@@ -109,6 +109,12 @@ pub struct DfPnSolver {
     /// `mid()` 内で合駒がチェーンマスへのドロップかどうかを判定するために使用．
     /// 各 `mid()` 呼び出しで更新され，飛び駒の王手がない場合は空．
     pub(super) chain_bb_cache: Bitboard,
+    /// PV 抽出が AND ノードで全 defender 子を visit budget 内に
+    /// 評価し切れなかった場合に true になる．
+    /// solve() はこのフラグが立っていると Mate を返さず CheckmateNoPv を
+    /// 返すことで，未検証の応手が残った状態の PV を「真の最長抵抗」として
+    /// 表示する soundness 違反を防ぐ．
+    pub(super) pv_extraction_incomplete: bool,
     /// 王手生成キャッシュ(E2 最適化)．
     pub(super) check_cache: CheckCache,
     /// TT ベース合駒プレフィルタの発火回数(診断用)．
@@ -243,6 +249,7 @@ impl DfPnSolver {
             find_shortest: true,
             pv_nodes_per_child: 1024,
             chain_bb_cache: Bitboard::EMPTY,
+            pv_extraction_incomplete: false,
             check_cache: CheckCache::new(),
             prefilter_hits: 0,
             refutable_check_failed: FxHashSet::default(),
@@ -730,7 +737,11 @@ impl DfPnSolver {
             // が途中で打ち切られて canonical PV を見逃すことがあった．
             // 短い詰みでは proof tree が小さいため過剰コストはほぼゼロ．
             const PV_VISIT_BUDGET: u64 = 10_000_000;
-            if let Some(pv) = pns_pv {
+
+            // PV 候補とその抽出が完全だったかを集める．
+            // pv_extraction_incomplete フラグを extract_pv_limited 呼び出し
+            // 後に確認し，最終的な Checkmate 判定で使う．
+            let (final_pv, mut pv_complete) = if let Some(pv) = pns_pv {
                 if self.find_shortest {
                     // 最短手数探索: PV 長を depth 上限にして追加証明
                     let saved_depth = self.depth;
@@ -738,6 +749,7 @@ impl DfPnSolver {
                     self.complete_or_proofs(board);
                     self.depth = saved_depth;
                     let final_moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
+                    let extraction_complete = !self.pv_extraction_incomplete;
                     let moves = if !final_moves.is_empty()
                         && final_moves.len() <= pv.len()
                     {
@@ -745,48 +757,57 @@ impl DfPnSolver {
                     } else {
                         pv
                     };
-                    return TsumeResult::Checkmate {
-                        moves,
+                    (moves, extraction_complete)
+                } else {
+                    // pns_extract_pv が直接返した PV (extract_pv_limited
+                    // 経由ではない) は incomplete フラグが立たない．
+                    // arena traversal で全子評価できるなら完全とみなす．
+                    (pv, true)
+                }
+            } else {
+                // アリーナ PV が取れなかった場合は TT ベースにフォールバック
+                self.complete_or_proofs(board);
+
+                let moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
+                let extraction_complete = !self.pv_extraction_incomplete;
+                if moves.is_empty() {
+                    return TsumeResult::CheckmateNoPv {
                         nodes_searched: self.nodes_searched,
                     };
                 }
-                return TsumeResult::Checkmate {
-                    moves: pv,
-                    nodes_searched: self.nodes_searched,
-                };
-            }
+                if self.find_shortest {
+                    let saved_depth = self.depth;
+                    self.depth = moves.len() as u32;
+                    self.complete_or_proofs(board);
+                    self.depth = saved_depth;
+                    let final_moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
+                    let final_complete = extraction_complete && !self.pv_extraction_incomplete;
+                    let moves = if !final_moves.is_empty()
+                        && final_moves.len() <= moves.len()
+                    {
+                        final_moves
+                    } else {
+                        moves
+                    };
+                    (moves, final_complete)
+                } else {
+                    (moves, extraction_complete)
+                }
+            };
+            // pv_complete suppress: pns_pv route doesn't necessarily check
+            let _ = &mut pv_complete;
 
-            // アリーナ PV が取れなかった場合は TT ベースにフォールバック
-            self.complete_or_proofs(board);
-
-            let moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
-            if moves.is_empty() {
+            // PV 抽出が AND ノードで全 defender を評価し切れなかった場合，
+            // 表示される PV が真の longest resistance である保証がないため，
+            // soundness を優先して CheckmateNoPv を返す．
+            if !pv_complete {
                 return TsumeResult::CheckmateNoPv {
                     nodes_searched: self.nodes_searched,
                 };
             }
-            if self.find_shortest {
-                let saved_depth = self.depth;
-                self.depth = moves.len() as u32;
-                self.complete_or_proofs(board);
-                self.depth = saved_depth;
-                let final_moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
-                let moves = if !final_moves.is_empty()
-                    && final_moves.len() <= moves.len()
-                {
-                    final_moves
-                } else {
-                    moves
-                };
-                TsumeResult::Checkmate {
-                    moves,
-                    nodes_searched: self.nodes_searched,
-                }
-            } else {
-                TsumeResult::Checkmate {
-                    moves,
-                    nodes_searched: self.nodes_searched,
-                }
+            TsumeResult::Checkmate {
+                moves: final_pv,
+                nodes_searched: self.nodes_searched,
             }
         } else if root_dn == 0 {
             TsumeResult::NoCheckmate {

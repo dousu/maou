@@ -944,6 +944,10 @@ impl DfPnSolver {
     pub(super) fn extract_pv_limited(&mut self, board: &mut Board, max_visits: u64) -> Vec<Move> {
         let mut board_clone = board.clone();
         let mut visits = 0u64;
+        // PV 抽出の incomplete フラグをリセット．AND ノードで全 defender
+        // 子を評価し切れなかった場合に extract_pv_recursive_inner が
+        // self.pv_extraction_incomplete を true に設定する．
+        self.pv_extraction_incomplete = false;
         self.extract_pv_recursive_inner(
             &mut board_clone,
             true,
@@ -1198,9 +1202,15 @@ impl DfPnSolver {
             // 機械的に詰みを延ばすだけの 中合 chain (defender_drop +
             // attacker_capture, recapture なし) を除外して比較する．
             let mut best_effective_len: usize = 0;
+            // soundness 用フラグ: 全 defender 子を評価し切ったか追跡する．
+            // visit budget 不足で途中 break した場合，PV 抽出は最長抵抗を
+            // 検証できていないので空 PV を返して呼び出し側で
+            // CheckmateNoPv 扱いにする．
+            let mut all_evaluated = true;
 
             for m in &moves {
                 if *visits > max_visits {
+                    all_evaluated = false;
                     break;
                 }
                 let captured = board.do_move(*m);
@@ -1305,6 +1315,14 @@ impl DfPnSolver {
                 }
             }
 
+            // 全 defender を評価し切れなかった場合，PV 抽出は最長抵抗を
+            // 検証できていない (途中の defender 応手が unverified なまま)．
+            // pv_extraction_incomplete フラグを立てて呼び出し側 (solve())
+            // で CheckmateNoPv に変換させる．PV 自体は best_pv を返して
+            // 暫定 PV を保持できるようにする．
+            if !all_evaluated {
+                self.pv_extraction_incomplete = true;
+            }
             best_pv.unwrap_or_default()
         }
     }

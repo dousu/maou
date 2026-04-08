@@ -1842,6 +1842,84 @@ use crate::types::{Color, PieceType};
     /// 8e8c+ 後の局面 (king 1c in check from dragon 8c) で，
     /// 期待する応手 (king move 1c1b + 多数の interpose drops) が
     /// 全部生成されているかを確認する．
+    /// 39手詰め PV ply 7 (8g8e 後) の N*4e 中合検証．
+    ///
+    /// false PV 「P*1g 1f1g 5g6f 1g1f 2c2g 1f1e 8g8e ...」の AND ply 7 で
+    /// 受け方が N*4e (rank 5 上の rook 8e と king 1e の間に knight drop)
+    /// を指すと詰みがなくなる (= N*4e は無駄合ではない正当な中合).
+    /// しかし `generate_defense_moves` は N*4e を返さないため，AND は
+    /// 1e1d (king move) しか評価せず短い詰み (15 手) を選んでしまう．
+    ///
+    /// この test は N*4e が合法で、かつ N*4e 後の局面が NoMate であることを
+    /// 直接確認する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_after_8g8e_n4e_defense() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f",
+            // false PV の最初の 7 手
+            "P*1g", "1f1g", "5g6f", "1g1f", "2c2g", "1f1e", "8g8e",
+        ];
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        eprintln!("=== AND ply 7 (8g8e 後) ===");
+        eprintln!("SFEN: {}", board.sfen());
+        eprintln!("White king: {:?}", board.king_square(Color::White));
+
+        // 全 defense moves を確認
+        let mut solver = DfPnSolver::default_solver();
+        let defenses = solver.generate_defense_moves(&mut board);
+        eprintln!("\ngenerate_defense_moves 結果: {}", defenses.len());
+        for d in &defenses {
+            eprintln!("  {}", d.to_usi());
+        }
+
+        // N*4e が合法か確認 (move_from_usi が成功するか)
+        eprintln!("\n--- N*4e を試す ---");
+        let mut after_n4e = board.clone();
+        match after_n4e.move_from_usi("N*4e") {
+            Some(m) => {
+                eprintln!("N*4e 合法手 OK");
+                after_n4e.do_move(m);
+                eprintln!("After N*4e SFEN: {}", after_n4e.sfen());
+
+                // この局面 (黒の手番) を solve して詰みを確認
+                eprintln!("\n--- N*4e 後の局面を solve (黒手番、詰みがあるか) ---");
+                let mut solver2 = DfPnSolver::with_timeout(31, 5_000_000, 32767, 120);
+                solver2.set_find_shortest(false);
+                let r = solver2.solve(&mut after_n4e.clone());
+                match &r {
+                    TsumeResult::Checkmate { moves, nodes_searched } => {
+                        let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                        eprintln!("nodes={} Mate({}) PV={:?}",
+                            nodes_searched, moves.len(), pv);
+                    }
+                    TsumeResult::NoCheckmate { nodes_searched } => {
+                        eprintln!("nodes={} NoCheckmate (= N*4e で詰みを免れる！)",
+                            nodes_searched);
+                    }
+                    TsumeResult::CheckmateNoPv { nodes_searched } => {
+                        eprintln!("nodes={} CheckmateNoPv", nodes_searched);
+                    }
+                    TsumeResult::Unknown { nodes_searched } => {
+                        eprintln!("nodes={} Unknown", nodes_searched);
+                    }
+                }
+            }
+            None => {
+                eprintln!("N*4e 不正な手");
+            }
+        }
+    }
+
     #[test]
     #[ignore]
     fn test_tsume_39te_after_8e8c_plus_defenses() {
