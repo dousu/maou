@@ -56,6 +56,94 @@ const _: () = assert!(
     "DfPnEntry must be 24 bytes for 32-byte TTFlatEntry"
 );
 
+/// 案 D: ProvenTT 専用のエントリ構造体．
+///
+/// proven entry (proof / confirmed disproof) は以下のフィールドが不要:
+/// - `source`: SNDA は active search 用 (proven は不要)
+/// - `pn`: proof は常に 0, disproof は常に > 0 → 1 bit で表現可
+/// - `dn`: proof は常に INF, disproof は常に 0 → 1 bit で表現可
+/// - `amount`: 案 B で mate_distance に置き換え済
+///
+/// 必要なフィールド:
+/// - `hand`: hand_gte_forward_chain 比較
+/// - `proof_flag`: proof or confirmed disproof
+/// - `mate_distance`: PV 抽出の longest resistance 判定
+/// - `best_move`: PV 表示用 attacker move
+/// - `remaining`: confirmed disproof の depth-limited 判定 (proof は常に INFINITE)
+///
+/// レイアウト (12 bytes):
+/// ```
+/// hand: [u8; 7]       (7 bytes, offset 0)
+/// flags: u8           (1 byte, offset 7)
+///   bit 0: is_proof (1) or confirmed_disproof (0)
+///   bit 7: distance_set (mate_distance is valid)
+///   bits 1-6: mate_distance (0-63 plies)
+/// best_move: u16      (2 bytes, offset 8)
+/// remaining: u16      (2 bytes, offset 10)
+/// ```
+/// 合計 12 bytes (alignment は u16 = 2)．
+///
+/// `mate_distance` が 0-63 に制限されることに注意 (案 B の 0-127 より狭い)．
+/// 64+ プライの詰みは distance unknown 扱いで slow path にフォールバック．
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
+pub(super) struct ProvenEntry {
+    pub(super) hand: [u8; HAND_KINDS],
+    /// bit 0: is_proof, bit 7: distance_set, bits 1-6: distance (0-63)
+    pub(super) flags: u8,
+    pub(super) best_move: u16,
+    pub(super) remaining: u16,
+}
+
+const _: () = assert!(
+    std::mem::size_of::<ProvenEntry>() == 12,
+    "ProvenEntry must be 12 bytes"
+);
+
+impl ProvenEntry {
+    pub(super) const ZERO: Self = ProvenEntry {
+        hand: [0; HAND_KINDS],
+        flags: 0,
+        best_move: 0,
+        remaining: 0,
+    };
+
+    /// proof エントリかどうか (bit 0)．
+    #[inline(always)]
+    pub(super) fn is_proof(&self) -> bool {
+        (self.flags & 0x01) != 0
+    }
+
+    /// mate_distance を取得する (proof + distance_set のときのみ Some)．
+    /// bits 1-6 に格納された 0-63 の distance を返す．
+    #[inline(always)]
+    pub(super) fn mate_distance(&self) -> Option<u16> {
+        if self.is_proof() && (self.flags & 0x80) != 0 {
+            Some(((self.flags >> 1) & 0x3F) as u16)
+        } else {
+            None
+        }
+    }
+
+    /// proof エントリ用 flags を encode する．
+    /// distance > 63 は distance_set フラグなしで encode (None 扱い)．
+    #[inline(always)]
+    pub(super) fn encode_proof_flags(distance: u16) -> u8 {
+        let bit0 = 0x01u8; // is_proof
+        if distance > 0 && distance <= 63 {
+            0x80 | (((distance & 0x3F) as u8) << 1) | bit0
+        } else {
+            bit0
+        }
+    }
+
+    /// confirmed disproof エントリ用 flags．
+    #[inline(always)]
+    pub(super) fn encode_disproof_flags() -> u8 {
+        0x00 // is_proof=0, no distance
+    }
+}
+
 impl DfPnEntry {
     /// ゼロ初期化されたエントリ(EMPTY 定数用)．
     pub(super) const ZERO: Self = DfPnEntry {
