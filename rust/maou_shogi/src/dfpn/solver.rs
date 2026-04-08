@@ -723,6 +723,13 @@ impl DfPnSolver {
         if root_pn == 0 {
             // PNS アリーナから PV を抽出できた場合はそちらを優先
             // (TT ベースの extract_pv は PNS 証明パスが不完全になりうる)
+            //
+            // PV 抽出 visit 予算: 10M に設定する．
+            // effective length 比較 (count_useless_interpose_pairs 経由) のために
+            // 全 AND 子を評価する必要があり，旧 100K 予算では深い AND iteration
+            // が途中で打ち切られて canonical PV を見逃すことがあった．
+            // 短い詰みでは proof tree が小さいため過剰コストはほぼゼロ．
+            const PV_VISIT_BUDGET: u64 = 10_000_000;
             if let Some(pv) = pns_pv {
                 if self.find_shortest {
                     // 最短手数探索: PV 長を depth 上限にして追加証明
@@ -730,7 +737,7 @@ impl DfPnSolver {
                     self.depth = pv.len() as u32;
                     self.complete_or_proofs(board);
                     self.depth = saved_depth;
-                    let final_moves = self.extract_pv_limited(board, 100_000);
+                    let final_moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
                     let moves = if !final_moves.is_empty()
                         && final_moves.len() <= pv.len()
                     {
@@ -752,7 +759,7 @@ impl DfPnSolver {
             // アリーナ PV が取れなかった場合は TT ベースにフォールバック
             self.complete_or_proofs(board);
 
-            let moves = self.extract_pv_limited(board, 100_000);
+            let moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
             if moves.is_empty() {
                 return TsumeResult::CheckmateNoPv {
                     nodes_searched: self.nodes_searched,
@@ -763,7 +770,7 @@ impl DfPnSolver {
                 self.depth = moves.len() as u32;
                 self.complete_or_proofs(board);
                 self.depth = saved_depth;
-                let final_moves = self.extract_pv_limited(board, 100_000);
+                let final_moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
                 let moves = if !final_moves.is_empty()
                     && final_moves.len() <= moves.len()
                 {

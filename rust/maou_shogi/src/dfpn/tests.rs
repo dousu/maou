@@ -1837,6 +1837,329 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("{}", "=".repeat(80));
     }
 
+    /// 39手詰め PV ply11 局面の generate_defense_moves 直接検証．
+    ///
+    /// 8e8c+ 後の局面 (king 1c in check from dragon 8c) で，
+    /// 期待する応手 (king move 1c1b + 多数の interpose drops) が
+    /// 全部生成されているかを確認する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_after_8e8c_plus_defenses() {
+        let sfen = "9/3+N1P3/1+R6k/9/7+R1/3S5/9/3p5/9 w 2b4g3s3n4l16p 34";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        eprintln!("=== ply11 (8e8c+ 直後) 局面 ===");
+        eprintln!("SFEN: {}", board.sfen());
+        let king_sq = board.king_square(Color::White).unwrap();
+        eprintln!("White king square: {:?} (col={} row={})",
+            king_sq, king_sq.col(), king_sq.row());
+
+        // 全マスに何があるか dump
+        eprintln!("\n--- 盤上駒一覧 ---");
+        for sq_idx in 0..81u8 {
+            let sq = Square(sq_idx);
+            let piece = board.squares[sq_idx as usize];
+            if !piece.is_empty() {
+                let color = piece.color().unwrap();
+                let pt = piece.piece_type().unwrap();
+                let usi_sq = format!("{}{}",
+                    char::from(b'9' - sq.col()),
+                    char::from(b'a' + sq.row()));
+                eprintln!("  {} {:?} {:?}", usi_sq, color, pt);
+            }
+        }
+
+        eprintln!("\n--- 持駒 ---");
+        eprintln!("  Black: {:?}", board.hand[Color::Black.index()]);
+        eprintln!("  White: {:?}", board.hand[Color::White.index()]);
+
+        // === N*4c をプレイした後の局面 ===
+        eprintln!("\n=== N*4c をプレイ ===");
+        let mut after_n4c = board.clone();
+        let n4c = after_n4c.move_from_usi("N*4c");
+        match n4c {
+            Some(m) => {
+                eprintln!("N*4c 合法手 OK: {:?}", m);
+                after_n4c.do_move(m);
+                eprintln!("After N*4c SFEN: {}", after_n4c.sfen());
+
+                eprintln!("\n--- 盤上駒一覧 ---");
+                for sq_idx in 0..81u8 {
+                    let sq = Square(sq_idx);
+                    let piece = after_n4c.squares[sq_idx as usize];
+                    if !piece.is_empty() {
+                        let color = piece.color().unwrap();
+                        let pt = piece.piece_type().unwrap();
+                        let usi_sq = format!("{}{}",
+                            char::from(b'9' - sq.col()),
+                            char::from(b'a' + sq.row()));
+                        eprintln!("  {} {:?} {:?}", usi_sq, color, pt);
+                    }
+                }
+
+                // この局面で attacker (黒) を解いてみる
+                eprintln!("\n--- N*4c 後の局面を solve ---");
+                let mut solver = DfPnSolver::with_timeout(31, 2_000_000, 32767, 60);
+                solver.set_find_shortest(false);
+                let r = solver.solve(&mut after_n4c.clone());
+                eprintln!("Result: {:?}", r);
+            }
+            None => {
+                eprintln!("N*4c 不正な手 (None returned)");
+            }
+        }
+
+        // 内部関数を直接呼び出して診断
+        let mut solver = DfPnSolver::default_solver();
+
+        // 1. compute_checkers_at
+        let checkers = board.compute_checkers_at(king_sq, Color::Black);
+        eprintln!("compute_checkers_at returned: count={}", checkers.count());
+        for sq in checkers {
+            eprintln!("  checker at {:?}", sq);
+        }
+
+        // 2. find_sliding_checker
+        let sliding = solver.find_sliding_checker(&board, king_sq, Color::Black);
+        eprintln!("find_sliding_checker: {:?}", sliding);
+
+        // 3. between_bb between checker and king
+        if let Some(checker_sq) = checkers.lsb() {
+            let between = crate::attack::between_bb(checker_sq, king_sq);
+            eprintln!("between_bb({:?}, {:?}): {:?}", checker_sq, king_sq, between);
+            eprintln!("between count = {}", between.count());
+
+            // 4. compute_futile_and_chain_squares
+            let (futile, chain) = solver.compute_futile_and_chain_squares(
+                &board, &between, king_sq, checker_sq, Color::White, Color::Black,
+            );
+            eprintln!("futile: {:?} count={}", futile, futile.count());
+            eprintln!("chain: {:?} count={}", chain, chain.count());
+        }
+
+        // 5. generate_defense_moves
+        let defenses = solver.generate_defense_moves(&mut board);
+        eprintln!("\nDefenses count: {}", defenses.len());
+        for d in &defenses {
+            eprintln!("  {}", d.to_usi());
+        }
+        eprintln!("chain_bb_cache: {:?}", solver.chain_bb_cache);
+    }
+
+    /// 39手詰め false PV (suboptimal) 調査診断．
+    ///
+    /// PV 抽出 visit budget を **明示的に低く** 設定 (100K) し，
+    /// search 自体は canonical proof を構築しているのに PV 抽出が
+    /// 短い false PV を返す現象を再現する．これにより:
+    ///
+    /// 1. search が proof している局面構造を診断
+    /// 2. PV 抽出が AND ノードで「全 child を評価できない」ために
+    ///    suboptimal な選択をする箇所を特定
+    /// 3. false PV の各 AND ノードで，全合法応手と TT pn/dn を列挙
+    /// 4. PV が選んだ応手 vs N*4c 等の longer-resistance 候補の比較
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply22_false_pv_diagnosis() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply22_false_pv_diag.log";
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        let board_root = board.clone();
+        writeln!(out, "ply 22 SFEN: {}", board_root.sfen()).unwrap();
+
+        // === Phase 1: 10M nodes で search 実行 (PV 抽出なし) ===
+        writeln!(out, "\n### Phase 1: PNS+MID で 10M nodes 探索").unwrap();
+        let mut solver = DfPnSolver::with_timeout(19, 10_000_000, 131_071, 600);
+        solver.set_find_shortest(false);
+        let mut search_board = board.clone();
+        let start = Instant::now();
+        let _result = solver.solve(&mut search_board);
+        let elapsed = start.elapsed();
+        writeln!(out, "Search done: nodes={} time={:.1}s",
+            solver.nodes_searched, elapsed.as_secs_f64()).unwrap();
+
+        let pk = position_key(&board_root);
+        let att_hand = board_root.hand[solver.attacker.index()];
+        let (root_pn, root_dn, _) = solver.look_up_pn_dn(pk, &att_hand, 19);
+        writeln!(out, "root_pn={} root_dn={}", root_pn, root_dn).unwrap();
+
+        if root_pn != 0 {
+            writeln!(out, "Search did not prove root, abort").unwrap();
+            return;
+        }
+
+        // === Phase 1b: PV 抽出を複数 visit budget で実行 ===
+        writeln!(out, "\n### Phase 1b: PV 抽出を複数 visit budget で").unwrap();
+        let visit_budgets: &[u64] = &[
+            1_000, 5_000, 10_000, 50_000, 100_000,
+            500_000, 1_000_000, 10_000_000,
+        ];
+        let mut all_pvs: Vec<(u64, Vec<Move>)> = Vec::new();
+        for &budget in visit_budgets {
+            let mut probe = board_root.clone();
+            let pv_x = solver.extract_pv_limited(&mut probe, budget);
+            let pv_x_usi: Vec<String> = pv_x.iter().map(|m| m.to_usi()).collect();
+            writeln!(out, "  visits={:>10}: PV ({} moves) {}",
+                budget, pv_x.len(), pv_x_usi.join(" ")).unwrap();
+            all_pvs.push((budget, pv_x));
+        }
+
+        // 最小 visit で得た非空 PV を診断対象に (低予算で出る PV)
+        let pv = all_pvs.iter()
+            .find(|(_, p)| !p.is_empty())
+            .map(|(_, p)| p.clone())
+            .unwrap_or_default();
+        if pv.is_empty() {
+            writeln!(out, "No PV obtained at any budget").unwrap();
+            return;
+        }
+        writeln!(out, "\nUsing PV from smallest non-empty budget for analysis:\n  {}",
+            pv.iter().map(|m| m.to_usi()).collect::<Vec<_>>().join(" ")).unwrap();
+
+        // === Phase 2: PV の各 AND ノードで全応手と TT 状態を dump ===
+        writeln!(out, "\n### Phase 2: PV 上の AND ノード診断").unwrap();
+        let mut work = board_root.clone();
+        for (idx, m) in pv.iter().enumerate() {
+            // index 0: attacker move, index 1: defender move (AND), ...
+            // AND ノードは「defender が手を選ぶ局面」= attacker が手を打った直後
+            // (奇数 index の手の直前)
+            if idx > 0 && idx % 2 == 1 {
+                // 直前 (idx-1) の attacker 手を打った直後の局面
+                // この時点で work は idx-1 まで進んでいる
+                writeln!(out, "\n--- AND ply {} (defender to move after `{}`) ---",
+                    idx, pv[idx - 1].to_usi()).unwrap();
+                writeln!(out, "  SFEN: {}", work.sfen()).unwrap();
+                writeln!(out, "  PV's chosen defender move: {}", m.to_usi()).unwrap();
+
+                // 全合法応手を列挙
+                let defenses = solver.generate_defense_moves(&mut work);
+                writeln!(out, "  Total defense moves: {}", defenses.len()).unwrap();
+
+                // 各応手の TT 状態
+                for def in &defenses {
+                    let captured = work.do_move(*def);
+                    let pk = position_key(&work);
+                    let hand = work.hand[solver.attacker.index()];
+                    let (cpn, cdn, _) = solver.look_up_pn_dn(pk, &hand, 19);
+                    let marker = if def.to_usi() == m.to_usi() { " ← PV" } else { "" };
+                    writeln!(out, "    {} pn={} dn={}{}",
+                        def.to_usi(), cpn, cdn, marker).unwrap();
+                    work.undo_move(*def, captured);
+                }
+            }
+            work.do_move(*m);
+        }
+        writeln!(out, "\n=== END ===").unwrap();
+        verbose_eprintln!("結果: {}", out_path);
+    }
+
+    /// 39手詰めの backward 解析を予算スケーリングで実行する診断．
+    ///
+    /// ply 22 (残り 17 手) で 1M ノードでは未解決になる境界を更に詳しく
+    /// 調査し，どの予算で解けるかを段階的に測定する．
+    /// PNS+MID 通常パスを使用し，PV が canonical (1g1h 経由) と一致するか
+    /// も確認する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply22_budget_sweep() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply22_budget_sweep.log";
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f",
+            // 以下が ply 22 から先の正解 17 手
+            "P*1g", "1f1g", "5g6f", "1g1h", "2c2g", "1h1i",
+            "8g8i", "S*6i", "8i6i", "6h6i+", "S*2h", "1i2i",
+            "2h3g", "2i3i", "2g2h", "3i4i", "2h4h",
+        ];
+        let expected_pv: Vec<&str> = pv[22..].to_vec();
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv[..22] {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " ply 22 OR node 予算スケーリング").unwrap();
+        writeln!(out, " SFEN: {}", board.sfen()).unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, "{:<14} {:<14} {:<10} {:<10} {:<8} {}",
+            "Budget", "Nodes", "Time(s)", "MaxPly", "Mate#", "Result/Match").unwrap();
+        writeln!(out, "{}", "-".repeat(90)).unwrap();
+
+        // 段階的予算
+        let budgets: &[u64] = &[
+            1_000_000,
+            2_000_000,
+            5_000_000,
+            10_000_000,
+            20_000_000,
+            50_000_000,
+        ];
+
+        for &budget in budgets {
+            let mut test_board = board.clone();
+            let mut solver = DfPnSolver::with_timeout(19, budget, 131_071, 600);
+            solver.set_find_shortest(false);
+            // PV 抽出は十分大きな visits 予算で
+            solver.set_pv_nodes_per_child(100_000);
+
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let (mate_str, match_str) = match &result {
+                TsumeResult::Checkmate { moves, .. } => {
+                    let pv_usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                    let pv_refs: Vec<&str> = pv_usi.iter().map(|s| s.as_str()).collect();
+                    let matches = pv_refs == expected_pv;
+                    (
+                        format!("Mate({})", moves.len()),
+                        if matches {
+                            "✓ canonical match".to_string()
+                        } else {
+                            format!("PV diff: {}", pv_usi.join(" "))
+                        },
+                    )
+                }
+                TsumeResult::CheckmateNoPv { .. } =>
+                    ("MateNoPv".to_string(), String::new()),
+                TsumeResult::NoCheckmate { .. } =>
+                    ("NoMate".to_string(), String::new()),
+                TsumeResult::Unknown { .. } =>
+                    ("Unknown".to_string(), String::new()),
+            };
+
+            writeln!(out, "{:<14} {:<14} {:<10.2} {:<10} {:<8} {}",
+                budget, solver.nodes_searched, elapsed.as_secs_f64(),
+                solver.max_ply, mate_str, match_str).unwrap();
+            out.flush().unwrap();
+        }
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        verbose_eprintln!("結果: {}", out_path);
+    }
+
     /// 39手詰め ply 22 IDS-MID ロバストネステスト: PNS なしで解き，
     /// 正解 PV 17 手 (最長抵抗) と完全一致することを確認する．
     ///
