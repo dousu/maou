@@ -2537,6 +2537,110 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: /tmp/tsume_39te_backward_1m.log");
     }
 
+    /// 39手詰め逆順サブ問題 (120M nodes 予算版)．
+    ///
+    /// `test_tsume_39te_ply22_no_pns` と同等の探索予算 (120M) を各 ply に与え，
+    /// 通常の `solve()` 経路 (PNS → IDS-MID fallback) でどこまで解けるかを調査する．
+    /// 最初の未解決 ply で break する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_backward_120m() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_backward_120m.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        let node_limit: u64 = 120_000_000;
+        let timeout: u64 = 1800;
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 39手詰め逆順サブ問題 (120M nodes / 1800s, stop on first failure)").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, "{:<6} {:<10} {:<14} {:<10} {:<10} {:<10} {}",
+            "Ply", "Remain", "Nodes", "Time(s)", "MaxPly", "TT_pos", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(90)).unwrap();
+
+        // PV を偶数手ずつ進めた局面(攻め番=ORノード)を全て事前構築
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        let mut positions: Vec<(usize, Board)> = Vec::new();
+        positions.push((0, board.clone()));
+        for ply_start in (0..38).step_by(2) {
+            let m1 = board.move_from_usi(pv[ply_start]).unwrap();
+            board.do_move(m1);
+            let m2 = board.move_from_usi(pv[ply_start + 1]).unwrap();
+            board.do_move(m2);
+            positions.push((ply_start + 2, board.clone()));
+        }
+
+        // 終盤(簡単)→序盤(困難)の逆順
+        positions.reverse();
+
+        let mut first_unsolved_ply: Option<usize> = None;
+
+        for (ply, pos) in &positions {
+            let remaining = 39 - ply;
+            let depth = (remaining + 2).min(41) as u32;
+
+            let mut test_board = pos.clone();
+            let mut solver = DfPnSolver::with_timeout(
+                depth, node_limit, 32767, timeout,
+            );
+            solver.set_find_shortest(false);
+
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let (result_str, solved) = match &result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    (format!("Mate({})", moves.len()), true),
+                TsumeResult::CheckmateNoPv { .. } =>
+                    ("MateNoPV".to_string(), true),
+                TsumeResult::NoCheckmate { .. } =>
+                    ("NoMate".to_string(), false),
+                TsumeResult::Unknown { .. } =>
+                    ("Unknown".to_string(), false),
+            };
+
+            writeln!(out, "{:<6} {:<10} {:<14} {:<10.2} {:<10} {:<10} {}",
+                ply, remaining, solver.nodes_searched, elapsed.as_secs_f64(),
+                solver.max_ply, solver.table.len(), result_str).unwrap();
+            out.flush().unwrap();
+
+            if !solved {
+                first_unsolved_ply = Some(*ply);
+                break; // 最初の未解決 ply で停止 (ユーザー指示)
+            }
+        }
+
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        if let Some(ply) = first_unsolved_ply {
+            writeln!(out, "境界: ply {} (残り{}手) で 120M ノードでは解けない",
+                ply, 39 - ply).unwrap();
+        } else {
+            writeln!(out, "全局面 120M ノード以内で解決").unwrap();
+        }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_backward_120m.log");
+    }
+
     /// 39手詰め逆順サブ問題 (10M nodes 予算版)．
     ///
     /// v0.24.27 時点の状態で，10M ノード予算があれば各 OR ノードからどこまで
