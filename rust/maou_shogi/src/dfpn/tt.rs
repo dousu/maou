@@ -53,6 +53,8 @@ const PROVEN_CLUSTER_MULTIPLIER: usize = 1;
 /// pos_key = 0 は空スロットを示す(実際のハッシュ値 0 との衝突は無視可能)．
 ///
 /// v0.24.0: DfPnEntry 圧縮(24 bytes)により TTFlatEntry は 32 bytes．
+/// v0.24.23: DfPnEntry に mate_distance(u16) 追加で 28 bytes ．
+/// TTFlatEntry は 40 bytes (pos_key 8 + entry 28 + padding 4)．
 #[derive(Clone, Copy)]
 #[repr(C)]
 struct TTFlatEntry {
@@ -62,8 +64,8 @@ struct TTFlatEntry {
 
 // コンパイル時にサイズを検証
 const _: () = assert!(
-    std::mem::size_of::<TTFlatEntry>() == 32,
-    "TTFlatEntry must be 32 bytes"
+    std::mem::size_of::<TTFlatEntry>() == 40,
+    "TTFlatEntry must be 40 bytes"
 );
 
 impl TTFlatEntry {
@@ -441,6 +443,31 @@ impl TranspositionTable {
     ///
     /// `look_up_proven` の1枚差走査で見つからない場合のフォールバック．
     /// Zobrist XOR 差分で部分集合のハッシュを逐次計算する．
+    /// proven entry の mate_distance を取得する．
+    ///
+    /// pn=0 の proof エントリが存在すればその mate_distance (詰み手数) を
+    /// 返す．エントリがないか distance が未設定 (0) の場合は None．
+    /// PV 抽出時に AND ノードで longest resistance 判定に使用する．
+    pub(super) fn look_up_mate_distance(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> Option<u16> {
+        let pos_key = Self::safe_key(pos_key);
+        // 自クラスタを走査して proof entry を探す
+        for fe in self.proven_cluster(pos_key, hand) {
+            if fe.pos_key != pos_key { continue; }
+            let e = &fe.entry;
+            if e.pn == 0 && hand_gte_forward_chain(hand, &e.hand) {
+                if e.mate_distance == 0 {
+                    return None;
+                }
+                return Some(e.mate_distance);
+            }
+        }
+        None
+    }
+
     pub(super) fn look_up_proven_subset(
         &self,
         pos_key: u64,
@@ -590,7 +617,7 @@ impl TranspositionTable {
         remaining: u16,
         source: u32,
     ) {
-        self.store_impl(pos_key, hand, pn, dn, remaining, source, false, 0);
+        self.store_impl(pos_key, hand, pn, dn, remaining, source, false, 0, 0);
     }
 
     /// ベストムーブ付きで転置表を更新する．
@@ -605,7 +632,29 @@ impl TranspositionTable {
         source: u32,
         best_move: u16,
     ) {
-        self.store_impl(pos_key, hand, pn, dn, remaining, source, false, best_move);
+        self.store_impl(pos_key, hand, pn, dn, remaining, source, false, best_move, 0);
+    }
+
+    /// ベストムーブと詰み手数付きで転置表を更新する (proven entry 用)．
+    ///
+    /// `mate_distance` は pn=0 のときのみ意味を持ち，この局面から詰みまでの
+    /// 残り手数を保存する．PV 抽出時に AND ノードで再帰なしに longest
+    /// resistance の child を選択するために使う．非 proven entry の場合は
+    /// 0 を指定する．
+    #[inline(always)]
+    pub(super) fn store_with_best_move_and_distance(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+        pn: u32,
+        dn: u32,
+        remaining: u16,
+        source: u32,
+        best_move: u16,
+        mate_distance: u16,
+    ) {
+        self.store_impl(pos_key, hand, pn, dn, remaining, source, false,
+            best_move, mate_distance);
     }
 
     /// 経路依存フラグ付きで転置表を更新する．
@@ -620,7 +669,7 @@ impl TranspositionTable {
         source: u32,
         path_dependent: bool,
     ) {
-        self.store_impl(pos_key, hand, pn, dn, remaining, source, path_dependent, 0);
+        self.store_impl(pos_key, hand, pn, dn, remaining, source, path_dependent, 0, 0);
     }
 
     #[inline(always)]
@@ -634,6 +683,7 @@ impl TranspositionTable {
         source: u32,
         path_dependent: bool,
         best_move: u16,
+        mate_distance: u16,
     ) {
         let pos_key = Self::safe_key(pos_key);
         #[cfg(feature = "verbose")]
@@ -658,7 +708,9 @@ impl TranspositionTable {
             }
         }
 
-        let new_entry = DfPnEntry::new(source, pn, dn, hand, remaining, path_dependent, best_move, 0);
+        let new_entry = DfPnEntry::new_with_distance(
+            source, pn, dn, hand, remaining, path_dependent, best_move, 0, mate_distance,
+        );
 
         if is_proven_entry(pn, dn, remaining, path_dependent) {
             // === ProvenTT への挿入 ===

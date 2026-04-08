@@ -17,11 +17,18 @@ const REMAINING_MASK: u16 = 0x7FFF;
 /// - remaining_flags: ビット 0-14 = 残り探索深さ(`depth - ply`)，
 ///   ビット 15 = path_dependent フラグ(GHI 対策)．
 ///   `REMAINING_INFINITE`(0x7FFF) は深さ制限なし(真の証明/反証)を示す．
+/// - mate_distance: 詰み手数 (proven entry のみ有効)．
+///   pn=0 のとき，この局面から詰みまでの手数 (= longest resistance 下で
+///   の残り plies) を保存する．PV 抽出時に AND ノードで再帰なしに
+///   最長抵抗の child を選択するために使う．
+///   非 proven entry では未使用 (0 のまま)．
 ///
 /// v0.24.0: エントリ圧縮(source u64→u32, amount u16→u8,
 /// path_dependent を remaining_flags に pack)で 32→24 bytes に削減．
-/// TTFlatEntry(pos_key u64 + DfPnEntry) が 40→32 bytes になり，
-/// 同じメモリ予算でクラスタサイズを拡大可能．
+///
+/// v0.24.23: mate_distance(u16) を追加(24→28 bytes)．TTFlatEntry は
+/// 32→40 bytes に拡大するが，PV 抽出で再帰なしの longest resistance 判定を
+/// 可能にして visit budget を不要にする．
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub(super) struct DfPnEntry {
@@ -40,12 +47,15 @@ pub(super) struct DfPnEntry {
     remaining_flags: u16,
     /// TT Best Move: この局面で最も有望だった手の Move16 エンコーディング．
     pub(super) best_move: u16,
+    /// 詰み手数 (proven entry でのみ有効)．pn=0 のとき，この局面から
+    /// 詰みまでの残り plies を保存する．非 proven entry では 0．
+    pub(super) mate_distance: u16,
 }
 
-// コンパイル時にサイズを検証(TTFlatEntry が 32 bytes になることを保証)
+// コンパイル時にサイズを検証(28 bytes == DfPnEntry with mate_distance added)
 const _: () = assert!(
-    std::mem::size_of::<DfPnEntry>() == 24,
-    "DfPnEntry must be 24 bytes for 32-byte TTFlatEntry"
+    std::mem::size_of::<DfPnEntry>() == 28,
+    "DfPnEntry must be 28 bytes with mate_distance field"
 );
 
 impl DfPnEntry {
@@ -58,6 +68,7 @@ impl DfPnEntry {
         amount: 0,
         remaining_flags: 0,
         best_move: 0,
+        mate_distance: 0,
     };
 
     /// remaining 値を取得する(ビット 0-14)．
@@ -102,6 +113,32 @@ impl DfPnEntry {
             amount,
             remaining_flags: Self::encode_remaining_flags(remaining, path_dependent),
             best_move,
+            mate_distance: 0,
+        }
+    }
+
+    /// 詰み手数付きで新しいエントリを構築する (proven entry 用)．
+    #[inline(always)]
+    pub(super) fn new_with_distance(
+        source: u32,
+        pn: u32,
+        dn: u32,
+        hand: [u8; HAND_KINDS],
+        remaining: u16,
+        path_dependent: bool,
+        best_move: u16,
+        amount: u8,
+        mate_distance: u16,
+    ) -> Self {
+        Self {
+            source,
+            pn,
+            dn,
+            hand,
+            amount,
+            remaining_flags: Self::encode_remaining_flags(remaining, path_dependent),
+            best_move,
+            mate_distance,
         }
     }
 

@@ -1195,6 +1195,70 @@ impl DfPnSolver {
                 verbose_eprintln!("[PV diag] ply={} AND node, {} defense moves", ply, moves.len());
             }
 
+            // === Fast path: TT distance ベースの longest resistance 選択 ===
+            //
+            // TT に mate_distance が保存されていれば，各 defender child の
+            // distance を O(1) で取得し，最長を選べる．再帰は 1 本だけで済み，
+            // 合計コストは O(depth × B) に圧縮される．
+            //
+            // 全 defender 子の TT lookup が成功し，distance が全て取得できた
+            // 場合のみ fast path を使用．いずれかが None (未設定) なら
+            // 従来の recursive 比較 にフォールバック．
+            let mut fast_path_best: Option<(Move, u16)> = None;
+            let mut fast_path_all_known = true;
+            for m in &moves {
+                let captured = board.do_move(*m);
+                let (child_pn, _) = self.look_up_board_for_pv(board);
+                if child_pn != 0 {
+                    // 未証明 child (proven tree に含まれない). fast path 断念
+                    board.undo_move(*m, captured);
+                    fast_path_all_known = false;
+                    break;
+                }
+                let dist_opt = self.look_up_board_mate_distance_for_pv(board);
+                board.undo_move(*m, captured);
+                match dist_opt {
+                    Some(d) => {
+                        match fast_path_best {
+                            None => fast_path_best = Some((*m, d)),
+                            Some((_, best_d)) if d > best_d => {
+                                fast_path_best = Some((*m, d));
+                            }
+                            _ => {}
+                        }
+                    }
+                    None => {
+                        // distance が TT に無い → fast path 断念
+                        fast_path_all_known = false;
+                        break;
+                    }
+                }
+            }
+
+            if fast_path_all_known {
+                if let Some((best_m, _)) = fast_path_best {
+                    // best_m に決定．sub_pv を 1 本だけ再帰計算．
+                    let captured = board.do_move(best_m);
+                    visited.insert(full_hash);
+                    let sub_pv = self.extract_pv_recursive_inner(
+                        board, true, visited, ply + 1, diag,
+                        visits, max_visits,
+                    );
+                    visited.remove(&full_hash);
+                    board.undo_move(best_m, captured);
+
+                    let mut result = Vec::with_capacity(1 + sub_pv.len());
+                    result.push(best_m);
+                    result.extend_from_slice(&sub_pv);
+                    return result;
+                }
+                // defender moves が空だったケース (冒頭で return してるはずだが念のため)
+                return Vec::new();
+            }
+
+            // === Slow path: 従来の recursive 比較 ===
+            // TT に distance が無い場合．effective length 比較で全 child を評価．
+
             let mut best_pv: Option<Vec<Move>> = None;
             let mut best_is_capture = false;
             let mut best_is_drop = false;
@@ -1325,6 +1389,14 @@ impl DfPnSolver {
             }
             best_pv.unwrap_or_default()
         }
+    }
+
+    /// PV 抽出用: 盤面から mate_distance を取得するラッパ．
+    #[inline]
+    pub(super) fn look_up_board_mate_distance_for_pv(&self, board: &Board) -> Option<u16> {
+        let pk = position_key(board);
+        let hand = board.hand[self.attacker.index()];
+        self.table.look_up_mate_distance(pk, &hand)
     }
 
     /// 探索ノード数を返す．

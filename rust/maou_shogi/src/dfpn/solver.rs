@@ -540,6 +540,43 @@ impl DfPnSolver {
         self.table.store_with_best_move(pos_key, hand, pn, dn, remaining, source, best_move);
     }
 
+    /// ベストムーブ + 詰み手数付きで転置表を更新する (proven entry 用)．
+    ///
+    /// `mate_distance` は PV 抽出の AND ノードで longest resistance 判定に
+    /// 使用される．非 proven entry の場合は 0 を指定．
+    #[inline]
+    pub(super) fn store_with_best_move_and_distance(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+        pn: u32,
+        dn: u32,
+        remaining: u16,
+        source: u32,
+        best_move: u16,
+        mate_distance: u16,
+    ) {
+        if pn == 0 && self.ancestor_has_proof() {
+            return;
+        }
+        self.table.store_with_best_move_and_distance(
+            pos_key, hand, pn, dn, remaining, source, best_move, mate_distance,
+        );
+    }
+
+    /// proven entry の mate_distance を取得する．
+    ///
+    /// 存在しないか distance=0 (未設定) の場合は None を返す．
+    #[inline]
+    pub(super) fn look_up_mate_distance_for_board(
+        &self,
+        board: &Board,
+    ) -> Option<u16> {
+        let pk = position_key(board);
+        let hand = board.hand[self.attacker.index()];
+        self.table.look_up_mate_distance(pk, &hand)
+    }
+
     /// TT Best Move を参照する(位置キー＋持ち駒指定)．
     #[inline]
     pub(super) fn look_up_best_move(
@@ -2426,8 +2463,49 @@ impl DfPnSolver {
             } else {
                 (current_pn, current_dn)
             };
+            // 詰み手数 (mate_distance) 計算:
+            // store_pn == 0 のとき proof → 子の distance から計算．
+            // OR: min(proven children distances) + 1
+            // AND: max(all children distances) + 1
+            // 子の distance が取得できない (0) 場合は distance=0 (未知) とする．
+            let mate_dist: u16 = if store_pn == 0 {
+                let mut compute_dist = || -> u16 {
+                    if or_node {
+                        // best_idx の child (proven を代表) の distance + 1
+                        let best_child = &children[best_idx];
+                        let best_child_pk = best_child.1;
+                        let best_child_hand = &best_child.3;
+                        if let Some(cd) = self.table.look_up_mate_distance(
+                            best_child_pk, best_child_hand)
+                        {
+                            return cd.saturating_add(1);
+                        }
+                        0
+                    } else {
+                        // AND: max(children distance) + 1
+                        let mut max_d: u16 = 0;
+                        let mut any_unknown = false;
+                        for (_m, ch_pk, _ch_fh, ch_hand) in children.iter() {
+                            if let Some(cd) = self.table.look_up_mate_distance(
+                                *ch_pk, ch_hand)
+                            {
+                                if cd > max_d { max_d = cd; }
+                            } else {
+                                any_unknown = true;
+                                break;
+                            }
+                        }
+                        if any_unknown { 0 } else { max_d.saturating_add(1) }
+                    }
+                };
+                compute_dist()
+            } else {
+                0
+            };
             profile_timed!(self, tt_store_ns, tt_store_count,
-                self.store_with_best_move(pos_key, att_hand, store_pn, store_dn, remaining, best_source, best_move16));
+                self.store_with_best_move_and_distance(
+                    pos_key, att_hand, store_pn, store_dn,
+                    remaining, best_source, best_move16, mate_dist));
 
             // TCA (Kishimoto & Müller 2008; Kishimoto 2010): 過小評価対策
             //
