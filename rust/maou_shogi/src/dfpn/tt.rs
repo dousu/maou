@@ -53,8 +53,9 @@ const PROVEN_CLUSTER_MULTIPLIER: usize = 1;
 /// pos_key = 0 は空スロットを示す(実際のハッシュ値 0 との衝突は無視可能)．
 ///
 /// v0.24.0: DfPnEntry 圧縮(24 bytes)により TTFlatEntry は 32 bytes．
-/// v0.24.23: DfPnEntry に mate_distance(u16) 追加で 28 bytes ．
-/// TTFlatEntry は 40 bytes (pos_key 8 + entry 28 + padding 4)．
+/// v0.24.23: 一時的に mate_distance(u16) 追加で 28 bytes (40 bytes TTFlat) ．
+/// v0.24.24: 案 B (amount を proven entry の distance として再利用) で
+///           24 bytes に戻し，TTFlatEntry を 32 bytes に維持．
 #[derive(Clone, Copy)]
 #[repr(C)]
 struct TTFlatEntry {
@@ -64,8 +65,8 @@ struct TTFlatEntry {
 
 // コンパイル時にサイズを検証
 const _: () = assert!(
-    std::mem::size_of::<TTFlatEntry>() == 40,
-    "TTFlatEntry must be 40 bytes"
+    std::mem::size_of::<TTFlatEntry>() == 32,
+    "TTFlatEntry must be 32 bytes"
 );
 
 impl TTFlatEntry {
@@ -445,8 +446,9 @@ impl TranspositionTable {
     /// Zobrist XOR 差分で部分集合のハッシュを逐次計算する．
     /// proven entry の mate_distance を取得する．
     ///
-    /// pn=0 の proof エントリが存在すればその mate_distance (詰み手数) を
-    /// 返す．エントリがないか distance が未設定 (0) の場合は None．
+    /// pn=0 の proof エントリが存在し，かつ distance-aware な store で
+    /// 設定されたものに限り mate_distance を返す．legacy proven entry
+    /// (priority 値のみ) や 未設定の場合は None．
     /// PV 抽出時に AND ノードで longest resistance 判定に使用する．
     pub(super) fn look_up_mate_distance(
         &self,
@@ -459,10 +461,7 @@ impl TranspositionTable {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
             if e.pn == 0 && hand_gte_forward_chain(hand, &e.hand) {
-                if e.mate_distance == 0 {
-                    return None;
-                }
-                return Some(e.mate_distance);
+                return e.proven_distance();
             }
         }
         None
@@ -744,11 +743,24 @@ impl TranspositionTable {
         let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
 
         if is_proof {
-            // ply ベースの amount: ルートに近い proof ほど高い amount
-            new_entry.amount = 255u8.saturating_sub(self.hint_ply.min(254) as u8);
+            // 案 B: amount は dual-purpose
+            // - bit 7 set (caller が distance を設定済み): そのまま使用
+            // - bit 7 unset (legacy 経路): hint_ply ベース priority を計算
+            //
+            // 後者は store/store_with_best_move 経由 (distance 不明) の場合．
+            // 前者は store_with_best_move_and_distance 経由 (distance 既知) の場合．
+            // distance encoded entry は bit 7 で識別され，proven_distance() で
+            // 安全に取得できる．
+            if (new_entry.amount & 0x80) == 0 {
+                // legacy: hint_ply ベース priority．bit 7 は使わない (max 127)
+                new_entry.amount = 127u8.saturating_sub(self.hint_ply.min(127) as u8);
+            }
 
             // === 積極的削減: 同一 pos_key の proof を整理 ===
-            // hand_gte による被支配除去 + 同一 hand の ply 選別
+            // 同一 hand 比較は distance-aware を優先 (bit 7 set は priority 高)．
+            // 新旧 amount を同じ「価値」軸で比較するために bit 7 込みで扱う:
+            // - distance-aware (0x80-0xFF): 高い値ほど高 priority (常に > legacy)
+            // - legacy (0x00-0x7F): hint_ply 小ほど高 priority
             for fe in p_cluster.iter_mut() {
                 if fe.pos_key != pos_key { continue; }
                 if fe.entry.pn == 0 {
@@ -757,12 +769,12 @@ impl TranspositionTable {
                         fe.pos_key = 0;
                         continue;
                     }
-                    // 同一 hand の proof: ルートに近い方を残す
+                    // 同一 hand の proof: amount が高い方を残す
                     if fe.entry.hand == hand {
                         if new_entry.amount >= fe.entry.amount {
                             fe.pos_key = 0;
                         } else {
-                            return; // 既存の方がルートに近い → 挿入不要
+                            return; // 既存の方が価値高 → 挿入不要
                         }
                     }
                     // 異なる hand で支配関係なし → 両方必要(独立した proof)
@@ -781,7 +793,8 @@ impl TranspositionTable {
             }
         } else {
             // confirmed disproof: ply ベースだが proof より低い優先度
-            new_entry.amount = 128u8.saturating_sub(self.hint_ply.min(127) as u8);
+            // bit 7 は distance-aware proof flag なので使わない (max 127).
+            new_entry.amount = 127u8.saturating_sub(self.hint_ply.min(127) as u8);
 
             // === 積極的削減: 同一 pos_key・同一 hand の confirmed disproof を整理 ===
             let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];

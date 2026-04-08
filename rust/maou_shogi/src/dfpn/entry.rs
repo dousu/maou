@@ -17,18 +17,19 @@ const REMAINING_MASK: u16 = 0x7FFF;
 /// - remaining_flags: ビット 0-14 = 残り探索深さ(`depth - ply`)，
 ///   ビット 15 = path_dependent フラグ(GHI 対策)．
 ///   `REMAINING_INFINITE`(0x7FFF) は深さ制限なし(真の証明/反証)を示す．
-/// - mate_distance: 詰み手数 (proven entry のみ有効)．
-///   pn=0 のとき，この局面から詰みまでの手数 (= longest resistance 下で
-///   の残り plies) を保存する．PV 抽出時に AND ノードで再帰なしに
-///   最長抵抗の child を選択するために使う．
-///   非 proven entry では未使用 (0 のまま)．
+/// - amount: dual-purpose フィールド (案 B):
+///   - **proven entry (pn=0)**: mate_distance (詰み手数, u8 saturated 0-255)
+///     を格納．PV 抽出時の longest resistance 判定に使用．
+///     ※ 元々の hint_ply ベース priority は失う代わりに，より長い詰み筋
+///     (distance 大) を eviction で優先保持する形になる．
+///   - **non-proven entry**: 探索投資量メトリック(KomoringHeights の amount\_)．
+///     GC / 置換時に大きい amount のエントリを優先保持する．
 ///
 /// v0.24.0: エントリ圧縮(source u64→u32, amount u16→u8,
 /// path_dependent を remaining_flags に pack)で 32→24 bytes に削減．
 ///
-/// v0.24.23: mate_distance(u16) を追加(24→28 bytes)．TTFlatEntry は
-/// 32→40 bytes に拡大するが，PV 抽出で再帰なしの longest resistance 判定を
-/// 可能にして visit budget を不要にする．
+/// v0.24.24: amount を proven entry 用 mate_distance として再利用．
+/// TT entry サイズは 24 bytes に維持しつつ PV 抽出 fast path を実現．
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub(super) struct DfPnEntry {
@@ -39,23 +40,20 @@ pub(super) struct DfPnEntry {
     pub(super) pn: u32,
     pub(super) dn: u32,
     pub(super) hand: [u8; HAND_KINDS],
-    /// 探索投資量メトリック(KomoringHeights の amount\_ に相当)．
-    /// GC / 置換時に大きい amount のエントリを優先保持する．
-    /// u8 に圧縮(0-255)．PROOF_BONUS=100, DISPROOF_BONUS=50 が収まる．
+    /// dual-purpose: proven entry では mate_distance, non-proven では
+    /// 探索投資量．アクセスは `proven_distance()` / `working_amount()` を
+    /// 経由する．
     pub(super) amount: u8,
     /// ビット 0-14: remaining depth, ビット 15: path_dependent flag.
     remaining_flags: u16,
     /// TT Best Move: この局面で最も有望だった手の Move16 エンコーディング．
     pub(super) best_move: u16,
-    /// 詰み手数 (proven entry でのみ有効)．pn=0 のとき，この局面から
-    /// 詰みまでの残り plies を保存する．非 proven entry では 0．
-    pub(super) mate_distance: u16,
 }
 
-// コンパイル時にサイズを検証(28 bytes == DfPnEntry with mate_distance added)
+// コンパイル時にサイズを検証(TTFlatEntry が 32 bytes になることを保証)
 const _: () = assert!(
-    std::mem::size_of::<DfPnEntry>() == 28,
-    "DfPnEntry must be 28 bytes with mate_distance field"
+    std::mem::size_of::<DfPnEntry>() == 24,
+    "DfPnEntry must be 24 bytes for 32-byte TTFlatEntry"
 );
 
 impl DfPnEntry {
@@ -68,8 +66,30 @@ impl DfPnEntry {
         amount: 0,
         remaining_flags: 0,
         best_move: 0,
-        mate_distance: 0,
     };
+
+    /// proven entry の mate_distance を取得する．
+    ///
+    /// 案 B のエンコーディング: amount フィールドは dual-purpose:
+    /// - **bit 7 = 1**: distance-aware store (bits 0-6 = mate_distance, 0-127)
+    /// - **bit 7 = 0**: legacy store (priority value, distance unknown)
+    ///
+    /// pn=0 で bit 7 がセットされていれば distance を返し，それ以外は None．
+    #[inline(always)]
+    pub(super) fn proven_distance(&self) -> Option<u16> {
+        if self.pn == 0 && (self.amount & 0x80) != 0 {
+            Some((self.amount & 0x7F) as u16)
+        } else {
+            None
+        }
+    }
+
+    /// distance を amount フィールドに encode する (bit 7 をセット)．
+    /// distance > 127 は 127 で saturate する．
+    #[inline(always)]
+    pub(super) fn encode_distance_amount(distance: u16) -> u8 {
+        0x80 | (distance.min(127) as u8)
+    }
 
     /// remaining 値を取得する(ビット 0-14)．
     #[inline(always)]
@@ -113,11 +133,11 @@ impl DfPnEntry {
             amount,
             remaining_flags: Self::encode_remaining_flags(remaining, path_dependent),
             best_move,
-            mate_distance: 0,
         }
     }
 
     /// 詰み手数付きで新しいエントリを構築する (proven entry 用)．
+    /// 案 B: amount フィールドに mate_distance を bit 7 set 形式で格納する．
     #[inline(always)]
     pub(super) fn new_with_distance(
         source: u32,
@@ -127,9 +147,16 @@ impl DfPnEntry {
         remaining: u16,
         path_dependent: bool,
         best_move: u16,
-        amount: u8,
+        _amount: u8,
         mate_distance: u16,
     ) -> Self {
+        // proven entry: amount に distance を bit 7 set 形式で encode
+        // non-proven: amount は通常通り (mate_distance パラメータは無視)
+        let amount = if pn == 0 && mate_distance > 0 {
+            Self::encode_distance_amount(mate_distance)
+        } else {
+            _amount
+        };
         Self {
             source,
             pn,
@@ -138,7 +165,6 @@ impl DfPnEntry {
             amount,
             remaining_flags: Self::encode_remaining_flags(remaining, path_dependent),
             best_move,
-            mate_distance,
         }
     }
 
