@@ -2317,6 +2317,84 @@ use crate::types::{Color, PieceType};
         );
     }
 
+    /// 39手詰め ply 24 から Mate(15) を発見する **非 ignore 回帰テスト**．
+    ///
+    /// 役割: PV 抽出の無駄合チェーン対策 (`count_useless_interpose_pairs`)
+    /// が正しく動作することを保証する．
+    ///
+    /// 背景: v0.24.23〜v0.24.26 には `extract_pv_recursive_inner` に fast
+    /// path (TT mate_distance を直接比較) が存在したが，TT distance は
+    /// raw 距離 (無駄合チェーンで inflate された値) を返すため，
+    /// `effective_len = total_len - 2 * useless_pairs` ではなく raw で
+    /// 比較してしまい chain drop 子を誤って選択し `Mate(21)` を返す
+    /// 可能性があった．v0.24.29 で fast path を廃止し，slow path で
+    /// 常に effective_len 比較を行うようにした．
+    ///
+    /// このテストは ply 24 位置から `solve()` を呼び出し，**必ず 15 手**
+    /// の PV が返ることを確認する．将来 fast path を再導入したり
+    /// effective_len 計算を壊した場合，このテストが失敗する．
+    ///
+    /// コスト: v0.24.29 で ~370K ノード / ~40 秒．
+    #[test]
+    fn test_tsume_39te_ply24_mate15_regression() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        // ply 24 までの前段 PV (24 手)．この後の攻め方番から解かせる．
+        let prefix_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+        // ply 24 から期待される 15 手の PV (canonical Mate(15))．
+        // chain drop で inflate された Mate(21) ではないことを保証する．
+        let expected_pv = [
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i",
+            "S*6i", "8i6i", "6h6i+", "S*2h", "1i2i",
+            "2h3g", "2i3i", "2g2h", "3i4i", "2h4h",
+        ];
+        assert_eq!(expected_pv.len(), 15);
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix_pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        // 残り 15 手 + 2 の depth で depth=17．予算 1M / 90s．
+        let mut solver = DfPnSolver::with_timeout(17, 1_000_000, 32767, 90);
+        solver.set_find_shortest(false);
+
+        let result = solver.solve(&mut board);
+
+        match result {
+            TsumeResult::Checkmate { moves, .. } => {
+                assert_eq!(
+                    moves.len(), 15,
+                    "expected Mate(15) canonical PV, got Mate({}): {:?}",
+                    moves.len(),
+                    moves.iter().map(|m| m.to_usi()).collect::<Vec<_>>()
+                );
+                let pv_usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                let pv_refs: Vec<&str> = pv_usi.iter().map(|s| s.as_str()).collect();
+                assert_eq!(
+                    pv_refs, expected_pv,
+                    "Mate(15) PV mismatch\n  got:      {}\n  expected: {}",
+                    pv_usi.join(" "), expected_pv.join(" "),
+                );
+            }
+            TsumeResult::CheckmateNoPv { nodes_searched } => {
+                panic!(
+                    "expected full Mate(15) PV but got CheckmateNoPv (nodes={}); \
+                     PV extraction did not complete within visit budget",
+                    nodes_searched
+                );
+            }
+            TsumeResult::NoCheckmate { .. } => panic!("expected Mate(15), got NoMate"),
+            TsumeResult::Unknown { .. } => panic!("expected Mate(15), got Unknown"),
+        }
+    }
+
     /// 39手詰め逆順サブ問題: 1M ノード / 180 秒で各 OR ノードから解き，
     /// 解けなくなった境界を特定する．解けない局面ではANDノードの各応手の
     /// 探索コスト内訳を報告する．

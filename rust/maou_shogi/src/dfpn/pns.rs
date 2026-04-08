@@ -973,8 +973,25 @@ impl DfPnSolver {
     /// (`docs/design/tsume-solver/aigoma-optimization.md`) の意図する
     /// 「PV(最長) = 真の最長抵抗」を復元する．
     ///
-    /// `pv[0]` が defender 手 (AND ノードが選ぶ手) であることを前提とする．
+    /// # 前提条件
+    ///
+    /// - `pv[0]` が **defender 手** (AND ノードが選ぶ手) であること．
+    ///   OR-node 起点の PV (attacker 先頭) を渡すと意味のない結果になる．
+    ///   呼び出し元は `extract_pv_recursive_inner` の AND ノード分岐のみ．
+    ///
+    /// # i += 2 ステップの意味
+    ///
+    /// チェーン内でペアが重なることはない (非重複 pairing)．
+    /// (defender_drop, attacker_capture) を消費したら次は (next_defender,
+    /// next_attacker) のペアを見る．これにより，例えばマルチレベル連続
+    /// チェーン `DC DC DC ...` (D=drop, C=capture) は 3 pair と数えられる．
+    /// 途中の recapture は次の pair の対象にはならず重複計上を避ける．
     pub(super) fn count_useless_interpose_pairs(pv: &[Move]) -> usize {
+        // 前提条件の契約: pv[0] は defender 手でなければならない．
+        // 手そのものから side は判らないが，defender_drop + attacker_capture が
+        // 同一マスで発生する特殊パターンは OR 始点では解釈不能 (OR 始点だと
+        // pv[0]=attacker_drop となり pair セマンティクスが崩れる)．
+        // 呼び出しは `extract_pv_recursive_inner` の AND 分岐のみ．
         let mut count = 0;
         let mut i = 0;
         while i + 1 < pv.len() {
@@ -1195,69 +1212,20 @@ impl DfPnSolver {
                 verbose_eprintln!("[PV diag] ply={} AND node, {} defense moves", ply, moves.len());
             }
 
-            // === Fast path: TT distance ベースの longest resistance 選択 ===
+            // 【不採用】v0.24.23 で導入された TT distance ベースの fast path は
+            // unsound であった: TT の `mate_distance` は **raw** 距離を保存しており，
+            // 無駄合 chain によって inflate された値を返す．fast path はその raw
+            // 距離で longest resistance を選んでいたため，chain drop 子を誤って
+            // 選択し Mate(21) を返す可能性があった (39手詰め ply 24 の既知バグ)．
             //
-            // TT に mate_distance が保存されていれば，各 defender child の
-            // distance を O(1) で取得し，最長を選べる．再帰は 1 本だけで済み，
-            // 合計コストは O(depth × B) に圧縮される．
+            // 修正: 全 defender 子を再帰評価し，`effective_len = total_len -
+            // 2 * useless_pairs` で比較する slow path を常に使う．訪問予算は
+            // `visits`/`max_visits` で制限され，予算超過時は `all_evaluated = false`
+            // を立てて呼び出し側で `CheckmateNoPv` に変換させる．
             //
-            // 全 defender 子の TT lookup が成功し，distance が全て取得できた
-            // 場合のみ fast path を使用．いずれかが None (未設定) なら
-            // 従来の recursive 比較 にフォールバック．
-            let mut fast_path_best: Option<(Move, u16)> = None;
-            let mut fast_path_all_known = true;
-            for m in &moves {
-                let captured = board.do_move(*m);
-                let (child_pn, _) = self.look_up_board_for_pv(board);
-                if child_pn != 0 {
-                    // 未証明 child (proven tree に含まれない). fast path 断念
-                    board.undo_move(*m, captured);
-                    fast_path_all_known = false;
-                    break;
-                }
-                let dist_opt = self.look_up_board_mate_distance_for_pv(board);
-                board.undo_move(*m, captured);
-                match dist_opt {
-                    Some(d) => {
-                        match fast_path_best {
-                            None => fast_path_best = Some((*m, d)),
-                            Some((_, best_d)) if d > best_d => {
-                                fast_path_best = Some((*m, d));
-                            }
-                            _ => {}
-                        }
-                    }
-                    None => {
-                        // distance が TT に無い → fast path 断念
-                        fast_path_all_known = false;
-                        break;
-                    }
-                }
-            }
-
-            if fast_path_all_known {
-                if let Some((best_m, _)) = fast_path_best {
-                    // best_m に決定．sub_pv を 1 本だけ再帰計算．
-                    let captured = board.do_move(best_m);
-                    visited.insert(full_hash);
-                    let sub_pv = self.extract_pv_recursive_inner(
-                        board, true, visited, ply + 1, diag,
-                        visits, max_visits,
-                    );
-                    visited.remove(&full_hash);
-                    board.undo_move(best_m, captured);
-
-                    let mut result = Vec::with_capacity(1 + sub_pv.len());
-                    result.push(best_m);
-                    result.extend_from_slice(&sub_pv);
-                    return result;
-                }
-                // defender moves が空だったケース (冒頭で return してるはずだが念のため)
-                return Vec::new();
-            }
-
-            // === Slow path: 従来の recursive 比較 ===
-            // TT に distance が無い場合．effective length 比較で全 child を評価．
+            // 性能: fast path 廃止により深い aigoma 問題で PV 抽出コストが増える
+            // が，実測では `test_tsume_39te_ply22_no_pns` は visit 予算 10M 内で
+            // 完了する (ply 22 の Mate(17) を正しく発見)．
 
             let mut best_pv: Option<Vec<Move>> = None;
             let mut best_is_capture = false;
@@ -1384,14 +1352,6 @@ impl DfPnSolver {
             }
             best_pv.unwrap_or_default()
         }
-    }
-
-    /// PV 抽出用: 盤面から mate_distance を取得するラッパ．
-    #[inline]
-    pub(super) fn look_up_board_mate_distance_for_pv(&self, board: &Board) -> Option<u16> {
-        let pk = position_key(board);
-        let hand = board.hand[self.attacker.index()];
-        self.table.look_up_mate_distance(pk, &hand)
     }
 
     /// 探索ノード数を返す．

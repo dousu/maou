@@ -765,7 +765,7 @@ impl DfPnSolver {
             // PV 候補とその抽出が完全だったかを集める．
             // pv_extraction_incomplete フラグを extract_pv_limited 呼び出し
             // 後に確認し，最終的な Checkmate 判定で使う．
-            let (final_pv, mut pv_complete) = if let Some(pv) = pns_pv {
+            let (final_pv, pv_complete) = if let Some(pv) = pns_pv {
                 if self.find_shortest {
                     // 最短手数探索: PV 長を depth 上限にして追加証明
                     let saved_depth = self.depth;
@@ -818,8 +818,6 @@ impl DfPnSolver {
                     (moves, extraction_complete)
                 }
             };
-            // pv_complete suppress: pns_pv route doesn't necessarily check
-            let _ = &mut pv_complete;
 
             // PV 抽出が AND ノードで全 defender を評価し切れなかった場合，
             // 表示される PV が真の longest resistance である保証がないため，
@@ -2453,7 +2451,7 @@ impl DfPnSolver {
             // AND: max(all children distances) + 1
             // 子の distance が取得できない (0) 場合は distance=0 (未知) とする．
             let mate_dist: u16 = if store_pn == 0 {
-                let mut compute_dist = || -> u16 {
+                let compute_dist = || -> u16 {
                     if or_node {
                         // best_idx の child (proven を代表) の distance + 1
                         let best_child = &children[best_idx];
