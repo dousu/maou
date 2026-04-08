@@ -17,19 +17,14 @@ const REMAINING_MASK: u16 = 0x7FFF;
 /// - remaining_flags: ビット 0-14 = 残り探索深さ(`depth - ply`)，
 ///   ビット 15 = path_dependent フラグ(GHI 対策)．
 ///   `REMAINING_INFINITE`(0x7FFF) は深さ制限なし(真の証明/反証)を示す．
-/// - amount: dual-purpose フィールド (案 B):
-///   - **proven entry (pn=0)**: mate_distance (詰み手数, u8 saturated 0-255)
-///     を格納．PV 抽出時の longest resistance 判定に使用．
-///     ※ 元々の hint_ply ベース priority は失う代わりに，より長い詰み筋
-///     (distance 大) を eviction で優先保持する形になる．
-///   - **non-proven entry**: 探索投資量メトリック(KomoringHeights の amount\_)．
-///     GC / 置換時に大きい amount のエントリを優先保持する．
+/// - amount: 探索投資量メトリック(KomoringHeights の amount\_)．
+///   GC / 置換時に大きい amount のエントリを優先保持する．
 ///
 /// v0.24.0: エントリ圧縮(source u64→u32, amount u16→u8,
 /// path_dependent を remaining_flags に pack)で 32→24 bytes に削減．
 ///
-/// v0.24.24: amount を proven entry 用 mate_distance として再利用．
-/// TT entry サイズは 24 bytes に維持しつつ PV 抽出 fast path を実現．
+/// v0.24.26: 案 D (Plan D) で proven entry は `ProvenEntry` に分離．
+/// DfPnEntry は WorkingTT 専用(intermediate + depth-limited disproof)．
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub(super) struct DfPnEntry {
@@ -40,9 +35,7 @@ pub(super) struct DfPnEntry {
     pub(super) pn: u32,
     pub(super) dn: u32,
     pub(super) hand: [u8; HAND_KINDS],
-    /// dual-purpose: proven entry では mate_distance, non-proven では
-    /// 探索投資量．アクセスは `proven_distance()` / `working_amount()` を
-    /// 経由する．
+    /// 探索投資量メトリック．GC / 置換で保持優先度として使う．
     pub(super) amount: u8,
     /// ビット 0-14: remaining depth, ビット 15: path_dependent flag.
     remaining_flags: u16,
@@ -100,6 +93,7 @@ const _: () = assert!(
     "ProvenEntry must be 12 bytes"
 );
 
+#[allow(dead_code)]
 impl ProvenEntry {
     pub(super) const ZERO: Self = ProvenEntry {
         hand: [0; HAND_KINDS],
@@ -114,6 +108,39 @@ impl ProvenEntry {
         (self.flags & 0x01) != 0
     }
 
+    /// pn synthesized value: proof=0, disproof=INF.
+    #[inline(always)]
+    pub(super) fn pn(&self) -> u32 {
+        if self.is_proof() { 0 } else { u32::MAX }
+    }
+
+    /// dn synthesized value: proof=INF, disproof=0.
+    #[inline(always)]
+    pub(super) fn dn(&self) -> u32 {
+        if self.is_proof() { u32::MAX } else { 0 }
+    }
+
+    /// source synthesized value: proven entries don't use SNDA → 0.
+    #[inline(always)]
+    pub(super) fn source(&self) -> u32 {
+        0
+    }
+
+    /// remaining value (0-32767).
+    /// proof entries の値は常に `REMAINING_INFINITE` (0x7FFF)．
+    /// disproof entries の値は store 時の depth．
+    #[inline(always)]
+    pub(super) fn remaining(&self) -> u16 {
+        self.remaining & REMAINING_MASK
+    }
+
+    /// path_dependent フラグ．proven entries では常に false
+    /// (path_dependent entries は WorkingTT に格納される)．
+    #[inline(always)]
+    pub(super) fn path_dependent(&self) -> bool {
+        false
+    }
+
     /// mate_distance を取得する (proof + distance_set のときのみ Some)．
     /// bits 1-6 に格納された 0-63 の distance を返す．
     #[inline(always)]
@@ -122,6 +149,61 @@ impl ProvenEntry {
             Some(((self.flags >> 1) & 0x3F) as u16)
         } else {
             None
+        }
+    }
+
+    /// `DfPnEntry::proven_distance` と API 互換のエイリアス．
+    /// PV 抽出 fast path で DfPnEntry と同様に使用できる．
+    #[inline(always)]
+    pub(super) fn proven_distance(&self) -> Option<u16> {
+        self.mate_distance()
+    }
+
+    /// エントリの eviction priority (高いほど保持優先)．
+    ///
+    /// - proof with distance: `0x80 | min(distance, 63)` → 128..191
+    ///   (distance が大きい = 長い詰み筋ほど高 priority)
+    /// - proof without distance: 64 (mid)
+    /// - confirmed disproof: 32 (low)
+    ///
+    /// `DfPnEntry::amount` と意味が異なることに注意(DfPnEntry は ply ベース)．
+    /// Plan D では proven entries の eviction は距離/種別ベース．
+    #[inline(always)]
+    pub(super) fn amount(&self) -> u8 {
+        if let Some(d) = self.mate_distance() {
+            0x80 | (d.min(63) as u8)
+        } else if self.is_proof() {
+            64
+        } else {
+            32
+        }
+    }
+
+    /// proof エントリを構築する．
+    #[inline(always)]
+    pub(super) fn new_proof(
+        hand: [u8; HAND_KINDS],
+        best_move: u16,
+        mate_distance: u16,
+    ) -> Self {
+        Self {
+            hand,
+            flags: Self::encode_proof_flags(mate_distance),
+            best_move,
+            remaining: REMAINING_INFINITE,
+        }
+    }
+
+    /// confirmed disproof エントリを構築する．
+    #[inline(always)]
+    pub(super) fn new_disproof(
+        hand: [u8; HAND_KINDS],
+    ) -> Self {
+        Self {
+            hand,
+            flags: Self::encode_disproof_flags(),
+            best_move: 0,
+            remaining: REMAINING_INFINITE,
         }
     }
 
@@ -144,6 +226,9 @@ impl ProvenEntry {
     }
 }
 
+/// `REMAINING_INFINITE` は `tt.rs` で定義されるが，entry.rs からも参照する．
+const REMAINING_INFINITE: u16 = 0x7FFF;
+
 impl DfPnEntry {
     /// ゼロ初期化されたエントリ(EMPTY 定数用)．
     pub(super) const ZERO: Self = DfPnEntry {
@@ -155,29 +240,6 @@ impl DfPnEntry {
         remaining_flags: 0,
         best_move: 0,
     };
-
-    /// proven entry の mate_distance を取得する．
-    ///
-    /// 案 B のエンコーディング: amount フィールドは dual-purpose:
-    /// - **bit 7 = 1**: distance-aware store (bits 0-6 = mate_distance, 0-127)
-    /// - **bit 7 = 0**: legacy store (priority value, distance unknown)
-    ///
-    /// pn=0 で bit 7 がセットされていれば distance を返し，それ以外は None．
-    #[inline(always)]
-    pub(super) fn proven_distance(&self) -> Option<u16> {
-        if self.pn == 0 && (self.amount & 0x80) != 0 {
-            Some((self.amount & 0x7F) as u16)
-        } else {
-            None
-        }
-    }
-
-    /// distance を amount フィールドに encode する (bit 7 をセット)．
-    /// distance > 127 は 127 で saturate する．
-    #[inline(always)]
-    pub(super) fn encode_distance_amount(distance: u16) -> u8 {
-        0x80 | (distance.min(127) as u8)
-    }
 
     /// remaining 値を取得する(ビット 0-14)．
     #[inline(always)]
@@ -213,38 +275,6 @@ impl DfPnEntry {
         best_move: u16,
         amount: u8,
     ) -> Self {
-        Self {
-            source,
-            pn,
-            dn,
-            hand,
-            amount,
-            remaining_flags: Self::encode_remaining_flags(remaining, path_dependent),
-            best_move,
-        }
-    }
-
-    /// 詰み手数付きで新しいエントリを構築する (proven entry 用)．
-    /// 案 B: amount フィールドに mate_distance を bit 7 set 形式で格納する．
-    #[inline(always)]
-    pub(super) fn new_with_distance(
-        source: u32,
-        pn: u32,
-        dn: u32,
-        hand: [u8; HAND_KINDS],
-        remaining: u16,
-        path_dependent: bool,
-        best_move: u16,
-        _amount: u8,
-        mate_distance: u16,
-    ) -> Self {
-        // proven entry: amount に distance を bit 7 set 形式で encode
-        // non-proven: amount は通常通り (mate_distance パラメータは無視)
-        let amount = if pn == 0 && mate_distance > 0 {
-            Self::encode_distance_amount(mate_distance)
-        } else {
-            _amount
-        };
         Self {
             source,
             pn,
