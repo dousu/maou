@@ -33,8 +33,20 @@ const PROVEN_CLUSTER_SIZE: usize = 8;
 ///
 /// intermediate + depth-limited disproof 専用．
 /// proof/confirmed disproof が ProvenTT に分離されたため，
-/// 6 エントリの全てを working entries に使用できる．
-const WORKING_CLUSTER_SIZE: usize = 6;
+/// 全エントリを working entries に使用できる．
+///
+/// **v0.24.27:** 6 → 8 に増加．
+/// Plan D で ProvenTT から解放された 128 MB を WorkingTT の slot 拡大に再配分．
+/// - 旧: 6 × 32 = 192 B/cluster (3 cache lines)
+/// - 新: 8 × 32 = 256 B/cluster (4 cache lines, 整列良好)
+///
+/// メモリ影響 (@ 2M clusters): 384 MB → 512 MB (+128 MB，ちょうど解放分)．
+/// 総 TT 消費は Plan B 以前 (896 MB) と同等に戻るが，配分が
+/// ProvenTT 寄り (512+384=896) → WorkingTT 寄り (384+512=896) にシフト．
+///
+/// 効果: WorkingTT は overflow-limited (intermediate エントリが頻繁に衝突)．
+/// slot を 33% 増やすことで overflow → eviction → 再探索サイクルを減らす．
+const WORKING_CLUSTER_SIZE: usize = 8;
 
 /// TT クラスタ数のデフォルト値(2^21 = 2M クラスタ)．
 ///
@@ -1586,7 +1598,7 @@ impl TranspositionTable {
 
         // WorkingTT クラスタ充填分布
         let working_clusters = working_slots / WORKING_CLUSTER_SIZE;
-        let mut wcluster_fill = [0u64; 7]; // 0..6
+        let mut wcluster_fill = [0u64; WORKING_CLUSTER_SIZE + 1];
         for c in 0..working_clusters {
             let start = c * WORKING_CLUSTER_SIZE;
             let fill = self.working[start..start + WORKING_CLUSTER_SIZE].iter()
@@ -1594,7 +1606,7 @@ impl TranspositionTable {
             wcluster_fill[fill] += 1;
         }
         eprintln!("WorkingTT cluster fill distribution:");
-        for i in 0..=6 {
+        for i in 0..=WORKING_CLUSTER_SIZE {
             if wcluster_fill[i] > 0 {
                 eprintln!("  {} entries: {} clusters ({:.1}%)", i, wcluster_fill[i],
                     wcluster_fill[i] as f64 / working_clusters as f64 * 100.0);
