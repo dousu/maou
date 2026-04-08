@@ -104,7 +104,8 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 56 | GC 時の obsolete intermediate 除去 | — | §6.6.4 | v0.24.12 |
 | 57 | 探索パス保護 (GC 前 amount 引き上げ) | — | §6.6.4 | v0.24.11 |
 | 58 | proof(-1) + 歩disproof(+1) 近傍走査 | — | §6.6.4 | v0.24.16 |
-| 59 | PV 抽出 fast path (TT mate\_distance) | — | §6.6.5 | v0.24.23 |
+| 59 | ~~PV 抽出 fast path (TT mate\_distance)~~ **v0.24.29 で廃止 (無駄合 unsound)** | — | §6.6.5, §10.2 | v0.24.23〜v0.24.28 |
 | 60 | TT entry 24 bytes 維持 (amount 再利用) Plan B | maou 独自 | §6.6.5 | v0.24.24 |
 | 61 | ProvenEntry 分離 (Plan D) | maou 独自 | §6.6.5 | v0.24.26 |
 | 62 | WorkingTT cluster size 6→8 (cache-aligned, +33% slots) | maou 独自 | §6.6.5 | v0.24.27 |
+| 63 | PV 抽出で effective\_len 比較を常用 (fast path 廃止) | maou 独自 | §10.2 | v0.24.29 |

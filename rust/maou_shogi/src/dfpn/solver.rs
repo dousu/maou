@@ -768,16 +768,29 @@ impl DfPnSolver {
             //   `test_tsume_39te_ply24_mate15_regression` (1M ノード探索予算)
             //   で PV 抽出 ~40s 程度
             //
-            // 実測 (v0.24.28 → v0.24.29, fast path 廃止):
-            // - 全 dfpn 55 テスト (大半が短い詰み): 140s → 156s (+11%)
-            // - `test_tsume_39te_ply22_no_pns` (Mate(17)): 106s → 110s (+4%)
-            // - `test_tsume_39te_backward_120m` (Mate(1)〜Mate(17) 全 ply):
-            //   fast path が実際に fire していた浅い ply で僅かな増加があるが
-            //   全体としては visit 予算 10M 内に収まる．
+            // 実測 (v0.24.27 → v0.24.29, fast path 廃止，backward_120m):
+            // | Ply  | v0.24.27 (fast path) | v0.24.29 (slow only) |    Δ |
+            // |------|----------------------|----------------------|------|
+            // | 24   |              41.18s  |              41.10s  |  ~0% |
+            // | **22** |            **418.91s**  |            **398.44s**  | **-4.9%** |
+            // |   (Mate(17)) |              |                      |      |
+            // | 38-26 |               < 0.5s |               < 0.5s |  noise |
             //
-            // 深い詰み (ply 20 以下) では visit 予算を超過し空 PV +
-            // CheckmateNoPv になる可能性があるが，これは search 自体の
-            // ノード予算が尽きる領域であり PV 抽出が律速要因ではない．
+            // 重要な発見: 深い aigoma (ply 22) で v0.24.29 の方が **速い**．
+            // fast path は「全 child TT lookup + distance 取得 → 失敗なら
+            // slow path」という 2 パス構造だったため，fire しない場合は
+            // 事前 TT lookup が純粋なオーバーヘッドになっていた．
+            // chain drop が proven になる確率が低い deep aigoma 問題では
+            // fast path がほぼ fire せず，廃止が高速化に寄与する．
+            //
+            // 浅い詰み (typical <15 手) では full dfpn suite で 140s → 156s
+            // (+11%) の軽微な regression がある．これは fast path が fire
+            // していた浅いケースの単純化コスト．
+            //
+            // ply ≤ 20 は visit 予算 10M を超える可能性があるが，そこまで
+            // 深い探索では **探索側のノード予算が先に尽きる**ので PV 抽出
+            // が律速要因になることはない．ply 20 は v0.24.27 でも 120M
+            // ノード予算 + 1800s timeout で Unknown だった．
             const PV_VISIT_BUDGET: u64 = 10_000_000;
 
             // PV 候補とその抽出が完全だったかを集める．
