@@ -50,9 +50,9 @@ const WORKING_CLUSTER_SIZE: usize = 8;
 
 /// TT クラスタ数のデフォルト値(2^21 = 2M クラスタ)．
 ///
-/// Dual TT メモリ配分:
-/// - ProvenTT:  proven_num_clusters × 8 × 32B
-/// - WorkingTT: working_num_clusters × 6 × 32B
+/// Dual TT メモリ配分 (v0.24.27):
+/// - ProvenTT:  proven_num_clusters × 8 × 24B = 384 MB @ 2M clusters
+/// - WorkingTT: working_num_clusters × 8 × 32B = 512 MB @ 2M clusters
 const DEFAULT_NUM_CLUSTERS: usize = 1 << 21; // 2M
 
 /// ProvenTT のクラスタ数の倍率．
@@ -375,7 +375,7 @@ impl TranspositionTable {
 
         // 歩(k=0)の+1のみ disproof 近傍走査．
         // disproof 近傍ヒットの60%+が歩+1(合駒チェーンの歩合い排除)．
-        // 追加コストは1クラスタ(6エントリ)のみで極めて軽量．
+        // 追加コストは1クラスタ(WORKING_CLUSTER_SIZE エントリ)のみで極めて軽量．
         if neighbor_scan && hand[0] < PieceType::MAX_HAND_COUNT[0] {
             let base_hh = Self::hand_hash(hand);
             let diff = Self::hand_hash_diff(0, hand[0], hand[0] + 1);
@@ -484,16 +484,15 @@ impl TranspositionTable {
     /// 部分集合クラスタ走査の上限．
     const MAX_SUBSET_CLUSTERS: usize = 128;
 
-    /// 持ち駒の全部分集合に対応するクラスタを走査して proof を検索する．
+    /// proven entry の mate_distance を取得する (PV 抽出 fast path 用)．
     ///
-    /// `look_up_proven` の1枚差走査で見つからない場合のフォールバック．
-    /// Zobrist XOR 差分で部分集合のハッシュを逐次計算する．
-    /// proven entry の mate_distance を取得する．
+    /// 自クラスタを走査し，proof エントリが存在すれば `ProvenEntry::mate_distance()`
+    /// の値を返す．`store_with_best_move_and_distance` 経由で distance が
+    /// 設定されていないエントリ (flags の distance_set ビットが立っていないもの)
+    /// では None を返す．
     ///
-    /// pn=0 の proof エントリが存在し，かつ distance-aware な store で
-    /// 設定されたものに限り mate_distance を返す．legacy proven entry
-    /// (priority 値のみ) や 未設定の場合は None．
-    /// PV 抽出時に AND ノードで longest resistance 判定に使用する．
+    /// PV 抽出時に AND ノードで longest resistance (最長抵抗手) の子を
+    /// 選択する際に使用する．
     pub(super) fn look_up_mate_distance(
         &self,
         pos_key: u64,
@@ -505,7 +504,7 @@ impl TranspositionTable {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
             if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
-                return e.proven_distance();
+                return e.mate_distance();
             }
         }
         None
@@ -933,10 +932,8 @@ impl TranspositionTable {
             }
             return;
         }
-        // クラスタ飽和 → overflow
+        // クラスタ飽和 → overflow．サンプリング診断は replace 後に実行 (borrow 回避)．
         self.working_overflow_since_gc += 1;
-        // サンプリングは replace 後に実行(borrow 回避)
-        // replace_weakest_for_disproof
         if Self::replace_weakest_for_disproof_in(w_cluster, pos_key, new_entry) {
             #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
             return;

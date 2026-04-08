@@ -1262,9 +1262,8 @@ impl DfPnSolver {
             let mut best_pv: Option<Vec<Move>> = None;
             let mut best_is_capture = false;
             let mut best_is_drop = false;
-            // 効果長 = total_len - 2 * 無駄合 pair 数．
-            // 機械的に詰みを延ばすだけの 中合 chain (defender_drop +
-            // attacker_capture, recapture なし) を除外して比較する．
+            // best_effective_len: 効果長 (useless interpose pair を除外した長さ)．
+            // 定義は `count_useless_interpose_pairs` を参照．
             let mut best_effective_len: usize = 0;
             // soundness 用フラグ: 全 defender 子を評価し切ったか追跡する．
             // visit budget 不足で途中 break した場合，PV 抽出は最長抵抗を
@@ -1316,15 +1315,14 @@ impl DfPnSolver {
                         None => true,
                         Some(prev) => {
                             // 第一基準: 効果長 (無駄合除外後の真の resistance) が長い
+                            // 第二基準: 効果長同率なら raw length が短い (chain inflation の少ない) PV を優先
+                            // 第三基準: 同率なら駒取りを優先
+                            // 第四基準: 駒取り状況も同じなら合駒 (打ち駒) を優先
                             if effective_len > best_effective_len {
                                 true
                             } else if effective_len < best_effective_len {
                                 false
                             } else if total_len < prev.len() {
-                                // 効果長が同じなら chain pairs が少ない方
-                                // (= raw length が短い方) を選ぶ．
-                                // 同じ効果長ならば chain inflation が少ない
-                                // クリーンな PV を優先する．
                                 true
                             } else if total_len > prev.len() {
                                 false
@@ -1334,8 +1332,6 @@ impl DfPnSolver {
                                 && !best_is_drop
                                 && is_capture == best_is_capture
                             {
-                                // 同率 & 駒取り状況も同じ場合，
-                                // 合駒(打ち駒)を優先する．
                                 true
                             } else {
                                 false
@@ -1379,11 +1375,10 @@ impl DfPnSolver {
                 }
             }
 
-            // 全 defender を評価し切れなかった場合，PV 抽出は最長抵抗を
-            // 検証できていない (途中の defender 応手が unverified なまま)．
-            // pv_extraction_incomplete フラグを立てて呼び出し側 (solve())
-            // で CheckmateNoPv に変換させる．PV 自体は best_pv を返して
-            // 暫定 PV を保持できるようにする．
+            // Soundness: visit 予算が尽きて全 defender を評価し切れなかった場合，
+            // 返す PV は真の longest resistance である保証がない．
+            // `pv_extraction_incomplete` フラグを立て，呼び出し側 (`solve()`) で
+            // `CheckmateNoPv` に変換させる．暫定 PV は参考値として保持．
             if !all_evaluated {
                 self.pv_extraction_incomplete = true;
             }
@@ -1879,7 +1874,9 @@ impl DfPnSolver {
         const PNS_STAGNATION_LIMIT: u64 = 500_000;
         // P4: アリーナ成長率監視による適応的早期終了
         const GROWTH_CHECK_INTERVAL: u64 = 10_000;
-        const GROWTH_STALL_LIMIT: u32 = 10; // 10回連続(100K反復)成長ゼロで打ち切り
+        // 10 回連続の GROWTH_CHECK_INTERVAL (合計 100K PNS イテレーション) で
+        // アリーナ成長ゼロなら打ち切る．
+        const GROWTH_STALL_LIMIT: u32 = 10;
         let mut prev_arena_size: usize = 1; // ルートノード分
         let mut growth_stall_count: u32 = 0;
         loop {
@@ -2695,17 +2692,21 @@ impl DfPnSolver {
                 let effective_len = total_len.saturating_sub(2 * useless_pairs);
 
                 let is_capture = child.move_from_parent.captured_piece_raw() > 0;
+                // Phase 1 (PNS arena-based) の AND ノード選択基準．
+                // `extract_pv_recursive_inner` (Phase 2, TT-based) と同じ順序だが，
+                // arena では is_drop tiebreaker は省略してある (全子が評価済みで
+                // 無駄合判定が効果長に既に反映されているため)．
                 let is_better = match &best_pv {
                     None => true,
                     Some(prev) => {
                         // 第一基準: 効果長 (無駄合除外後の真の resistance) が長い
+                        // 第二基準: 同率なら raw length が短い PV を優先
+                        // 第三基準: 同率なら駒取りを優先
                         if effective_len > best_effective_len {
                             true
                         } else if effective_len < best_effective_len {
                             false
                         } else if total_len < prev.len() {
-                            // 効果長が同じなら chain pairs が少ない
-                            // (= raw length が短い) クリーンな PV を優先
                             true
                         } else if total_len > prev.len() {
                             false

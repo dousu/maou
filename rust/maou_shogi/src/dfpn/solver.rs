@@ -411,9 +411,9 @@ impl DfPnSolver {
     ///
     /// Deep df-pn では深い ply(depth の後半)にのみバイアスを適用:
     /// `pn = 1 + (ply - depth/2) / R` (ply > depth/2 の場合)．
-    /// 浅い ply は標準 df-pn と同じ `pn=1` を維持し，
-    /// 探索ホットパスでの TT 参照（自クラスタのみ）．
+    /// 浅い ply は標準 df-pn と同じ `pn=1` を維持する．
     ///
+    /// 本関数は探索ホットパスから呼ばれるため TT 参照は自クラスタのみとし，
     /// 近傍クラスタ走査は行わない(NPS 優先)．
     /// proof/disproof の hand\_gte 近傍走査は `has_proof`，`get_proof_hand` 等の
     /// 補助メソッド(±1 限定走査)に任せる．これらは child init や
@@ -562,19 +562,6 @@ impl DfPnSolver {
         self.table.store_with_best_move_and_distance(
             pos_key, hand, pn, dn, remaining, source, best_move, mate_distance,
         );
-    }
-
-    /// proven entry の mate_distance を取得する．
-    ///
-    /// 存在しないか distance=0 (未設定) の場合は None を返す．
-    #[inline]
-    pub(super) fn look_up_mate_distance_for_board(
-        &self,
-        board: &Board,
-    ) -> Option<u16> {
-        let pk = position_key(board);
-        let hand = board.hand[self.attacker.index()];
-        self.table.look_up_mate_distance(pk, &hand)
     }
 
     /// TT Best Move を参照する(位置キー＋持ち駒指定)．
@@ -857,17 +844,14 @@ impl DfPnSolver {
         }
     }
 
-    /// 深さ制限 OR ノードの再帰的 NM 判定．
+    /// 深さ制限 OR ノードの再帰的 NM 判定 (IDS の構造的不詰検証)．
     ///
-    /// 全王手に対して玉方に不詰を示す応手が存在するかを再帰的に確認する．
-    /// 各王手に対し，玉方に「応手後に王手なし」または「応手後の王手が
-    /// さらに反証可能」となる逃げ手が存在すれば真の不詰(REMAINING_INFINITE)
-    /// として扱える．`max_depth` で再帰の深さを制限し，分岐爆発を防止する．
-    /// IDS の NM 判定で使用する構造的不詰検証．
-    ///
-    /// 全王手に対して「合法な応手を経由して王手が尽きる」ことを再帰的に
-    /// 確認する．呼び出し回数上限(`REFUTABLE_CALL_LIMIT`)を超えた場合は
-    /// 安全側に倒して false(未証明)を返す．
+    /// 全王手に対して玉方に「応手後に王手なし」または「応手後の王手が
+    /// さらに反証可能」となる逃げ手が存在するかを再帰的に確認する．
+    /// 全ての王手でそれが成立すれば真の不詰 (REMAINING_INFINITE) として扱える．
+    /// 再帰深さは固定値 5 で制限し，分岐爆発を防止する．
+    /// 呼び出し回数上限 (`REFUTABLE_CALL_LIMIT`) を超えた場合は安全側に倒して
+    /// false (未証明) を返す．
     pub(super) fn depth_limit_all_checks_refutable(
         &mut self,
         board: &mut Board,

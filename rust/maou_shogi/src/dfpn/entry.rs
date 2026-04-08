@@ -59,8 +59,7 @@ const _: () = assert!(
 ///
 /// 必要なフィールド:
 /// - `hand`: hand_gte_forward_chain 比較
-/// - `proof_flag`: proof or confirmed disproof
-/// - `mate_distance`: PV 抽出の longest resistance 判定
+/// - `flags`: proof / confirmed disproof の種別 + mate_distance の pack
 /// - `best_move`: PV 表示用 attacker move
 /// - `remaining`: confirmed disproof の depth-limited 判定 (proof は常に INFINITE)
 ///
@@ -150,13 +149,6 @@ impl ProvenEntry {
         } else {
             None
         }
-    }
-
-    /// `DfPnEntry::proven_distance` と API 互換のエイリアス．
-    /// PV 抽出 fast path で DfPnEntry と同様に使用できる．
-    #[inline(always)]
-    pub(super) fn proven_distance(&self) -> Option<u16> {
-        self.mate_distance()
     }
 
     /// エントリの eviction priority (高いほど保持優先)．
