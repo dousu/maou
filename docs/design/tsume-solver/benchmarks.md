@@ -542,6 +542,93 @@ TT の構造的課題(overflow，NPS)は大幅に改善されたため，
 - **MID 閾値伝搬の改善**: depth boundary 付近でのノード集中を緩和する
   閾値制御(dn\_floor の adaptive 化等)
 
+#### 39手詰め最新調査 (v0.24.27, Plan D + WorkingTT 拡張)
+
+v0.24.23〜v0.24.27 で PV 抽出経路と TT エントリレイアウトを再設計し，
+**WorkingTT を 6→8 entries/cluster に拡張** (§6.6.5)．
+ply 22 サブ問題が初めて通常の `solve()` 経路で解けるようになった．
+
+**ply22 回帰テスト (`test_tsume_39te_ply22_no_pns`):**
+
+| 構成 | 時間 | Δ |
+|---|---|---|
+| Plan D baseline (v0.24.26) | 159.59s | — |
+| **v0.24.27 (WorkingTT 6→8)** | **104〜107s** | **-34.6%** |
+
+`mid_fallback` 直接呼び出し経路で 120M ノード予算 / 1200s timeout．
+WorkingTT slot を 33% 増やすことで intermediate エントリの eviction
+thrashing が解消された．
+
+**注意 — 「10M で解ける」narrative の整理:**
+
+v0.24.0〜v0.24.27 の改善過程で「10M で ply 22 が解ける」という記述が
+複数箇所に出るが，これは **2 種類の予算が混同されていた**:
+
+1. **PV 抽出予算 (`PV_VISIT_BUDGET = 10M`)**: 探索完了後の TT 歩行 (longest
+   resistance reconstruction) における visit 回数上限．Plan B (v0.24.23) で
+   `mate_distance` fast path を導入し O(B^D) → O(depth × B) に改善した結果，
+   10M visit で十分．
+2. **探索ノード予算 (`max_nodes`)**: DFPN 探索本体のノード展開上限．
+   ply 22 を解くには **120M nodes** 必要 (`test_tsume_39te_ply22_no_pns` の値)．
+
+「10M」は (1) であり (2) ではない．以下の backward 解析でこの違いを明確化した．
+
+**バックワード解析 (v0.24.27, 通常 `solve()` 経路):**
+
+PV を逆順にたどり，各偶数 ply (攻め方手番 = OR ノード) を個別に解いて
+解ける境界 ply を特定する．予算別に 3 回実施．
+
+| Ply | 残り | 1M nodes | 10M nodes | 120M nodes |
+|----:|----:|---|---|---|
+| 38 | 1 | Mate(1) ✓ | Mate(1) ✓ | Mate(1) ✓ |
+| 36 | 3 | Mate(3) ✓ | Mate(3) ✓ | Mate(3) ✓ |
+| 34 | 5 | Mate(5) ✓ | Mate(5) ✓ | Mate(5) ✓ |
+| 32 | 7 | Mate(7) ✓ | Mate(7) ✓ | Mate(7) ✓ |
+| 30 | 9 | Mate(9) ✓ | Mate(9) ✓ | Mate(9) ✓ |
+| 28 | 11 | Mate(11) ✓ | Mate(11) ✓ | Mate(11) ✓ |
+| 26 | 13 | Mate(13) ✓ | Mate(13) ✓ | Mate(13) ✓ |
+| **24** | **15** | **Unknown** | **Mate(15) ✓** (367k) | **Mate(15) ✓** (367k) |
+| **22** | **17** | Unknown | Unknown | **Mate(17) ✓** (38M, 419s) |
+| **20** | **19** | Unknown | Unknown | **Unknown (timeout)** (10.9M, 1817s) |
+
+**判明事項:**
+
+1. **境界は ply 24/22 → ply 22/20 にシフト**: v0.24.27 で初めて通常 `solve()` 経路
+   から ply 22 が解けるようになった (Mate(17) を 38M ノードで証明)
+2. **ply 20 (Mate(19)) は 120M でもタイムアウト**: 10.9M ノード時点で 1817 秒
+   経過 → 探索速度 6 kn/s と異常に遅い (ply 22 の 91 kn/s と比べて 1/15)
+3. **ノード予算ではなく時間が律速**: 深い局面ほど 1 ノードあたりのコストが
+   重く，枝の厚さが速度を落とす．ply 20 の真の必要ノード数は 30-100M と推定
+
+**コスト増大率 (v0.24.27):**
+
+| 区間 | ノード比 | 時間比 |
+|---|---|---|
+| ply 26 → 24 | 103 → 367k = **×3565** | 0.4 → 41s = **×100** |
+| ply 24 → 22 | 367k → 38M = **×104** | 41 → 419s = **×10** |
+| ply 22 → 20 | 38M → 10.9M+ (打ち切り) | 419 → 1817s+ |
+
+ply 26→24 の跳躍 (×3565) が最大．以後 2 手深くなるごとに概ね **×10〜100** の
+スケールでコストが増加する．完全解 (ply 0) までの距離はまだ大きく，
+ply 20 で既に 5 時間相当の見積もり → **完全解には数十時間〜数日** と推定．
+
+**測定スクリプト:** `test_tsume_39te_backward_1m`, `test_tsume_39te_backward_10m`,
+`test_tsume_39te_backward_120m` (tests.rs, `#[ignore]`)．
+ログは `/tmp/tsume_39te_backward_*.log`．
+
+**今後の方向性:**
+
+ply 20 以降を解くには次の改善が必要:
+
+- **NPS の根本的改善**: ply 20 で 6 kn/s は異常．move generation,
+  TT lookup, check generation のいずれかが指数的に重くなっている
+- **合駒チェーンの不詰証明共有**: 異なる駒種で同一不詰パターンが繰り返される
+  ケースを `hand_gte_forward_chain` で吸収する深さ・幅両方向の拡張
+- **段階的 IDS depth**: depth=41 一括ではなく depth=32→41 の段階解法で
+  Frontier Variant の MID 停滞検出を早く発動させる
+- **探索分割**: ply 24 サブ問題のような中間目標で TT ウォームアップ後に
+  ルートから解き直すアプローチ
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
