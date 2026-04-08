@@ -89,7 +89,8 @@ source ハッシュに基づくグループ化で重複分を控除する．
 
 **実装:** mod.rs (`snda_dedup`), solver.rs (OR/AND collect)
 
-TT エントリに `source: u64` フィールドを追加．
+TT エントリに `source` フィールドを追加
+(v0.24.0 で u64→u32 に圧縮，上位 32 bit 切り捨て．衝突確率は 2⁻³² で実用上十分)．
 `(source, value)` ペアをソートし，同一 source グループで:
 
 ```
