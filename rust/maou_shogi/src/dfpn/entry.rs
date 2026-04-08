@@ -92,7 +92,6 @@ const _: () = assert!(
     "ProvenEntry must be 12 bytes"
 );
 
-#[allow(dead_code)]
 impl ProvenEntry {
     pub(super) const ZERO: Self = ProvenEntry {
         hand: [0; HAND_KINDS],
@@ -131,13 +130,6 @@ impl ProvenEntry {
     #[inline(always)]
     pub(super) fn remaining(&self) -> u16 {
         self.remaining & REMAINING_MASK
-    }
-
-    /// path_dependent フラグ．proven entries では常に false
-    /// (path_dependent entries は WorkingTT に格納される)．
-    #[inline(always)]
-    pub(super) fn path_dependent(&self) -> bool {
-        false
     }
 
     /// mate_distance を取得する (proof + distance_set のときのみ Some)．
@@ -200,13 +192,25 @@ impl ProvenEntry {
     }
 
     /// proof エントリ用 flags を encode する．
-    /// distance > 63 は distance_set フラグなしで encode (None 扱い)．
+    ///
+    /// distance の扱い:
+    /// - `1..=63`: `distance_set` (bit 7) をセットし，`mate_distance()` で復元可能
+    /// - `> 63`: 6-bit フィールドに収まらないため distance_set なしで encode．
+    ///   `mate_distance()` は `None` を返し，PV 抽出は slow path の
+    ///   effective_len 計算にフォールバックする
+    /// - `0`: distance 未知 (caller が実 distance を計算できなかった場合) を
+    ///   意味する sentinel．`mate_distance()` は `None` を返す．
+    ///   MID store 時に `compute_dist()` の子 lookup が失敗した場合に 0 が
+    ///   渡されうる．有効な mate は必ず 1 手以上あるため，distance=0 を
+    ///   「未設定」として扱っても 1-手詰めとの衝突はない
+    ///   (1-手詰めは `distance=1` で encode される)．
     #[inline(always)]
     pub(super) fn encode_proof_flags(distance: u16) -> u8 {
         let bit0 = 0x01u8; // is_proof
         if distance > 0 && distance <= 63 {
             0x80 | (((distance & 0x3F) as u8) << 1) | bit0
         } else {
+            // distance = 0 (未知) または > 63 (範囲外): distance_set なし
             bit0
         }
     }

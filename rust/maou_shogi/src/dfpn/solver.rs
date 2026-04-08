@@ -759,7 +759,25 @@ impl DfPnSolver {
             // effective length 比較 (count_useless_interpose_pairs 経由) のために
             // 全 AND 子を評価する必要があり，旧 100K 予算では深い AND iteration
             // が途中で打ち切られて canonical PV を見逃すことがあった．
-            // 短い詰みでは proof tree が小さいため過剰コストはほぼゼロ．
+            //
+            // コスト特性 (v0.24.29, TT-distance fast path 廃止後):
+            // - 短い詰み (typical 3-15 手): proof tree が小さいため visit 数
+            //   は数千〜数万程度，予算の 0.1% も消費しない
+            // - 中深度 (20-30 手): 数十万〜数百万 visits，全体の数% のコスト
+            // - 深い aigoma (39手詰め ply 22〜24): 数百万 visits．具体的には
+            //   `test_tsume_39te_ply24_mate15_regression` (1M ノード探索予算)
+            //   で PV 抽出 ~40s 程度
+            //
+            // 実測 (v0.24.28 → v0.24.29, fast path 廃止):
+            // - 全 dfpn 55 テスト (大半が短い詰み): 140s → 156s (+11%)
+            // - `test_tsume_39te_ply22_no_pns` (Mate(17)): 106s → 110s (+4%)
+            // - `test_tsume_39te_backward_120m` (Mate(1)〜Mate(17) 全 ply):
+            //   fast path が実際に fire していた浅い ply で僅かな増加があるが
+            //   全体としては visit 予算 10M 内に収まる．
+            //
+            // 深い詰み (ply 20 以下) では visit 予算を超過し空 PV +
+            // CheckmateNoPv になる可能性があるが，これは search 自体の
+            // ノード予算が尽きる領域であり PV 抽出が律速要因ではない．
             const PV_VISIT_BUDGET: u64 = 10_000_000;
 
             // PV 候補とその抽出が完全だったかを集める．

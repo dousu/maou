@@ -1820,9 +1820,11 @@ impl TranspositionTable {
         for (i, fe) in self.proven_cluster(pos_key, hand).iter().enumerate() {
             if fe.pos_key == pos_key {
                 let e = &fe.entry;
+                // ProvenEntry は常に path_dependent=false (設計上，path-dep
+                // エントリは WorkingTT に格納される)．
                 verbose_eprintln!(
-                    "  [P{}]: pn={} dn={} remaining={} path_dep={} hand={:?}",
-                    i, e.pn(), e.dn(), e.remaining(), e.path_dependent(), &e.hand
+                    "  [P{}]: pn={} dn={} remaining={} path_dep=false hand={:?}",
+                    i, e.pn(), e.dn(), e.remaining(), &e.hand
                 );
             }
         }
