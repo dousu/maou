@@ -1839,8 +1839,14 @@ impl DfPnSolver {
         const GROWTH_STALL_LIMIT: u32 = 10;
         let mut prev_arena_size: usize = 1; // ルートノード分
         let mut growth_stall_count: u32 = 0;
+        #[cfg(feature = "verbose")]
+        let mut spin_iters_local: u64 = 0;
+        #[cfg(feature = "verbose")]
+        let mut changed_iters_local: u64 = 0;
         loop {
             pns_iters += 1;
+            #[cfg(feature = "verbose")]
+            let (root_pn_before, root_dn_before) = (arena[0].pn, arena[0].dn);
             // 終了条件: ルート証明/反証
             if arena[0].pn == 0 || arena[0].dn == 0 {
                 break;
@@ -2106,6 +2112,22 @@ impl DfPnSolver {
 
             // バックアップ: 展開ノードからルートまで pn/dn を更新
             Self::pns_backup(arena, current);
+
+            // 空回り(pn/dn 不変)検出
+            #[cfg(feature = "verbose")]
+            {
+                if arena[0].pn == root_pn_before && arena[0].dn == root_dn_before {
+                    spin_iters_local += 1;
+                } else {
+                    changed_iters_local += 1;
+                }
+            }
+        }
+
+        #[cfg(feature = "verbose")]
+        {
+            self.dbg_pns_spin_iters += spin_iters_local;
+            self.dbg_pns_changed_iters += changed_iters_local;
         }
 
         // 診断: PNS 終了時の状態

@@ -141,6 +141,31 @@ pub struct DfPnSolver {
     /// プロファイリング統計情報(`profile` feature 有効時のみ)．
     #[cfg(feature = "profile")]
     pub(super) profile_stats: ProfileStats,
+    /// 診断: PNS 空回り(pn/dn 不変)イテレーション数．
+    ///
+    /// 500M 予算テスト等で予算が有効に使われているかを確認する．
+    /// 1 PNS イテレーションの前後で `arena[0].(pn,dn)` が完全に同一
+    /// だった回数を累積する．pns_main_with_arena の出口で solver に
+    /// 反映される．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_pns_spin_iters: u64,
+    /// 診断: PNS pn/dn 変化があったイテレーション数．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_pns_changed_iters: u64,
+    /// 診断: `refutable_check_with_cache` の TT 経路ヒット数．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_tt_hits: u64,
+    /// 診断: `refutable_check_with_cache` の memoize 経路ヒット数．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_memo_hits: u64,
+    /// 診断: `refutable_check_with_cache` の再帰フォールバック
+    /// (true を返した) 数．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_recursive_true: u64,
+    /// 診断: `refutable_check_with_cache` の再帰フォールバック
+    /// (false を返した・memoize した) 数．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_recursive_false: u64,
     /// TT 診断: 監視対象の ply(0 = 無効)．
     ///
     /// 指定 ply で MID ループの再帰前後に TT サイズを出力し，
@@ -274,6 +299,18 @@ impl DfPnSolver {
             attacker: Color::Black,
             #[cfg(feature = "profile")]
             profile_stats: ProfileStats::default(),
+            #[cfg(feature = "verbose")]
+            dbg_pns_spin_iters: 0,
+            #[cfg(feature = "verbose")]
+            dbg_pns_changed_iters: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_tt_hits: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_memo_hits: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_recursive_true: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_recursive_false: 0,
             #[cfg(feature = "tt_diag")]
             diag_ply: 0,
             #[cfg(feature = "tt_diag")]
@@ -898,16 +935,25 @@ impl DfPnSolver {
     ) -> bool {
         // Fast path: TT ベース判定
         if self.all_checks_refutable_by_tt(board, checks) {
+            #[cfg(feature = "verbose")]
+            { self.dbg_refut_tt_hits += 1; }
             return true;
         }
         // Memoize: 既に false 確定の局面ならスキップ
         if self.refutable_check_failed.contains(&pos_key) {
+            #[cfg(feature = "verbose")]
+            { self.dbg_refut_memo_hits += 1; }
             return false;
         }
         // Fallback: 再帰判定 (高コスト). false ならキャッシュ．
         let result = self.depth_limit_all_checks_refutable(board, checks);
         if !result {
             self.refutable_check_failed.insert(pos_key);
+            #[cfg(feature = "verbose")]
+            { self.dbg_refut_recursive_false += 1; }
+        } else {
+            #[cfg(feature = "verbose")]
+            { self.dbg_refut_recursive_true += 1; }
         }
         result
     }
