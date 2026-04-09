@@ -109,3 +109,4 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 61 | ProvenEntry 分離 (Plan D) | maou 独自 | §6.6.5 | v0.24.26 |
 | 62 | WorkingTT cluster size 6→8 (cache-aligned, +33% slots) | maou 独自 | §6.6.5 | v0.24.27 |
 | 63 | PV 抽出で effective\_len 比較を常用 (fast path 廃止) | maou 独自 | §10.2 | v0.24.29 |
+| 64 | PNS NM 昇格判定のハイブリッド化 + `refutable_check_failed` memoize 実運用 | maou 独自 | §10.2 | v0.24.33 |
