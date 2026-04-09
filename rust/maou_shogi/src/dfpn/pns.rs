@@ -1739,7 +1739,13 @@ impl DfPnSolver {
 
             if !skip_pns {
                 // PNS フェーズ: TT を更新しフロンティアを特定
-                let pns_budget = (remaining_budget / 20).max(10_000).min(50_000);
+                // 予算の動的調整: 前サイクルで proof を生産していた場合は
+                // 予算を拡大(remaining/10 = 10%)し，より多くの proof を蓄積して
+                // MID の TT ヒット率を向上させる．
+                // 初回(last_pns_proof_stores 未設定)または proof=0 の場合は
+                // 従来どおり remaining/20 = 5%．
+                let pns_ratio = if self.last_pns_proof_stores > 0 { 10 } else { 20 };
+                let pns_budget = (remaining_budget / pns_ratio).max(10_000).min(50_000);
                 self.max_nodes = self.nodes_searched.saturating_add(pns_budget);
                 #[cfg(feature = "verbose")]
                 let (proofs_before, growth_before, spin_before, changed_before) = (

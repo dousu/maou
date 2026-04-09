@@ -981,15 +981,18 @@ Frontier Variant の各サイクルで `[fv] iter N pns: proofs=X arena_growth=Y
 - arena growth は毎サイクル 10万〜20万ノード — PNS は新しい部分木を展開している
 - ply 16 で zero-proof サイクルが 2/14 出現 — 深い ply ほど PNS 生産性が低下する傾向
 
-**課題 E: Frontier zero-proof early skip (v0.24.36)**
+**課題 E: Frontier PNS 予算の動的制御 (v0.24.36〜v0.24.37)**
 
-v0.24.36 で Frontier Variant に zero-proof early skip を導入した．
-PNS が 2 サイクル連続で proof store = 0 を返した場合，
-以降のサイクルで PNS フェーズをスキップし MID に全予算を集中する．
+v0.24.36 で zero-proof early skip，v0.24.37 で proof rate ベース予算拡大を導入し，
+Frontier Variant の PNS 予算を前サイクルの proof store 数に基づいて動的制御する:
 
-- **判定条件:** `consecutive_zero_proofs >= 2` (1 回だけは偶然の可能性を許容)
-- **スキップ時の MID 予算:** `remaining / 3`(通常の `remaining / 4` より増加)
-- **proof store の取得:** `pns_store_to_tt` の戻り値を `last_pns_proof_stores` に格納
+- **zero-proof early skip (v0.24.36):** `consecutive_zero_proofs >= 2` で PNS スキップ，
+  MID 予算を `remaining/4` → `remaining/3` に増加
+- **proof rate ベース予算拡大 (v0.24.37):** 前サイクルの proof store > 0 の場合，
+  PNS 予算を `remaining/20 (5%)` → `remaining/10 (10%)` に倍増．
+  proof store が正値のサイクルでは PNS がより多くの proof を TT に蓄積でき，
+  後続 MID の TT ヒット率を向上させる
+- **proof store の取得:** `pns_store_to_tt` の戻り値(u64)を `last_pns_proof_stores` に格納
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
