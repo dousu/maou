@@ -2361,8 +2361,10 @@ use crate::types::{Color, PieceType};
             board.do_move(m);
         }
 
-        // 残り 15 手 + 2 の depth で depth=17．予算 1M / 90s．
-        let mut solver = DfPnSolver::with_timeout(17, 1_000_000, 32767, 90);
+        // 残り 15 手 + 2 の depth で depth=17．予算 1M / 600s．
+        // release で ~52s (367K nodes)．dev ビルドでは release 比 ~6 倍遅い
+        // (~312s) ため，十分な余裕を持たせたタイムアウトが必要．
+        let mut solver = DfPnSolver::with_timeout(17, 1_000_000, 32767, 600);
         solver.set_find_shortest(false);
 
         let result = solver.solve(&mut board);
