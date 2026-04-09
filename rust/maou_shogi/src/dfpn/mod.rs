@@ -147,7 +147,6 @@ fn propagate_nm_remaining(child_min_remaining: u16, current_remaining: u16) -> u
     if child_min_remaining == REMAINING_INFINITE {
         REMAINING_INFINITE
     } else {
-        // 子の remaining + 1 と現在の remaining の小さい方
         let propagated = child_min_remaining.saturating_add(1);
         propagated.min(current_remaining)
     }

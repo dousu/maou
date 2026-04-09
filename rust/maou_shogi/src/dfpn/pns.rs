@@ -944,6 +944,10 @@ impl DfPnSolver {
     pub(super) fn extract_pv_limited(&mut self, board: &mut Board, max_visits: u64) -> Vec<Move> {
         let mut board_clone = board.clone();
         let mut visits = 0u64;
+        // PV 抽出の incomplete フラグをリセット．AND ノードで全 defender
+        // 子を評価し切れなかった場合に extract_pv_recursive_inner が
+        // self.pv_extraction_incomplete を true に設定する．
+        self.pv_extraction_incomplete = false;
         self.extract_pv_recursive_inner(
             &mut board_clone,
             true,
@@ -953,6 +957,65 @@ impl DfPnSolver {
             &mut visits,
             max_visits,
         )
+    }
+
+    /// PV 内の "無駄合 (useless interposition)" pair の数を数える．
+    ///
+    /// 無駄合 pair の定義: 連続する手列 (defender_drop, attacker_capture, [next_defender])
+    /// において:
+    /// - `defender_drop` は駒打ち (`is_drop()`)
+    /// - `attacker_capture` は **同じマス** での駒取り
+    /// - 次の defender 手は同じマスでの recapture **でない**
+    ///   (recapture なら犠牲交換 = 無駄合 ではない)
+    ///
+    /// この pair は機械的に詰みを 2 手延ばすだけで真の防御リソースを買っていない
+    /// ため，AND ノードでの最長抵抗比較から除外することで設計ドキュメント
+    /// (`docs/design/tsume-solver/aigoma-optimization.md`) の意図する
+    /// 「PV(最長) = 真の最長抵抗」を復元する．
+    ///
+    /// # 前提条件
+    ///
+    /// - `pv[0]` が **defender 手** (AND ノードが選ぶ手) であること．
+    ///   OR-node 起点の PV (attacker 先頭) を渡すと意味のない結果になる．
+    ///   呼び出し元は `extract_pv_recursive_inner` の AND ノード分岐のみ．
+    ///
+    /// # i += 2 ステップの意味
+    ///
+    /// チェーン内でペアが重なることはない (非重複 pairing)．
+    /// (defender_drop, attacker_capture) を消費したら次は (next_defender,
+    /// next_attacker) のペアを見る．これにより，例えばマルチレベル連続
+    /// チェーン `DC DC DC ...` (D=drop, C=capture) は 3 pair と数えられる．
+    /// 途中の recapture は次の pair の対象にはならず重複計上を避ける．
+    pub(super) fn count_useless_interpose_pairs(pv: &[Move]) -> usize {
+        // 前提条件の契約: pv[0] は defender 手でなければならない．
+        // 手そのものから side は判らないが，defender_drop + attacker_capture が
+        // 同一マスで発生する特殊パターンは OR 始点では解釈不能 (OR 始点だと
+        // pv[0]=attacker_drop となり pair セマンティクスが崩れる)．
+        // 呼び出しは `extract_pv_recursive_inner` の AND 分岐のみ．
+        let mut count = 0;
+        let mut i = 0;
+        while i + 1 < pv.len() {
+            let def = pv[i];
+            let att = pv[i + 1];
+            if def.is_drop()
+                && att.captured_piece_raw() != 0
+                && att.to_sq() == def.to_sq()
+            {
+                // defender の次の手 (i+2) が同じマスへの recapture か？
+                let recaptured = if i + 2 < pv.len() {
+                    let next_def = pv[i + 2];
+                    next_def.captured_piece_raw() != 0
+                        && next_def.to_sq() == def.to_sq()
+                } else {
+                    false
+                };
+                if !recaptured {
+                    count += 1;
+                }
+            }
+            i += 2;
+        }
+        count
     }
 
     /// PV 復元の再帰実装．
@@ -1149,12 +1212,36 @@ impl DfPnSolver {
                 verbose_eprintln!("[PV diag] ply={} AND node, {} defense moves", ply, moves.len());
             }
 
+            // 【不採用】v0.24.23 で導入された TT distance ベースの fast path は
+            // unsound であった: TT の `mate_distance` は **raw** 距離を保存しており，
+            // 無駄合 chain によって inflate された値を返す．fast path はその raw
+            // 距離で longest resistance を選んでいたため，chain drop 子を誤って
+            // 選択し Mate(21) を返す可能性があった (39手詰め ply 24 の既知バグ)．
+            //
+            // 修正: 全 defender 子を再帰評価し，`effective_len = total_len -
+            // 2 * useless_pairs` で比較する slow path を常に使う．訪問予算は
+            // `visits`/`max_visits` で制限され，予算超過時は `all_evaluated = false`
+            // を立てて呼び出し側で `CheckmateNoPv` に変換させる．
+            //
+            // 性能: fast path 廃止により深い aigoma 問題で PV 抽出コストが増える
+            // が，実測では `test_tsume_39te_ply22_no_pns` は visit 予算 10M 内で
+            // 完了する (ply 22 の Mate(17) を正しく発見)．
+
             let mut best_pv: Option<Vec<Move>> = None;
             let mut best_is_capture = false;
             let mut best_is_drop = false;
+            // best_effective_len: 効果長 (useless interpose pair を除外した長さ)．
+            // 定義は `count_useless_interpose_pairs` を参照．
+            let mut best_effective_len: usize = 0;
+            // soundness 用フラグ: 全 defender 子を評価し切ったか追跡する．
+            // visit budget 不足で途中 break した場合，PV 抽出は最長抵抗を
+            // 検証できていないので空 PV を返して呼び出し側で
+            // CheckmateNoPv 扱いにする．
+            let mut all_evaluated = true;
 
             for m in &moves {
                 if *visits > max_visits {
+                    all_evaluated = false;
                     break;
                 }
                 let captured = board.do_move(*m);
@@ -1182,27 +1269,37 @@ impl DfPnSolver {
                         board.undo_move(*m, captured);
                         continue;
                     }
+                    // この候補手の full_pv = [m] ++ sub_pv
+                    // 無駄合 pair を数えて効果長を計算する
+                    let mut full_pv: Vec<Move> = Vec::with_capacity(total_len);
+                    full_pv.push(*m);
+                    full_pv.extend_from_slice(&sub_pv);
+                    let useless_pairs = Self::count_useless_interpose_pairs(&full_pv);
+                    let effective_len = total_len.saturating_sub(2 * useless_pairs);
+
                     let is_capture = m.captured_piece_raw() > 0;
                     let is_drop = m.is_drop();
                     let is_better = match &best_pv {
                         None => true,
                         Some(prev) => {
-                            if total_len > prev.len() {
+                            // 第一基準: 効果長 (無駄合除外後の真の resistance) が長い
+                            // 第二基準: 効果長同率なら raw length が短い (chain inflation の少ない) PV を優先
+                            // 第三基準: 同率なら駒取りを優先
+                            // 第四基準: 駒取り状況も同じなら合駒 (打ち駒) を優先
+                            if effective_len > best_effective_len {
                                 true
-                            } else if total_len == prev.len()
-                                && is_capture
-                                && !best_is_capture
-                            {
+                            } else if effective_len < best_effective_len {
+                                false
+                            } else if total_len < prev.len() {
                                 true
-                            } else if total_len == prev.len()
-                                && is_drop
+                            } else if total_len > prev.len() {
+                                false
+                            } else if is_capture && !best_is_capture {
+                                true
+                            } else if is_drop
                                 && !best_is_drop
                                 && is_capture == best_is_capture
                             {
-                                // 同率 & 駒取り状況も同じ場合，
-                                // 合駒(打ち駒)を優先する．
-                                // 打ち駒のサブツリーは探索で重点的に証明
-                                // されやすく，sub_pv が正確な傾向がある．
                                 true
                             } else {
                                 false
@@ -1212,22 +1309,17 @@ impl DfPnSolver {
 
                     if diag {
                         verbose_eprintln!(
-                            "[PV diag] ply={} AND candidate {} len={} capture={} drop={} better={}{}",
-                            ply, m.to_usi(), total_len, is_capture, is_drop, is_better,
-                            if let Some(prev) = &best_pv {
-                                format!(" (prev_best={} prev_cap={} prev_drop={})", prev.len(), best_is_capture, best_is_drop)
-                            } else {
-                                String::new()
-                            }
+                            "[PV diag] ply={} AND candidate {} len={} eff={} pairs={} capture={} drop={} better={}",
+                            ply, m.to_usi(), total_len, effective_len, useless_pairs,
+                            is_capture, is_drop, is_better,
                         );
                     }
 
                     if is_better {
-                        let mut pv = vec![*m];
-                        pv.extend(sub_pv);
-                        best_pv = Some(pv);
+                        best_pv = Some(full_pv);
                         best_is_capture = is_capture;
                         best_is_drop = is_drop;
+                        best_effective_len = effective_len;
                     }
                 } else if diag {
                     verbose_eprintln!(
@@ -1251,6 +1343,13 @@ impl DfPnSolver {
                 }
             }
 
+            // Soundness: visit 予算が尽きて全 defender を評価し切れなかった場合，
+            // 返す PV は真の longest resistance である保証がない．
+            // `pv_extraction_incomplete` フラグを立て，呼び出し側 (`solve()`) で
+            // `CheckmateNoPv` に変換させる．暫定 PV は参考値として保持．
+            if !all_evaluated {
+                self.pv_extraction_incomplete = true;
+            }
             best_pv.unwrap_or_default()
         }
     }
@@ -1735,7 +1834,9 @@ impl DfPnSolver {
         const PNS_STAGNATION_LIMIT: u64 = 500_000;
         // P4: アリーナ成長率監視による適応的早期終了
         const GROWTH_CHECK_INTERVAL: u64 = 10_000;
-        const GROWTH_STALL_LIMIT: u32 = 10; // 10回連続(100K反復)成長ゼロで打ち切り
+        // 10 回連続の GROWTH_CHECK_INTERVAL (合計 100K PNS イテレーション) で
+        // アリーナ成長ゼロなら打ち切る．
+        const GROWTH_STALL_LIMIT: u32 = 10;
         let mut prev_arena_size: usize = 1; // ルートノード分
         let mut growth_stall_count: u32 = 0;
         loop {
@@ -2519,9 +2620,12 @@ impl DfPnSolver {
 
             best_pv.unwrap_or_default()
         } else {
-            // AND ノード: 全子が証明済み，最長 PV を選択(最長抵抗)
+            // AND ノード: 全子が証明済み，最長 PV を選択(最長抵抗)．
+            // 無駄合 chain による raw length 膨張を除外するため，
+            // extract_pv_recursive_inner と同じく effective length で比較する．
             let mut best_pv: Option<Vec<Move>> = None;
             let mut best_is_capture = false;
+            let mut best_effective_len: usize = 0;
 
             for &ci in &node.children {
                 let child = &arena[ci as usize];
@@ -2540,16 +2644,33 @@ impl DfPnSolver {
                 if total_len % 2 == 1 {
                     continue;
                 }
+                // full_pv = [child_move] ++ sub_pv で effective length を計算
+                let mut full_pv: Vec<Move> = Vec::with_capacity(total_len);
+                full_pv.push(child.move_from_parent);
+                full_pv.extend_from_slice(&sub_pv);
+                let useless_pairs = Self::count_useless_interpose_pairs(&full_pv);
+                let effective_len = total_len.saturating_sub(2 * useless_pairs);
+
                 let is_capture = child.move_from_parent.captured_piece_raw() > 0;
+                // Phase 1 (PNS arena-based) の AND ノード選択基準．
+                // `extract_pv_recursive_inner` (Phase 2, TT-based) と同じ順序だが，
+                // arena では is_drop tiebreaker は省略してある (全子が評価済みで
+                // 無駄合判定が効果長に既に反映されているため)．
                 let is_better = match &best_pv {
                     None => true,
                     Some(prev) => {
-                        if total_len > prev.len() {
+                        // 第一基準: 効果長 (無駄合除外後の真の resistance) が長い
+                        // 第二基準: 同率なら raw length が短い PV を優先
+                        // 第三基準: 同率なら駒取りを優先
+                        if effective_len > best_effective_len {
                             true
-                        } else if total_len == prev.len()
-                            && is_capture
-                            && !best_is_capture
-                        {
+                        } else if effective_len < best_effective_len {
+                            false
+                        } else if total_len < prev.len() {
+                            true
+                        } else if total_len > prev.len() {
+                            false
+                        } else if is_capture && !best_is_capture {
                             true
                         } else {
                             false
@@ -2557,10 +2678,9 @@ impl DfPnSolver {
                     }
                 };
                 if is_better {
-                    let mut pv = vec![child.move_from_parent];
-                    pv.extend(sub_pv);
-                    best_pv = Some(pv);
+                    best_pv = Some(full_pv);
                     best_is_capture = is_capture;
+                    best_effective_len = effective_len;
                 }
             }
 

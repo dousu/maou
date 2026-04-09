@@ -109,6 +109,12 @@ pub struct DfPnSolver {
     /// `mid()` 内で合駒がチェーンマスへのドロップかどうかを判定するために使用．
     /// 各 `mid()` 呼び出しで更新され，飛び駒の王手がない場合は空．
     pub(super) chain_bb_cache: Bitboard,
+    /// PV 抽出が AND ノードで全 defender 子を visit budget 内に
+    /// 評価し切れなかった場合に true になる．
+    /// solve() はこのフラグが立っていると Mate を返さず CheckmateNoPv を
+    /// 返すことで，未検証の応手が残った状態の PV を「真の最長抵抗」として
+    /// 表示する soundness 違反を防ぐ．
+    pub(super) pv_extraction_incomplete: bool,
     /// 王手生成キャッシュ(E2 最適化)．
     pub(super) check_cache: CheckCache,
     /// TT ベース合駒プレフィルタの発火回数(診断用)．
@@ -243,6 +249,7 @@ impl DfPnSolver {
             find_shortest: true,
             pv_nodes_per_child: 1024,
             chain_bb_cache: Bitboard::EMPTY,
+            pv_extraction_incomplete: false,
             check_cache: CheckCache::new(),
             prefilter_hits: 0,
             refutable_check_failed: FxHashSet::default(),
@@ -404,9 +411,9 @@ impl DfPnSolver {
     ///
     /// Deep df-pn では深い ply(depth の後半)にのみバイアスを適用:
     /// `pn = 1 + (ply - depth/2) / R` (ply > depth/2 の場合)．
-    /// 浅い ply は標準 df-pn と同じ `pn=1` を維持し，
-    /// 探索ホットパスでの TT 参照（自クラスタのみ）．
+    /// 浅い ply は標準 df-pn と同じ `pn=1` を維持する．
     ///
+    /// 本関数は探索ホットパスから呼ばれるため TT 参照は自クラスタのみとし，
     /// 近傍クラスタ走査は行わない(NPS 優先)．
     /// proof/disproof の hand\_gte 近傍走査は `has_proof`，`get_proof_hand` 等の
     /// 補助メソッド(±1 限定走査)に任せる．これらは child init や
@@ -531,6 +538,30 @@ impl DfPnSolver {
             return;
         }
         self.table.store_with_best_move(pos_key, hand, pn, dn, remaining, source, best_move);
+    }
+
+    /// ベストムーブ + 詰み手数付きで転置表を更新する (proven entry 用)．
+    ///
+    /// `mate_distance` は PV 抽出の AND ノードで longest resistance 判定に
+    /// 使用される．非 proven entry の場合は 0 を指定．
+    #[inline]
+    pub(super) fn store_with_best_move_and_distance(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+        pn: u32,
+        dn: u32,
+        remaining: u16,
+        source: u32,
+        best_move: u16,
+        mate_distance: u16,
+    ) {
+        if pn == 0 && self.ancestor_has_proof() {
+            return;
+        }
+        self.table.store_with_best_move_and_distance(
+            pos_key, hand, pn, dn, remaining, source, best_move, mate_distance,
+        );
     }
 
     /// TT Best Move を参照する(位置キー＋持ち駒指定)．
@@ -723,14 +754,57 @@ impl DfPnSolver {
         if root_pn == 0 {
             // PNS アリーナから PV を抽出できた場合はそちらを優先
             // (TT ベースの extract_pv は PNS 証明パスが不完全になりうる)
-            if let Some(pv) = pns_pv {
+            //
+            // PV 抽出 visit 予算: 10M に設定する．
+            // effective length 比較 (count_useless_interpose_pairs 経由) のために
+            // 全 AND 子を評価する必要があり，旧 100K 予算では深い AND iteration
+            // が途中で打ち切られて canonical PV を見逃すことがあった．
+            //
+            // コスト特性 (v0.24.29, TT-distance fast path 廃止後):
+            // - 短い詰み (typical 3-15 手): proof tree が小さいため visit 数
+            //   は数千〜数万程度，予算の 0.1% も消費しない
+            // - 中深度 (20-30 手): 数十万〜数百万 visits，全体の数% のコスト
+            // - 深い aigoma (39手詰め ply 22〜24): 数百万 visits．具体的には
+            //   `test_tsume_39te_ply24_mate15_regression` (1M ノード探索予算)
+            //   で PV 抽出 ~40s 程度
+            //
+            // 実測 (v0.24.27 → v0.24.29, fast path 廃止，backward_120m):
+            // | Ply  | v0.24.27 (fast path) | v0.24.29 (slow only) |    Δ |
+            // |------|----------------------|----------------------|------|
+            // | 24   |              41.18s  |              41.10s  |  ~0% |
+            // | **22** |            **418.91s**  |            **398.44s**  | **-4.9%** |
+            // |   (Mate(17)) |              |                      |      |
+            // | 38-26 |               < 0.5s |               < 0.5s |  noise |
+            //
+            // 重要な発見: 深い aigoma (ply 22) で v0.24.29 の方が **速い**．
+            // fast path は「全 child TT lookup + distance 取得 → 失敗なら
+            // slow path」という 2 パス構造だったため，fire しない場合は
+            // 事前 TT lookup が純粋なオーバーヘッドになっていた．
+            // chain drop が proven になる確率が低い deep aigoma 問題では
+            // fast path がほぼ fire せず，廃止が高速化に寄与する．
+            //
+            // 浅い詰み (typical <15 手) では full dfpn suite で 140s → 156s
+            // (+11%) の軽微な regression がある．これは fast path が fire
+            // していた浅いケースの単純化コスト．
+            //
+            // ply ≤ 20 は visit 予算 10M を超える可能性があるが，そこまで
+            // 深い探索では **探索側のノード予算が先に尽きる**ので PV 抽出
+            // が律速要因になることはない．ply 20 は v0.24.27 でも 120M
+            // ノード予算 + 1800s timeout で Unknown だった．
+            const PV_VISIT_BUDGET: u64 = 10_000_000;
+
+            // PV 候補とその抽出が完全だったかを集める．
+            // pv_extraction_incomplete フラグを extract_pv_limited 呼び出し
+            // 後に確認し，最終的な Checkmate 判定で使う．
+            let (final_pv, pv_complete) = if let Some(pv) = pns_pv {
                 if self.find_shortest {
                     // 最短手数探索: PV 長を depth 上限にして追加証明
                     let saved_depth = self.depth;
                     self.depth = pv.len() as u32;
                     self.complete_or_proofs(board);
                     self.depth = saved_depth;
-                    let final_moves = self.extract_pv_limited(board, 100_000);
+                    let final_moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
+                    let extraction_complete = !self.pv_extraction_incomplete;
                     let moves = if !final_moves.is_empty()
                         && final_moves.len() <= pv.len()
                     {
@@ -738,48 +812,55 @@ impl DfPnSolver {
                     } else {
                         pv
                     };
-                    return TsumeResult::Checkmate {
-                        moves,
+                    (moves, extraction_complete)
+                } else {
+                    // pns_extract_pv が直接返した PV (extract_pv_limited
+                    // 経由ではない) は incomplete フラグが立たない．
+                    // arena traversal で全子評価できるなら完全とみなす．
+                    (pv, true)
+                }
+            } else {
+                // アリーナ PV が取れなかった場合は TT ベースにフォールバック
+                self.complete_or_proofs(board);
+
+                let moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
+                let extraction_complete = !self.pv_extraction_incomplete;
+                if moves.is_empty() {
+                    return TsumeResult::CheckmateNoPv {
                         nodes_searched: self.nodes_searched,
                     };
                 }
-                return TsumeResult::Checkmate {
-                    moves: pv,
-                    nodes_searched: self.nodes_searched,
-                };
-            }
+                if self.find_shortest {
+                    let saved_depth = self.depth;
+                    self.depth = moves.len() as u32;
+                    self.complete_or_proofs(board);
+                    self.depth = saved_depth;
+                    let final_moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
+                    let final_complete = extraction_complete && !self.pv_extraction_incomplete;
+                    let moves = if !final_moves.is_empty()
+                        && final_moves.len() <= moves.len()
+                    {
+                        final_moves
+                    } else {
+                        moves
+                    };
+                    (moves, final_complete)
+                } else {
+                    (moves, extraction_complete)
+                }
+            };
 
-            // アリーナ PV が取れなかった場合は TT ベースにフォールバック
-            self.complete_or_proofs(board);
-
-            let moves = self.extract_pv_limited(board, 100_000);
-            if moves.is_empty() {
+            // PV 抽出が AND ノードで全 defender を評価し切れなかった場合，
+            // 表示される PV が真の longest resistance である保証がないため，
+            // soundness を優先して CheckmateNoPv を返す．
+            if !pv_complete {
                 return TsumeResult::CheckmateNoPv {
                     nodes_searched: self.nodes_searched,
                 };
             }
-            if self.find_shortest {
-                let saved_depth = self.depth;
-                self.depth = moves.len() as u32;
-                self.complete_or_proofs(board);
-                self.depth = saved_depth;
-                let final_moves = self.extract_pv_limited(board, 100_000);
-                let moves = if !final_moves.is_empty()
-                    && final_moves.len() <= moves.len()
-                {
-                    final_moves
-                } else {
-                    moves
-                };
-                TsumeResult::Checkmate {
-                    moves,
-                    nodes_searched: self.nodes_searched,
-                }
-            } else {
-                TsumeResult::Checkmate {
-                    moves,
-                    nodes_searched: self.nodes_searched,
-                }
+            TsumeResult::Checkmate {
+                moves: final_pv,
+                nodes_searched: self.nodes_searched,
             }
         } else if root_dn == 0 {
             TsumeResult::NoCheckmate {
@@ -792,17 +873,14 @@ impl DfPnSolver {
         }
     }
 
-    /// 深さ制限 OR ノードの再帰的 NM 判定．
+    /// 深さ制限 OR ノードの再帰的 NM 判定 (IDS の構造的不詰検証)．
     ///
-    /// 全王手に対して玉方に不詰を示す応手が存在するかを再帰的に確認する．
-    /// 各王手に対し，玉方に「応手後に王手なし」または「応手後の王手が
-    /// さらに反証可能」となる逃げ手が存在すれば真の不詰(REMAINING_INFINITE)
-    /// として扱える．`max_depth` で再帰の深さを制限し，分岐爆発を防止する．
-    /// IDS の NM 判定で使用する構造的不詰検証．
-    ///
-    /// 全王手に対して「合法な応手を経由して王手が尽きる」ことを再帰的に
-    /// 確認する．呼び出し回数上限(`REFUTABLE_CALL_LIMIT`)を超えた場合は
-    /// 安全側に倒して false(未証明)を返す．
+    /// 全王手に対して玉方に「応手後に王手なし」または「応手後の王手が
+    /// さらに反証可能」となる逃げ手が存在するかを再帰的に確認する．
+    /// 全ての王手でそれが成立すれば真の不詰 (REMAINING_INFINITE) として扱える．
+    /// 再帰深さは固定値 5 で制限し，分岐爆発を防止する．
+    /// 呼び出し回数上限 (`REFUTABLE_CALL_LIMIT`) を超えた場合は安全側に倒して
+    /// false (未証明) を返す．
     pub(super) fn depth_limit_all_checks_refutable(
         &mut self,
         board: &mut Board,
@@ -1687,6 +1765,24 @@ impl DfPnSolver {
                 None
             };
 
+        // 混合 AND ノード(非 drop 応手 + chain drop 両方あり)での
+        // chain drop 距離ベース bias 適用のため，玉位置を保持する．
+        //
+        // 既存の chain_king_sq は全 drop が chain の場合のみ設定されるが，
+        // 39te ply 22 の 5g6f 後の AND のように「玉逃げ + chain drop」が
+        // 混在するケースでは chain_king_sq = None となり，chain drop は
+        // 単純な INTERPOSE_DN_BIAS のみで距離ベース bias が適用されない．
+        // これが外側 chain drop への探索リソース浪費の原因となっている．
+        //
+        // `mixed_chain_king_sq` は混合 AND でも defender king 位置を
+        // 保持し，chain drop 子に対して距離ベース bias を適用する．
+        let mixed_chain_king_sq =
+            if chain_king_sq.is_none() && !or_node && saved_chain_bb.is_not_empty() {
+                board.king_square(board.turn)
+            } else {
+                None
+            };
+
         // プレフィルタで全合駒が証明済み(children が空になった場合)
         if !or_node && init_prefiltered_count > 0 && children.is_empty() {
             let mut p = init_and_proof;
@@ -2233,7 +2329,8 @@ impl DfPnSolver {
                     //   ドロップ(合駒)にバイアスを加算し，非合駒を優先する．
                     //   通常の AND ノードでは玉逃げの反証が速いため．
                     let effective_cdn = if let Some(ksq) = chain_king_sq {
-                        // チェーン AND: ドロップ優先，外側ほど後回し
+                        // チェーン AND(全 drop が chain): ドロップ優先，
+                        // 外側ほど後回し．
                         if m.is_drop() {
                             let to = m.to_sq();
                             let dr = (to.row() as i8 - ksq.row() as i8)
@@ -2247,6 +2344,31 @@ impl DfPnSolver {
                         } else {
                             // 非合駒: 大きなバイアスで後回し
                             cdn.saturating_add(INTERPOSE_DN_BIAS)
+                        }
+                    } else if let Some(ksq) = mixed_chain_king_sq {
+                        // 混合 AND (非 drop 応手 + chain drop 両方あり):
+                        // 非 drop 応手を先に評価し，chain drop は距離ベースで
+                        // 後回しにする．無駄合 chain が PV を膨らませる
+                        // 問題の緩和 (非 drop 応手で反証/proof が速い場合，
+                        // chain drop の探索を最小限にする)．
+                        if m.is_drop() && saved_chain_bb.contains(m.to_sq()) {
+                            let to = m.to_sq();
+                            let dr = (to.row() as i8 - ksq.row() as i8)
+                                .unsigned_abs() as u32;
+                            let dc = (to.col() as i8 - ksq.col() as i8)
+                                .unsigned_abs() as u32;
+                            // chain drop: INTERPOSE_DN_BIAS + 距離比例加算．
+                            // 外側(d=5)は INTERPOSE_DN_BIAS + 4*PN_UNIT
+                            cdn.saturating_add(
+                                INTERPOSE_DN_BIAS
+                                    + dr.max(dc).saturating_sub(1) * PN_UNIT
+                            )
+                        } else if m.is_drop() {
+                            // 非 chain drop: 通常の INTERPOSE_DN_BIAS のみ
+                            cdn.saturating_add(INTERPOSE_DN_BIAS)
+                        } else {
+                            // 非合駒: バイアスなし(優先)
+                            cdn
                         }
                     } else if m.is_drop() {
                         cdn.saturating_add(INTERPOSE_DN_BIAS)
@@ -2354,8 +2476,49 @@ impl DfPnSolver {
             } else {
                 (current_pn, current_dn)
             };
+            // 詰み手数 (mate_distance) 計算:
+            // store_pn == 0 のとき proof → 子の distance から計算．
+            // OR: min(proven children distances) + 1
+            // AND: max(all children distances) + 1
+            // 子の distance が取得できない (0) 場合は distance=0 (未知) とする．
+            let mate_dist: u16 = if store_pn == 0 {
+                let compute_dist = || -> u16 {
+                    if or_node {
+                        // best_idx の child (proven を代表) の distance + 1
+                        let best_child = &children[best_idx];
+                        let best_child_pk = best_child.1;
+                        let best_child_hand = &best_child.3;
+                        if let Some(cd) = self.table.look_up_mate_distance(
+                            best_child_pk, best_child_hand)
+                        {
+                            return cd.saturating_add(1);
+                        }
+                        0
+                    } else {
+                        // AND: max(children distance) + 1
+                        let mut max_d: u16 = 0;
+                        let mut any_unknown = false;
+                        for (_m, ch_pk, _ch_fh, ch_hand) in children.iter() {
+                            if let Some(cd) = self.table.look_up_mate_distance(
+                                *ch_pk, ch_hand)
+                            {
+                                if cd > max_d { max_d = cd; }
+                            } else {
+                                any_unknown = true;
+                                break;
+                            }
+                        }
+                        if any_unknown { 0 } else { max_d.saturating_add(1) }
+                    }
+                };
+                compute_dist()
+            } else {
+                0
+            };
             profile_timed!(self, tt_store_ns, tt_store_count,
-                self.store_with_best_move(pos_key, att_hand, store_pn, store_dn, remaining, best_source, best_move16));
+                self.store_with_best_move_and_distance(
+                    pos_key, att_hand, store_pn, store_dn,
+                    remaining, best_source, best_move16, mate_dist));
 
             // TCA (Kishimoto & Müller 2008; Kishimoto 2010): 過小評価対策
             //

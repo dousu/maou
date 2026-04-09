@@ -122,8 +122,8 @@ pub struct ProfileStats {
 #[cfg(feature = "profile")]
 impl std::fmt::Display for ProfileStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // child_init_domove は child_init の内訳だが，early return で child_init が
-        // 記録されないケースがあるため，未計上分を補正する．
+        // child_init_domove は child_init の入れ子内訳だが，一部の early return
+        // 経路で親 child_init カウンタに記録されないため，未計上分を補正する．
         let child_init_uncaptured = self.child_init_domove_ns
             .saturating_sub(self.child_init_ns);
         let total_ns = self.position_key_ns
