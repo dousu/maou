@@ -863,24 +863,63 @@ ply 12 (500.0M) が exactly cap で Unknown．
 
 ##### 識別された新課題
 
-**課題 A: PNS 空回り (85〜92% の pn/dn 不変イテレーション)**
+**課題 A: PNS root pn/dn 不変率 (85〜92%) の解釈と実効性の検証**
 
-PNS メインループの各イテレーションで arena root の pn/dn が変化したかを計測した結果，
-深い ply ほど空回り率が上昇し，ply 12 では **92.2%** に達した:
+PNS メインループの各イテレーションで arena root の pn/dn が変化したかを計測した:
 
 ```
-ply 24: 75.7% spin → ply 22: 86.5% → ply 14: 88.1% → ply 12: 92.2%
+ply 24: 75.7% 不変 → ply 22: 86.5% → ply 14: 88.1% → ply 12: 92.2%
 ```
 
-「空回り」は PNS が most-proving node を選択・展開してもルートの
-pn/dn が不変に留まるケースで，非最善子の部分木を探索している状態．
-PNS 自体は正しく動作しているが，有効な閾値更新に寄与しないイテレーションが
-大半を占めるため **ノード予算あたりの進捗効率が低い**．
+初期の分析ではこれを「空回り (spin)」と表現したが，この解釈は
+PNS の導入目的に照らして **不正確** である．
 
-改善の方向性:
-- PNS の予算を reduce し MID に回す (Frontier Variant のバランス調整)
-- PN\_STAGNATION\_LIMIT の adaptive 化 (spin 率監視で早期打ち切り)
-- PNS-MID サイクルの切替頻度を高める (1 サイクルあたりの PNS 予算縮小)
+**PNS が導入された目的 (§11.7, §10.2 閾値飢餓):**
+
+PNS は MID の閾値飢餓 (TT エントリ停滞) を解決するために導入された．
+MID が 50M → 100M ノードで TT エントリが完全同一になる問題 (§10.2
+「閾値飢餓と TT クラスタ飽和」) に対し，PNS は MID が到達できない
+部分木をグローバルに選択・証明し，TT に proof エントリを蓄積する
+ことで MID の閾値突破を補助する．
+
+**PNS の MID への寄与メカニズム:**
+
+1. PNS は `pns_expand` で子を展開し，即座に TT に store する
+   (証明/反証/中間の全てを store)
+2. PNS メインループ終了時に `pns_store_to_tt` で proven ノードの
+   best move を TT に追加格納する
+3. 後続の MID フェーズで child init 時に TT を参照し，
+   PNS が蓄積した proof エントリにヒットして分岐を即座に解決する
+4. `retain_proofs()` でサイクル間の中間エントリは除去されるが，
+   **proof (pn=0) と confirmed disproof は保持** されるため，
+   PNS が蓄積した証明はサイクルをまたいで永続する
+
+したがって **root pn/dn が不変でも PNS が新しい部分木を証明していれば
+生産的な探索**である．root 不変は「最善手が変わらない」ことを意味するが，
+非最善手の部分木で proof が蓄積されていれば，MID がその部分木に到達した
+際に TT ヒットで即座に解決される．
+
+**真の効率指標の候補:**
+
+root pn/dn 変化率ではなく，以下を計測すべき:
+
+- PNS サイクルあたりの **新規 proof store 数** (TT に新しく追加された
+  pn=0 エントリ数)
+- PNS サイクル後の MID フェーズでの **TT hit による child init 即解決数**
+  (PNS が蓄積した proof を MID が実際に利用した回数)
+- PNS サイクルあたりの **arena growth** (新ノード数 — arena が成長して
+  いなければ PNS は既知領域を走査しているだけ)
+
+これらの指標が低い場合に初めて PNS サイクルの予算削減が正当化される．
+逆に proof store 数が高ければ，root 不変率 92% でも PNS は有効に機能
+している可能性がある．
+
+**改善の方向性:**
+
+- PNS 生産性指標 (proof store / arena growth) を `verbose` feature で追加計測し，
+  Frontier Variant の PNS 予算比率 (現行 remaining/20 = 5%) を実データに基づいて調整する
+- PNS arena stagnation detection (P4) が正しく機能しているかを深い ply で再検証する
+  (growth\_stall\_count の発火頻度と打ち切りタイミング)
 
 **課題 B: `all_checks_refutable_by_tt` TT 経路は実質不活性**
 
