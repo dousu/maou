@@ -152,6 +152,22 @@ pub struct DfPnSolver {
     /// 診断: PNS pn/dn 変化があったイテレーション数．
     #[cfg(feature = "verbose")]
     pub(super) dbg_pns_changed_iters: u64,
+    /// 診断: PNS が TT に格納した新規 proof (pn=0) エントリ数(累計)．
+    ///
+    /// `pns_store_to_tt` で実際に TT に書き込まれた証明ノード数．
+    /// MID がこれらの proof を TT ヒットで再利用できるため，
+    /// PNS の実効的な生産性を測定する指標となる．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_pns_proof_stores: u64,
+    /// 診断: PNS サイクルごとのアリーナ新規ノード数(累計)．
+    ///
+    /// 各 PNS サイクルで展開された新規ノード数．アリーナが成長して
+    /// いなければ PNS は既知領域を走査しているだけであり，真の空振りを示す．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_pns_arena_growth: u64,
+    /// 診断: Frontier Variant の PNS サイクル数(累計)．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_pns_cycles: u64,
     /// 診断: `refutable_check_with_cache` の TT 経路ヒット数．
     #[cfg(feature = "verbose")]
     pub(super) dbg_refut_tt_hits: u64,
@@ -303,6 +319,12 @@ impl DfPnSolver {
             dbg_pns_spin_iters: 0,
             #[cfg(feature = "verbose")]
             dbg_pns_changed_iters: 0,
+            #[cfg(feature = "verbose")]
+            dbg_pns_proof_stores: 0,
+            #[cfg(feature = "verbose")]
+            dbg_pns_arena_growth: 0,
+            #[cfg(feature = "verbose")]
+            dbg_pns_cycles: 0,
             #[cfg(feature = "verbose")]
             dbg_refut_tt_hits: 0,
             #[cfg(feature = "verbose")]

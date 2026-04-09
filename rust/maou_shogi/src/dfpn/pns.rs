@@ -1732,7 +1732,30 @@ impl DfPnSolver {
             // PNS フェーズ: TT を更新しフロンティアを特定
             let pns_budget = (remaining_budget / 20).max(10_000).min(50_000);
             self.max_nodes = self.nodes_searched.saturating_add(pns_budget);
+            #[cfg(feature = "verbose")]
+            let (proofs_before, growth_before, spin_before, changed_before) = (
+                self.dbg_pns_proof_stores,
+                self.dbg_pns_arena_growth,
+                self.dbg_pns_spin_iters,
+                self.dbg_pns_changed_iters,
+            );
             let _pv = self.pns_main_with_arena(board, &mut arena);
+            #[cfg(feature = "verbose")]
+            {
+                let cycle_proofs = self.dbg_pns_proof_stores - proofs_before;
+                let cycle_growth = self.dbg_pns_arena_growth - growth_before;
+                let cycle_spin = self.dbg_pns_spin_iters - spin_before;
+                let cycle_changed = self.dbg_pns_changed_iters - changed_before;
+                let cycle_total = cycle_spin + cycle_changed;
+                let cycle_spin_pct = if cycle_total > 0 {
+                    cycle_spin as f64 / cycle_total as f64 * 100.0
+                } else { 0.0 };
+                verbose_eprintln!(
+                    "[fv] iter {} pns: proofs={} arena_growth={} spin={:.1}% ({}/{}) budget={}",
+                    frontier_iters, cycle_proofs, cycle_growth,
+                    cycle_spin_pct, cycle_spin, cycle_total, pns_budget,
+                );
+            }
 
             let (r_pn, r_dn, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
             if r_pn == 0 || r_dn == 0 {
@@ -1762,6 +1785,11 @@ impl DfPnSolver {
             self.table.retain_proofs();
         }
         self.max_nodes = total_max_nodes;
+        #[cfg(feature = "verbose")]
+        verbose_eprintln!(
+            "[fv] done: {} iters, total proofs={} arena_growth={} cycles={}",
+            frontier_iters, self.dbg_pns_proof_stores, self.dbg_pns_arena_growth, self.dbg_pns_cycles,
+        );
     }
 
     // ================================================================
@@ -1843,6 +1871,8 @@ impl DfPnSolver {
         let mut spin_iters_local: u64 = 0;
         #[cfg(feature = "verbose")]
         let mut changed_iters_local: u64 = 0;
+        #[cfg(feature = "verbose")]
+        let arena_size_at_entry: usize = arena.len();
         loop {
             pns_iters += 1;
             #[cfg(feature = "verbose")]
@@ -2128,6 +2158,8 @@ impl DfPnSolver {
         {
             self.dbg_pns_spin_iters += spin_iters_local;
             self.dbg_pns_changed_iters += changed_iters_local;
+            self.dbg_pns_arena_growth += (arena.len() - arena_size_at_entry) as u64;
+            self.dbg_pns_cycles += 1;
         }
 
         // 診断: PNS 終了時の状態
@@ -2725,6 +2757,8 @@ impl DfPnSolver {
     }
 
     pub(super) fn pns_store_to_tt(&mut self, arena: &[PnsNode]) {
+        #[cfg(feature = "verbose")]
+        let mut proof_store_count: u64 = 0;
         for node in arena {
             if node.pn == 0 && node.expanded && !node.children.is_empty() {
                 // 証明済み中間ノード
@@ -2738,6 +2772,8 @@ impl DfPnSolver {
                             node.pos_key, node.hand, 0, INF,
                             REMAINING_INFINITE, node.pos_key as u32, best_move16,
                         );
+                        #[cfg(feature = "verbose")]
+                        { proof_store_count += 1; }
                     }
                 } else {
                     // AND 証明: 全子が証明済み
@@ -2745,6 +2781,8 @@ impl DfPnSolver {
                         node.pos_key, node.hand, 0, INF,
                         REMAINING_INFINITE, node.pos_key as u32,
                     );
+                    #[cfg(feature = "verbose")]
+                    { proof_store_count += 1; }
                 }
             } else if node.dn == 0 && node.expanded {
                 // PNS の反証(NM)は TT にバックプロパゲーションしない．
@@ -2758,6 +2796,10 @@ impl DfPnSolver {
                 // 展開フェーズ(expand_pns_node)で各ノードの NM は既に
                 // TT に個別に記録済みなので，backprop での追加格納は不要．
             }
+        }
+        #[cfg(feature = "verbose")]
+        {
+            self.dbg_pns_proof_stores += proof_store_count;
         }
     }
 }

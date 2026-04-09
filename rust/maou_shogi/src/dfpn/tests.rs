@@ -2820,10 +2820,16 @@ use crate::types::{Color, PieceType};
                     + solver.dbg_refut_recursive_false;
                 writeln!(out,
                     "       PNS iters: spin={} changed={} ({:.1}% spin) | \
-                     refut: tt={} memo={} rec_true={} rec_false={} total={}",
+                     proofs={} arena_growth={} cycles={}",
                     solver.dbg_pns_spin_iters,
                     solver.dbg_pns_changed_iters,
                     spin_pct,
+                    solver.dbg_pns_proof_stores,
+                    solver.dbg_pns_arena_growth,
+                    solver.dbg_pns_cycles,
+                ).unwrap();
+                writeln!(out,
+                    "       refut: tt={} memo={} rec_true={} rec_false={} total={}",
                     solver.dbg_refut_tt_hits,
                     solver.dbg_refut_memo_hits,
                     solver.dbg_refut_recursive_true,

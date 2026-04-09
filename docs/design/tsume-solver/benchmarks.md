@@ -945,6 +945,28 @@ longest resistance 再構成コストが予算を超過する．
 - `PV_VISIT_BUDGET` の引き上げ (10M → 50M 等)
 - PV 抽出アルゴリズムの効率化 (chain drop 子のスキップ等)
 
+**課題 D: PNS 生産性指標の計測基盤 (v0.24.35)**
+
+v0.24.35 で `verbose` feature に PNS 生産性指標を追加した．
+従来の root pn/dn 不変率(空振り率)に加え，PNS の実効的な生産性を測定する
+3 指標を `pns_main_with_arena` および `frontier_variant` で計測する:
+
+| 指標 | フィールド | 意味 |
+|------|----------|------|
+| proof store 数 | `dbg_pns_proof_stores` | `pns_store_to_tt` で TT に新規格納された pn=0 エントリ数 |
+| arena growth | `dbg_pns_arena_growth` | PNS サイクルで展開された新規アリーナノード数 |
+| PNS サイクル数 | `dbg_pns_cycles` | `pns_main_with_arena` の呼び出し回数 |
+
+Frontier Variant の各サイクルで `[fv] iter N pns: proofs=X arena_growth=Y spin=Z%`
+を出力し，サイクル単位の生産性を可視化する．
+
+**計測の目的:**
+
+1. root pn/dn 不変 ≠ 真の空振りであることを定量的に検証する
+2. Frontier PNS 予算比率(現行 remaining/20 = 5%)の adaptive 化の判断材料とする
+3. PNS が生産的なサイクル(proof store > 0)と非生産的なサイクル(arena growth = 0)を
+   区別し，非生産的サイクルで MID に予算を回す最適化の基盤とする
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
