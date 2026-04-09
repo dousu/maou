@@ -1718,6 +1718,10 @@ impl DfPnSolver {
 
         let mut frontier_iters = 0u32;
         const MAX_FRONTIER_ITERS: u32 = 50;
+        // Zero-proof early skip: PNS が連続して proof=0 を返した場合，
+        // PNS サイクルをスキップして MID に全予算を回す．
+        // 1 回だけ proof=0 は偶然の可能性があるため 2 連続で判定する．
+        let mut consecutive_zero_proofs: u32 = 0;
 
         while frontier_iters < MAX_FRONTIER_ITERS
             && self.nodes_searched < total_max_nodes
@@ -1729,42 +1733,66 @@ impl DfPnSolver {
                 break;
             }
 
-            // PNS フェーズ: TT を更新しフロンティアを特定
-            let pns_budget = (remaining_budget / 20).max(10_000).min(50_000);
-            self.max_nodes = self.nodes_searched.saturating_add(pns_budget);
-            #[cfg(feature = "verbose")]
-            let (proofs_before, growth_before, spin_before, changed_before) = (
-                self.dbg_pns_proof_stores,
-                self.dbg_pns_arena_growth,
-                self.dbg_pns_spin_iters,
-                self.dbg_pns_changed_iters,
-            );
-            let _pv = self.pns_main_with_arena(board, &mut arena);
-            #[cfg(feature = "verbose")]
-            {
-                let cycle_proofs = self.dbg_pns_proof_stores - proofs_before;
-                let cycle_growth = self.dbg_pns_arena_growth - growth_before;
-                let cycle_spin = self.dbg_pns_spin_iters - spin_before;
-                let cycle_changed = self.dbg_pns_changed_iters - changed_before;
-                let cycle_total = cycle_spin + cycle_changed;
-                let cycle_spin_pct = if cycle_total > 0 {
-                    cycle_spin as f64 / cycle_total as f64 * 100.0
-                } else { 0.0 };
-                verbose_eprintln!(
-                    "[fv] iter {} pns: proofs={} arena_growth={} spin={:.1}% ({}/{}) budget={}",
-                    frontier_iters, cycle_proofs, cycle_growth,
-                    cycle_spin_pct, cycle_spin, cycle_total, pns_budget,
-                );
-            }
+            // Zero-proof early skip: 2 サイクル連続で PNS が proof=0 なら
+            // PNS フェーズをスキップし，MID に全予算を集中する．
+            let skip_pns = consecutive_zero_proofs >= 2;
 
-            let (r_pn, r_dn, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
-            if r_pn == 0 || r_dn == 0 {
-                break; // PNS で証明または反証完了
+            if !skip_pns {
+                // PNS フェーズ: TT を更新しフロンティアを特定
+                let pns_budget = (remaining_budget / 20).max(10_000).min(50_000);
+                self.max_nodes = self.nodes_searched.saturating_add(pns_budget);
+                #[cfg(feature = "verbose")]
+                let (proofs_before, growth_before, spin_before, changed_before) = (
+                    self.dbg_pns_proof_stores,
+                    self.dbg_pns_arena_growth,
+                    self.dbg_pns_spin_iters,
+                    self.dbg_pns_changed_iters,
+                );
+                let _pv = self.pns_main_with_arena(board, &mut arena);
+
+                // Zero-proof 判定: 直前の PNS サイクルの proof store 数を確認
+                if self.last_pns_proof_stores == 0 {
+                    consecutive_zero_proofs += 1;
+                } else {
+                    consecutive_zero_proofs = 0;
+                }
+
+                #[cfg(feature = "verbose")]
+                {
+                    let cycle_proofs = self.dbg_pns_proof_stores - proofs_before;
+                    let cycle_growth = self.dbg_pns_arena_growth - growth_before;
+                    let cycle_spin = self.dbg_pns_spin_iters - spin_before;
+                    let cycle_changed = self.dbg_pns_changed_iters - changed_before;
+                    let cycle_total = cycle_spin + cycle_changed;
+                    let cycle_spin_pct = if cycle_total > 0 {
+                        cycle_spin as f64 / cycle_total as f64 * 100.0
+                    } else { 0.0 };
+                    verbose_eprintln!(
+                        "[fv] iter {} pns: proofs={} arena_growth={} spin={:.1}% ({}/{}) budget={}",
+                        frontier_iters, cycle_proofs, cycle_growth,
+                        cycle_spin_pct, cycle_spin, cycle_total, pns_budget,
+                    );
+                }
+
+                let (r_pn, r_dn, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
+                if r_pn == 0 || r_dn == 0 {
+                    break; // PNS で証明または反証完了
+                }
+            } else {
+                verbose_eprintln!(
+                    "[fv] iter {} pns: SKIPPED (zero-proof early skip, {} consecutive)",
+                    frontier_iters, consecutive_zero_proofs,
+                );
             }
 
             // MID フェーズ: PNS で更新された TT を活用して局所探索
             let remaining_budget2 = total_max_nodes.saturating_sub(self.nodes_searched);
-            let mid_budget = (remaining_budget2 / 4).max(50_000).min(remaining_budget2);
+            let mid_budget = if skip_pns {
+                // PNS スキップ時は MID に多くの予算を配分
+                (remaining_budget2 / 3).max(50_000).min(remaining_budget2)
+            } else {
+                (remaining_budget2 / 4).max(50_000).min(remaining_budget2)
+            };
             self.max_nodes = self.nodes_searched.saturating_add(mid_budget);
             self.path_len = 0;
 
@@ -2175,7 +2203,7 @@ impl DfPnSolver {
         }
 
         // 証明/反証結果を TT に格納(PV 抽出用)
-        self.pns_store_to_tt(&arena);
+        self.last_pns_proof_stores = self.pns_store_to_tt(&arena);
 
         // デバッグ: 証明ツリーの整合性チェック
         #[cfg(debug_assertions)]
@@ -2756,8 +2784,11 @@ impl DfPnSolver {
         }
     }
 
-    pub(super) fn pns_store_to_tt(&mut self, arena: &[PnsNode]) {
-        #[cfg(feature = "verbose")]
+    /// PNS アリーナの証明済みノードを TT に格納する．
+    ///
+    /// 証明済み(pn=0)の中間ノードのみを格納し，反証(dn=0)は格納しない．
+    /// 格納された proof エントリ数を返す．
+    pub(super) fn pns_store_to_tt(&mut self, arena: &[PnsNode]) -> u64 {
         let mut proof_store_count: u64 = 0;
         for node in arena {
             if node.pn == 0 && node.expanded && !node.children.is_empty() {
@@ -2772,8 +2803,7 @@ impl DfPnSolver {
                             node.pos_key, node.hand, 0, INF,
                             REMAINING_INFINITE, node.pos_key as u32, best_move16,
                         );
-                        #[cfg(feature = "verbose")]
-                        { proof_store_count += 1; }
+                        proof_store_count += 1;
                     }
                 } else {
                     // AND 証明: 全子が証明済み
@@ -2781,8 +2811,7 @@ impl DfPnSolver {
                         node.pos_key, node.hand, 0, INF,
                         REMAINING_INFINITE, node.pos_key as u32,
                     );
-                    #[cfg(feature = "verbose")]
-                    { proof_store_count += 1; }
+                    proof_store_count += 1;
                 }
             } else if node.dn == 0 && node.expanded {
                 // PNS の反証(NM)は TT にバックプロパゲーションしない．
@@ -2801,6 +2830,7 @@ impl DfPnSolver {
         {
             self.dbg_pns_proof_stores += proof_store_count;
         }
+        proof_store_count
     }
 }
 

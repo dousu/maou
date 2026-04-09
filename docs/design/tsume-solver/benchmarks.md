@@ -967,6 +967,30 @@ Frontier Variant の各サイクルで `[fv] iter N pns: proofs=X arena_growth=Y
 3. PNS が生産的なサイクル(proof store > 0)と非生産的なサイクル(arena growth = 0)を
    区別し，非生産的サイクルで MID に予算を回す最適化の基盤とする
 
+**計測結果 (39手詰め 10M 予算 backward 解析):**
+
+| Ply | FV iters | Total proofs | Arena growth | Avg spin | Zero-proof cycles | Proof rate (/1K) |
+|-----|----------|-------------|-------------|----------|-------------------|-----------------|
+| 22 | 14 | 3,820 | 1,474K | 84.2% | 0/14 | 8.7 |
+| 18 | 5 | 3,249 | 1,485K | 83.6% | 0/5 | 13.0 |
+| 16 | 14 | 3,385 | 2,216K | 85.0% | 2/14 | 7.7 |
+
+**重要な所見:**
+
+- spin 率 83-85% でも全 ply で proof store は正値(平均 100-300 proofs/cycle)
+- arena growth は毎サイクル 10万〜20万ノード — PNS は新しい部分木を展開している
+- ply 16 で zero-proof サイクルが 2/14 出現 — 深い ply ほど PNS 生産性が低下する傾向
+
+**課題 E: Frontier zero-proof early skip (v0.24.36)**
+
+v0.24.36 で Frontier Variant に zero-proof early skip を導入した．
+PNS が 2 サイクル連続で proof store = 0 を返した場合，
+以降のサイクルで PNS フェーズをスキップし MID に全予算を集中する．
+
+- **判定条件:** `consecutive_zero_proofs >= 2` (1 回だけは偶然の可能性を許容)
+- **スキップ時の MID 予算:** `remaining / 3`(通常の `remaining / 4` より増加)
+- **proof store の取得:** `pns_store_to_tt` の戻り値を `last_pns_proof_stores` に格納
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |

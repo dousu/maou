@@ -141,6 +141,11 @@ pub struct DfPnSolver {
     /// プロファイリング統計情報(`profile` feature 有効時のみ)．
     #[cfg(feature = "profile")]
     pub(super) profile_stats: ProfileStats,
+    /// 直前の PNS サイクルで TT に格納された proof (pn=0) エントリ数．
+    ///
+    /// `pns_main_with_arena` の出口で `pns_store_to_tt` の戻り値が格納される．
+    /// Frontier Variant の zero-proof early skip 判定に使用する．
+    pub(super) last_pns_proof_stores: u64,
     /// 診断: PNS 空回り(pn/dn 不変)イテレーション数．
     ///
     /// 500M 予算テスト等で予算が有効に使われているかを確認する．
@@ -315,6 +320,7 @@ impl DfPnSolver {
             attacker: Color::Black,
             #[cfg(feature = "profile")]
             profile_stats: ProfileStats::default(),
+            last_pns_proof_stores: 0,
             #[cfg(feature = "verbose")]
             dbg_pns_spin_iters: 0,
             #[cfg(feature = "verbose")]
