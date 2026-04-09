@@ -141,6 +141,18 @@ pub struct DfPnSolver {
     /// プロファイリング統計情報(`profile` feature 有効時のみ)．
     #[cfg(feature = "profile")]
     pub(super) profile_stats: ProfileStats,
+    /// デバッグ: `depth_limit_all_checks_refutable` の累積コスト．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refutable_total_ns: u64,
+    /// デバッグ: 再帰呼出しの累積回数．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refutable_total_calls: u64,
+    /// デバッグ: 呼出し回数(外側の depth_limit_all_checks_refutable 呼び出し数)．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refutable_invocations: u64,
+    /// デバッグ: REFUTABLE_CALL_LIMIT に到達した回数．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refutable_limit_hits: u64,
     /// TT 診断: 監視対象の ply(0 = 無効)．
     ///
     /// 指定 ply で MID ループの再帰前後に TT サイズを出力し，
@@ -274,6 +286,14 @@ impl DfPnSolver {
             attacker: Color::Black,
             #[cfg(feature = "profile")]
             profile_stats: ProfileStats::default(),
+            #[cfg(feature = "verbose")]
+            dbg_refutable_total_ns: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refutable_total_calls: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refutable_invocations: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refutable_limit_hits: 0,
             #[cfg(feature = "tt_diag")]
             diag_ply: 0,
             #[cfg(feature = "tt_diag")]
@@ -887,9 +907,21 @@ impl DfPnSolver {
         checks: &[Move],
     ) -> bool {
         let mut calls: u32 = 0;
-        self.all_checks_refutable_recursive(
+        #[cfg(feature = "verbose")]
+        let start = Instant::now();
+        let result = self.all_checks_refutable_recursive(
             board, checks, 5, &mut calls, Self::REFUTABLE_CALL_LIMIT,
-        )
+        );
+        #[cfg(feature = "verbose")]
+        {
+            self.dbg_refutable_total_ns += start.elapsed().as_nanos() as u64;
+            self.dbg_refutable_total_calls += calls as u64;
+            self.dbg_refutable_invocations += 1;
+            if calls >= Self::REFUTABLE_CALL_LIMIT {
+                self.dbg_refutable_limit_hits += 1;
+            }
+        }
+        result
     }
 
     /// TT ベースの NM 昇格判定(MID 内部用)．

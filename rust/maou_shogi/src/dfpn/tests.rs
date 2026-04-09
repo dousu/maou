@@ -2719,6 +2719,212 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: /tmp/tsume_39te_backward_120m.log");
     }
 
+    /// 39手詰め ply 20 の NPS 時間依存性を診断する．
+    ///
+    /// `test_tsume_39te_backward_120m` では ply 20 の NPS が 6 kn/s と異常に
+    /// 低いが，45 秒予算の短時間探索では 46 kn/s が出ている．これは NPS が
+    /// 時間と共に低下している可能性を示唆する．本テストは ply 20 を中程度の
+    /// 予算 (300 秒) で探索し，30 秒おきに ProfileStats を吐いて劣化パターンを
+    /// 測定する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_profile_ply20_timeline() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_profile_ply20_timeline.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        // ply 20 まで PV を進める
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for ply_start in (0..20).step_by(2) {
+            let m1 = board.move_from_usi(pv[ply_start]).unwrap();
+            board.do_move(m1);
+            let m2 = board.move_from_usi(pv[ply_start + 1]).unwrap();
+            board.do_move(m2);
+        }
+
+        // 複数の時間予算で個別に実行し，各時点の NPS を比較
+        let budgets_s: [u64; 4] = [30, 90, 180, 360];
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " ply 20 NPS 時間依存性").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, "各実行は独立に solve() を呼ぶ (TT 初期状態)．").unwrap();
+
+        for budget_s in budgets_s {
+            let mut test_board = board.clone();
+            let mut solver = DfPnSolver::with_timeout(21, 500_000_000, 32767, budget_s);
+            solver.set_find_shortest(false);
+
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let result_str = match &result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+
+            let elapsed_s = elapsed.as_secs_f64();
+            let nps_k = if elapsed_s > 0.0 {
+                (solver.nodes_searched as f64 / elapsed_s) / 1000.0
+            } else { 0.0 };
+
+            writeln!(out, "\n{}", "-".repeat(80)).unwrap();
+            writeln!(out, "budget={}s  result={} nodes={} time={:.1}s NPS={:.1}k max_ply={} TT_pos={}",
+                budget_s, result_str, solver.nodes_searched, elapsed_s, nps_k,
+                solver.max_ply, solver.table.len()).unwrap();
+            writeln!(out, "{}", "-".repeat(80)).unwrap();
+
+            #[cfg(feature = "profile")]
+            {
+                solver.sync_tt_profile();
+                writeln!(out, "{}", solver.profile_stats).unwrap();
+            }
+            out.flush().unwrap();
+
+            if !matches!(result, TsumeResult::Unknown { .. }) {
+                break; // 解けたらそれ以上伸ばさない
+            }
+        }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_profile_ply20_timeline.log");
+    }
+
+    /// 39手詰め ply 24/22/20 の NPS 崩壊を診断するプロファイルテスト．
+    ///
+    /// `test_tsume_39te_backward_120m` で観測された異常な NPS 低下
+    /// (ply 22: 91 kn/s → ply 20: 6 kn/s) の原因を特定するため，
+    /// 各 ply を固定時間で探索し ProfileStats を比較する．
+    ///
+    /// 固定時間方式にすることで，ply ごとの per-operation ns/call と
+    /// NPS を公平に比較できる．`profile` feature を有効化して実行する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_profile_depth_scan() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_profile_depth_scan.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        // 時間固定で比較するため node_limit は大きめに取る
+        let node_limit: u64 = 200_000_000;
+        let timeout: u64 = 45;
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 39手詰め NPS 崩壊診断 ({}s/ply, profile feature)", timeout).unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+        // ply 24, 22, 20 の 3 つだけ (浅い→深い)
+        let target_plies: [usize; 3] = [24, 22, 20];
+
+        // PV を偶数手ずつ進めた局面を事前構築
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        let mut positions: std::collections::HashMap<usize, Board> =
+            std::collections::HashMap::new();
+        positions.insert(0, board.clone());
+        for ply_start in (0..38).step_by(2) {
+            let m1 = board.move_from_usi(pv[ply_start]).unwrap();
+            board.do_move(m1);
+            let m2 = board.move_from_usi(pv[ply_start + 1]).unwrap();
+            board.do_move(m2);
+            positions.insert(ply_start + 2, board.clone());
+        }
+
+        for &ply in &target_plies {
+            let pos = positions.get(&ply).unwrap().clone();
+            let remaining = 39 - ply;
+            let depth = (remaining + 2).min(41) as u32;
+
+            writeln!(out, "\n{}", "-".repeat(80)).unwrap();
+            writeln!(out, "Ply {} (残り{}手, depth={})", ply, remaining, depth).unwrap();
+            writeln!(out, "{}", "-".repeat(80)).unwrap();
+
+            let mut test_board = pos;
+            let mut solver = DfPnSolver::with_timeout(
+                depth, node_limit, 32767, timeout,
+            );
+            solver.set_find_shortest(false);
+
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let result_str = match &result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+
+            let elapsed_s = elapsed.as_secs_f64();
+            let nps_k = if elapsed_s > 0.0 {
+                (solver.nodes_searched as f64 / elapsed_s) / 1000.0
+            } else { 0.0 };
+
+            writeln!(out, "  result  : {}", result_str).unwrap();
+            writeln!(out, "  nodes   : {}", solver.nodes_searched).unwrap();
+            writeln!(out, "  time(s) : {:.2}", elapsed_s).unwrap();
+            writeln!(out, "  NPS(K)  : {:.1}", nps_k).unwrap();
+            writeln!(out, "  max_ply : {}", solver.max_ply).unwrap();
+            writeln!(out, "  TT_pos  : {}", solver.table.len()).unwrap();
+
+            #[cfg(feature = "profile")]
+            {
+                solver.sync_tt_profile();
+                writeln!(out, "{}", solver.profile_stats).unwrap();
+            }
+            #[cfg(not(feature = "profile"))]
+            {
+                writeln!(out, "  (profile feature 無効)").unwrap();
+            }
+            out.flush().unwrap();
+        }
+
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, "比較: ply 深化による ns/call の増大を確認せよ").unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_profile_depth_scan.log");
+    }
+
     /// 39手詰め逆順サブ問題 (10M nodes 予算版)．
     ///
     /// v0.24.27 時点の状態で，10M ノード予算があれば各 OR ノードからどこまで
