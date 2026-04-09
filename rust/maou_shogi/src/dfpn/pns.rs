@@ -1839,8 +1839,14 @@ impl DfPnSolver {
         const GROWTH_STALL_LIMIT: u32 = 10;
         let mut prev_arena_size: usize = 1; // ルートノード分
         let mut growth_stall_count: u32 = 0;
+        #[cfg(feature = "verbose")]
+        let mut spin_iters_local: u64 = 0;
+        #[cfg(feature = "verbose")]
+        let mut changed_iters_local: u64 = 0;
         loop {
             pns_iters += 1;
+            #[cfg(feature = "verbose")]
+            let (root_pn_before, root_dn_before) = (arena[0].pn, arena[0].dn);
             // 終了条件: ルート証明/反証
             if arena[0].pn == 0 || arena[0].dn == 0 {
                 break;
@@ -2106,6 +2112,22 @@ impl DfPnSolver {
 
             // バックアップ: 展開ノードからルートまで pn/dn を更新
             Self::pns_backup(arena, current);
+
+            // 空回り(pn/dn 不変)検出
+            #[cfg(feature = "verbose")]
+            {
+                if arena[0].pn == root_pn_before && arena[0].dn == root_dn_before {
+                    spin_iters_local += 1;
+                } else {
+                    changed_iters_local += 1;
+                }
+            }
+        }
+
+        #[cfg(feature = "verbose")]
+        {
+            self.dbg_pns_spin_iters += spin_iters_local;
+            self.dbg_pns_changed_iters += changed_iters_local;
         }
 
         // 診断: PNS 終了時の状態
@@ -2169,12 +2191,26 @@ impl DfPnSolver {
             arena[node_idx as usize].expanded = true;
             if or_node {
                 // OR ノードの深さ制限: 王手が0手なら真の不詰(REMAINING_INFINITE)．
-                // 王手がある場合: 2手延長で全王手が即座に反証可能かを確認．
+                // 王手がある場合の NM 昇格判定はハイブリッドで実施する．
+                //
+                // 1. まず `all_checks_refutable_by_tt` (~2µs/王手) で TT ベース
+                //    の高速判定．TT に `REMAINING_INFINITE` エントリが既にあれば
+                //    これだけで決着する．
+                // 2. TT 判定が false の場合，`refutable_check_failed` キャッシュを
+                //    確認．既に false 確定なら skip．
+                // 3. それ以外は `depth_limit_all_checks_refutable` (再帰 movegen)
+                //    を実行し，false なら結果を memoize する．
+                //
+                // v0.24.31 以前は常に `depth_limit_all_checks_refutable` を
+                // 呼んでおり，39手詰め ply 20 では 10,000 回上限到達が
+                // 99.9% で PNS 時間の 99.97% を消費していた．
+                // ハイブリッド化 + memoization で共通ケースを ~2µs に短縮しつつ
+                // 29手詰めの NM 昇格率を維持する．
                 let checks = self.generate_check_moves_cached(board);
                 if checks.is_empty() {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key as u32);
-                } else if self.depth_limit_all_checks_refutable(board, &checks) {
+                } else if self.refutable_check_with_cache(board, pos_key, &checks) {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key as u32);
                 } else {
@@ -2357,11 +2393,11 @@ impl DfPnSolver {
             arena[node_idx as usize].dn = 0;
             arena[node_idx as usize].expanded = true;
             let mut prop_rem = propagate_nm_remaining(or_nm_min_remaining, remaining);
-            // 2手延長による REMAINING_INFINITE 昇格
+            // REMAINING_INFINITE 昇格: ハイブリッド判定 (上述と同じ経路)．
             if prop_rem != REMAINING_INFINITE {
                 let checks = self.generate_check_moves_cached(board);
                 if checks.is_empty()
-                    || self.depth_limit_all_checks_refutable(board, &checks)
+                    || self.refutable_check_with_cache(board, pos_key, &checks)
                 {
                     prop_rem = REMAINING_INFINITE;
                 }

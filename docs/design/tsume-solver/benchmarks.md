@@ -28,13 +28,21 @@ SFEN: 9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1
 
 **テスト:** `test_tsume_39te_aigoma` (tests.rs, `#[ignore]`),
 `test_tsume_39te_ply22_no_pns` (tests.rs, `#[ignore]`),
-`test_tsume_39te_backward_{1m,10m,120m}` (tests.rs, `#[ignore]`)
+`test_tsume_39te_backward_{1m,10m,120m}` (tests.rs, `#[ignore]`),
+`test_tsume_39te_profile_{depth_scan,ply20_timeline}` (tests.rs, `#[ignore]`, v0.24.32+)
 
-**現状 (v0.24.27):** ルートからの統合探索は依然未解決だが，サブ問題の解決範囲は
+**現状 (v0.24.33):** PNS の NM 昇格判定を TT ベース + memoize のハイブリッド
+(`refutable_check_with_cache`) に置き換え，従来 PNS 時間の 99.97% を消費していた
+`depth_limit_all_checks_refutable` の律速要因を除去した．この 1 コミットで
+backward_120m の境界が **ply 20 (Mate(19))** から **ply 14 (Mate(25))** へ
+4 ply も前進し，ply 16 (Mate(23)) までが通常 `solve()` 経路で解けるようになった．
+詳細は後述 §10.2 末尾「v0.24.33 PNS NM 昇格判定の非対称性解消」参照．
+
+**前状態 (v0.24.27〜v0.24.29):** ルートからの統合探索は依然未解決だが，サブ問題の解決範囲は
 大きく改善された．`test_tsume_39te_ply22_no_pns` (mid\_fallback 直接呼び出し，
 120M ノード予算) で **ply 22 (Mate(17)) を 104〜107s で解ける**ようになった．
 通常 `solve()` 経路でも 120M 予算で ply 22 まで解け，境界は ply 20 (Mate(19))
-に移動している．詳細は後述 §10.2 末尾「39手詰め最新調査 (v0.24.27)」参照．
+に移動していた．詳細は後述 §10.2 末尾「39手詰め最新調査 (v0.24.27)」参照．
 
 **歴史的経緯 (v0.22.0):** `test_tsume_39te_aigoma` (10M ノード / 60s) では UNKNOWN．
 backward 解析で ply 24 サブ問題は 333K で Mate(21) に解けるが，
@@ -667,9 +675,9 @@ TT `mate_distance` ベースの fast path が **無駄合 chain 下で unsound**
 むしろ改善しているため，**v0.24.29 は soundness と性能の両面で v0.24.27
 より優れている**．
 
-**今後の方向性:**
+**今後の方向性 (v0.24.29 時点):**
 
-ply 20 以降を解くには次の改善が必要:
+ply 20 以降を解くには次の改善が必要と推定していた:
 
 - **NPS の根本的改善**: ply 20 で 6 kn/s は異常．move generation,
   TT lookup, check generation のいずれかが指数的に重くなっている
@@ -679,6 +687,263 @@ ply 20 以降を解くには次の改善が必要:
   Frontier Variant の MID 停滞検出を早く発動させる
 - **探索分割**: ply 24 サブ問題のような中間目標で TT ウォームアップ後に
   ルートから解き直すアプローチ
+
+※ このうち 1 番目 (NPS の根本的改善) について，v0.24.32 の診断調査で
+律速要因が特定され，v0.24.33 で解決された．次節参照．
+
+#### 39手詰め最新調査 (v0.24.32 診断 + v0.24.33 fix)
+
+##### v0.24.32: NPS 崩壊の診断
+
+v0.24.31 までの観測で「ply 20 で NPS が時間と共に低下し，ノード予算を
+増やしても探索が進まない完全な plateau が発生する」という異常を
+`test_tsume_39te_profile_ply20_timeline` で再現した:
+
+| budget | nodes       | 実時間 | NPS       | 備考 |
+|--------|-------------|--------|-----------|---|
+| 30s    | 569k        | 30.5s  | 18.7 kn/s | 通常 |
+| 90s    | 7,036k      | 90.4s  | 77.8 kn/s | 通常 |
+| 180s   | 10,856k     | 192.5s | 56.4 kn/s | **plateau 突入** |
+| 360s   | 10,859k     | 367.5s | 29.5 kn/s | **+175s で +2,816 nodes のみ** |
+
+180s → 360s で追加 175 秒を使ったにもかかわらずノード数が +0.03% しか
+増えない完全停止．`verbose` 追加計測で `frontier_variant()` iter 1 の
+PNS フェーズに 115 秒が消えていることを特定:
+
+```
+[fv] iter 1 total=114080ms pns=113857ms(1791nodes arena=281) mid=0ms retain=150ms
+[pns_main_exit] arena=281 iters=1792 | sel=0ms exp=113984ms undo=1ms bk=0ms
+  refut_invocations=1,723 refut_calls=17,240,174
+  refut_ns=113,970,357,047 refut_limit_hits=1,721/1,723
+```
+
+**PNS 時間 114 秒の 99.97% が `depth_limit_all_checks_refutable` に消費され，
+1,723 回の呼出しの 1,721 回 (99.9%) が REFUTABLE_CALL_LIMIT=10,000 に到達**．
+
+原因は MID 側 (`solver.rs:1194`) と PNS 側 (`pns.rs:2271,2458`) で同じ NM 昇格
+判定に異なる実装を使っていた非対称性:
+
+| 関数 | 実装 | 1 呼出あたりコスト |
+|---|---|---|
+| `all_checks_refutable_by_tt` (MID が使う) | TT ルックアップのみ | ~16 µs |
+| `depth_limit_all_checks_refutable` (PNS が使う) | 5 レベルの再帰 movegen, 上限 10,000 回 | ~66 ms (limit 到達時) |
+
+差は **約 4,000 倍**．v0.24.31 までは PNS がすべてこの遅い方を使っていた．
+
+##### v0.24.33: ハイブリッド判定への修正
+
+新設した `refutable_check_with_cache` で次の 3 段階判定を行う:
+
+1. **TT ベース高速判定** (`all_checks_refutable_by_tt`, ~2µs/王手) を先行
+2. false の場合は既存の `refutable_check_failed` HashSet で memoize 確認
+   (既出なら skip)
+3. 未キャッシュなら再帰判定にフォールバックし，false の場合は pos_key を
+   キャッシュに記録
+
+既存の `refutable_check_failed` フィールドは宣言・clear() はされていたが
+insert/contains が無い完全な死蔵コードだった．v0.24.33 で初めて実運用に
+乗せる．再帰判定の結果は `all_checks_refutable_recursive` が position 依存
+(探索深さ非依存) のため false の memoize は sound．
+
+##### ply20 timeline: plateau の消滅
+
+```
+test_tsume_39te_profile_ply20_timeline (ply 20 独立 solve() 複数予算):
+```
+
+| budget | v0.24.31 nodes | **v0.24.33 nodes** | v0.24.31 NPS | **v0.24.33 NPS** |
+|-------:|---------------|--------------------|--------------|------------------|
+| 30s    | 569k          | **1,082k** (+90%)  | 18.7 kn/s    | **35.5 kn/s**    |
+| 90s    | 7,036k        | 6,988k (同等)      | 77.8 kn/s    | 77.3 kn/s        |
+| 180s   | 10,856k       | **14,973k** (+38%) | 56.4 kn/s    | **82.9 kn/s**    |
+| 360s   | 10,859k       | **30,947k** (+185%)| 29.5 kn/s    | **85.8 kn/s**    |
+
+**plateau が完全消滅**し，ノード数が予算に比例して単調増加するようになった．
+360s で 30.9M ノードに到達 (v0.24.31 は 10.9M で停止していた)．
+
+##### backward_120m: 境界が ply 14 に前進 (Mate(19)/(21)/(23) を初解決)
+
+`test_tsume_39te_backward_120m` で v0.24.33 の新境界を測定 (120M nodes /
+1800s per ply, 最初の Unknown で停止)．ログは `/tmp/tsume_39te_backward_120m.log`:
+
+| Ply | 残り | v0.24.29 nodes/time | **v0.24.33 nodes/time** | Δ |
+|----:|----:|---|---|---|
+| 38-26 | 1-13 | <0.5s | <0.5s | — |
+| 24 | 15 | 367k / 41.10s | **367k / 33.56s** | **-18% time** |
+| 22 | 17 | 38.1M / 398.44s | **16.9M / 192.28s** | **-56% nodes, -52% time** |
+| **20** | **19** | **Unknown (timeout 1817s)** | **76.7M / 638.13s** **Mate(19)** ✓ | **初解決** |
+| **18** | **21** | (未到達) | **105.8M / 738.86s** **Mate(21)** ✓ | **初解決** |
+| **16** | **23** | (未到達) | **119.4M / 976.26s** **Mate(23)** ✓ | **初解決** |
+| **14** | **25** | (未到達) | 119,998,148 / 911.70s **Unknown** | **新境界** |
+
+**境界が ply 20 → ply 14 へ 4 ply 前進**．ply 20 (Mate(19))，ply 18 (Mate(21))，
+ply 16 (Mate(23)) が通常 `solve()` 経路で初めて解けた．
+
+ply 16 は 119.4M / 120M 予算の **99.5%** まで使用しており，budget edge
+ギリギリで解けている．ply 14 は 99.998M で Unknown に留まり新境界となった．
+
+##### コスト増大率の再評価 (v0.24.33)
+
+| 区間 | v0.24.29 時間比 | **v0.24.33 時間比** |
+|---|---|---|
+| ply 26 → 24 | ×100 | ×80 (0.42→33.6s) |
+| ply 24 → 22 | ×10 | ×5.7 (33.6→192.3s) |
+| ply 22 → 20 | timeout | ×3.3 (192.3→638.1s) |
+| ply 20 → 18 | — | ×1.2 (638→739s) |
+| ply 18 → 16 | — | ×1.3 (739→976s) |
+| ply 16 → 14 | — | <×1 (既に budget 上限) |
+
+2 ply 深くなるごとのコスト増大率が ×10〜100 から **×1.2〜5** 程度に
+劇的に低下．当面は時間ではなく **ノード予算そのもの** が律速で，
+純粋な探索効率 (合駒分岐の展開) が次の壁．
+
+##### 回帰テスト (v0.24.33 で実施):
+
+- `test_tsume_39te_ply24_mate15_regression`: PASS (45s, Mate(15) canonical)
+- `test_tsume_39te_ply22_no_pns`: PASS (8.8M nodes / 93s; v0.24.29 baseline
+  38M nodes / 419s → **4.5× 高速化**)
+- `test_tsume_39te_backward_1m`: 境界は引き続き ply 22/Unknown (1M budget で
+  ply 22 は解けないが，ply 24 まで従来通り解ける)
+- `test_tsume_39te_backward_10m`: ply 20 (Mate(19)) が **10M budget で初解決**
+  (8.84M nodes / 131s)．
+- 非 ignored テスト全 127 件: PASS
+
+##### 今後の方向性 (v0.24.33 以降)
+
+ply 14 以降を解くには次の改善が必要:
+
+- **ノード予算の拡大**: ply 14 は 120M で Unknown．ply 20 → 18 → 16 の
+  コスト増大率が ×1.2〜1.3 で緩やかなので，数百 M 程度で ply 12〜10 まで
+  到達する見込み．ただしルート (ply 0) には更に 7 ply 分の深さがある
+- **合駒チェーンの不詰証明共有**: 依然律速要因．`hand_gte_forward_chain`
+  の更なる拡張または inter-ply proof reuse
+- **段階的 IDS depth**: depth=41 一括ではなく段階解法
+- **探索分割**: ply 24/22 のサブ問題を先行解決し TT ウォームアップ後に
+  ルートから解き直すアプローチ
+
+NPS 崩壊 (元 v0.24.31 以前の "ply 20 で 6 kn/s" の異常) は解消されたため，
+残る課題は**探索アルゴリズム空間での最適化**である．
+
+##### backward_500m: 500M ノード予算での境界 (ply 14→ply 12 に前進)
+
+`test_tsume_39te_backward_500m` (500M nodes / 3600s per ply, `verbose` feature)
+で PNS 空回り統計と `refutable_check_with_cache` の経路別ヒット率を測定:
+
+| Ply | 残り | Nodes | Time(s) | 結果 | PNS spin% | refut tt/memo/rec |
+|----:|----:|---:|---:|---|---:|---|
+| 38-26 | 1-13 | ≤103 | ≤0.5 | Mate(N) | 0-32% | 0/0/3 |
+| 24 | 15 | 367k | 34.7 | Mate(15) | 75.7% | 0/259/3265 |
+| 22 | 17 | 16.9M | 199.1 | Mate(17) | 86.5% | 4/1228/4843 |
+| 20 | 19 | 201.7M | 1039.7 | Mate(19) | 84.9% | 0/53160/6732 |
+| 18 | 21 | 243.4M | 1092.4 | Mate(21) | 86.0% | 0/1269/2875 |
+| 16 | 23 | 454.1M | 2622.7 | **MateNoPV** | 87.1% | 2/3369/4550 |
+| **14** | **25** | **498.3M** | **2727.7** | **Mate(25)** ✓ | 88.1% | 17/5507/5469 |
+| **12** | **27** | 500.0M | 3152.8 | **Unknown** | **92.2%** | 1/378/455 |
+
+500M 予算で **ply 14 (Mate(25)) が解決可能**となり，境界は **ply 12 (残り 27 手)** に移動した．
+120M 予算 (境界 ply 14) からさらに **2 ply 前進**．
+
+PV(Mate(25)) が取れたのは ply 14 のみ．ply 16 は MateNoPV (証明成功だが
+PV\_VISIT\_BUDGET=10M 超過)．
+
+**コスト増大率 (v0.24.33, 500M):**
+
+| 区間 | ノード比 | 時間比 |
+|---|---|---|
+| ply 24 → 22 | 367k → 16.9M = ×46 | 35 → 199s = ×5.7 |
+| ply 22 → 20 | 16.9M → 202M = ×12 | 199 → 1040s = ×5.2 |
+| ply 20 → 18 | 202M → 243M = ×1.2 | 1040 → 1092s = ×1.1 |
+| ply 18 → 16 | 243M → 454M = ×1.9 | 1092 → 2623s = ×2.4 |
+| ply 16 → 14 | 454M → 498M = ×1.1 | 2623 → 2728s = ×1.0 |
+| ply 14 → 12 | 498M → 500M (cap) | 2728 → 3153s |
+
+ply 24→22 が ×46 の跳躍で最大．以後の増大は ×1.0〜2.4 と緩やか．
+500M 予算では **ply 14 (498.3M) が budget edge ギリギリ** で解け，
+ply 12 (500.0M) が exactly cap で Unknown．
+
+##### 識別された新課題
+
+**課題 A: PNS root pn/dn 不変率 (85〜92%) の解釈と実効性の検証**
+
+PNS メインループの各イテレーションで arena root の pn/dn が変化したかを計測した:
+
+```
+ply 24: 75.7% 不変 → ply 22: 86.5% → ply 14: 88.1% → ply 12: 92.2%
+```
+
+初期の分析ではこれを「空回り (spin)」と表現したが，この解釈は
+PNS の導入目的に照らして **不正確** である．
+
+**PNS が導入された目的 (§11.7, §10.2 閾値飢餓):**
+
+PNS は MID の閾値飢餓 (TT エントリ停滞) を解決するために導入された．
+MID が 50M → 100M ノードで TT エントリが完全同一になる問題 (§10.2
+「閾値飢餓と TT クラスタ飽和」) に対し，PNS は MID が到達できない
+部分木をグローバルに選択・証明し，TT に proof エントリを蓄積する
+ことで MID の閾値突破を補助する．
+
+**PNS の MID への寄与メカニズム:**
+
+1. PNS は `pns_expand` で子を展開し，即座に TT に store する
+   (証明/反証/中間の全てを store)
+2. PNS メインループ終了時に `pns_store_to_tt` で proven ノードの
+   best move を TT に追加格納する
+3. 後続の MID フェーズで child init 時に TT を参照し，
+   PNS が蓄積した proof エントリにヒットして分岐を即座に解決する
+4. `retain_proofs()` でサイクル間の中間エントリは除去されるが，
+   **proof (pn=0) と confirmed disproof は保持** されるため，
+   PNS が蓄積した証明はサイクルをまたいで永続する
+
+したがって **root pn/dn が不変でも PNS が新しい部分木を証明していれば
+生産的な探索**である．root 不変は「最善手が変わらない」ことを意味するが，
+非最善手の部分木で proof が蓄積されていれば，MID がその部分木に到達した
+際に TT ヒットで即座に解決される．
+
+**真の効率指標の候補:**
+
+root pn/dn 変化率ではなく，以下を計測すべき:
+
+- PNS サイクルあたりの **新規 proof store 数** (TT に新しく追加された
+  pn=0 エントリ数)
+- PNS サイクル後の MID フェーズでの **TT hit による child init 即解決数**
+  (PNS が蓄積した proof を MID が実際に利用した回数)
+- PNS サイクルあたりの **arena growth** (新ノード数 — arena が成長して
+  いなければ PNS は既知領域を走査しているだけ)
+
+これらの指標が低い場合に初めて PNS サイクルの予算削減が正当化される．
+逆に proof store 数が高ければ，root 不変率 92% でも PNS は有効に機能
+している可能性がある．
+
+**改善の方向性:**
+
+- PNS 生産性指標 (proof store / arena growth) を `verbose` feature で追加計測し，
+  Frontier Variant の PNS 予算比率 (現行 remaining/20 = 5%) を実データに基づいて調整する
+- PNS arena stagnation detection (P4) が正しく機能しているかを深い ply で再検証する
+  (growth\_stall\_count の発火頻度と打ち切りタイミング)
+
+**課題 B: `all_checks_refutable_by_tt` TT 経路は実質不活性**
+
+全 ply 合計で TT 経路のヒットは **24 回** (0.03%) に対し，
+memoize 経路は **64,970 回** (68%)．TT 経路は IDS depth 切替で
+`clear_working()` + `clear_proven_disproofs()` が実行された後の
+PNS で呼ばれるため，REMAINING\_INFINITE disproof が TT に残存しない．
+現状は memoize 経路が実質的な高速パスとして機能している．
+
+改善の方向性:
+- `clear_proven_disproofs()` の見直し (REMAINING\_INFINITE disproof の
+  一部を IDS depth 切替で保持する)
+- 確認的不要と判断された場合は TT 経路を除去し `refutable_check_failed`
+  のみで判定する
+
+**課題 C: 深い ply での PV 抽出不完全 (MateNoPV)**
+
+ply 16 (454M ノード探索) で証明成功後に `PV_VISIT_BUDGET = 10M` 内で
+PV を再構成できなかった．TT が巨大化 (数百万エントリ) した状態での
+longest resistance 再構成コストが予算を超過する．
+
+改善の方向性:
+- `PV_VISIT_BUDGET` の引き上げ (10M → 50M 等)
+- PV 抽出アルゴリズムの効率化 (chain drop 子のスキップ等)
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 

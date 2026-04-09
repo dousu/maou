@@ -141,6 +141,31 @@ pub struct DfPnSolver {
     /// プロファイリング統計情報(`profile` feature 有効時のみ)．
     #[cfg(feature = "profile")]
     pub(super) profile_stats: ProfileStats,
+    /// 診断: PNS 空回り(pn/dn 不変)イテレーション数．
+    ///
+    /// 500M 予算テスト等で予算が有効に使われているかを確認する．
+    /// 1 PNS イテレーションの前後で `arena[0].(pn,dn)` が完全に同一
+    /// だった回数を累積する．pns_main_with_arena の出口で solver に
+    /// 反映される．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_pns_spin_iters: u64,
+    /// 診断: PNS pn/dn 変化があったイテレーション数．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_pns_changed_iters: u64,
+    /// 診断: `refutable_check_with_cache` の TT 経路ヒット数．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_tt_hits: u64,
+    /// 診断: `refutable_check_with_cache` の memoize 経路ヒット数．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_memo_hits: u64,
+    /// 診断: `refutable_check_with_cache` の再帰フォールバック
+    /// (true を返した) 数．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_recursive_true: u64,
+    /// 診断: `refutable_check_with_cache` の再帰フォールバック
+    /// (false を返した・memoize した) 数．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_recursive_false: u64,
     /// TT 診断: 監視対象の ply(0 = 無効)．
     ///
     /// 指定 ply で MID ループの再帰前後に TT サイズを出力し，
@@ -274,6 +299,18 @@ impl DfPnSolver {
             attacker: Color::Black,
             #[cfg(feature = "profile")]
             profile_stats: ProfileStats::default(),
+            #[cfg(feature = "verbose")]
+            dbg_pns_spin_iters: 0,
+            #[cfg(feature = "verbose")]
+            dbg_pns_changed_iters: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_tt_hits: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_memo_hits: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_recursive_true: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_recursive_false: 0,
             #[cfg(feature = "tt_diag")]
             diag_ply: 0,
             #[cfg(feature = "tt_diag")]
@@ -871,6 +908,54 @@ impl DfPnSolver {
                 nodes_searched: self.nodes_searched,
             }
         }
+    }
+
+    /// ハイブリッド NM 昇格判定 (PNS pns_expand 用).
+    ///
+    /// 1. `all_checks_refutable_by_tt` で TT ベース高速判定 (~2µs/王手)
+    /// 2. 失敗時は `refutable_check_failed` キャッシュを確認
+    /// 3. 未キャッシュなら `depth_limit_all_checks_refutable` にフォールバック．
+    ///    false の場合は pos_key をキャッシュに記録し，同一局面での
+    ///    再評価を省略する．
+    ///
+    /// 設計意図: 39手詰め ply 20 で `depth_limit_all_checks_refutable` が
+    /// PNS 時間の 99.97% を消費する律速要因だった (1,723 invocations 中
+    /// 1,721 が REFUTABLE_CALL_LIMIT=10,000 に到達)．一方 29 手詰め等の
+    /// 浅い問題では recursive 版が実際に NM 昇格を発生させる．
+    /// このハイブリッド化で:
+    ///   - 共通ケース (TT ヒット) は ~2µs
+    ///   - 再帰が必要な局面は初回のみ ~66ms まで支払い，memoize で再評価回避
+    ///   - 29 手詰めなど浅い問題の NM 昇格率を維持
+    #[inline]
+    pub(super) fn refutable_check_with_cache(
+        &mut self,
+        board: &mut Board,
+        pos_key: u64,
+        checks: &[Move],
+    ) -> bool {
+        // Fast path: TT ベース判定
+        if self.all_checks_refutable_by_tt(board, checks) {
+            #[cfg(feature = "verbose")]
+            { self.dbg_refut_tt_hits += 1; }
+            return true;
+        }
+        // Memoize: 既に false 確定の局面ならスキップ
+        if self.refutable_check_failed.contains(&pos_key) {
+            #[cfg(feature = "verbose")]
+            { self.dbg_refut_memo_hits += 1; }
+            return false;
+        }
+        // Fallback: 再帰判定 (高コスト). false ならキャッシュ．
+        let result = self.depth_limit_all_checks_refutable(board, checks);
+        if !result {
+            self.refutable_check_failed.insert(pos_key);
+            #[cfg(feature = "verbose")]
+            { self.dbg_refut_recursive_false += 1; }
+        } else {
+            #[cfg(feature = "verbose")]
+            { self.dbg_refut_recursive_true += 1; }
+        }
+        result
     }
 
     /// 深さ制限 OR ノードの再帰的 NM 判定 (IDS の構造的不詰検証)．
