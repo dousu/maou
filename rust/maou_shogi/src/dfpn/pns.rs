@@ -1719,9 +1719,6 @@ impl DfPnSolver {
         let mut frontier_iters = 0u32;
         const MAX_FRONTIER_ITERS: u32 = 50;
 
-        #[cfg(feature = "verbose")]
-        let fv_start = Instant::now();
-
         while frontier_iters < MAX_FRONTIER_ITERS
             && self.nodes_searched < total_max_nodes
             && !self.timed_out
@@ -1732,29 +1729,13 @@ impl DfPnSolver {
                 break;
             }
 
-            #[cfg(feature = "verbose")]
-            let iter_start = Instant::now();
-            #[cfg(feature = "verbose")]
-            let nodes_before = self.nodes_searched;
-            #[cfg(feature = "verbose")]
-            let tt_before = self.table.len();
-
             // PNS フェーズ: TT を更新しフロンティアを特定
             let pns_budget = (remaining_budget / 20).max(10_000).min(50_000);
             self.max_nodes = self.nodes_searched.saturating_add(pns_budget);
-            #[cfg(feature = "verbose")]
-            let pns_start = Instant::now();
             let _pv = self.pns_main_with_arena(board, &mut arena);
-            #[cfg(feature = "verbose")]
-            let pns_ms = pns_start.elapsed().as_millis();
-            #[cfg(feature = "verbose")]
-            let nodes_after_pns = self.nodes_searched;
 
             let (r_pn, r_dn, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
             if r_pn == 0 || r_dn == 0 {
-                #[cfg(feature = "verbose")]
-                eprintln!("[fv] iter {} PNS break: pns_ms={} pns_nodes={} arena={} rpn={} rdn={}",
-                    frontier_iters, pns_ms, nodes_after_pns - nodes_before, arena.len(), r_pn, r_dn);
                 break; // PNS で証明または反証完了
             }
 
@@ -1768,13 +1749,7 @@ impl DfPnSolver {
             if r_pn2 == 0 || r_dn2 == 0 {
                 break;
             }
-            #[cfg(feature = "verbose")]
-            let mid_start = Instant::now();
             self.mid(board, INF - 1, INF - 1, 0, true);
-            #[cfg(feature = "verbose")]
-            let mid_ms = mid_start.elapsed().as_millis();
-            #[cfg(feature = "verbose")]
-            let nodes_after_mid = self.nodes_searched;
 
             let (r_pn3, r_dn3, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
             if r_pn3 == 0 || r_dn3 == 0 {
@@ -1784,27 +1759,8 @@ impl DfPnSolver {
             // サイクル間 TT 清掃: MID が蓄積した中間エントリを除去し，
             // 次の PNS サイクルが新鮮な状態でフロンティアを選択できるようにする．
             // 証明(pn=0)と確定反証(dn=0, 非経路依存)は保持する．
-            #[cfg(feature = "verbose")]
-            let retain_start = Instant::now();
             self.table.retain_proofs();
-            #[cfg(feature = "verbose")]
-            let retain_ms = retain_start.elapsed().as_millis();
-            #[cfg(feature = "verbose")]
-            let tt_after = self.table.len();
-            #[cfg(feature = "verbose")]
-            let iter_ms = iter_start.elapsed().as_millis();
-
-            #[cfg(feature = "verbose")]
-            eprintln!(
-                "[fv] iter {} total={}ms pns={}ms({}nodes arena={}) mid={}ms({}nodes) retain={}ms tt={}→{} rpn={} rdn={}",
-                frontier_iters, iter_ms, pns_ms,
-                nodes_after_pns - nodes_before, arena.len(),
-                mid_ms, nodes_after_mid - nodes_after_pns,
-                retain_ms, tt_before, tt_after, r_pn3, r_dn3,
-            );
         }
-        #[cfg(feature = "verbose")]
-        eprintln!("[fv] TOTAL iters={} wall={}ms", frontier_iters, fv_start.elapsed().as_millis());
         self.max_nodes = total_max_nodes;
     }
 
@@ -1870,16 +1826,6 @@ impl DfPnSolver {
 
         // PNS メインループ
         let mut pns_iters: u64 = 0;
-        #[cfg(feature = "verbose")]
-        let mut phase_sel_ns: u64 = 0;
-        #[cfg(feature = "verbose")]
-        let mut phase_exp_ns: u64 = 0;
-        #[cfg(feature = "verbose")]
-        let mut phase_undo_ns: u64 = 0;
-        #[cfg(feature = "verbose")]
-        let mut phase_bk_ns: u64 = 0;
-        #[cfg(feature = "verbose")]
-        let mut phase_cond_ns: u64 = 0;
         // PNS 収束検出: root_pn が一定反復数改善しなければ打ち切る．
         // PNS はアリーナ飽和後に選択ウォークだけを繰り返し
         // 予算を消費するため，早期打ち切りで MID に予算を回す．
@@ -1895,8 +1841,6 @@ impl DfPnSolver {
         let mut growth_stall_count: u32 = 0;
         loop {
             pns_iters += 1;
-            #[cfg(feature = "verbose")]
-            let _iter_cond_start = Instant::now();
             // 終了条件: ルート証明/反証
             if arena[0].pn == 0 || arena[0].dn == 0 {
                 break;
@@ -1943,12 +1887,6 @@ impl DfPnSolver {
                 self.timed_out = true;
                 break;
             }
-
-            #[cfg(feature = "verbose")]
-            { phase_cond_ns += _iter_cond_start.elapsed().as_nanos() as u64; }
-
-            #[cfg(feature = "verbose")]
-            let _sel_start = Instant::now();
 
             // Most-proving node 選択 + 盤面復元
             path.clear();
@@ -2154,23 +2092,11 @@ impl DfPnSolver {
                 current = best_child;
             }
 
-            #[cfg(feature = "verbose")]
-            { phase_sel_ns += _sel_start.elapsed().as_nanos() as u64; }
-
-            #[cfg(feature = "verbose")]
-            let _exp_start = Instant::now();
-
             // リーフ展開(逐次活性化で解決済みの場合はスキップ)
             if !skip_expand {
                 let ply = (path.len() - 1) as u32;
                 self.pns_expand(board, arena, current, ply, &ancestors_buf[..ancestors_len]);
             }
-
-            #[cfg(feature = "verbose")]
-            { phase_exp_ns += _exp_start.elapsed().as_nanos() as u64; }
-
-            #[cfg(feature = "verbose")]
-            let _undo_start = Instant::now();
 
             // 盤面をルートに戻す
             for i in (1..path.len()).rev() {
@@ -2178,17 +2104,8 @@ impl DfPnSolver {
                 board.undo_move(child_move, captures[i - 1]);
             }
 
-            #[cfg(feature = "verbose")]
-            { phase_undo_ns += _undo_start.elapsed().as_nanos() as u64; }
-
-            #[cfg(feature = "verbose")]
-            let _bk_start = Instant::now();
-
             // バックアップ: 展開ノードからルートまで pn/dn を更新
             Self::pns_backup(arena, current);
-
-            #[cfg(feature = "verbose")]
-            { phase_bk_ns += _bk_start.elapsed().as_nanos() as u64; }
         }
 
         // 診断: PNS 終了時の状態
@@ -2201,29 +2118,6 @@ impl DfPnSolver {
             verbose_eprintln!("[pns_diag] arena={}/{} iters={} nodes_used={} root_pn={} root_dn={} TT_pos={} time={:.2}s",
                 arena.len(), PNS_MAX_ARENA_NODES, pns_iters, pns_nodes_used, root_pn, root_dn,
                 self.table.len(), pns_elapsed);
-        }
-        #[cfg(feature = "verbose")]
-        eprintln!(
-            "[pns_main_exit] arena={} iters={} root_pn={} root_dn={} | \
-             sel={}ms exp={}ms undo={}ms bk={}ms cond={}ms | \
-             refut_invocations={} refut_calls={} refut_ns={} refut_limit_hits={}",
-            arena.len(), pns_iters, arena[0].pn, arena[0].dn,
-            phase_sel_ns / 1_000_000,
-            phase_exp_ns / 1_000_000,
-            phase_undo_ns / 1_000_000,
-            phase_bk_ns / 1_000_000,
-            phase_cond_ns / 1_000_000,
-            self.dbg_refutable_invocations,
-            self.dbg_refutable_total_calls,
-            self.dbg_refutable_total_ns,
-            self.dbg_refutable_limit_hits,
-        );
-        #[cfg(feature = "verbose")]
-        {
-            self.dbg_refutable_total_ns = 0;
-            self.dbg_refutable_total_calls = 0;
-            self.dbg_refutable_invocations = 0;
-            self.dbg_refutable_limit_hits = 0;
         }
 
         // 証明/反証結果を TT に格納(PV 抽出用)
@@ -2275,12 +2169,26 @@ impl DfPnSolver {
             arena[node_idx as usize].expanded = true;
             if or_node {
                 // OR ノードの深さ制限: 王手が0手なら真の不詰(REMAINING_INFINITE)．
-                // 王手がある場合: 2手延長で全王手が即座に反証可能かを確認．
+                // 王手がある場合の NM 昇格判定はハイブリッドで実施する．
+                //
+                // 1. まず `all_checks_refutable_by_tt` (~2µs/王手) で TT ベース
+                //    の高速判定．TT に `REMAINING_INFINITE` エントリが既にあれば
+                //    これだけで決着する．
+                // 2. TT 判定が false の場合，`refutable_check_failed` キャッシュを
+                //    確認．既に false 確定なら skip．
+                // 3. それ以外は `depth_limit_all_checks_refutable` (再帰 movegen)
+                //    を実行し，false なら結果を memoize する．
+                //
+                // v0.24.31 以前は常に `depth_limit_all_checks_refutable` を
+                // 呼んでおり，39手詰め ply 20 では 10,000 回上限到達が
+                // 99.9% で PNS 時間の 99.97% を消費していた．
+                // ハイブリッド化 + memoization で共通ケースを ~2µs に短縮しつつ
+                // 29手詰めの NM 昇格率を維持する．
                 let checks = self.generate_check_moves_cached(board);
                 if checks.is_empty() {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key as u32);
-                } else if self.depth_limit_all_checks_refutable(board, &checks) {
+                } else if self.refutable_check_with_cache(board, pos_key, &checks) {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key as u32);
                 } else {
@@ -2463,11 +2371,11 @@ impl DfPnSolver {
             arena[node_idx as usize].dn = 0;
             arena[node_idx as usize].expanded = true;
             let mut prop_rem = propagate_nm_remaining(or_nm_min_remaining, remaining);
-            // 2手延長による REMAINING_INFINITE 昇格
+            // REMAINING_INFINITE 昇格: ハイブリッド判定 (上述と同じ経路)．
             if prop_rem != REMAINING_INFINITE {
                 let checks = self.generate_check_moves_cached(board);
                 if checks.is_empty()
-                    || self.depth_limit_all_checks_refutable(board, &checks)
+                    || self.refutable_check_with_cache(board, pos_key, &checks)
                 {
                     prop_rem = REMAINING_INFINITE;
                 }
