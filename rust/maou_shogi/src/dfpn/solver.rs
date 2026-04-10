@@ -2725,21 +2725,11 @@ impl DfPnSolver {
                 // 合駒チェーンの深部では予算が dn_floor(100) 未満に縮退し，
                 // 子 AND ノードの TT dn が予算を上回って即座に TT exit する
                 // 1-node スラッシングが発生する(ply-35 で 9.8M 回の空振り)．
-                //
-                // Adaptive DN_FLOOR: ply が depth の半分を超えたら DN_FLOOR を
-                // スケーリングし，depth boundary 付近でのノード集中を緩和する．
-                // ply/depth 比率が高い(深い位置)ほど大きなフロアを適用し，
-                // 仮反証の繰り返し生成を抑制する．
-                let dn_floor_adaptive = if self.depth > 0 && ply > self.depth / 2 {
-                    let scale = 1 + (ply - self.depth / 2) / (self.depth / 4).max(1);
-                    DN_FLOOR.saturating_mul(scale)
-                } else {
-                    DN_FLOOR
-                };
+                // dn_floor_or=100 を保証し，子 AND に探索進捗させる余裕を与える．
                 let child_dn_th = eff_dn_th
                     .saturating_sub(current_dn)
                     .saturating_add(best_pn_dn.1)
-                    .max(dn_floor_adaptive)
+                    .max(DN_FLOOR)
                     .min(INF - 1);
                 // OR ノード pn 閾値: 1+ε trick (sibling_based)．
                 //
@@ -2814,18 +2804,11 @@ impl DfPnSolver {
                 // (eff_dn_th) がチェーンの深さ分だけ縮退し dn_floor を下回る．
                 // キャップ(eff_dn_th.min(...))を外して dn_floor を保証し，
                 // チェーン末端の証明に十分な探索予算を確保する(§3 最適化)．
-                // AND ノードにも adaptive DN_FLOOR を適用
-                let dn_floor_adaptive = if self.depth > 0 && ply > self.depth / 2 {
-                    let scale = 1 + (ply - self.depth / 2) / (self.depth / 4).max(1);
-                    DN_FLOOR.saturating_mul(scale)
-                } else {
-                    DN_FLOOR
-                };
                 let child_dn_th = if chain_king_sq.is_some() {
-                    sibling_based.max(dn_floor_adaptive).min(INF - 1)
+                    sibling_based.max(DN_FLOOR).min(INF - 1)
                 } else {
                     eff_dn_th
-                        .min(sibling_based.max(dn_floor_adaptive))
+                        .min(sibling_based.max(DN_FLOOR))
                         .min(INF - 1)
                 };
                 (child_pn_th, child_dn_th)
