@@ -6709,3 +6709,116 @@ use crate::types::{Color, PieceType};
             }
         }
     }
+
+    /// パラメータグリッドサーチ: 39手詰め ply 24 (1M ノード) と ply 22 (10M ノード) で
+    /// 主要パラメータの組み合わせを評価する．
+    ///
+    /// 評価指標: ply 24 のノード数(小さいほど良い)．
+    /// 10M 予算で ply 22 が解ければボーナス．
+    #[test]
+    #[ignore]
+    fn test_param_grid_search() {
+        use std::io::Write;
+        let out_path = "/tmp/param_grid_search.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        // ply 24 までの PV
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+
+        // ply 24 局面を構築
+        let mut board24 = Board::new();
+        board24.set_sfen(sfen).unwrap();
+        for usi in &pv {
+            let m = board24.move_from_usi(usi).unwrap();
+            board24.do_move(m);
+        }
+
+        // パラメータグリッド: (epsilon_denom, pn_floor_n, pn_floor_d, dn_floor_mult, deep_dfpn_r)
+        let configs: Vec<(&str, u32, u32, u32, u32, u32)> = vec![
+            // name, eps_d, pfn, pfd, dnfm, ddr
+            ("baseline",     3, 2, 3, 100, 4),
+            ("eps2",         2, 2, 3, 100, 4),  // より大きな epsilon
+            ("eps4",         4, 2, 3, 100, 4),  // より小さな epsilon
+            ("pf3/4",        3, 3, 4, 100, 4),  // pn_floor 75%
+            ("pf1/2",        3, 1, 2, 100, 4),  // pn_floor 50%
+            ("dn80",         3, 2, 3,  80, 4),  // DN_FLOOR 80
+            ("dn150",        3, 2, 3, 150, 4),  // DN_FLOOR 150
+            ("ddr2",         3, 2, 3, 100, 2),  // deep dfpn R=2
+            ("ddr8",         3, 2, 3, 100, 8),  // deep dfpn R=8
+            // 組み合わせ
+            ("eps2+pf3/4",   2, 3, 4, 100, 4),
+            ("eps2+dn80",    2, 2, 3,  80, 4),
+            ("eps2+ddr2",    2, 2, 3, 100, 2),
+            ("eps2+pf3/4+dn80",  2, 3, 4, 80, 4),
+            ("eps2+pf3/4+ddr2",  2, 3, 4, 100, 2),
+            ("eps2+dn80+ddr2",   2, 2, 3, 80, 2),
+            ("full_combo",   2, 3, 4,  80, 2),
+        ];
+
+        writeln!(out, "{:<22} {:>10} {:>8} {:>10} {:>8} {}",
+            "Config", "Ply24Nodes", "Time24", "Ply22Nodes", "Time22", "Ply22Result").unwrap();
+        writeln!(out, "{}", "-".repeat(80)).unwrap();
+
+        for (name, eps_d, pfn, pfd, dnfm, ddr) in &configs {
+            // Ply 24 テスト (1M ノード / 600s)
+            let mut board = board24.clone();
+            let mut solver = DfPnSolver::with_timeout(17, 1_000_000, 32767, 600);
+            solver.set_find_shortest(false);
+            solver.param_epsilon_denom = *eps_d;
+            solver.param_pn_floor_numer = *pfn;
+            solver.param_pn_floor_denom = *pfd;
+            solver.param_dn_floor_mult = *dnfm;
+            solver.param_deep_dfpn_r = *ddr;
+
+            let start = std::time::Instant::now();
+            let _result24 = solver.solve(&mut board);
+            let t24 = start.elapsed().as_secs_f64();
+            let n24 = solver.nodes_searched;
+
+            // Ply 22 テスト (10M ノード / 600s): PV の先頭 22 手を適用した局面
+            let mut board22 = Board::new();
+            board22.set_sfen(sfen).unwrap();
+            for usi in &pv[..22] {
+                let m = board22.move_from_usi(usi).unwrap();
+                board22.do_move(m);
+            }
+            // remaining=17, depth=remaining+2=19
+            let mut solver22 = DfPnSolver::with_timeout(19, 10_000_000, 32767, 600);
+            solver22.set_find_shortest(false);
+            solver22.param_epsilon_denom = *eps_d;
+            solver22.param_pn_floor_numer = *pfn;
+            solver22.param_pn_floor_denom = *pfd;
+            solver22.param_dn_floor_mult = *dnfm;
+            solver22.param_deep_dfpn_r = *ddr;
+
+            let start22 = std::time::Instant::now();
+            let result22 = solver22.solve(&mut board22);
+            let t22 = start22.elapsed().as_secs_f64();
+            let n22 = solver22.nodes_searched;
+            let r22 = match &result22 {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+
+            writeln!(out, "{:<22} {:>10} {:>7.1}s {:>10} {:>7.1}s {}",
+                name, n24, t24, n22, t22, r22).unwrap();
+            out.flush().unwrap();
+        }
+        writeln!(out, "\n完了").unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        eprintln!("結果: /tmp/param_grid_search.log");
+    }

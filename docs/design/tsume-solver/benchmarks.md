@@ -1017,6 +1017,39 @@ v0.24.38 で `clear_proven_disproofs()` を `clear_proven_disproofs_below(min_de
 
 **安全性:** 全 127 テスト pass，ply 24 ノード数退行なし
 
+**課題 H: Depth-adaptive epsilon による閾値余裕の最適化 (v0.24.41)**
+
+パラメータグリッドサーチにより 1+ε の epsilon 除数が depth に依存する最適値を
+持つことを発見した．16 構成の網羅的テストで以下が判明:
+
+| Config | Ply24 Nodes (depth=17) | Ply22 10M (depth=19) |
+|--------|----------------------|---------------------|
+| baseline (eps_denom=3) | **367,331** (最適) | Unknown |
+| eps_denom=2 | 1,000,000 (+172% 退行) | **Mate(17) 8.1M** ✓ |
+| eps_denom=4 | 1,000,000 (+172% 退行) | Unknown |
+
+eps_denom=3 は depth=17 に最適だが depth=19 では不足．
+eps_denom=2 は depth=19 で ply 22 を解けるが depth=17 では退行．
+
+**depth-adaptive epsilon:**
+
+```
+eps_denom = if saved_depth >= 19 { 2 } else { 3 }
+```
+
+IDS の全反復で最終 depth (saved_depth) に基づいて eps_denom を決定し，
+浅い反復でも深い問題向けの epsilon 余裕を適用する．
+
+**計測結果:**
+
+| Ply | baseline | depth-adaptive | 変化 |
+|-----|---------|---------------|------|
+| 24 (depth=17) | 367,331 | **367,331** | **同一(退行なし)** |
+| 22 (depth=19) | 10M Unknown | **8,111,974 Mate(17)** | **10M 内で解決可能に** |
+
+depth=17 では eps_denom=3 を維持し退行なし，depth=19 では eps_denom=2 に
+切り替わり ply 22 (Mate(17)) を 8.1M ノードで解決．
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |

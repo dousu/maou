@@ -131,6 +131,23 @@ pub struct DfPnSolver {
     pub(super) next_gc_check: u64,
     /// overflow GC のクールダウン(次に GC を許可するノード数)．
     next_overflow_gc: u64,
+    // === チューニング可能パラメータ ===
+    /// 1+ε の epsilon 除数(デフォルト 3: epsilon = second_best/3 + PN_UNIT)．
+    pub(super) param_epsilon_denom: u32,
+    /// AND pn_floor の分子(デフォルト 2: pn_floor = eff_pn_th * 2/3)．
+    pub(super) param_pn_floor_numer: u32,
+    /// AND pn_floor の分母(デフォルト 3)．
+    pub(super) param_pn_floor_denom: u32,
+    /// DN_FLOOR の PN_UNIT 倍率(デフォルト 100: DN_FLOOR = 100 * PN_UNIT)．
+    pub(super) param_dn_floor_mult: u32,
+    /// INTERPOSE_DN_BIAS の PN_UNIT 倍率(デフォルト 8)．
+    pub(super) param_interpose_dn_mult: u32,
+    /// Deep df-pn の深さ係数 R(デフォルト 4)．
+    pub(super) param_deep_dfpn_r: u32,
+    /// 最終 IDS depth (solve 時の depth)．
+    /// IDS 中に self.depth が変化するため，epsilon の depth-adaptive 判定に
+    /// 最終 depth を保持する．mid_fallback の入口で設定される．
+    pub(super) saved_depth_for_epsilon: u32,
     /// Killer Move テーブル(OR ノード用)．
     ///
     /// ply ごとに最大 2 つの killer move(Move16)を保持する．
@@ -302,6 +319,13 @@ impl DfPnSolver {
             tt_gc_threshold: 0,
             next_gc_check: 0,
             next_overflow_gc: 0,
+            param_epsilon_denom: 0, // 0 = depth-adaptive: depth≤17→3, depth≥19→2
+            param_pn_floor_numer: 2,
+            param_pn_floor_denom: 3,
+            param_dn_floor_mult: 100,
+            param_interpose_dn_mult: 8,
+            param_deep_dfpn_r: DEEP_DFPN_R,
+            saved_depth_for_epsilon: 0,
             killer_table: Vec::new(),
             table: TranspositionTable::new(),
             nodes_searched: 0,
@@ -516,7 +540,7 @@ impl DfPnSolver {
             let ply = (self.depth as u32).saturating_sub(remaining as u32);
             let half_depth = self.depth / 2;
             if ply > half_depth {
-                let biased_pn = PN_UNIT + (ply - half_depth) / DEEP_DFPN_R * PN_UNIT;
+                let biased_pn = PN_UNIT + (ply - half_depth) / self.param_deep_dfpn_r * PN_UNIT;
                 (biased_pn, PN_UNIT, 0)
             } else {
                 (PN_UNIT, PN_UNIT, 0)
@@ -2729,7 +2753,7 @@ impl DfPnSolver {
                 let child_dn_th = eff_dn_th
                     .saturating_sub(current_dn)
                     .saturating_add(best_pn_dn.1)
-                    .max(DN_FLOOR)
+                    .max(self.param_dn_floor_mult * PN_UNIT)
                     .min(INF - 1);
                 // OR ノード pn 閾値: 1+ε trick (sibling_based)．
                 //
@@ -2738,7 +2762,18 @@ impl DfPnSolver {
                 // 自然精度 epsilon (§10.2 方針A): divide-at-unit-scale を外し，
                 // 除算の自然精度を活かす．second_best=3S のとき epsilon=28，
                 // sibling_based=76(4.75S) となり ~19%/level の閾値余裕を確保する．
-                let epsilon_or = second_best / 3 + PN_UNIT;
+                // depth-adaptive epsilon: 深い問題ほど epsilon を拡大し閾値飢餓を緩和．
+                // グリッドサーチにより eps_denom=3 は depth≤17 に最適，
+                // eps_denom=2 は depth≥19 で ply 22 を 10M 内で解けることを確認．
+                let eps_denom = if self.param_epsilon_denom > 0 {
+                    self.param_epsilon_denom
+                } else {
+                    let d = if self.saved_depth_for_epsilon > 0 {
+                        self.saved_depth_for_epsilon
+                    } else { self.depth };
+                    if d >= 19 { 2 } else { 3 }
+                };
+                let epsilon_or = second_best / eps_denom + PN_UNIT;
                 let sibling_based_or = second_best.saturating_add(epsilon_or);
                 let child_pn_th = sibling_based_or.max(2 * PN_UNIT).min(INF - 1);
                 (child_pn_th, child_dn_th)
@@ -2774,9 +2809,11 @@ impl DfPnSolver {
                 // 閾値減衰を (1/2)^N → (2/3)^N に改善する．
                 // 6 AND レベルで (2/3)^6 ≈ 0.088 vs (1/2)^6 ≈ 0.016 → 5.6倍．
                 // u64 に昇格して乗算オーバーフローを防止する．
-                let pn_floor_raw = ((eff_pn_th as u64 * 2 / 3) as u32).max(PN_UNIT);
+                let pn_floor_raw = ((eff_pn_th as u64 * self.param_pn_floor_numer as u64
+                    / self.param_pn_floor_denom as u64) as u32).max(PN_UNIT);
+                let dn_floor_param = self.param_dn_floor_mult * PN_UNIT;
                 let pn_floor = if chain_king_sq.is_some() {
-                    DN_FLOOR.max(pn_floor_raw)
+                    dn_floor_param.max(pn_floor_raw)
                 } else {
                     pn_floor_raw
                 };
@@ -2791,8 +2828,16 @@ impl DfPnSolver {
                     .max(pn_floor)
                     .max(progress_floor)
                     .min(INF - 1);
-                // 自然精度 epsilon (§10.2 方針A): OR ノードと同じく自然精度．
-                let epsilon = second_best / 3 + PN_UNIT;
+                // 自然精度 epsilon (§10.2 方針A): OR ノードと同じく depth-adaptive．
+                let eps_denom = if self.param_epsilon_denom > 0 {
+                    self.param_epsilon_denom
+                } else {
+                    let d = if self.saved_depth_for_epsilon > 0 {
+                        self.saved_depth_for_epsilon
+                    } else { self.depth };
+                    if d >= 19 { 2 } else { 3 }
+                };
+                let epsilon = second_best / eps_denom + PN_UNIT;
                 let sibling_based = second_best.saturating_add(epsilon);
                 // AND ノード dn 閾値の最低保証．
                 //
@@ -2805,10 +2850,10 @@ impl DfPnSolver {
                 // キャップ(eff_dn_th.min(...))を外して dn_floor を保証し，
                 // チェーン末端の証明に十分な探索予算を確保する(§3 最適化)．
                 let child_dn_th = if chain_king_sq.is_some() {
-                    sibling_based.max(DN_FLOOR).min(INF - 1)
+                    sibling_based.max(dn_floor_param).min(INF - 1)
                 } else {
                     eff_dn_th
-                        .min(sibling_based.max(DN_FLOOR))
+                        .min(sibling_based.max(dn_floor_param))
                         .min(INF - 1)
                 };
                 (child_pn_th, child_dn_th)
