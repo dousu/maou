@@ -1672,11 +1672,21 @@ impl DfPnSolver {
                 ids_depth = saved_depth;
             } else {
                 // 深さ進行:
-                // saved_depth > 31 の場合: 段階的 IDS (2→4→8→16→32→41)
-                //   深い問題では段階的に TT を構築して探索効率を上げる
+                // saved_depth > 31 の場合: 段階的 IDS
+                //   depth ≤ 32: 倍増 (2→4→8→16→32)
+                //   depth > 32: +4 刻み (32→36→40→41)
+                //   深い depth での TT ウォームアップを段階的に行い，
+                //   プレフィルタ (§8.4) のヒット率を向上させる．
+                //   v0.24.38 の選択的 disproof 保持と相乗効果:
+                //   中間ステップの NM disproof が次のステップに引き継がれる．
                 // saved_depth <= 31 の場合: 直接ジャンプ (2→4→31)
                 //   浅い問題では中間深さの探索が無駄になるため
-                let next = ids_depth.saturating_mul(2).max(ids_depth + 2);
+                let next = if ids_depth >= 32 {
+                    // 32 以降は +4 刻みで段階的に進行
+                    ids_depth + 4
+                } else {
+                    ids_depth.saturating_mul(2).max(ids_depth + 2)
+                };
                 if saved_depth <= 31 && next > 4 && next < saved_depth {
                     ids_depth = saved_depth;
                 } else {
