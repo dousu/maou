@@ -1017,6 +1017,24 @@ v0.24.38 で `clear_proven_disproofs()` を `clear_proven_disproofs_below(min_de
 
 **安全性:** 全 127 テスト pass，ply 24 ノード数退行なし
 
+**課題 G: Adaptive DN_FLOOR による depth boundary 集中の緩和 (v0.24.39)**
+
+v0.24.39 で DN_FLOOR を ply/depth 比率に基づいて動的にスケーリングする．
+ply が depth の半分を超えたら `DN_FLOOR * (1 + (ply - depth/2) / (depth/4))` に拡大し，
+depth boundary 付近でのノード集中を緩和する．
+
+OR ノード・AND ノード(chain/non-chain)の両方に適用．
+
+**計測結果 (120M backward 解析):**
+
+| Ply | v0.24.38 nodes | v0.24.39 nodes | 変化 |
+|-----|---------------|---------------|------|
+| 24 | 367,331 | 367,328 | -3 (-0.001%) |
+| 22 | 16,942,722 | **16,619,891** | **-1.9%** |
+
+ply 22 で **1.9% のノード削減**．TT エントリ数は 271,866 → 293,246 (+7.9%) に増加し，
+depth boundary 付近のノード消費が TT 蓄積に再配分されていることを示す．
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
