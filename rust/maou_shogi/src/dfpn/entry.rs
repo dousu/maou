@@ -179,13 +179,18 @@ impl ProvenEntry {
     }
 
     /// confirmed disproof エントリを構築する．
+    ///
+    /// `ids_depth` は NM 昇格が確認された IDS depth で，
+    /// `clear_proven_disproofs_below()` での選択的除去に使用する．
+    /// disproof の flags bits 1-6 に 0-63 にクランプして格納する．
     #[inline(always)]
     pub(super) fn new_disproof(
         hand: [u8; HAND_KINDS],
+        ids_depth: u32,
     ) -> Self {
         Self {
             hand,
-            flags: Self::encode_disproof_flags(),
+            flags: Self::encode_disproof_flags(ids_depth),
             best_move: 0,
             remaining: REMAINING_INFINITE,
         }
@@ -216,9 +221,21 @@ impl ProvenEntry {
     }
 
     /// confirmed disproof エントリ用 flags．
+    ///
+    /// bits 1-6 に確認時の IDS depth を格納する(0-63, クランプ)．
+    /// bit 0 = 0 (is_proof=false), bit 7 = 0 (distance_set は proof のみ)．
     #[inline(always)]
-    pub(super) fn encode_disproof_flags() -> u8 {
-        0x00 // is_proof=0, no distance
+    pub(super) fn encode_disproof_flags(ids_depth: u32) -> u8 {
+        // is_proof=0, bits 1-6 に ids_depth (0-63)
+        let clamped = ids_depth.min(63) as u8;
+        clamped << 1
+    }
+
+    /// confirmed disproof の確認時 IDS depth を取得する (bits 1-6)．
+    #[inline(always)]
+    pub(super) fn disproof_depth(&self) -> u32 {
+        debug_assert!(!self.is_proof(), "disproof_depth called on proof entry");
+        ((self.flags >> 1) & 0x3F) as u32
     }
 }
 

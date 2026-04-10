@@ -994,6 +994,29 @@ Frontier Variant の PNS 予算を前サイクルの proof store 数に基づい
   後続 MID の TT ヒット率を向上させる
 - **proof store の取得:** `pns_store_to_tt` の戻り値(u64)を `last_pns_proof_stores` に格納
 
+**課題 F: IDS depth 切替時の ProvenTT disproof 選択的保持 (v0.24.38)**
+
+v0.24.38 で `clear_proven_disproofs()` を `clear_proven_disproofs_below(min_depth)` に
+変更し，ProvenTT の confirmed disproof を確認時の IDS depth に基づいて選択的に除去する．
+
+**実装:**
+
+- ProvenEntry の flags bits 1-6（disproof では未使用）に確認時の IDS depth を格納
+- `clear_proven_disproofs_below(min_depth)` は `disproof_depth() < min_depth` の
+  エントリのみ除去
+- IDS 切替時の閾値: `next_ids_depth / 2`
+  - 例: IDS 2→4→8→16→32→41 で 8→16 に進行する場合，
+    threshold=8 で depth<8 (depth=2,4) の disproof を除去し depth=8 を保持
+- TT に `current_ids_depth` フィールドを追加し，`store_proven` で自動的に記録
+
+**計測結果:**
+
+完全除去(clear なし)では ply 24 で +26% ノード増加の退行が発生したが，
+選択的除去(`ids_depth / 2` 閾値)では ply 24 ノード数が v0.24.37 と完全同一(367,331)
+に回復．浅い disproof のみ除去し，深い disproof を保持することで退行を回避．
+
+**安全性:** 全 127 テスト pass，ply 24 ノード数退行なし
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |

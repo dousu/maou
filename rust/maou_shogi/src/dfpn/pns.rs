@@ -1411,6 +1411,7 @@ impl DfPnSolver {
                 ids_depth = saved_depth;
             }
             self.depth = ids_depth;
+            self.table.current_ids_depth = ids_depth;
             self.path_len = 0;
             let remaining = ids_depth as u16;
             let (root_pn, _, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
@@ -1663,11 +1664,9 @@ impl DfPnSolver {
             let time_exceeded = ids_depth < saved_depth
                 && remaining_time < self.timeout.as_secs_f64() * 0.25;
 
-            // IDS 反復間でのクリーンアップ:
-            // 1. WorkingTT を全クリア(構造的不詰エントリ + path-dep disproof の汚染防止)
-            // 2. ProvenTT の confirmed disproof を除去(NoMate バグ対策 §6.6.3)
+            // IDS 反復間でのクリーンアップ + depth 進行:
+            // WorkingTT を全クリア(構造的不詰エントリ + path-dep disproof の汚染防止)
             self.table.clear_working();
-            self.table.clear_proven_disproofs();
 
             if stagnated || time_exceeded {
                 ids_depth = saved_depth;
@@ -1684,6 +1683,14 @@ impl DfPnSolver {
                     ids_depth = next.min(saved_depth);
                 }
             }
+
+            // ProvenTT の浅い confirmed disproof を選択的に除去:
+            // 次の IDS depth の半分未満で確認された disproof のみ除去し，
+            // それ以上の depth で確認された disproof は保持する．
+            // 例: IDS 2→4→8→16→32→41 で depth 8→16 に進行する場合，
+            // threshold=8 で depth<8 (depth=2,4) の disproof を除去，
+            // depth=8 の disproof は保持する．
+            self.table.clear_proven_disproofs_below(ids_depth / 2);
 
             prev_root_pn = root_pn2;
             prev_root_dn = root_dn2;
