@@ -994,32 +994,6 @@ Frontier Variant の PNS 予算を前サイクルの proof store 数に基づい
   後続 MID の TT ヒット率を向上させる
 - **proof store の取得:** `pns_store_to_tt` の戻り値(u64)を `last_pns_proof_stores` に格納
 
-**課題 F: IDS depth 切替時の ProvenTT disproof 保持 (v0.24.38)**
-
-v0.24.38 で IDS depth 切替時の `clear_proven_disproofs()` 呼び出しを除去した．
-
-**変更前:** IDS 反復間で ProvenTT の confirmed disproof を全除去（NoMate バグ対策）．
-`all_checks_refutable_by_tt` の TT 経路ヒット率が 0.03% と事実上死蔵していた．
-
-**変更後:** ProvenTT の confirmed disproof を IDS depth 切替間で保持する．
-
-**安全性の根拠:**
-
-- ProvenTT に格納される disproof は `is_proven_entry()` の条件
-  (`dn=0`, `!path_dependent`, `remaining=REMAINING_INFINITE`) を満たすもののみ
-- これらは `mid_fallback` の NM 昇格時に `depth_limit_all_checks_refutable()` で
-  position 依存(depth 非依存)の完全検証を経ている
-- `depth_limit_all_checks_refutable()` は depth=5 の再帰で全王手が反証可能かを
-  盤面状態のみから判定し，IDS depth に依存しない
-- v0.24.33 で `refutable_check_with_cache` のハイブリッド判定が導入され，
-  NM 昇格の精度が大幅に向上している
-
-**期待効果:**
-
-- `all_checks_refutable_by_tt` TT 経路の活性化 (0.03% → 有意なヒット率)
-- PNS NM 昇格判定の高速化（TT ヒットで memoize/再帰フォールバック回避）
-- IDS の深い反復で浅い反復の NM 証明を再利用
-
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
