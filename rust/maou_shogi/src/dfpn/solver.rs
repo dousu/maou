@@ -880,7 +880,14 @@ impl DfPnSolver {
             // 深い探索では **探索側のノード予算が先に尽きる**ので PV 抽出
             // が律速要因になることはない．ply 20 は v0.24.27 でも 120M
             // ノード予算 + 1800s timeout で Unknown だった．
-            const PV_VISIT_BUDGET: u64 = 10_000_000;
+            // PV 抽出の visit 予算．探索ノード数に応じてスケーリングする．
+            //
+            // 固定 10M visits では深い探索(97M+ ノード)後に AND ノードの
+            // 全 defender 評価で予算超過し MateNoPV が発生する．
+            // 探索ノード数の 1/4 を基準に 10M〜50M の範囲で動的に設定する．
+            // 上限 50M は PV 抽出の過大な時間消費を防止する(24M budget で
+            // PV 抽出に 11 分+ かかるケースを回避)．
+            let pv_visit_budget: u64 = (self.nodes_searched / 4).max(10_000_000).min(50_000_000);
 
             // PV 候補とその抽出が完全だったかを集める．
             // pv_extraction_incomplete フラグを extract_pv_limited 呼び出し
@@ -892,7 +899,7 @@ impl DfPnSolver {
                     self.depth = pv.len() as u32;
                     self.complete_or_proofs(board);
                     self.depth = saved_depth;
-                    let final_moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
+                    let final_moves = self.extract_pv_limited(board, pv_visit_budget);
                     let extraction_complete = !self.pv_extraction_incomplete;
                     let moves = if !final_moves.is_empty()
                         && final_moves.len() <= pv.len()
@@ -912,7 +919,7 @@ impl DfPnSolver {
                 // アリーナ PV が取れなかった場合は TT ベースにフォールバック
                 self.complete_or_proofs(board);
 
-                let moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
+                let moves = self.extract_pv_limited(board, pv_visit_budget);
                 let extraction_complete = !self.pv_extraction_incomplete;
                 if moves.is_empty() {
                     return TsumeResult::CheckmateNoPv {
@@ -924,7 +931,7 @@ impl DfPnSolver {
                     self.depth = moves.len() as u32;
                     self.complete_or_proofs(board);
                     self.depth = saved_depth;
-                    let final_moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
+                    let final_moves = self.extract_pv_limited(board, pv_visit_budget);
                     let final_complete = extraction_complete && !self.pv_extraction_incomplete;
                     let moves = if !final_moves.is_empty()
                         && final_moves.len() <= moves.len()
