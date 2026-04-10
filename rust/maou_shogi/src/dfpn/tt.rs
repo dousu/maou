@@ -1793,7 +1793,7 @@ impl TranspositionTable {
         }
 
         // Phase 2: 全 confirmed disproof を除去
-        self.clear_proven_disproofs_below(0);
+        self.clear_proven_disproofs_below(u32::MAX);
         if self.proven_len() <= target {
             return initial - self.proven_len();
         }

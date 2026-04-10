@@ -18,7 +18,7 @@ use super::{
     adjust_hand_for_move, edge_cost_and, edge_cost_or,
     position_key, propagate_nm_remaining, push_move, snda_dedup,
     CheckCache,
-    DEEP_DFPN_R, DN_FLOOR, INF, INTERPOSE_DN_BIAS, MAX_MOVES, PN_UNIT,
+    DEEP_DFPN_R, DN_FLOOR, EPSILON_DENOM_ADAPTIVE, INF, INTERPOSE_DN_BIAS, MAX_MOVES, PN_UNIT,
     REMAINING_INFINITE, STAGNATION_LIMIT, TCA_EXTEND_DENOM, ZERO_PROGRESS_LIMIT,
 };
 
@@ -132,7 +132,11 @@ pub struct DfPnSolver {
     /// overflow GC のクールダウン(次に GC を許可するノード数)．
     next_overflow_gc: u64,
     // === チューニング可能パラメータ ===
-    /// 1+ε の epsilon 除数(デフォルト 3: epsilon = second_best/3 + PN_UNIT)．
+    /// 1+ε の epsilon 除数．
+    ///
+    /// - `EPSILON_DENOM_ADAPTIVE` (0): depth-adaptive モード．
+    ///   `saved_depth_for_epsilon >= 19` なら 2，それ以外は 3．
+    /// - 正の値: その値を固定除数として使用(テスト用)．
     pub(super) param_epsilon_denom: u32,
     /// AND pn_floor の分子(デフォルト 2: pn_floor = eff_pn_th * 2/3)．
     pub(super) param_pn_floor_numer: u32,
@@ -319,7 +323,7 @@ impl DfPnSolver {
             tt_gc_threshold: 0,
             next_gc_check: 0,
             next_overflow_gc: 0,
-            param_epsilon_denom: 0, // 0 = depth-adaptive: depth≤17→3, depth≥19→2
+            param_epsilon_denom: EPSILON_DENOM_ADAPTIVE,
             param_pn_floor_numer: 2,
             param_pn_floor_denom: 3,
             param_dn_floor_mult: 100,
@@ -415,6 +419,25 @@ impl DfPnSolver {
             diag_single_child_exits: 0,
             #[cfg(feature = "tt_diag")]
             diag_node_limit_exits: 0,
+        }
+    }
+
+    /// 1+ε の実効 epsilon 除数を返す．
+    ///
+    /// `param_epsilon_denom` が `EPSILON_DENOM_ADAPTIVE` (0) の場合は
+    /// `saved_depth_for_epsilon` に基づいて depth-adaptive に決定する．
+    /// 正の値が設定されている場合はその値をそのまま返す(テスト用)．
+    #[inline(always)]
+    fn effective_eps_denom(&self) -> u32 {
+        if self.param_epsilon_denom != EPSILON_DENOM_ADAPTIVE {
+            self.param_epsilon_denom
+        } else {
+            let d = if self.saved_depth_for_epsilon > 0 {
+                self.saved_depth_for_epsilon
+            } else {
+                self.depth
+            };
+            if d >= 19 { 2 } else { 3 }
         }
     }
 
@@ -2769,18 +2792,7 @@ impl DfPnSolver {
                 // 自然精度 epsilon (§10.2 方針A): divide-at-unit-scale を外し，
                 // 除算の自然精度を活かす．second_best=3S のとき epsilon=28，
                 // sibling_based=76(4.75S) となり ~19%/level の閾値余裕を確保する．
-                // depth-adaptive epsilon: 深い問題ほど epsilon を拡大し閾値飢餓を緩和．
-                // グリッドサーチにより eps_denom=3 は depth≤17 に最適，
-                // eps_denom=2 は depth≥19 で ply 22 を 10M 内で解けることを確認．
-                let eps_denom = if self.param_epsilon_denom > 0 {
-                    self.param_epsilon_denom
-                } else {
-                    let d = if self.saved_depth_for_epsilon > 0 {
-                        self.saved_depth_for_epsilon
-                    } else { self.depth };
-                    if d >= 19 { 2 } else { 3 }
-                };
-                let epsilon_or = second_best / eps_denom + PN_UNIT;
+                let epsilon_or = second_best / self.effective_eps_denom() + PN_UNIT;
                 let sibling_based_or = second_best.saturating_add(epsilon_or);
                 let child_pn_th = sibling_based_or.max(2 * PN_UNIT).min(INF - 1);
                 (child_pn_th, child_dn_th)
@@ -2836,15 +2848,7 @@ impl DfPnSolver {
                     .max(progress_floor)
                     .min(INF - 1);
                 // 自然精度 epsilon (§10.2 方針A): OR ノードと同じく depth-adaptive．
-                let eps_denom = if self.param_epsilon_denom > 0 {
-                    self.param_epsilon_denom
-                } else {
-                    let d = if self.saved_depth_for_epsilon > 0 {
-                        self.saved_depth_for_epsilon
-                    } else { self.depth };
-                    if d >= 19 { 2 } else { 3 }
-                };
-                let epsilon = second_best / eps_denom + PN_UNIT;
+                let epsilon = second_best / self.effective_eps_denom() + PN_UNIT;
                 let sibling_based = second_best.saturating_add(epsilon);
                 // AND ノード dn 閾値の最低保証．
                 //

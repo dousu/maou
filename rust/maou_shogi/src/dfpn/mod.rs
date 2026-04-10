@@ -129,6 +129,12 @@ const ZERO_PROGRESS_LIMIT: u32 = 16;
 /// 結果が変わらないケースを検出する．
 const STAGNATION_LIMIT: u32 = 4;
 
+/// `param_epsilon_denom` の depth-adaptive モードを示すセンチネル値．
+///
+/// この値が設定されている場合，epsilon 除数は `saved_depth_for_epsilon` に基づいて
+/// 自動決定される(depth ≥ 19 → 2，それ以外 → 3)．
+const EPSILON_DENOM_ADAPTIVE: u32 = 0;
+
 /// 深さ制限なし(真の証明/反証)を示す定数．
 ///
 /// remaining_flags のビット 0-14 に格納されるため 15 ビットの最大値(0x7FFF)．
