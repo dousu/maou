@@ -1664,10 +1664,16 @@ impl DfPnSolver {
                 && remaining_time < self.timeout.as_secs_f64() * 0.25;
 
             // IDS 反復間でのクリーンアップ:
-            // 1. WorkingTT を全クリア(構造的不詰エントリ + path-dep disproof の汚染防止)
-            // 2. ProvenTT の confirmed disproof を除去(NoMate バグ対策 §6.6.3)
+            // WorkingTT を全クリア(構造的不詰エントリ + path-dep disproof の汚染防止)．
+            //
+            // ProvenTT の confirmed disproof は保持する(v0.24.38):
+            // ProvenTT に格納される disproof は is_proven_entry() の条件
+            // (dn=0, !path_dep, remaining=REMAINING_INFINITE) を満たすもののみであり，
+            // mid_fallback の NM 昇格で depth_limit_all_checks_refutable() による
+            // 位置依存(depth 非依存)の完全検証を経ている．
+            // IDS depth 切替で除去すると all_checks_refutable_by_tt の TT 経路が
+            // 不活性化し(ヒット率 0.03%)，PNS NM 昇格判定の効率が低下する．
             self.table.clear_working();
-            self.table.clear_proven_disproofs();
 
             if stagnated || time_exceeded {
                 ids_depth = saved_depth;
