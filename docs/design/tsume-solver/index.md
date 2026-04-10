@@ -110,3 +110,11 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 62 | WorkingTT cluster size 6→8 (cache-aligned, +33% slots) | maou 独自 | §6.6.5 | v0.24.27 |
 | 63 | PV 抽出で effective\_len 比較を常用 (fast path 廃止) | maou 独自 | §10.2 | v0.24.29 |
 | 64 | PNS NM 昇格判定のハイブリッド化 + `refutable_check_failed` memoize 実運用 | maou 独自 | §10.2 | v0.24.33 |
+| 65 | PNS 生産性指標 (proof store / arena growth / cycles) | maou 独自 | §10.2 | v0.24.35 |
+| 66 | Frontier zero-proof early skip | maou 独自 | §10.2 | v0.24.36 |
+| 67 | Frontier PNS 予算の proof rate ベース動的拡大 (5%→10%) | maou 独自 | §10.2 | v0.24.37 |
+| 68 | IDS ProvenTT disproof 選択的保持 (確認 depth ベース) | maou 独自 | §6.6.3, §10.2 | v0.24.38 |
+| 69 | IDS depth 32+ で +4 刻みの段階的深化 | maou 独自 | §2.3 | v0.24.40 |
+| 70 | Depth-adaptive epsilon (saved\_depth ≥ 19 → eps\_denom=2) | maou 独自 | §3.1, §10.2 | v0.24.41 |
+| 71 | PV visit 予算の動的スケーリング (10M〜50M) | maou 独自 | §10.2 | v0.24.42 |
+| 72 | チューニング可能パラメータ (param\_epsilon\_denom 等) | maou 独自 | §11.8 | v0.24.41 |

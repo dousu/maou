@@ -50,6 +50,13 @@
 
 | 日付 | 版 | 内容 |
 |------|-----|------|
+| 2026-04-10 | v0.24.42 | PV visit 予算の動的スケーリング (10M〜50M)．ply 18 MateNoPV → Mate(21) 解消 |
+| 2026-04-10 | v0.24.41 | §3.1 depth-adaptive epsilon (saved\_depth ≥ 19 → eps\_denom=2)．パラメータグリッドサーチ(16構成)により depth 依存の最適値を発見．ply 20 -49% ノード削減，ply 22 が 10M 予算で初めて解ける．チューニング可能パラメータをDfPnSolver フィールドに追加 |
+| 2026-04-10 | v0.24.40 | §2.3 IDS depth 32+ で +4 刻みの段階的深化．ルート統合探索(depth=41)での TT ウォームアップ改善 |
+| 2026-04-10 | v0.24.38 | §6.6.3 IDS ProvenTT disproof 選択的保持．ProvenEntry flags bits 1-6 に確認 depth を格納し `clear_proven_disproofs_below(ids_depth/2)` で浅い disproof のみ除去 |
+| 2026-04-10 | v0.24.37 | §10.2 Frontier PNS 予算の proof rate ベース動的拡大 (5%→10%)．前サイクル proof>0 で予算倍増 |
+| 2026-04-10 | v0.24.36 | §10.2 Frontier zero-proof early skip．2 サイクル連続 proof=0 で PNS スキップ，MID 予算を remaining/4→remaining/3 に増加 |
+| 2026-04-10 | v0.24.35 | §10.2 PNS 生産性指標 (proof store / arena growth / cycles) を verbose feature に追加．pns\_store\_to\_tt 戻り値を u64 (proof 数) に変更 |
 | 2026-04-04 | v0.24.0 | §6.6.3 Dual TT(ProvenTT hand\_hash 混合 + WorkingTT pos\_key) + エントリ圧縮(40→32B) + 2段階検索 + 段階的 retain + NoMate バグ修正 + ply ベース amount + 祖先チェック．NPS +33%(50M: 183K→244K)，ProvenTT overflow -99.6%．WorkingTT 改善3案は NPS 低下で不採用．§9-b PV 復元．§10.2 構造的課題の最終状態(A: ProvenTT 解決/WorkingTT 残存，B: 部分解決，C: 残存) |
 | 2026-03-31 | v0.22.1 | §10.2 方針C 採用(PNS アリーナ再利用)，方針D 不採用(リニアプロービング: NPS 低下)．NPS +20% 改善(同条件比較) |
 | 2026-03-30 | v0.22.0 | §6.6 amount フィールド導入 + §6.6.1 クラスタ飽和問題の文書化．amount ベース replace\_weakest + GC．min\_depth は有用性なしで削除 |
