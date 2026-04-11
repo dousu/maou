@@ -9,7 +9,7 @@ use crate::bitboard::Bitboard;
 use crate::board::Board;
 use crate::movegen;
 use crate::moves::Move;
-use crate::types::{Color, Piece, PieceType, HAND_KINDS};
+use crate::types::{Color, Piece, PieceType, Square, HAND_KINDS};
 
 use super::entry::PnsNode;
 use super::tt::TranspositionTable;
@@ -3572,14 +3572,13 @@ impl DfPnSolver {
 
             // メイン TT で捕獲後局面の証明を参照．
             //
-            // 注: 施策 X-N 候補 A (v0.24.56 試行) で neighbor_scan=true を
-            // 試みたが test_tsume_39te_ply24_mate15_regression が Unknown
-            // に退行 (ベースライン 367K nodes で Mate(15)) したため revert．
-            // prefilter が過剰に proof を hit し get_proof_hand 経由の
-            // proof hand 構築で誤った情報を注入する可能性がある．
-            // cross_deduce_children (v0.24.55) とは異なり prefilter は
-            // `init_and_proof` の累積に使われるため semantics が異なる．
-            // 今後より慎重な設計が必要．
+            // 注: 施策 X-N 候補 A (v0.24.56 試行, v0.24.57 A-fix 試行) で
+            // neighbor_scan=true と or_ph=child_hand の組合せを試みたが，
+            // いずれも test_tsume_39te_ply24_mate15_regression で Unknown 退行．
+            // prefilter の semantics は init_and_proof 累積と
+            // adjust_hand_for_move の両方に複合的に依存しており，
+            // 単純な書き換えでは soundness を保ちつつ neighbor_scan の
+            // 恩恵を得ることが困難と判明．A-fix は将来の深掘り課題として保留．
             let (ppn, _, _) = self.table.look_up(pc_pk, &pc_hand, pc_remaining, false);
             if ppn == 0 {
                 // 捕獲後局面が証明済み → 合駒の OR ノードも証明
@@ -3775,6 +3774,118 @@ impl DfPnSolver {
 
         #[cfg(feature = "tt_diag")]
         { self.diag_cross_deduce_hits += cross_count; }
+
+        // 施策 X-N Candidate B (v0.24.57+): Sibling forward-chain transitive closure
+        //
+        // 既存 cross_deduce は pc_pk への TT lookup を通じて proof を転用する
+        // が，neighbor_scan を有効化してもなお Zobrist hand_hash 混合により
+        // クラスタが遠い hand variant が見逃される場合がある．
+        //
+        // 本 phase では sibling 間の **forward-chain domination** を直接
+        // check し，TT lookup を介さず proof を伝搬する．
+        //
+        // 安全性:
+        // - D_i が self TT で proven (cpn_i = 0) → D_i の OR node は勝ち筋
+        //   (attacker captures → pc_pk with pc_hand_i が proven)
+        // - pc_hand_j が pc_hand_i を forward-chain dominate →
+        //   pc_pk with pc_hand_j も proven (domination)
+        // - 故に D_j の capture 経路も勝ち → D_j の OR node も proven
+        // - or_ph = siblings[j].hand (child の実際の hand) で store すれば
+        //   conservative に正しい claim となる
+        //
+        // 計算量: sibling 数 N (典型 ~20) に対し O(N^2) の check × 最大 N
+        // round (fixpoint)．per-call 最大 ~8K ops で微小．
+        self.cross_deduce_transitive_closure(children, target_sq, remaining);
+    }
+
+    /// 施策 X-N Candidate B (v0.24.57): sibling 間 forward-chain transitive closure．
+    ///
+    /// cross_deduce_children の末尾で呼ばれ，既存の pc_pk TT lookup では
+    /// 捕捉できなかった siblings を forward-chain domination グラフ経由で
+    /// proof 伝搬する．
+    ///
+    /// 手順:
+    /// 1. target_sq への drop sibling を収集
+    /// 2. 各 sibling の自己 TT 状態を check (cpn == 0 かどうか)
+    /// 3. 各 sibling の `pc_hand` (= child_hand + drop_piece) を計算
+    /// 4. Fixpoint loop:
+    ///    - 未証明 sibling j に対し，証明済み sibling i で
+    ///      `hand_gte_forward_chain(pc_hand_j, pc_hand_i)` が真なら
+    ///    - `siblings[j].hand` を or_ph として TT に store し proven 化
+    #[inline(never)]
+    pub(super) fn cross_deduce_transitive_closure(
+        &mut self,
+        children: &ArrayVec<
+            (Move, u64, u64, [u8; HAND_KINDS]),
+            MAX_MOVES,
+        >,
+        target_sq: Square,
+        remaining: u16,
+    ) {
+        // Step 1: target_sq への drop siblings を index 収集 (最大 HAND_KINDS=7)
+        // (実際のほとんどの chain aigoma では 7 未満，本番ケースは 3〜5 程度)
+        let mut indices: ArrayVec<usize, HAND_KINDS> = ArrayVec::new();
+        for (i, (m, _, _, _)) in children.iter().enumerate() {
+            if m.is_drop() && m.to_sq() == target_sq {
+                if indices.try_push(i).is_err() {
+                    break; // capacity 超過は無視 (通常発生しない)
+                }
+            }
+        }
+        if indices.len() < 2 {
+            return; // 兄弟なしなら伝搬対象もなし
+        }
+
+        // Step 2-3: 各 sibling の自己 TT 状態と pc_hand を計算
+        let mut proven: ArrayVec<bool, HAND_KINDS> = ArrayVec::new();
+        let mut pc_hands: ArrayVec<[u8; HAND_KINDS], HAND_KINDS> = ArrayVec::new();
+        let sub_rem = remaining.saturating_sub(1);
+        for &idx in &indices {
+            let (m, _, child_pk, child_hand) = &children[idx];
+            let (cpn, _, _) = self.look_up_pn_dn(*child_pk, child_hand, sub_rem);
+            let _ = proven.try_push(cpn == 0);
+            // pc_hand = child_hand + drop_piece_i (capture 後の attacker hand)
+            let mut pc_hand = *child_hand;
+            if let Some(pt) = m.drop_piece_type() {
+                if let Some(hi) = pt.hand_index() {
+                    pc_hand[hi] = pc_hand[hi].saturating_add(1);
+                }
+            }
+            let _ = pc_hands.try_push(pc_hand);
+        }
+
+        // Step 4: Fixpoint transitive closure
+        // 最大 N 回の外側 loop で未証明 siblings を全部伝搬
+        #[cfg(feature = "tt_diag")]
+        let mut closure_transfers: u64 = 0;
+        loop {
+            let mut changed = false;
+            for j in 0..indices.len() {
+                if proven[j] { continue; }
+                // j の pc_hand_j が i の pc_hand_i を forward-chain dominate するか
+                for i in 0..indices.len() {
+                    if i == j || !proven[i] { continue; }
+                    if super::hand_gte_forward_chain(&pc_hands[j], &pc_hands[i]) {
+                        // D_j の OR node を proven 化
+                        let (_, _, child_pk_j, child_hand_j) = &children[indices[j]];
+                        // conservative: or_ph = child_hand_j (必ず dominate 可能)
+                        self.table.store(
+                            *child_pk_j, *child_hand_j, 0, INF,
+                            sub_rem, *child_pk_j as u32,
+                        );
+                        proven[j] = true;
+                        changed = true;
+                        #[cfg(feature = "tt_diag")]
+                        { closure_transfers += 1; }
+                        break;
+                    }
+                }
+            }
+            if !changed { break; }
+        }
+
+        #[cfg(feature = "tt_diag")]
+        { self.diag_cross_deduce_hits += closure_transfers; }
     }
 }
 

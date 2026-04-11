@@ -3035,6 +3035,114 @@ proof hand の乖離が複合的な退行を引き起こす．
 4. **cliff 突破は依然未解決**．単一の局所最適化では chain aigoma の
    組合せ爆発に対処できない
 
+#### v0.24.57 候補 B (transitive closure) 実装と候補 A-fix 試行
+
+v0.24.56 の次アクション項目 (2)「候補 B transitive closure」を実装．
+併せてユーザ指示によりユ候補 A-fix (prefilter の or_ph を query ベースに
+修正) を試行したが追加の Unknown 退行で保留．
+
+##### 候補 A-fix 調査結果 (v0.24.57 で再試行して不採用)
+
+prefilter の `or_ph` 構築を `pc_hand - captured_piece` ベース
+(= `child_hand`) に修正し，併せて `neighbor_scan=true` を試行:
+
+1. `or_ph = child_hand` (query ベース，conservative)
+2. `look_up(pc_pk, pc_hand, ..., neighbor_scan=true)`
+
+**結果**: `test_tsume_39te_ply24_mate15_regression` が依然 Unknown．
+
+**原因分析**: prefilter の `adjust_hand_for_move(block_move, &or_ph)` +
+`and_proof[k] = max(adj[k])` による累積は，or_ph + drop_piece を
+「attacker 側の post-capture 必要 hand」として and_proof に max
+累積する．or_ph = child_hand とすると adj = child_hand + drop_piece
+= pc_hand となり，従来の `adj = pc_ph_stored` より **要素単位で
+大きく** なる．結果として AND の stored proof hand が過剰に厳しく
+なり，後続 look_up での proof 再利用率が低下して探索全体が迷走する．
+
+prefilter の semantics は `init_and_proof` 累積と
+`adjust_hand_for_move` の両方に複合的に依存しており，
+**or_ph の単純な書き換えでは soundness と性能の両立が不可能**と
+結論．候補 A-fix は将来の深掘り課題として保留し，現状の
+`neighbor_scan=false` を維持する．
+
+##### 候補 B: cross_deduce の forward-chain transitive closure
+
+cross_deduce_children の末尾に **sibling 間 forward-chain domination
+transitive closure phase** を追加．既存の pc_pk TT lookup では捕捉
+できない，TT の hand_hash Zobrist クラスタから遠い proof を in-memory
+で伝搬する．
+
+**アルゴリズム** (solver.rs:3785+ `cross_deduce_transitive_closure`):
+
+1. `target_sq` へ drop する siblings を index 収集 (≤ HAND_KINDS=7)
+2. 各 sibling の自己 TT 状態 (cpn == 0) と `pc_hand_i = child_hand_i
+   + drop_piece_i` を計算
+3. Fixpoint loop:
+   - 未証明 sibling `j` に対し，証明済み sibling `i` で
+     `hand_gte_forward_chain(pc_hand_j, pc_hand_i)` が真なら
+   - `siblings[j].hand` を or_ph として TT に store (conservative)
+   - `proven[j] = true`，次の round で更に伝搬
+4. No changes → break
+
+**計算量**: 典型 sibling 数 N≤7 に対し O(N^2) × 最大 N round．
+per-call ~300 ops で微小．
+
+**安全性** (sound):
+- D_i proven → D_i の OR node は勝ち筋 (attacker captures → pc_pk
+  with pc_hand_i が proven)
+- forward-chain domination → pc_pk with pc_hand_j も proven
+- 故に D_j の capture 経路も勝ち → D_j の OR node も proven
+- or_ph = child_hand (strong conservative claim)
+
+**測定結果** (`test_tsume_39te_ply25_gap_diagnosis`):
+
+| Depth | v0.24.55 (pre-B) | v0.24.57 (B) | Δ nodes |
+|:---:|---:|---:|---:|
+| 17 | 367K Mate(15) | **450K** Mate(15) | +22% |
+| 21 | 5.48M Unknown | **5.08M** Unknown | **-7%** |
+| 25 | 9.80M Unknown | **8.82M** Unknown | **-10%** |
+
+**cross_deduce hit rate**:
+
+| Depth | v0.24.55 | v0.24.57 (B) |
+|:---:|---:|---:|
+| 17 | 147 / 244 = 60.2% | **218** / 263 = 82.9% |
+| 21 | 2,623 / 4,295 = 61.1% | **2,992** / 3,553 = 84.2% |
+| 25 | 7,423 / 15,561 = 47.7% | 6,149 / 8,450 = **72.8%** |
+
+cross_deduce hit rate がさらに ~20 ポイント向上．transitive closure
+で複数 sibling を一度に proven 化する効果．depth=17 の nodes +22% は
+より多くの proof 計算が行われた結果 (TT が厚くなり他所で reuse)．
+
+**29 手詰 regression check**: 2 tests / 370.04s (v0.24.55 baseline
+432.98s → **-14.5%**)．29 手詰 PNS+MID 経路も IDS-MID only 経路も
+継続高速化．
+
+**非 ignored 133 tests**: PASS (135s)．soundness 維持．
+
+##### cliff の最終状態
+
+| Depth | v0.24.46 baseline | v0.24.57 最新 | 変化 |
+|:---:|:---|:---|:---:|
+| 17 | 367K Mate(15) | 450K Mate(15) | soundness OK，+22% (transitive closure の副作用) |
+| 21 | 6.02M Unknown | **5.08M** Unknown | **-16%** (cross_deduce 系の累積) |
+| 25 | 10.3M Unknown | **8.82M** Unknown | **-14%** (cross_deduce 系の累積) |
+
+cliff は突破されていないが，**累積で depth=21/25 は ~15% node 削減**．
+cross_deduce 系の強化だけでは chain aigoma の指数爆発に対処でき
+ないことが改めて確認された．
+
+##### 次のアクション項目 (v0.24.57 時点)
+
+1. **候補 A-fix の深掘り**: prefilter の `and_proof` 累積 semantics
+   を再設計し，neighbor_scan の恩恵を soundness を保ちつつ得る
+   (次セッションで詳細調査)
+2. **候補 C (multi-step cross_deduce)**: 複数 chain step を越えた
+   proof 伝搬．sibling だけでなく後続 ply の位置まで to span
+3. **非 cross_deduce 系の施策**: cross_deduce 系は +20〜60 pt の
+   hit rate 改善にもかかわらず cliff 不変．別種の N 削減策
+   (structural pruning / hand equivalence classes) を検討
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
