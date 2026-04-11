@@ -248,13 +248,6 @@ pub struct DfPnSolver {
     /// `diag_cd_guard_child_proven - diag_cd_no_siblings` と等しいはず．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_cd_entered_main: u64,
-    /// TT 診断: 施策 α で chain aigoma drop を skip した合計 move 数 (v0.24.47+)．
-    #[cfg(feature = "tt_diag")]
-    pub(super) diag_alpha_skipped_chain_drops: u64,
-    /// TT 診断: 施策 α が発火した AND ノード数 (v0.24.47+)．
-    /// フィルタ条件 (rem<=1 + chain_bb 非空) が真かつ drop が実際に除去された回数．
-    #[cfg(feature = "tt_diag")]
-    pub(super) diag_alpha_trigger_count: u64,
     /// TT 診断: AND ノード MID ループで deferred_children あり & all_proved=false の回数．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_deferred_not_ready: u64,
@@ -407,10 +400,6 @@ impl DfPnSolver {
             diag_cd_no_siblings: 0,
             #[cfg(feature = "tt_diag")]
             diag_cd_entered_main: 0,
-            #[cfg(feature = "tt_diag")]
-            diag_alpha_skipped_chain_drops: 0,
-            #[cfg(feature = "tt_diag")]
-            diag_alpha_trigger_count: 0,
             #[cfg(feature = "tt_diag")]
             diag_deferred_not_ready: 0,
             #[cfg(feature = "tt_diag")]
@@ -1380,39 +1369,6 @@ impl DfPnSolver {
             profile_timed!(self, movegen_defense_ns, movegen_defense_count,
                 self.generate_defense_moves(board))
         };
-
-        // 施策 α (v0.24.47): 境界層での chain aigoma 早期終了．
-        //
-        // `test_tsume_39te_ply25_gap_diagnosis` (v0.24.46) で ply = depth - 2
-        // に ~50%，境界 4 ply に ~93% のノードが集中することが判明した．
-        // 境界層では `remaining` が小さく chain aigoma の 1 サイクル
-        // (drop + capture = 2 ply) すら完結しない．
-        //
-        // AND ノードで `remaining <= 1` かつ chain aigoma 検出時 (`chain_bb_cache`
-        // 非空)，chain 合駒マスへの drop を除去する．chain aigoma 変種の過剰な
-        // 展開を抑制し，境界層 thrashing を緩和する．
-        //
-        // soundness (ヒューリスティック):
-        // - rem=1 では defender が chain drop → attacker capture → rem=0 で
-        //   depth-limited に到達し，いずれにせよ partial result を返す
-        // - canonical mate PV は canonical depth で既に発見済み．境界層の
-        //   chain drop は delaying tactic であり，真の defender escape ではない
-        // - このフィルタが false Checkmate を引き起こす場合はテストで検出される
-        if !or_node && remaining <= 1 && !self.chain_bb_cache.is_empty() {
-            let chain_bb = self.chain_bb_cache;
-            let before = moves.len();
-            moves.retain(|m| !(m.is_drop() && chain_bb.contains(m.to_sq())));
-            #[cfg(feature = "tt_diag")]
-            {
-                let removed = (before - moves.len()) as u64;
-                if removed > 0 {
-                    self.diag_alpha_skipped_chain_drops += removed;
-                    self.diag_alpha_trigger_count += 1;
-                }
-            }
-            #[cfg(not(feature = "tt_diag"))]
-            let _ = before;
-        }
 
         // Dynamic Move Ordering: TT Best Move + Killer Moves
         // 前回の探索で最善だった手を優先的に展開し，カットオフを早める．
