@@ -234,6 +234,20 @@ pub struct DfPnSolver {
     /// TT 診断: cross_deduce_deferred で証明除去された合駒数．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_cross_deduce_hits: u64,
+    /// TT 診断: cross_deduce 外ガード `!or_node && m.is_drop()` 成立数 (v0.24.46+)．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_cd_guard_and_drop: u64,
+    /// TT 診断: cross_deduce 外ガード `cpn_after == 0` 成立数 (v0.24.46+)．
+    /// cross_deduce_children 関数の呼び出し回数と一致する．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_cd_guard_child_proven: u64,
+    /// TT 診断: cross_deduce_children 内で `has_siblings == false` で早期 return した数 (v0.24.46+)．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_cd_no_siblings: u64,
+    /// TT 診断: cross_deduce_children の本体ループに入った数 (v0.24.46+)．
+    /// `diag_cd_guard_child_proven - diag_cd_no_siblings` と等しいはず．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_cd_entered_main: u64,
     /// TT 診断: AND ノード MID ループで deferred_children あり & all_proved=false の回数．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_deferred_not_ready: u64,
@@ -378,6 +392,14 @@ impl DfPnSolver {
             diag_pns_deferred_already_proven: 0,
             #[cfg(feature = "tt_diag")]
             diag_cross_deduce_hits: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_cd_guard_and_drop: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_cd_guard_child_proven: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_cd_no_siblings: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_cd_entered_main: 0,
             #[cfg(feature = "tt_diag")]
             diag_deferred_not_ready: 0,
             #[cfg(feature = "tt_diag")]
@@ -3098,12 +3120,16 @@ impl DfPnSolver {
             // 旧 deferred_children 方式の cross_deduce_deferred と同等の効果を
             // MID ループ内で実現する．
             if !or_node && m.is_drop() {
+                #[cfg(feature = "tt_diag")]
+                { self.diag_cd_guard_and_drop += 1; }
                 let (cpn_after, _, _) = self.look_up_pn_dn(
                     children[best_idx].2,
                     &children[best_idx].3,
                     remaining.saturating_sub(1),
                 );
                 if cpn_after == 0 {
+                    #[cfg(feature = "tt_diag")]
+                    { self.diag_cd_guard_child_proven += 1; }
                     #[cfg(feature = "profile")]
                     let _cd_start = Instant::now();
                     self.cross_deduce_children(
@@ -3468,8 +3494,12 @@ impl DfPnSolver {
             mj.is_drop() && mj.to_sq() == target_sq && *mj != solved_move
         });
         if !has_siblings {
+            #[cfg(feature = "tt_diag")]
+            { self.diag_cd_no_siblings += 1; }
             return;
         }
+        #[cfg(feature = "tt_diag")]
+        { self.diag_cd_entered_main += 1; }
 
         let solved_pt = match solved_move.drop_piece_type() {
             Some(pt) => pt,
