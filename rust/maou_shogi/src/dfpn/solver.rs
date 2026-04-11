@@ -3730,7 +3730,19 @@ impl DfPnSolver {
                 hand_j[hi_j] = hand_j[hi_j].saturating_add(1);
 
                 let pc_remaining = remaining.saturating_sub(2);
-                let (ppn, _, _) = self.table.look_up(pc_pk, &hand_j, pc_remaining, false);
+                // 施策 X-N (v0.24.55): neighbor_scan を有効化．
+                //
+                // v0.24.54 までは `neighbor_scan: false` で自クラスタのみ
+                // 検索していたが，chain aigoma の駒種変種は hand_hash の
+                // Zobrist 混合後に隣接クラスタにも分散する．proof(-1) +
+                // 歩 disproof(+1) の近傍走査 (tt.rs:425-442) を活用することで
+                // hand_j に対する proof 発見率を向上させ，unique (pk, hand)
+                // 組合せの N を削減する．
+                //
+                // オーバーヘッド: look_up_proven の neighbor loop は最大
+                // HAND_KINDS=7 クラスタ走査．cross_deduce は per-solve で
+                // 数百〜数千回しか発火しないため全体コストは微小．
+                let (ppn, _, _) = self.table.look_up(pc_pk, &hand_j, pc_remaining, true);
 
                 if ppn == 0 {
                     let pc_ph = self.table.get_proof_hand(pc_pk, &hand_j);
