@@ -6822,3 +6822,244 @@ use crate::types::{Color, PieceType};
             .unwrap();
         eprintln!("結果: /tmp/param_grid_search.log");
     }
+
+    /// 39手詰め ply25 gap 診断テスト．
+    ///
+    /// 目的: benchmarks.md §10.2 の「ply 25 AND ノードの 23 応手を個別に
+    /// 探索すると全て 200K 以内で解け，合計 ~1.5M ノード」という観察と，
+    /// 統合探索での爆発 (depth=23+ で 50M Unknown) との乖離を定量化する．
+    ///
+    /// 3 フェーズ構成:
+    ///
+    /// - **Phase 0a**: ply 25 AND node 全体を統合解く (浅い depth)．
+    ///   個別和 (1.5M) と統合 (?) の比を見る．
+    /// - **Phase 0b**: ply 25 AND node の各守備応手について個別 solve．
+    ///   benchmarks.md の 1.5M 合計を再現確認する．
+    /// - **Phase 1**: ply 24 OR node (5g6f を打つ前) を 3 種の depth で
+    ///   solve し，depth inflation による counter 爆発を観測する．
+    ///
+    /// 各フェーズで verbose+tt_diag+profile の全カウンタを出力する．
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   --features verbose,tt_diag,profile \
+    ///   test_tsume_39te_ply25_gap_diagnosis -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply25_gap_diagnosis() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply25_gap_diagnosis.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            // ↓ 以下が ply 24 以降
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 39手詰め ply25 gap 診断").unwrap();
+        writeln!(out, " SFEN: {}", sfen).unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+        // ply 24 board (24 手打った後 = 攻め手番，直後に 5g6f を打つ OR root)
+        let mut board24 = Board::new();
+        board24.set_sfen(sfen).unwrap();
+        for usi in &pv[..24] {
+            let m = board24.move_from_usi(usi).unwrap();
+            board24.do_move(m);
+        }
+        writeln!(out, "\n[ply24] board SFEN: {}", board24.sfen()).unwrap();
+        writeln!(out, "[ply24] turn: {:?} (attacker, OR root)", board24.turn).unwrap();
+
+        // ply 25 board (25 手打った後 = 守備手番，AND node with 23 responses)
+        let mut board25 = board24.clone();
+        let m_5g6f = board25.move_from_usi("5g6f").unwrap();
+        board25.do_move(m_5g6f);
+        writeln!(out, "\n[ply25] board SFEN: {}", board25.sfen()).unwrap();
+        writeln!(out, "[ply25] turn: {:?} (defender, AND node)", board25.turn).unwrap();
+
+        let report_counters =
+            |out: &mut std::fs::File, label: &str, solver: &mut DfPnSolver| {
+            writeln!(out, "  [{}]", label).unwrap();
+            writeln!(out, "    nodes_searched = {}", solver.nodes_searched).unwrap();
+            writeln!(out, "    max_ply        = {}", solver.max_ply).unwrap();
+            writeln!(out, "    TT entries     = {}", solver.table.len()).unwrap();
+            writeln!(out, "    prefilter_hits = {}", solver.prefilter_hits).unwrap();
+            #[cfg(feature = "verbose")]
+            {
+                writeln!(out, "    pns_spin_iters    = {}", solver.dbg_pns_spin_iters).unwrap();
+                writeln!(out, "    pns_changed_iters = {}", solver.dbg_pns_changed_iters).unwrap();
+                writeln!(out, "    pns_proof_stores  = {}", solver.dbg_pns_proof_stores).unwrap();
+                writeln!(out, "    pns_arena_growth  = {}", solver.dbg_pns_arena_growth).unwrap();
+                writeln!(out, "    pns_cycles        = {}", solver.dbg_pns_cycles).unwrap();
+                writeln!(out, "    refut_tt_hits     = {}", solver.dbg_refut_tt_hits).unwrap();
+                writeln!(out, "    refut_memo_hits   = {}", solver.dbg_refut_memo_hits).unwrap();
+                writeln!(out, "    refut_rec_true    = {}", solver.dbg_refut_recursive_true).unwrap();
+                writeln!(out, "    refut_rec_false   = {}", solver.dbg_refut_recursive_false).unwrap();
+            }
+            #[cfg(feature = "tt_diag")]
+            {
+                writeln!(out, "    deferred_act(mid)  = {}", solver.diag_mid_deferred_activations).unwrap();
+                writeln!(out, "    deferred_act(pns)  = {}", solver.diag_pns_deferred_activations).unwrap();
+                writeln!(out, "    deferred_already_proven = {}", solver.diag_pns_deferred_already_proven).unwrap();
+                writeln!(out, "    cross_deduce_hits  = {}", solver.diag_cross_deduce_hits).unwrap();
+                writeln!(out, "    deferred_ready     = {}", solver.diag_deferred_ready).unwrap();
+                writeln!(out, "    deferred_not_ready = {}", solver.diag_deferred_not_ready).unwrap();
+                writeln!(out, "    deferred_enqueued  = {}", solver.diag_deferred_enqueued).unwrap();
+                writeln!(out, "    mid_loop_iters     = {}", solver.diag_mid_loop_iters).unwrap();
+                writeln!(out, "    prefilter_miss     = {}", solver.diag_prefilter_miss).unwrap();
+                writeln!(out, "    prefilter_skip     = {}", solver.diag_prefilter_skip_remaining).unwrap();
+                writeln!(out, "    capture_tt_calls   = {}", solver.diag_capture_tt_calls).unwrap();
+                writeln!(out, "    capture_tt_hits    = {}", solver.diag_capture_tt_hits).unwrap();
+                writeln!(out, "    threshold_exits    = {}", solver.diag_threshold_exits).unwrap();
+                writeln!(out, "    terminal_exits     = {}", solver.diag_terminal_exits).unwrap();
+                writeln!(out, "    init_and_disp_exits = {}", solver.diag_init_and_disproof_exits).unwrap();
+                writeln!(out, "    single_child_exits = {}", solver.diag_single_child_exits).unwrap();
+                writeln!(out, "    node_limit_exits   = {}", solver.diag_node_limit_exits).unwrap();
+                writeln!(out, "    ply_visits (non-zero):").unwrap();
+                for (i, v) in solver.diag_ply_visits.iter().enumerate() {
+                    if *v > 0 {
+                        writeln!(out, "      ply {:2}: visits={:<10} proofs={}",
+                            i, v, solver.diag_ply_proofs[i]).unwrap();
+                    }
+                }
+                let tt_proven = solver.table.count_proven();
+                let tt_disproven = solver.table.count_disproven();
+                let tt_intermediate = solver.table.count_intermediate();
+                writeln!(out, "    TT composition: proven={} disproven={} intermediate={}",
+                    tt_proven, tt_disproven, tt_intermediate).unwrap();
+            }
+            #[cfg(feature = "profile")]
+            {
+                solver.sync_tt_profile();
+                writeln!(out, "{}", solver.profile_stats).unwrap();
+            }
+        };
+
+        // ======== Phase 0a: ply 25 AND node 統合 (浅い depth=15) ========
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, " Phase 0a: ply 25 AND node 統合 (depth=15, 5M budget)").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        {
+            let mut test_board = board25.clone();
+            // depth=15 → 残り 14 手分の余裕
+            let mut solver = DfPnSolver::with_timeout(15, 5_000_000, 32767, 60);
+            solver.set_find_shortest(false);
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+            let result_str = match &result {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+            writeln!(out, "  result = {}, time = {:.2}s", result_str, elapsed.as_secs_f64()).unwrap();
+            report_counters(&mut out, "Phase0a", &mut solver);
+            out.flush().unwrap();
+        }
+
+        // ======== Phase 0b: ply 25 の各守備応手を個別解決 ========
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, " Phase 0b: ply 25 個別応手 (各 depth=14, 500K budget)").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        let defenses = {
+            let mut tmp_solver = DfPnSolver::default_solver();
+            let mut tmp_board = board25.clone();
+            tmp_solver.generate_defense_moves(&mut tmp_board)
+        };
+        writeln!(out, "defender moves: {}", defenses.len()).unwrap();
+        writeln!(out, "{:>4} {:>10} {:>12} {:>8} {:>10}",
+            "#", "Move", "Nodes", "Time(s)", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(52)).unwrap();
+
+        let mut individual_total_nodes: u64 = 0;
+        for (i, def_mv) in defenses.iter().enumerate() {
+            let mut child_board = board25.clone();
+            child_board.do_move(*def_mv);
+            // 14 手の余裕 (各サブ問題は Mate(13) 以下なので十分)
+            let mut sub_solver = DfPnSolver::with_timeout(14, 500_000, 32767, 15);
+            sub_solver.set_find_shortest(false);
+            let start = Instant::now();
+            let result = sub_solver.solve(&mut child_board);
+            let elapsed = start.elapsed();
+            let (status, nodes) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } =>
+                    (format!("Mate({})", moves.len()), *nodes_searched),
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    ("MateNoPV".into(), *nodes_searched),
+                TsumeResult::NoCheckmate { nodes_searched } =>
+                    ("NoMate".into(), *nodes_searched),
+                TsumeResult::Unknown { nodes_searched } =>
+                    ("Unknown".into(), *nodes_searched),
+            };
+            individual_total_nodes += nodes;
+            writeln!(out, "{:>4} {:>10} {:>12} {:>8.2} {:>10}",
+                i + 1, def_mv.to_usi(), nodes,
+                elapsed.as_secs_f64(), status).unwrap();
+            out.flush().unwrap();
+        }
+        writeln!(out, "{}", "-".repeat(52)).unwrap();
+        writeln!(out, "個別合計ノード数: {}", individual_total_nodes).unwrap();
+
+        // ======== Phase 1: ply 24 OR node depth inflation ========
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, " Phase 1: ply 24 OR node depth inflation").unwrap();
+        writeln!(out, " (同じ root 局面を異なる depth で解き，counter 変化を観測)").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+        let depth_targets: &[(u32, u64, u64)] = &[
+            // (depth, max_nodes, timeout_s)
+            (17, 2_000_000, 90),    // doc: 317K, 既知 working
+            (21, 10_000_000, 120),  // doc: 4.1M, まだ working
+            (25, 15_000_000, 150),  // doc: 50M Unknown ← cliff
+        ];
+
+        for &(depth, max_nodes, timeout_s) in depth_targets {
+            writeln!(out, "\n{}", "-".repeat(80)).unwrap();
+            writeln!(out, "Phase 1: depth={} budget={}M timeout={}s",
+                depth, max_nodes / 1_000_000, timeout_s).unwrap();
+            writeln!(out, "{}", "-".repeat(80)).unwrap();
+            let mut test_board = board24.clone();
+            let mut solver = DfPnSolver::with_timeout(depth, max_nodes, 32767, timeout_s);
+            solver.set_find_shortest(false);
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+            let result_str = match &result {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+            let nps_k = if elapsed.as_secs_f64() > 0.0 {
+                (solver.nodes_searched as f64 / elapsed.as_secs_f64()) / 1000.0
+            } else { 0.0 };
+            writeln!(out, "  result = {}, time = {:.2}s, NPS = {:.1}k",
+                result_str, elapsed.as_secs_f64(), nps_k).unwrap();
+            let label = format!("Phase1_depth{}", depth);
+            report_counters(&mut out, &label, &mut solver);
+            out.flush().unwrap();
+        }
+
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 診断完了: {}", out_path).unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        eprintln!("結果: /tmp/tsume_39te_ply25_gap_diagnosis.log");
+    }
