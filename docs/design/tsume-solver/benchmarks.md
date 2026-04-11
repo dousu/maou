@@ -1587,11 +1587,192 @@ defender が chain aigoma で防ぎきるには `2 * chain_length` ply が必要
 各ステップで `test_tsume_39te_ply25_gap_diagnosis` を再実行し counter 遷移を
 検証する．
 
-##### 次のアクション項目 (v0.24.46)
+#### v0.24.47 施策 α 実装と soundness 違反 (不採用)
 
-1. **施策 α ステップ 1 の実装と実証実験**
-2. 効果確認後に benchmarks.md §10.2 に実測結果を追記
-3. 必要なら施策 β (visit cap) との併用を検討
+v0.24.47 で施策 α を **`remaining <= 1 && chain_bb_cache 非空` の AND ノードで
+chain マスへの drop を `ArrayVec::retain` で除去** する最小介入で実装した．
+
+**初期観測 (soundness 違反発覚前):**
+
+| Depth | Result | Nodes | Time | vs v0.24.46 |
+|:---:|:---:|---:|---:|:---|
+| 17 | Mate(15) ✓ | 367,332 | 54.2s | 不変 |
+| 21 | Unknown | 5,582,848 | 120.7s | -7.3% |
+| 25 | **Mate(15) ✓** | **158,199** | **35.0s** | **-98.5%** (apparent cliff 突破) |
+
+depth=25 で 10.3M budget で Unknown だったものが 158K nodes で "Mate(15)" を
+返し，一見 cliff 突破に見えた．非 ignored 128 テスト全 pass．新 regression test
+`test_tsume_39te_ply24_mate15_regression_depth25` を `moves.len() == 15` のみ
+verify する緩和形式で追加した．
+
+**soundness 違反の発覚:**
+
+depth=25 での root 初手が canonical の `5g6f` ではなく **`5g4f` (silver → 4f)**
+に変化していた．当初「どちらも valid な discovered check で残り 14 手同一」と
+誤解したが，ユーザ指摘により **`5g4f` 後に defender が `P*4g` (銀の裏に歩合)
+で逃げ切れる**ことが判明．
+
+検証テスト `test_tsume_39te_5g4f_p4g_escape_verify` (v0.24.49) で programmatic
+に確認:
+
+- 5g4f → P*4g 後の局面 (SFEN: `9/3+N1P3/7+R1/9/9/5S3/1R3p2k/3p5/9 b 2b4g3s3n4l15p 27`)
+- クリーン codebase (施策 α revert 済み) で 5M / 300s budget で solve
+- **結果: NoCheckmate (nodes=2,782,633)** → defender 逃げ切りが確定
+
+つまり `5g4f` は canonical Mate(15) の valid な初手ではなく，施策 α が **false
+Checkmate** を生成していた．v0.24.47 は cbbe8f5 で revert 済み．
+
+##### 施策 α soundness 違反の根本原因分析
+
+**汚染メカニズム (step-by-step):**
+
+1. 施策 α filter は `!or_node && remaining <= 1 && !chain_bb.is_empty()` で発火
+2. IDS は 2→4→8→16→24→25 で進行．各 IDS step で異なる depth の MID を実行
+3. **浅い IDS step (depth=2, 4, 8, 16, 24)** の AND ply 1/3/7/15/23 で filter 発火
+   (ply=depth-1 で rem=1 の AND ノード)
+4. filter は chain マス (4g/5g/6g/7g) への drop を list から除去．本来の defender
+   最善手 `P*4g` が列挙されなくなる
+5. MID は残った defense moves (king moves + non-chain drops) のみを評価
+6. 仮に全て mate に至るなら AND ノードは **`pn=0` (proven)** と判定される
+7. proven entry は **ProvenTT に `remaining = REMAINING_INFINITE` でストア**される
+   (`entry.rs:177` の `ProvenEntry::new_proof` 実装．proof は常に depth 非依存
+   として扱われる)
+8. 後続の IDS step (depth=4, 8, ..., 25) で同一 `(pos_key, hand)` を lookup すると
+   **filter の無い文脈でも pn=0 が返る**．contamination 完成
+9. depth=25 最終 IDS step の root 探索で 5g4f の子 AND が "既に proven" として
+   短絡し，5g4f が最善手として採用される
+10. 最終的に 5g4f → canonical PV の残り 14 手を組み合わせた "Mate(15)" が返る
+
+**設計上の矛盾点:**
+
+ProvenTT の proof entry は「mate 存在は depth に依存しない真」として
+`REMAINING_INFINITE` で保存される (v0.24.26 Plan D，§6.6.5 参照)．この不変条件
+下では **filter 条件下でのみ sound な proof** を保存すると必然的に汚染する．
+
+これは benchmarks.md §10.2 の **「false NoMate バグ」(v0.24.18 commit 6e3efc3)**
+のパターンの逆版 (false Checkmate) であり，設計ドキュメントが
+
+> 浅い depth の confirmed disproof が深い depth を汚染する (NoMate バグ §6.6.3)
+
+と警告していたものの **proof 側での再発**である．v0.24.18 は disproof 側の
+対策として `clear_proven_disproofs_below()` を導入したが，**proof 側には同等の
+対策が無い** (proof は depth 非依存として扱われるため)．
+
+##### 施策 α の部分導入可能性の再検討
+
+単純な「move filter で列挙を絞る」アプローチは ProvenTT の depth 非依存性と
+本質的に矛盾する．しかし **filter の作用範囲を狭める / 異なる形で適用する**
+ことで部分的な効果を得られる可能性がある．以下，6 つの variant を検討した:
+
+**A-1: filter-tagged proof entries**
+
+ProvenEntry に「filter 文脈下で生成された」フラグを追加し，IDS 深度切替時に
+除去する．
+
+- soundness: ✅ (汚染源を探知・除去できる)
+- 実装コスト: **高** — ProvenEntry は 12 byte に密に pack されており (v0.24.26
+  Plan D)，追加 bit を確保できない．構造体拡張でクラスタサイズ再計算が必要
+- 判定: **不採用** (コスト/リスクが高すぎる)
+
+**A-2: 最終 IDS 深度のみ filter 発火**
+
+`self.depth == saved_depth_for_epsilon` の時のみ filter を有効化し，浅い
+IDS step での汚染を回避する．
+
+- soundness: ❌ — 最終 step で生成された false proof が PV 抽出 (`extract_pv_limited`)
+  経由で誤った PV を返す．解決の時点で false Checkmate が確定する
+- 判定: **不採用**
+
+**A-3: move ordering のみへの適用 (chain drops を末尾へ移動)**
+
+filter で除去せず，chain drops を move 配列の**末尾**に reorder する．MID の
+threshold cutoff が先に non-chain moves で発火すれば chain drops は評価
+されない．
+
+- soundness: ✅ — AND ノードの `pn = sum(children.pn)` は全 child 評価が
+  必要．threshold cutoff で途中 return する場合は `pn > 0` が返り，
+  **false proven は発生しない** (MID は sum が threshold を超えたら早期 return
+  するため，残り children 未評価でも "proven (pn=0)" にはならない)
+- 効果: 不明．thrashing の本質的原因 (各 child 自体の rem=0/1 での
+  繰り返し評価) は解消されない．**ply 分布改善は限定的**と予測
+- 判定: **試験価値あり** (コスト低，リスクゼロ)
+
+**A-4: DN heuristic inflation (初期値の水増し)**
+
+chain drops の初期 dn を inflate して「disprove しにくい」child と見せかけ，
+AND node の child 選択 (min dn) から外す．
+
+- soundness: ✅ — 初期 dn は探索で上書きされる．ordering 効果のみで
+  pn aggregation は影響なし
+- 効果: A-3 より強い move ordering 効果．ただし A-3 同様 thrashing 自体は解消
+  しない可能性
+- 判定: **試験価値あり** (コスト低，A-3 と併用可能)
+
+**A-5: 局所 specialized resolver (one-shot 評価)**
+
+AND ノードで境界層 (`remaining <= 2` + chain aigoma 検出) の場合，通常の MID
+再帰ではなく **専用の一括評価ルーチン**を呼ぶ．結果は ProvenTT に保存**しない**
+(一時的な値として使う)．
+
+- soundness: ✅ — 局所計算を TT に持ち越さなければ汚染しない
+- 効果: 境界層の thrashing を根本的に解消．各 chain drop の評価を 1 回だけ行う
+- 実装コスト: **中** — 専用ルーチンと TT store skip 経路が必要．既存 MID
+  インターフェースとの整合性検証が必要
+- 判定: **最有力候補** (施策 α の本来の意図を soundness を保ったまま実現できる)
+
+**A-6: 施策 δ (PNS 責任転嫁) への統合**
+
+境界層探索を PNS に委ね，PNS の `amount` ベース eviction で thrashing を
+自然に抑制する．
+
+- soundness: ✅ — PNS は df-pn とは別アルゴリズムで arena 管理．汚染ルートが無い
+- 実装コスト: **中〜高** — IDS ループで境界層到達を検出し PNS 経路へ切替
+- 判定: **独立施策として並行検討**．施策 δ 単体で評価
+
+##### 施策 α 部分導入の結論
+
+| Variant | soundness | 効果見込み | コスト | 推奨 |
+|:---:|:---:|:---:|:---:|:---:|
+| A-1 tagged proof | ✅ | 高 | 高 | — |
+| A-2 最終 IDS のみ | ❌ | — | — | 不採用 |
+| A-3 move reorder | ✅ | 低〜中 | 低 | **試験** |
+| A-4 DN inflation | ✅ | 中 | 低 | **試験** |
+| A-5 局所 resolver | ✅ | 高 | 中 | **最有力** |
+| A-6 施策 δ 統合 | ✅ | 高 | 中〜高 | **並行検討** |
+
+**推奨順**:
+
+1. まず **A-3 + A-4** を組み合わせた「境界層 chain drop 優先度降下」を
+   試験する．soundness-safe で実装コスト最小．効果が限定的でも後続施策の
+   評価基準として有用
+2. 次に **A-5 局所 resolver** を実装．施策 α の本来の意図 (境界層 chain
+   aigoma 早期終了) を soundness を保ったまま実現する本命施策
+3. **A-6 施策 δ** は独立方針として並行検討．境界層対策の代替案として
+   位置付け
+
+**他手法との調整による改善可能性:**
+
+施策 α の失敗は「単独 filter で列挙を絞る」アプローチの限界を示した．他の
+既存手法との組合せで境界層 thrashing を間接的に緩和する方向も検討する:
+
+- **施策 I (v0.24.45 intermediate 保持)** は IDS 境界の情報損失を緩和したが
+  cliff 不変だった．A-5 の局所 resolver 結果を「一時キャッシュ」として
+  施策 I の retention スキーム下で保持すれば相乗効果の可能性
+- **§8.3 遅延展開** の `deferred_children` に境界層専用の activation order
+  を追加 (例: rem<=2 では chain drop の activation を保留し，non-chain
+  children が全て解決するまで評価を遅らせる)．これは §8.5 cross_deduce の
+  補完としても機能
+- **§3.1 depth-adaptive epsilon** を境界層限定で更に絞り込む (例: rem<=2
+  の AND で `eps_denom = 1`)．閾値伝搬の特性変化で thrashing を緩和
+
+##### 次のアクション項目 (v0.24.49)
+
+1. **benchmarks.md §10.2 の本セクション記述済み** (v0.24.47 失敗の正式記録
+   および施策 α 部分導入の再評価)
+2. **A-3 + A-4 (move ordering + DN inflation)** の最小試験実装を検討
+3. **A-5 局所 resolver** の設計検討 (TT store skip 経路 + interface 定義)
+4. **A-6 施策 δ** の独立設計検討 (§11.7 Frontier Variant の拡張として
+   定式化できるか検討)
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
