@@ -20,7 +20,7 @@
 ## 1. 概要
 
 maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, Nagai 2002) を
-基盤とし，Best-First PNS と IDS-dfpn(Frontier Variant 統合）の
+基盤とし，Best-First PNS と IDS-dfpn (Frontier Variant 統合) の
 2フェーズ探索を採用する．
 
 ### 設計目標
@@ -119,3 +119,4 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 71 | PV visit 予算の動的スケーリング (10M〜50M) | maou 独自 | §10.2 | v0.24.42 |
 | 72 | チューニング可能パラメータ (param\_epsilon\_denom 等) | maou 独自 | §11.8 | v0.24.41 |
 | 73 | GC Phase 2 no-op バグ修正 (`clear_proven_disproofs_below(u32::MAX)`) | maou 独自 | §6.6 | v0.24.43 |
+| 74 | ply25 gap 診断テスト (4 層構造の特定 + 施策再優先化) | maou 独自 | §10.2 | v0.24.44 |
