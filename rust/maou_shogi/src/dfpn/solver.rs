@@ -11,6 +11,7 @@ use crate::movegen;
 use crate::moves::Move;
 use crate::types::{Color, Piece, PieceType, HAND_KINDS};
 
+use super::entry::PnsNode;
 use super::tt::TranspositionTable;
 #[cfg(feature = "profile")]
 use super::profile::ProfileStats;
@@ -256,6 +257,17 @@ pub struct DfPnSolver {
     /// AND ノード訪問で複数 child に inflation が発火するとその分加算される．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_a4_inflations: u64,
+    /// TT 診断: 施策 A-6 (v0.24.51+) 境界層 PNS 責任転嫁の呼出回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_a6_invocations: u64,
+    /// TT 診断: 施策 A-6 で PNS が境界 sub-position を完全解決した回数．
+    /// 呼出後に `look_up_pn_dn` が `pn=0 || dn=0` を返した場合を count．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_a6_converged: u64,
+    /// TT 診断: 施策 A-6 で PNS が予算内に収束しなかった回数．
+    /// arena 飽和 / ノード予算超過で partial 結果のみ残る (TT 非汚染)．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_a6_non_converged: u64,
     /// TT 診断: AND ノード MID ループで deferred_children あり & all_proved=false の回数．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_deferred_not_ready: u64,
@@ -410,6 +422,12 @@ impl DfPnSolver {
             diag_cd_entered_main: 0,
             #[cfg(feature = "tt_diag")]
             diag_a4_inflations: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_a6_invocations: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_a6_converged: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_a6_non_converged: 0,
             #[cfg(feature = "tt_diag")]
             diag_deferred_not_ready: 0,
             #[cfg(feature = "tt_diag")]
@@ -1379,6 +1397,27 @@ impl DfPnSolver {
             profile_timed!(self, movegen_defense_ns, movegen_defense_count,
                 self.generate_defense_moves(board))
         };
+
+        // 施策 A-6 (v0.24.51): 境界層 PNS 責任転嫁．
+        //
+        // AND ノードで `remaining <= 2 && chain_bb_cache 非空` の場合，
+        // 通常の MID ループを skip して PNS に sub-position 解決を委譲する．
+        // PNS は完全証明/確定反証のみ TT に store するため汚染リスクなし．
+        // 結果は親 MID の後続 look_up_pn_dn 経由で自然に伝搬される．
+        // 詳細は benchmarks.md §10.2 v0.24.51 A-6 設計参照．
+        //
+        // 注意: generate_defense_moves の呼出しにより chain_bb_cache が
+        // この AND ノード向けに更新されている前提．OR ノードは対象外
+        // (PNS 責任転嫁は chain aigoma 展開の thrashing 対策であり，
+        // AND の defender が chain 合駒を列挙する場面が target)．
+        if !or_node && remaining <= 2 && !self.chain_bb_cache.is_empty() {
+            let _ = moves; // 未使用を抑制 (PNS が独自に生成する)
+            self.mid_via_pns_boundary(board);
+            // NOTE: この位置は path_len 増加前 (line 1978 の push 前)．
+            // depth-limit terminal 経路 (line 1389 return) と同様に
+            // path_len 操作不要で直接 return する．
+            return;
+        }
 
         // Dynamic Move Ordering: TT Best Move + Killer Moves
         // 前回の探索で最善だった手を優先的に展開し，カットオフを早める．
@@ -3186,6 +3225,86 @@ impl DfPnSolver {
         // パスから除去
         debug_assert_eq!(self.path[self.path_len - 1], full_hash);
         self.path_len -= 1;
+    }
+
+    /// 施策 A-6 (v0.24.51): 境界層 PNS 責任転嫁．
+    ///
+    /// MID の AND 境界層 (`remaining <= 2 && chain_bb_cache 非空`) で呼び出され，
+    /// 通常の MID 再帰の代わりに **小規模 arena での PNS** を起動する．
+    ///
+    /// # 動作
+    ///
+    /// - 専用 arena (BOUNDARY_ARENA_NODES) を一時 allocate
+    /// - `self.max_nodes` を一時的に `self.nodes_searched + BOUNDARY_NODE_BUDGET` に
+    ///   制限して PNS 予算を境界層評価に絞る
+    /// - `pns_main_with_arena(board, &mut arena)` を呼び出す．PNS root の
+    ///   `or_node` は `board.turn == self.attacker` から動的に決定される
+    ///   (pns.rs:1935 の変更参照)
+    /// - PNS は完全証明 (`pn=0`) / 確定反証 (`dn=0`) のみを TT に store する
+    ///   ため，親 MID が後続の `look_up_pn_dn` で結果を自然に読み取る
+    /// - 中間値 (pn>0, dn>0) は arena 破棄で消失し TT 汚染しない
+    ///
+    /// # Soundness
+    ///
+    /// - PNS の `pns_store_to_tt` は既に validated な規則 (完全解のみ flush)
+    ///   で動作するため filter ベース施策 α とは異なり false proof を生成
+    ///   しない
+    /// - `self.attacker` は solve() 入口で設定された問題の真の attacker で
+    ///   あり，MID 再帰中も不変．PNS は `hand = board.hand[self.attacker]`
+    ///   として正しい attacker 視点で評価する
+    /// - 親情報伝搬は通常の TT look_up_pn_dn 経由で自然に解決
+    ///
+    /// # Budget 管理
+    ///
+    /// `BOUNDARY_NODE_BUDGET` (100K) は PNS arena 容量とも一致．これを超過
+    /// すると PNS は non-converged で return し，TT には何も書き込まれない．
+    /// この場合 MID caller は TT lookup で miss し，通常の child init /
+    /// threshold 伝搬にフォールバックする．
+    pub(super) fn mid_via_pns_boundary(&mut self, board: &mut Board) {
+        /// 境界層 PNS arena の最大ノード数 (~10MB メモリ /call)．
+        const BOUNDARY_ARENA_NODES: usize = 100_000;
+        /// 境界層 PNS ノード予算 (solver.max_nodes の一時 override)．
+        const BOUNDARY_NODE_BUDGET: u64 = 100_000;
+
+        #[cfg(feature = "tt_diag")]
+        { self.diag_a6_invocations += 1; }
+
+        // solver state を save
+        let saved_max_nodes = self.max_nodes;
+
+        // PNS 予算を境界用に制限
+        self.max_nodes = self
+            .nodes_searched
+            .saturating_add(BOUNDARY_NODE_BUDGET);
+
+        // 専用 arena を allocate．Frontier Variant とは独立．
+        let mut arena: Vec<PnsNode> =
+            Vec::with_capacity(BOUNDARY_ARENA_NODES);
+
+        // PNS 起動．root の or_node は pns.rs:1935 で board.turn から
+        // 動的決定される．self.depth は outer IDS depth のままで呼び出し，
+        // PNS は sub-position から outer depth 相当の remaining 予算で
+        // 探索する．これは sub-position を「独立した詰将棋問題」として
+        // 扱う意図に合致する．
+        let _pv = self.pns_main_with_arena(board, &mut arena);
+
+        // solver state を restore
+        self.max_nodes = saved_max_nodes;
+
+        #[cfg(feature = "tt_diag")]
+        {
+            // PNS 収束判定: TT で sub-position の pn/dn を lookup する
+            let pos_key = position_key(board);
+            let att_hand = board.hand[self.attacker.index()];
+            let remaining = self.depth.saturating_sub(0) as u16; // depth 以下
+            let (pn_after, dn_after, _) =
+                self.look_up_pn_dn(pos_key, &att_hand, remaining);
+            if pn_after == 0 || dn_after == 0 {
+                self.diag_a6_converged += 1;
+            } else {
+                self.diag_a6_non_converged += 1;
+            }
+        }
     }
 
     /// 既に生成済みの王手リストを使って1手詰め判定する．

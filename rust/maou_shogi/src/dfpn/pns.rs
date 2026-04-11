@@ -1924,6 +1924,13 @@ impl DfPnSolver {
         let pk = position_key(board);
         let fh = board.hash;
         let hand = board.hand[self.attacker.index()];
+        // 施策 A-6 (v0.24.51): PNS root の or_node を board.turn から動的決定．
+        // 従来は `or_node: true` ハードコードだったが，境界層 PNS 責任転嫁
+        // (mid_via_pns_boundary) から AND root で PNS を起動する場合に備え
+        // board.turn == self.attacker なら OR (true)，それ以外なら AND (false)
+        // とする．solve() 経由の通常呼出しでは root は常に attacker 番なので
+        // 従来挙動と一致する．
+        let root_or_node = board.turn == self.attacker;
         arena.push(PnsNode {
             pos_key: pk,
             full_hash: fh,
@@ -1932,7 +1939,7 @@ impl DfPnSolver {
             dn: PN_UNIT,
             parent: u32::MAX,
             move_from_parent: Move(0),
-            or_node: true,
+            or_node: root_or_node,
             expanded: false,
             children: Vec::new(),
             cached_best: u32::MAX,
