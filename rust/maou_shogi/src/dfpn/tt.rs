@@ -1439,6 +1439,66 @@ impl TranspositionTable {
         self.working_overflow_since_gc = 0;
     }
 
+    /// IDS depth 切替時に WorkingTT から intermediate エントリを選択的に保持する (v0.24.45)．
+    ///
+    /// 施策 I: `test_tsume_39te_ply25_gap_diagnosis` (v0.24.44) で特定された
+    /// 「IDS depth 切替時の intermediate 全消去」問題への対策．
+    ///
+    /// # 保持条件
+    ///
+    /// 以下を全て満たすエントリのみ保持する:
+    /// 1. `pn > 0 && dn > 0` (intermediate; proven/disproven は既に ProvenTT にあるか除去される)
+    /// 2. `!path_dependent` (GHI 不整合防止)
+    /// 3. `remaining >= min_remaining` (前 IDS step の上位 N ply 分の作業のみ保持)
+    /// 4. `remaining != REMAINING_INFINITE` (depth-limited のみ; 仮値は除外)
+    ///
+    /// # remaining の shift
+    ///
+    /// 保持したエントリの `remaining` に `delta_remaining` を加算する．
+    /// 旧 IDS depth で計算された pn/dn は新 depth でも**下限値として有効**である
+    /// (より多くの remaining = より多くの探索必要 → 旧 pn/dn は安全な初期下限)．
+    /// 加算後の値が `REMAINING_INFINITE` を超える場合は保持しない．
+    ///
+    /// # 返り値
+    ///
+    /// 保持したエントリ数．0 なら通常の `clear_working()` と同じ効果．
+    ///
+    /// # 注意
+    ///
+    /// - path-dependent disproof は常に除去する (GHI 対策)
+    /// - depth-limited disproof (dn=0, remaining < INFINITE) も除去する
+    ///   (新 depth では無効になる可能性が高い)
+    /// - 保持後は `working_overflow_since_gc` をリセットする
+    pub(super) fn retain_working_intermediates(
+        &mut self,
+        min_remaining: u16,
+        delta_remaining: u16,
+    ) -> usize {
+        let mut kept = 0usize;
+        for fe in self.working.iter_mut() {
+            if fe.pos_key == 0 { continue; }
+            let entry = &mut fe.entry;
+            let rem = entry.remaining();
+            let is_intermediate = entry.pn > 0 && entry.dn > 0;
+            let is_path_dep = entry.path_dependent();
+            let is_depth_limited = rem < REMAINING_INFINITE;
+            let new_rem = rem.saturating_add(delta_remaining);
+            let keep = is_intermediate
+                && !is_path_dep
+                && is_depth_limited
+                && rem >= min_remaining
+                && new_rem < REMAINING_INFINITE;
+            if keep {
+                entry.set_remaining(new_rem);
+                kept += 1;
+            } else {
+                fe.pos_key = 0;
+            }
+        }
+        self.working_overflow_since_gc = 0;
+        kept
+    }
+
     /// WorkingTT の overflow カウンタを取得しリセットする．
     ///
     /// 前回の drain/GC/clear 以降に発生したクラスタ overflow の累積回数を返す．

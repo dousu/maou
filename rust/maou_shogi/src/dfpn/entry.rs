@@ -64,7 +64,7 @@ const _: () = assert!(
 /// - `remaining`: confirmed disproof の depth-limited 判定 (proof は常に INFINITE)
 ///
 /// レイアウト (12 bytes):
-/// ```
+/// ```text
 /// hand: [u8; 7]       (7 bytes, offset 0)
 /// flags: u8           (1 byte, offset 7)
 ///   bit 0: is_proof (1) or confirmed_disproof (0)

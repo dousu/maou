@@ -1665,9 +1665,11 @@ impl DfPnSolver {
             let time_exceeded = ids_depth < saved_depth
                 && remaining_time < self.timeout.as_secs_f64() * 0.25;
 
-            // IDS 反復間でのクリーンアップ + depth 進行:
-            // WorkingTT を全クリア(構造的不詰エントリ + path-dep disproof の汚染防止)
-            self.table.clear_working();
+            // IDS 反復間での depth 進行判断．
+            // 施策 I (v0.24.45): WorkingTT の全クリアは廃止し，intermediate
+            // エントリを選択的に保持する．保持時は remaining を depth 差分だけ
+            // シフトし，新 depth での初期下限値として再利用する．
+            let prev_ids_depth = ids_depth;
 
             if stagnated || time_exceeded {
                 ids_depth = saved_depth;
@@ -1693,6 +1695,35 @@ impl DfPnSolver {
                 } else {
                     ids_depth = next.min(saved_depth);
                 }
+            }
+
+            // 施策 I (v0.24.45): WorkingTT から intermediate を選択的に保持．
+            //
+            // `test_tsume_39te_ply25_gap_diagnosis` (v0.24.44) で「depth=17 で
+            // 75K intermediate → depth=21 で 0」という中間進捗の全消去が観測され，
+            // 合駒チェーンの不詰部分証明が毎 IDS step でゼロから再構築される
+            // 問題の原因となっていた．
+            //
+            // 保持条件 (`retain_working_intermediates` 参照):
+            //   pn>0 && dn>0 && !path_dependent && remaining < INFINITE
+            //
+            // 保持時は `remaining` に depth 差分 (delta) を加算する．
+            // 旧 depth で計算された pn/dn は新 depth での初期下限値として
+            // 安全に再利用される (より多くの remaining = より多くの探索が
+            // 必要 → 旧 pn/dn は常に真の値以下)．
+            //
+            // delta は通常 2〜4 (段階的 IDS)．stagnation で saved_depth に
+            // 直接ジャンプする場合は delta が大きくなりうるが，
+            // shift 後の remaining が REMAINING_INFINITE を超えない限り
+            // 安全に保持される (超える場合は個別に除去される)．
+            if ids_depth > prev_ids_depth {
+                let delta = (ids_depth - prev_ids_depth) as u16;
+                // min_remaining=0: 全ての非 path-dep intermediate を保持
+                self.table.retain_working_intermediates(0, delta);
+            } else {
+                // depth が進まない (stagnated で prev == saved_depth) or
+                // depth が減る (起きえないが防御的に) → 従来通り全クリア
+                self.table.clear_working();
             }
 
             // ProvenTT の浅い confirmed disproof を選択的に除去:
@@ -1840,6 +1871,15 @@ impl DfPnSolver {
             // サイクル間 TT 清掃: MID が蓄積した中間エントリを除去し，
             // 次の PNS サイクルが新鮮な状態でフロンティアを選択できるようにする．
             // 証明(pn=0)と確定反証(dn=0, 非経路依存)は保持する．
+            //
+            // NOTE (v0.24.45): 当初は `retain_proofs_and_intermediates()` で
+            // 非 path-dep intermediate も保持する案を試みたが，
+            // `test_no_checkmate_gold_interposition` で soundness 違反が発生した．
+            // Frontier サイクル境界は PNS アリーナが破棄される境界であり，
+            // stale intermediate pn/dn を次サイクルに持ち越すと proof 伝搬に
+            // 影響する．Frontier サイクル境界では従来通り全 intermediate を
+            // 除去する方針を維持する．施策 I (IDS depth 切替時の保持) のみ
+            // 採用．詳細は benchmarks.md §10.2 v0.24.45 参照．
             self.table.retain_proofs();
         }
         self.max_nodes = total_max_nodes;
