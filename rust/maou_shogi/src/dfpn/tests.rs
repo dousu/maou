@@ -7252,3 +7252,177 @@ use crate::types::{Color, PieceType};
         out.flush().unwrap();
         eprintln!("結果: {}", out_path);
     }
+
+    // ========================================================================
+    // 施策 X (v0.24.53): ProvenEntry proof_tag 拡張の単体テスト
+    // ========================================================================
+
+    /// `ProvenEntry::new_tagged_proof` の round-trip 検証．
+    /// 各 tag と tag_depth の組合せで `proof_tag()` / `tag_depth()` が
+    /// 正しい値を返すことを確認する．
+    #[test]
+    fn test_proven_entry_tagged_proof_round_trip() {
+        use super::entry::{
+            ProvenEntry, PROOF_TAG_ABSOLUTE, PROOF_TAG_FILTER_DEPENDENT,
+            PROOF_TAG_PROVISIONAL, PROOF_TAG_DEPTH_LIMITED, PROOF_TAG_INVALID,
+        };
+        let hand = [1u8, 0, 0, 0, 0, 0, 0];
+        let best_move = 0x1234u16;
+
+        // ABSOLUTE (既存 new_proof と等価)
+        let e = ProvenEntry::new_tagged_proof(hand, best_move, 15, PROOF_TAG_ABSOLUTE, 0);
+        assert!(e.is_proof());
+        assert_eq!(e.proof_tag(), PROOF_TAG_ABSOLUTE);
+        assert_eq!(e.tag_depth(), 0);
+        assert_eq!(e.mate_distance(), Some(15));
+        assert_eq!(e.best_move, best_move);
+        assert_eq!(e.hand, hand);
+
+        // FILTER_DEPENDENT with depth=17
+        let e = ProvenEntry::new_tagged_proof(hand, best_move, 7, PROOF_TAG_FILTER_DEPENDENT, 17);
+        assert!(e.is_proof());
+        assert_eq!(e.proof_tag(), PROOF_TAG_FILTER_DEPENDENT);
+        assert_eq!(e.tag_depth(), 17);
+        assert_eq!(e.mate_distance(), Some(7));
+
+        // PROVISIONAL with depth=25
+        let e = ProvenEntry::new_tagged_proof(hand, best_move, 5, PROOF_TAG_PROVISIONAL, 25);
+        assert_eq!(e.proof_tag(), PROOF_TAG_PROVISIONAL);
+        assert_eq!(e.tag_depth(), 25);
+
+        // DEPTH_LIMITED
+        let e = ProvenEntry::new_tagged_proof(hand, best_move, 3, PROOF_TAG_DEPTH_LIMITED, 7);
+        assert_eq!(e.proof_tag(), PROOF_TAG_DEPTH_LIMITED);
+        assert_eq!(e.tag_depth(), 7);
+
+        // tag_depth overflow (>63) → clamped to 63
+        let e = ProvenEntry::new_tagged_proof(hand, best_move, 11, PROOF_TAG_FILTER_DEPENDENT, 100);
+        assert_eq!(e.tag_depth(), 63);
+
+        // INVALID tag
+        let e = ProvenEntry::new_tagged_proof(hand, best_move, 1, PROOF_TAG_INVALID, 0);
+        assert_eq!(e.proof_tag(), PROOF_TAG_INVALID);
+    }
+
+    /// `ProvenEntry::new_proof` は `new_tagged_proof(.., ABSOLUTE, 0)` に委譲する
+    /// ため backward compat を保証する．
+    #[test]
+    fn test_proven_entry_new_proof_defaults_to_absolute() {
+        use super::entry::{ProvenEntry, PROOF_TAG_ABSOLUTE};
+        let hand = [0u8, 0, 0, 0, 0, 0, 1];
+        let e = ProvenEntry::new_proof(hand, 0x5678, 13);
+        assert!(e.is_proof());
+        assert_eq!(e.proof_tag(), PROOF_TAG_ABSOLUTE);
+        assert_eq!(e.tag_depth(), 0);
+        assert_eq!(e.mate_distance(), Some(13));
+    }
+
+    /// disproof エントリは `proof_tag()` で ABSOLUTE，`tag_depth()` で 0 を
+    /// 返す (backward compat + 明示的な zero 返却)．
+    #[test]
+    fn test_proven_entry_disproof_tag_accessors() {
+        use super::entry::{ProvenEntry, PROOF_TAG_ABSOLUTE};
+        let hand = [0u8; 7];
+        let e = ProvenEntry::new_disproof(hand, 25);
+        assert!(!e.is_proof());
+        assert_eq!(e.disproof_depth(), 25);
+        // disproof entry は tag 非対応: accessor は ABSOLUTE/0 を返す
+        assert_eq!(e.proof_tag(), PROOF_TAG_ABSOLUTE);
+        assert_eq!(e.tag_depth(), 0);
+    }
+
+    /// `ProvenEntry::amount` (eviction priority) が tag に応じて変化することを
+    /// 確認する．ABSOLUTE proof > non-ABSOLUTE proof > disproof の順序．
+    #[test]
+    fn test_proven_entry_amount_tag_priority() {
+        use super::entry::{
+            ProvenEntry, PROOF_TAG_ABSOLUTE, PROOF_TAG_FILTER_DEPENDENT,
+            PROOF_TAG_PROVISIONAL,
+        };
+        let hand = [0u8; 7];
+
+        // ABSOLUTE proof without distance: 64
+        let abs = ProvenEntry::new_tagged_proof(hand, 0, 0, PROOF_TAG_ABSOLUTE, 0);
+        assert_eq!(abs.amount(), 64);
+
+        // FILTER_DEPENDENT proof without distance: 48
+        let filt = ProvenEntry::new_tagged_proof(hand, 0, 0, PROOF_TAG_FILTER_DEPENDENT, 0);
+        assert_eq!(filt.amount(), 48);
+
+        // PROVISIONAL proof without distance: 48
+        let prov = ProvenEntry::new_tagged_proof(hand, 0, 0, PROOF_TAG_PROVISIONAL, 0);
+        assert_eq!(prov.amount(), 48);
+
+        // confirmed disproof: 32
+        let disp = ProvenEntry::new_disproof(hand, 10);
+        assert_eq!(disp.amount(), 32);
+
+        // ABSOLUTE proof with distance 15: 0x80 | 15 = 143
+        let abs_d = ProvenEntry::new_tagged_proof(hand, 0, 15, PROOF_TAG_ABSOLUTE, 0);
+        assert_eq!(abs_d.amount(), 0x80 | 15);
+
+        // 順序性: ABSOLUTE+distance > ABSOLUTE > non-ABSOLUTE > disproof
+        assert!(abs_d.amount() > abs.amount());
+        assert!(abs.amount() > filt.amount());
+        assert!(filt.amount() > disp.amount());
+    }
+
+    /// `clear_proven_disproofs_below` が non-ABSOLUTE proof を
+    /// 選択的に除去することを検証する (施策 X の統合動作)．
+    #[test]
+    fn test_clear_proven_disproofs_below_includes_tagged_proofs() {
+        use super::entry::{
+            PROOF_TAG_FILTER_DEPENDENT, PROOF_TAG_PROVISIONAL,
+        };
+        use super::tt::TranspositionTable;
+        let mut tt = TranspositionTable::new();
+
+        let hand = [1u8, 0, 0, 0, 0, 0, 0];
+        let pk = 0xDEADBEEF_12345678u64;
+
+        // ABSOLUTE proof at tag_depth=0 (should never be removed)
+        tt.store_with_best_move_and_distance(
+            pk, hand, 0, u32::MAX, 0x7FFF, pk as u32, 0x100, 15,
+        );
+
+        // 3 pos_keys with different tags for diversity
+        // 同一 pk + 同一 hand は cluster 内で上書きされるため，異なる pk を使う
+        let pk_filter = 0x1111_1111_1111_1111u64;
+        let pk_prov = 0x2222_2222_2222_2222u64;
+
+        // FILTER_DEPENDENT at depth=5
+        tt.store_tagged_proof_for_test(
+            pk_filter, hand, 0x200, 10, PROOF_TAG_FILTER_DEPENDENT, 5,
+        );
+
+        // PROVISIONAL at depth=15
+        tt.store_tagged_proof_for_test(
+            pk_prov, hand, 0x300, 8, PROOF_TAG_PROVISIONAL, 15,
+        );
+
+        // clear at min_depth=10: FILTER_DEPENDENT (depth=5 < 10) should be removed
+        // PROVISIONAL (depth=15 >= 10) should be kept
+        // ABSOLUTE is never affected
+        tt.clear_proven_disproofs_below(10);
+
+        // ABSOLUTE proof remains
+        let (pn, _, _) = tt.look_up(pk, &hand, 0x7FFF, false);
+        assert_eq!(pn, 0, "ABSOLUTE proof should be preserved");
+
+        // FILTER_DEPENDENT removed
+        let (pn, _, _) = tt.look_up(pk_filter, &hand, 0x7FFF, false);
+        assert_ne!(pn, 0, "FILTER_DEPENDENT proof at depth<10 should be removed");
+
+        // PROVISIONAL preserved
+        let (pn, _, _) = tt.look_up(pk_prov, &hand, 0x7FFF, false);
+        assert_eq!(pn, 0, "PROVISIONAL proof at depth>=10 should be preserved");
+
+        // Second clear at higher min_depth: PROVISIONAL (depth=15) also removed
+        tt.clear_proven_disproofs_below(20);
+        let (pn, _, _) = tt.look_up(pk_prov, &hand, 0x7FFF, false);
+        assert_ne!(pn, 0, "PROVISIONAL proof at depth<20 should be removed");
+
+        // ABSOLUTE still preserved
+        let (pn, _, _) = tt.look_up(pk, &hand, 0x7FFF, false);
+        assert_eq!(pn, 0, "ABSOLUTE proof must never be removed");
+    }
