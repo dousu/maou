@@ -118,3 +118,4 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 70 | Depth-adaptive epsilon (saved\_depth ≥ 19 → eps\_denom=2) | maou 独自 | §3.1, §10.2 | v0.24.41 |
 | 71 | PV visit 予算の動的スケーリング (10M〜50M) | maou 独自 | §10.2 | v0.24.42 |
 | 72 | チューニング可能パラメータ (param\_epsilon\_denom 等) | maou 独自 | §11.8 | v0.24.41 |
+| 73 | GC Phase 2 no-op バグ修正 (`clear_proven_disproofs_below(u32::MAX)`) | maou 独自 | §6.6 | v0.24.43 |

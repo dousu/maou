@@ -50,6 +50,7 @@
 
 | 日付 | 版 | 内容 |
 |------|-----|------|
+| 2026-04-10 | v0.24.43 | §6.6 GC Phase 2 no-op バグ修正．`clear_proven_disproofs_below(0)` → `clear_proven_disproofs_below(u32::MAX)` (`u32 < 0` が常に false で no-op だった)．`effective_eps_denom()` インライン関数化と `EPSILON_DENOM_ADAPTIVE` 定数化のリファクタリング．120M backward 解析でリグレッションなし |
 | 2026-04-10 | v0.24.42 | PV visit 予算の動的スケーリング (10M〜50M)．ply 18 MateNoPV → Mate(21) 解消 |
 | 2026-04-10 | v0.24.41 | §3.1 depth-adaptive epsilon (saved\_depth ≥ 19 → eps\_denom=2)．パラメータグリッドサーチ(16構成)により depth 依存の最適値を発見．ply 20 -49% ノード削減，ply 22 が 10M 予算で初めて解ける．チューニング可能パラメータをDfPnSolver フィールドに追加 |
 | 2026-04-10 | v0.24.40 | §2.3 IDS depth 32+ で +4 刻みの段階的深化．ルート統合探索(depth=41)での TT ウォームアップ改善 |

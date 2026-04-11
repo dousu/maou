@@ -1077,6 +1077,33 @@ pv_visit_budget = min(max(nodes_searched / 4, 10M), 50M)
 - ply 18: 97.6M 探索 → budget 24M → **MateNoPV → Mate(21) 解消**
 - 上限 50M で過大な PV 抽出時間を防止
 
+**課題 J: GC Phase 2 no-op バグ修正 (v0.24.43)**
+
+v0.24.38 の `clear_proven_disproofs()` → `clear_proven_disproofs_below(min_depth)`
+リファクタリング時に，GC Phase 2 の呼び出しが
+`clear_proven_disproofs_below(0)` のまま残されていた．
+
+**バグ:** `disproof_depth() < 0` は u32 で常に false → no-op．
+コメント「全 confirmed disproof を除去」とは真逆の挙動になり，
+元の `clear_proven_disproofs()` の無条件全除去機能が失われていた．
+
+**修正:** `clear_proven_disproofs_below(u32::MAX)` で全 disproof を除去．
+
+**120M backward 解析での検証 (v0.24.42 vs v0.24.43):**
+
+| Ply | v0.24.42 nodes | v0.24.43 nodes | 変化 |
+|-----|---------------|---------------|------|
+| 24 | 367,331 | 367,331 | 同一 |
+| 22 | 31,361,713 | 31,361,713 | 同一 |
+| 20 | 39,118,955 | 39,118,955 | 同一 |
+| 18 | 97,588,759 (Mate(21)) | 97,588,759 (Mate(21)) | 同一 |
+| 16 | 117,080,263 | 117,080,263 | 同一 |
+
+**リグレッションなし．** 全 ply でノード数完全同一．
+GC Phase 2 は ProvenTT 充填率が 70% を超過した時にのみ発火する Phase であり，
+120M backward 解析では到達しないため，no-op バグは挙動に影響していなかった．
+ただし長期実行や大予算 (500M+) でのバグ顕在化を防ぐため修正は必須．
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
