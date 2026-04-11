@@ -7067,3 +7067,118 @@ use crate::types::{Color, PieceType};
             .unwrap();
         eprintln!("結果: /tmp/tsume_39te_ply25_gap_diagnosis.log");
     }
+
+    /// v0.24.47 施策 α の soundness 違反を検証する診断テスト．
+    ///
+    /// **検証内容**: 5g4f (施策 α が root で選んだ手) 後に defender が P*4g
+    /// (銀の裏に歩合) を打った局面が **本当に defender 逃げ切りか**を
+    /// クリーン codebase (strategy α revert 済み) で確認する．
+    ///
+    /// 期待結果:
+    /// - Case A (P*4g が有効な escape): 局面 = attacker 番 OR node．solve() は
+    ///   NoMate または Unknown を返す → 5g4f は PV として不正 → strategy α 不正
+    /// - Case B (P*4g でも攻め方が詰ませられる): solve() は Checkmate を返す →
+    ///   strategy α は soundness を壊していない (別の理由で PV が変わっている)
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_5g4f_p4g_escape_verify() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_5g4f_p4g_verify.log";
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix_pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        writeln!(out, "=== ply 24 position (prefix_pv 24 手適用後) ===").unwrap();
+        writeln!(out, "SFEN: {}", board.sfen()).unwrap();
+        writeln!(out, "turn: {:?} (attacker = OR root)", board.turn).unwrap();
+
+        // Step 1: attacker が 5g4f を打つ
+        let m_5g4f = board.move_from_usi("5g4f").unwrap();
+        board.do_move(m_5g4f);
+        writeln!(out, "\n=== after 5g4f (ply 25) ===").unwrap();
+        writeln!(out, "SFEN: {}", board.sfen()).unwrap();
+        writeln!(out, "turn: {:?} (defender = AND node)", board.turn).unwrap();
+        writeln!(out, "in_check: {}", board.is_in_check(board.turn)).unwrap();
+
+        // Step 2: 守備方応手を列挙し P*4g が含まれるか確認
+        let mut defense_solver = DfPnSolver::default_solver();
+        let mut defense_board = board.clone();
+        let defenses = defense_solver.generate_defense_moves(&mut defense_board);
+        writeln!(out, "\n=== defender responses: {} moves ===", defenses.len()).unwrap();
+        let mut p4g_found = false;
+        for d in &defenses {
+            let usi = d.to_usi();
+            if usi == "P*4g" {
+                p4g_found = true;
+            }
+            writeln!(out, "  {}", usi).unwrap();
+        }
+        writeln!(out, "P*4g in defense moves: {}", p4g_found).unwrap();
+
+        // Step 3: P*4g が legal なら実際に打って attacker 番で solve
+        if p4g_found {
+            let m_p4g = board.move_from_usi("P*4g").unwrap();
+            board.do_move(m_p4g);
+            writeln!(out, "\n=== after P*4g (ply 26) ===").unwrap();
+            writeln!(out, "SFEN: {}", board.sfen()).unwrap();
+            writeln!(out, "turn: {:?} (attacker = OR root)", board.turn).unwrap();
+
+            // 十分な予算で solve．max 13 手詰め (Mate(13) 以下) なら 5g4f は
+            // 最短 14 手詰めの有効な初手 (mate(13) + 打った 1 手 = 14 手)．
+            // Mate > 13 なら 5g4f ルートは Mate(15) より長く canonical 不一致．
+            let mut solver = DfPnSolver::with_timeout(17, 5_000_000, 32767, 300);
+            solver.set_find_shortest(true);
+            let result = solver.solve(&mut board);
+            writeln!(out, "\n=== solve result ===").unwrap();
+            match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } => {
+                    let pv_usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                    writeln!(out, "Checkmate in {} moves (nodes={})",
+                        moves.len(), nodes_searched).unwrap();
+                    writeln!(out, "PV: {}", pv_usi.join(" ")).unwrap();
+                    writeln!(out, "\n結論: 5g4f → P*4g 後も {} 手で詰む．", moves.len()).unwrap();
+                    writeln!(out, "→ 5g4f + P*4g 合流で合計 {} 手 (5g4f 1 手 + P*4g 1 手 + Mate({}))",
+                        2 + moves.len(), moves.len()).unwrap();
+                    if moves.len() <= 13 {
+                        writeln!(out, "→ 5g4f ルートは 最短 {} 手詰め (2 + {} = {} 手) で canonical (15 手) より {} か",
+                            2 + moves.len(), moves.len(), 2 + moves.len(),
+                            if 2 + moves.len() < 15 { "短い" } else { "同じ" }).unwrap();
+                    } else {
+                        writeln!(out, "→ 5g4f ルートは 合計 {} 手 で canonical (15 手) より長い",
+                            2 + moves.len()).unwrap();
+                    }
+                }
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    writeln!(out, "CheckmateNoPv (nodes={})", nodes_searched).unwrap(),
+                TsumeResult::NoCheckmate { nodes_searched } => {
+                    writeln!(out, "**NoCheckmate** (nodes={})", nodes_searched).unwrap();
+                    writeln!(out, "\n結論: 5g4f → P*4g は **defender 逃げ切り**を確定．").unwrap();
+                    writeln!(out, "→ 5g4f は Mate(15) canonical の有効な初手ではなく，").unwrap();
+                    writeln!(out, "   施策 α (v0.24.47) が浅い IDS で false proven を").unwrap();
+                    writeln!(out, "   生成し ProvenTT に汚染エントリを残した soundness 違反．").unwrap();
+                }
+                TsumeResult::Unknown { nodes_searched } => {
+                    writeln!(out, "**Unknown** (nodes={})", nodes_searched).unwrap();
+                    writeln!(out, "\n結論: 予算不足で判定できず．予算拡大で再実行推奨．").unwrap();
+                }
+            }
+        } else {
+            writeln!(out, "\n結論: P*4g は legal defense ではない (盤面状態要確認)").unwrap();
+        }
+
+        out.flush().unwrap();
+        eprintln!("結果: {}", out_path);
+    }
