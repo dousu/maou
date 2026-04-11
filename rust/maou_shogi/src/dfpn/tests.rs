@@ -2397,6 +2397,75 @@ use crate::types::{Color, PieceType};
         }
     }
 
+    /// 39手詰め ply24 depth=25 soundness regression (v0.24.50+)．
+    ///
+    /// 施策 A-4 (境界層 DN inflation) と今後の境界層施策が canonical PV を
+    /// 壊さないことを保証する soundness-only test．
+    ///
+    /// **strict mode** (default): 探索結果が Checkmate なら PV を canonical と
+    /// 完全一致で比較．Unknown は許容 (cliff 未突破を受け入れる)．
+    /// NoCheckmate / 異なる PV は panic (soundness 違反)．
+    ///
+    /// 背景: v0.24.47 施策 α は `moves.len() == 15` しか verify せず，
+    /// 初手が `5g6f` から `5g4f` に変化した false Checkmate を見逃した．
+    /// 同じ失敗を繰り返さないため，Mate 結果は strict に verify する．
+    ///
+    /// Unknown を許容するのは，本 test が **A-4 の期待する cliff 突破を
+    /// 測るための benchmark ではなく soundness guard** として機能させる
+    /// ため．depth=25 Unknown は v0.24.46 baseline と同じで退行ではない．
+    #[test]
+    fn test_tsume_39te_ply24_mate15_soundness_depth25() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+        let expected_pv = [
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i",
+            "S*6i", "8i6i", "6h6i+", "S*2h", "1i2i",
+            "2h3g", "2i3i", "2g2h", "3i4i", "2h4h",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix_pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        // 小さめの予算で高速に判定する (cliff 突破目的ではなく soundness guard)
+        let mut solver = DfPnSolver::with_timeout(25, 3_000_000, 32767, 300);
+        solver.set_find_shortest(false);
+
+        let result = solver.solve(&mut board);
+
+        match result {
+            TsumeResult::Checkmate { moves, .. } => {
+                // Mate 結果なら canonical と完全一致必須
+                let pv_usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                let pv_refs: Vec<&str> = pv_usi.iter().map(|s| s.as_str()).collect();
+                assert_eq!(
+                    pv_refs, expected_pv,
+                    "depth=25 PV mismatch (soundness risk)\n  got:      {}\n  expected: {}",
+                    pv_usi.join(" "), expected_pv.join(" "),
+                );
+            }
+            TsumeResult::CheckmateNoPv { .. } => {
+                // MateNoPV は PV 不明だが最低限 15 手であることは確認できる
+                // が，canonical の verify ができないため panic
+                panic!("unexpected CheckmateNoPv; cannot verify canonical PV");
+            }
+            TsumeResult::NoCheckmate { .. } =>
+                panic!("got NoCheckmate — critical soundness break (valid mate position)"),
+            TsumeResult::Unknown { .. } => {
+                // Unknown は許容: cliff 未突破で探索が時間 / ノード上限に到達した
+                // 場合は v0.24.46 baseline と同じ挙動であり退行ではない
+            }
+        }
+    }
+
     /// 39手詰め逆順サブ問題: 1M ノード / 180 秒で各 OR ノードから解き，
     /// 解けなくなった境界を特定する．解けない局面ではANDノードの各応手の
     /// 探索コスト内訳を報告する．
@@ -6919,6 +6988,7 @@ use crate::types::{Color, PieceType};
                 writeln!(out, "    cd_guard_child_proven = {}", solver.diag_cd_guard_child_proven).unwrap();
                 writeln!(out, "    cd_no_siblings     = {}", solver.diag_cd_no_siblings).unwrap();
                 writeln!(out, "    cd_entered_main    = {}", solver.diag_cd_entered_main).unwrap();
+                writeln!(out, "    a4_inflations      = {}", solver.diag_a4_inflations).unwrap();
                 writeln!(out, "    deferred_ready     = {}", solver.diag_deferred_ready).unwrap();
                 writeln!(out, "    deferred_not_ready = {}", solver.diag_deferred_not_ready).unwrap();
                 writeln!(out, "    deferred_enqueued  = {}", solver.diag_deferred_enqueued).unwrap();

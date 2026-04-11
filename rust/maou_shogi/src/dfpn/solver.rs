@@ -248,6 +248,14 @@ pub struct DfPnSolver {
     /// `diag_cd_guard_child_proven - diag_cd_no_siblings` と等しいはず．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_cd_entered_main: u64,
+    /// TT 診断: 施策 A-4 (v0.24.50+) の境界層 DN inflation 発火数．
+    ///
+    /// AND ノードで `remaining <= 2 && chain_bb_cache 非空` の際に chain drop
+    /// (chain_king_sq or mixed_chain_king_sq パス) に BOUNDARY_CHAIN_MULT (=8)
+    /// 倍の bias を加算した回数の累積．child 評価ループ内で数えるため，1 つの
+    /// AND ノード訪問で複数 child に inflation が発火するとその分加算される．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_a4_inflations: u64,
     /// TT 診断: AND ノード MID ループで deferred_children あり & all_proved=false の回数．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_deferred_not_ready: u64,
@@ -400,6 +408,8 @@ impl DfPnSolver {
             diag_cd_no_siblings: 0,
             #[cfg(feature = "tt_diag")]
             diag_cd_entered_main: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_a4_inflations: 0,
             #[cfg(feature = "tt_diag")]
             diag_deferred_not_ready: 0,
             #[cfg(feature = "tt_diag")]
@@ -2514,6 +2524,16 @@ impl DfPnSolver {
                     // 非チェーン AND:
                     //   ドロップ(合駒)にバイアスを加算し，非合駒を優先する．
                     //   通常の AND ノードでは玉逃げの反証が速いため．
+                    //
+                    // 施策 A-4 (v0.24.50): 境界層 DN inflation
+                    // remaining <= 2 かつ chain aigoma 検出時，chain drop の
+                    // 初期 dn バイアスを大幅に inflate して argmin 選択から
+                    // 外す．pn aggregation (children pn の sum) には影響
+                    // しないため false proven は生成しない (soundness-safe
+                    // な move ordering 強化のみ)．詳細 benchmarks.md §10.2．
+                    let boundary_inflate =
+                        remaining <= 2 && !self.chain_bb_cache.is_empty();
+                    const BOUNDARY_CHAIN_MULT: u32 = 8;
                     let effective_cdn = if let Some(ksq) = chain_king_sq {
                         // チェーン AND(全 drop が chain): ドロップ優先，
                         // 外側ほど後回し．
@@ -2524,9 +2544,19 @@ impl DfPnSolver {
                             let dc = (to.col() as i8 - ksq.col() as i8)
                                 .unsigned_abs() as u32;
                             // 内側(d=1)はバイアス0，外側は距離に比例
-                            cdn.saturating_add(
-                                dr.max(dc).saturating_sub(1) * PN_UNIT
-                            )
+                            let base_bias =
+                                dr.max(dc).saturating_sub(1) * PN_UNIT;
+                            let bias = if boundary_inflate {
+                                // 施策 A-4: chain drop に追加ペナルティ
+                                #[cfg(feature = "tt_diag")]
+                                { self.diag_a4_inflations += 1; }
+                                base_bias
+                                    .saturating_mul(BOUNDARY_CHAIN_MULT)
+                                    .saturating_add(INTERPOSE_DN_BIAS)
+                            } else {
+                                base_bias
+                            };
+                            cdn.saturating_add(bias)
                         } else {
                             // 非合駒: 大きなバイアスで後回し
                             cdn.saturating_add(INTERPOSE_DN_BIAS)
@@ -2545,10 +2575,18 @@ impl DfPnSolver {
                                 .unsigned_abs() as u32;
                             // chain drop: INTERPOSE_DN_BIAS + 距離比例加算．
                             // 外側(d=5)は INTERPOSE_DN_BIAS + 4*PN_UNIT
-                            cdn.saturating_add(
-                                INTERPOSE_DN_BIAS
-                                    + dr.max(dc).saturating_sub(1) * PN_UNIT
-                            )
+                            let base_bias = INTERPOSE_DN_BIAS
+                                + dr.max(dc).saturating_sub(1) * PN_UNIT;
+                            let bias = if boundary_inflate {
+                                // 施策 A-4: 境界層で mixed chain drop も
+                                // 8 倍 inflate
+                                #[cfg(feature = "tt_diag")]
+                                { self.diag_a4_inflations += 1; }
+                                base_bias.saturating_mul(BOUNDARY_CHAIN_MULT)
+                            } else {
+                                base_bias
+                            };
+                            cdn.saturating_add(bias)
                         } else if m.is_drop() {
                             // 非 chain drop: 通常の INTERPOSE_DN_BIAS のみ
                             cdn.saturating_add(INTERPOSE_DN_BIAS)
