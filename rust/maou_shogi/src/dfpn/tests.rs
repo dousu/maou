@@ -2397,6 +2397,75 @@ use crate::types::{Color, PieceType};
         }
     }
 
+    /// 39手詰め ply24 depth=25 Mate(15) regression (v0.24.47+ 施策 α soundness guard)．
+    ///
+    /// 施策 α (pns.rs:MID で `remaining <= 1 && chain_bb_cache 非空` の場合に
+    /// chain 合駒 drop を除去) が depth=25 で soundness を壊さないことを保証する．
+    ///
+    /// 背景: v0.24.46 診断で ply = depth-2 境界層に ~50% ノードが集中することが
+    /// 判明し，施策 α (境界層 chain aigoma 早期終了) を導入した．この filter により
+    /// v0.24.46 baseline で depth=25 Unknown (10M+ nodes) だったのが v0.24.47 で
+    /// Mate(15) を 158K nodes / 35s で発見できるようになった．
+    ///
+    /// **PV の多様性**: canonical Mate(15) は複数の初手 (`5g6f` / `5g4f` 等) を
+    /// 許容する．どちらも 15 手詰めを達成する valid な開き王手であり，施策 α の
+    /// 閾値伝搬が root 手選択に影響するため，canonical な **手数** (15) のみを
+    /// 検証する (具体的な初手は depth によって異なる)．
+    ///
+    /// soundness 判定の根拠:
+    /// - 15 手より**短い** PV (Mate(13) 等) は false Checkmate (ヒューリスティック
+    ///   が誤った proof を通した) の可能性
+    /// - 15 手より**長い** PV (Mate(17), Mate(21) 等) は chain drop inflate
+    ///   による canonical 違反
+    /// - 15 手ちょうどなら canonical Mate(15) と一致 (別 PV でも最短手数は
+    ///   不変)
+    #[test]
+    fn test_tsume_39te_ply24_mate15_regression_depth25() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix_pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        // depth=25 (saved_depth >= 19 → depth-adaptive epsilon 有効)
+        // 実測 ~35s / 158K nodes．dev 比 6 倍で 600s 余裕を設定．
+        let mut solver = DfPnSolver::with_timeout(25, 15_000_000, 32767, 600);
+        solver.set_find_shortest(false);
+
+        let result = solver.solve(&mut board);
+
+        match result {
+            TsumeResult::Checkmate { moves, .. } => {
+                let pv_usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                assert_eq!(
+                    moves.len(), 15,
+                    "expected Mate(15) canonical mate count at depth=25, got Mate({}): {}",
+                    moves.len(), pv_usi.join(" "),
+                );
+            }
+            TsumeResult::CheckmateNoPv { nodes_searched } => {
+                panic!(
+                    "expected full Mate(15) PV at depth=25 but got CheckmateNoPv \
+                     (nodes={}); PV extraction did not complete within visit budget",
+                    nodes_searched
+                );
+            }
+            TsumeResult::NoCheckmate { .. } =>
+                panic!("expected Mate(15) at depth=25, got NoMate (strategy α unsound?)"),
+            TsumeResult::Unknown { .. } =>
+                panic!("expected Mate(15) at depth=25, got Unknown"),
+        }
+    }
+
     /// 39手詰め逆順サブ問題: 1M ノード / 180 秒で各 OR ノードから解き，
     /// 解けなくなった境界を特定する．解けない局面ではANDノードの各応手の
     /// 探索コスト内訳を報告する．
@@ -6919,6 +6988,8 @@ use crate::types::{Color, PieceType};
                 writeln!(out, "    cd_guard_child_proven = {}", solver.diag_cd_guard_child_proven).unwrap();
                 writeln!(out, "    cd_no_siblings     = {}", solver.diag_cd_no_siblings).unwrap();
                 writeln!(out, "    cd_entered_main    = {}", solver.diag_cd_entered_main).unwrap();
+                writeln!(out, "    alpha_trigger_count    = {}", solver.diag_alpha_trigger_count).unwrap();
+                writeln!(out, "    alpha_skipped_chain_drops = {}", solver.diag_alpha_skipped_chain_drops).unwrap();
                 writeln!(out, "    deferred_ready     = {}", solver.diag_deferred_ready).unwrap();
                 writeln!(out, "    deferred_not_ready = {}", solver.diag_deferred_not_ready).unwrap();
                 writeln!(out, "    deferred_enqueued  = {}", solver.diag_deferred_enqueued).unwrap();
