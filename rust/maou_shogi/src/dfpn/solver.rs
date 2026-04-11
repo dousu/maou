@@ -3570,7 +3570,16 @@ impl DfPnSolver {
             let pc_pk = position_key(board);
             let pc_hand = board.hand[self.attacker.index()];
 
-            // メイン TT で捕獲後局面の証明を参照
+            // メイン TT で捕獲後局面の証明を参照．
+            //
+            // 注: 施策 X-N 候補 A (v0.24.56 試行) で neighbor_scan=true を
+            // 試みたが test_tsume_39te_ply24_mate15_regression が Unknown
+            // に退行 (ベースライン 367K nodes で Mate(15)) したため revert．
+            // prefilter が過剰に proof を hit し get_proof_hand 経由の
+            // proof hand 構築で誤った情報を注入する可能性がある．
+            // cross_deduce_children (v0.24.55) とは異なり prefilter は
+            // `init_and_proof` の累積に使われるため semantics が異なる．
+            // 今後より慎重な設計が必要．
             let (ppn, _, _) = self.table.look_up(pc_pk, &pc_hand, pc_remaining, false);
             if ppn == 0 {
                 // 捕獲後局面が証明済み → 合駒の OR ノードも証明

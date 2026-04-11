@@ -2967,6 +2967,74 @@ C. **cross_deduce の multi-step 拡張**: 現在は同一 AND ノードの sibl
 3. **cliff 突破の本質的アプローチ** は依然として未解決．本施策は
    インクリメンタル改善の積み重ねフェーズ
 
+#### v0.24.56 候補 A (`try_prefilter_block` neighbor_scan) 試行と revert
+
+v0.24.55 で cross_deduce に成功した neighbor_scan の拡張を
+`try_prefilter_block` (solver.rs:3574) にも適用する試行を行った．
+同一 1 行変更 (`false` → `true`)．
+
+**29 手詰 tests への効果** (非常に有望):
+
+- v0.24.54 baseline: 453.62s
+- v0.24.55 (cross_deduce): 432.98s (-4.5%)
+- v0.24.56 (+ prefilter): **345.55s (-23.8% from v0.24.54, -20.2% from v0.24.55)**
+
+29 手詰 PNS+MID と IDS-MID only 両経路が劇的に高速化．
+
+**しかし 39 手詰 regression で退行**:
+
+`test_tsume_39te_ply24_mate15_regression` (depth=17, 1M budget, 600s
+timeout) が **Unknown** を返却．v0.24.55 までは 367K nodes / ~40s で
+Mate(15) を安定発見していた canonical テスト．
+
+**原因推測**: prefilter の semantics は cross_deduce とは異なる．
+prefilter は post-capture 位置の proof を発見した際，`get_proof_hand`
+経由で `init_and_proof` に proof hand を累積する．neighbor_scan で
+発見した proof は **隣接クラスタの hand_hash 混合位置** であり，
+`get_proof_hand` が返す hand が query hand から乖離する場合がある．
+この乖離した hand が `init_and_proof` に累積されると，AND ノードの
+proof hand が過剰に強い値となり，その後の MID 探索で矛盾が生じる
+(AND が proven とされるべき状態で unknown に留まる)．
+
+これは **soundness 違反ではない** (false Checkmate は発生しない) が，
+**性能退行** により探索が迷走して budget を超過する．
+
+**revert 判断**: 39 手詰 canonical regression を壊すのは受け入れ
+られない．1 行変更を元に戻して試行の記録だけを `solver.rs:3574`
+付近のコメントに残す．今後より慎重な設計 (`init_and_proof` への
+影響を考慮した proof hand の制限) が必要．
+
+**判定**:
+- cross_deduce (v0.24.55) は採用継続
+- prefilter は neighbor_scan **不採用**
+- 2 つの §8.4/§8.5 機構は semantics が異なることが判明
+
+##### 学び: prefilter と cross_deduce の semantics の違い
+
+| 特徴 | cross_deduce (§8.5) | try_prefilter_block (§8.4) |
+|:---|:---|:---|
+| 発火タイミング | AND child 評価後 (cpn_after=0 時) | AND child 初期化前 (deferred 前) |
+| proof 適用先 | 同一マスの兄弟 drop の OR 局面 | 自分の drop 自体の OR 局面 |
+| init_and_proof 影響 | なし | **直接 累積される** |
+| 発見 proof の用途 | TT に OR proof を store | `init_and_proof` 累積 + drop skip |
+| neighbor_scan 安全性 | ✅ TT store のみで局所的 | ❌ init_and_proof 経由で影響が広範 |
+
+cross_deduce は発見した proof を直接 TT に store するだけで局所的に
+閉じた操作．一方 prefilter は `init_and_proof` への累積を通じて
+AND ノードの proof 全体に影響を及ぼす．そのため neighbor_scan による
+proof hand の乖離が複合的な退行を引き起こす．
+
+##### 次のアクション項目 (v0.24.56 時点)
+
+1. **prefilter の neighbor_scan は保留**．cross_deduce 単体での N 削減
+   効果 (-9% nodes at depth=21) を維持
+2. **候補 B (transitive closure)** を次に検討．cross_deduce の hand
+   dominance graph 事前計算で探索空間を削減
+3. **候補 C (multi-step cross_deduce)** は実装コスト高だが最も大きな
+   効果が期待できる長期目標
+4. **cliff 突破は依然未解決**．単一の局所最適化では chain aigoma の
+   組合せ爆発に対処できない
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
