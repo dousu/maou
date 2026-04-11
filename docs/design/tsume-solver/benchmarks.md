@@ -2710,6 +2710,159 @@ pub(super) fn look_up_proven_untagged_only(
 4. 後続: 施策 α 再評価 (tag=FILTER_DEPENDENT) または施策 A-6 再評価
    (tag=PROVISIONAL) のいずれかを選択して効果測定
 
+#### v0.24.53 施策 X 実装 (proof_tag 基盤) + v0.24.54 後続施策評価結果
+
+##### v0.24.53: 施策 X 基盤実装 (採用)
+
+ユーザ承認を受けて方針 X を実装した．ProvenEntry.remaining フィールドを
+meta にリネームし，proof_tag (bits 0-3) + tag_depth (bits 4-9) を
+pack する構造に変更．12 byte レイアウトを維持したまま tagged proof を
+実現した．
+
+**実装内容**:
+
+- `ProvenEntry`: `remaining` → `meta` リネーム + 5 つの PROOF_TAG_* 定数
+  + `new_tagged_proof` / `proof_tag()` / `tag_depth()` accessor 追加
+- 既存 `remaining()` accessor を削除 (後方互換は `new_proof` の内部委譲で
+  実現)．`amount()` が tag 認識し non-ABSOLUTE proof に低 priority (48)
+- `TranspositionTable::store_tagged_proof`: tag 付き proof を格納
+- `clear_proven_disproofs_below(min_depth)` 統合: disproof と non-ABSOLUTE
+  proof を同じ min_depth 閾値で選択的除去
+- `ProvenEntry::remaining()` 削除に伴い tt.rs の参照箇所を書き換え:
+  `look_up_proven` の disproof パスで remaining 比較 (常に no-op) を除去，
+  `get_disproof_remaining` / `get_effective_disproof_info` で ProvenTT
+  ヒット時は `REMAINING_INFINITE` 直接返却
+
+**単体テスト** (5 件追加):
+
+1. `test_proven_entry_tagged_proof_round_trip`: tag + tag_depth の
+   round-trip 検証 (全 tag + overflow clamp)
+2. `test_proven_entry_new_proof_defaults_to_absolute`: backward compat
+3. `test_proven_entry_disproof_tag_accessors`: disproof 側の 0 返却
+4. `test_proven_entry_amount_tag_priority`: eviction priority 順序
+5. `test_clear_proven_disproofs_below_includes_tagged_proofs`: 統合 clear
+   が ABSOLUTE を保持し non-ABSOLUTE を選択除去することを verify
+
+**測定**: 非 ignored 133 tests 全 PASS (既存 128 + 新規 5)．soundness
+退行なし．
+
+##### v0.24.54: 施策 α 再評価 (試行失敗，revert)
+
+Strategy X 基盤上で施策 α (境界層 chain drop filter) を再実装．
+`alpha_x_filter_active` flag を MID 入口/出口で save/restore し，filter
+発火時は pn=0 store を `store_tagged_proof` 経由で FILTER_DEPENDENT に
+route する最小構成．
+
+**失敗**: `test_tsume_39te_ply24_mate15_soundness_depth25` で PV mismatch:
+
+```
+got:      5g4f 1g1h ...  (v0.24.47 と同じ false PV)
+expected: 5g6f 1g1h ...
+```
+
+**原因**: 親 MID に **tag propagation 機構が無い**ため，FILTER_DEPENDENT
+proof を子が返した後，親 MID は自分の proof を **ABSOLUTE tag** で store
+してしまう．結果として汚染が親に伝搬し `5g4f` false mate を返す．
+
+**必要な追加実装** (本 PR では未実装):
+
+- `look_up_pn_dn_with_tag` variant でのタグ取得
+- MID の child 評価ループで「FILTER_DEPENDENT 子を読んだか」を追跡
+- 親 MID の store site で追跡結果を元に tag 決定
+
+**判定**: 施策 α は soundness 維持のために **tag propagation 機構が
+必須**であることが確認された．本 PR では実装コストを鑑み **revert**．
+将来の拡張候補として記録．Strategy X 基盤のみ維持．
+
+##### v0.24.54: 施策 A-6 再評価 (採用，cliff 効果なし)
+
+Strategy X 基盤上で施策 A-6 (境界層 PNS 責任転嫁) を v0.24.51 の失敗
+原因を踏まえて再実装．
+
+**v0.24.51 の失敗原因** (再掲): per-call 100K ノード × 数百万のユニーク
+境界位置 = 数百億ノードの累積 work で無限ループ．
+
+**v0.24.54 の変更**:
+
+- **グローバル呼出数上限** `a6_boundary_pns_calls_remaining` (初期 10) を
+  導入．solver 入口でリセットし境界層 PNS 呼出毎に減算
+- **per-call 予算縮小**: 100K → 5K ノード (arena + max_nodes)
+- **total A-6 budget**: 10 calls × 5K nodes = 50K ノード (solve 全体の
+  0.5% 以下)
+- **tag 不使用**: PNS は完全証明のみを TT に書き込む既存規則で動作する
+  ため sound．PROVISIONAL tag は不要 (Strategy X 基盤は今後の拡張用に保持)
+
+**測定結果** (`test_tsume_39te_ply25_gap_diagnosis` Phase 1):
+
+| Depth | Baseline (v0.24.53) | A-6 v2 (v0.24.54) | Δ |
+|:---:|:---|:---|:---|
+| 17 | 367K Mate(15) | 367K Mate(15) | 不変 |
+| 21 | 6.02M Unknown | 5.99M Unknown | -0.5% |
+| 25 | 10.3M Unknown | 10.33M Unknown | +0.3% |
+
+**結論**: soundness は保たれるが **cliff 効果なし**．50K 予算では境界層
+の数百万ユニーク位置に対する影響が測定誤差レベル．
+
+**なぜ効果がないか**: 境界層 thrashing の本質は「各ユニーク位置が
+独立して計算を要する」ことであり，局所的な PNS 置換では根本的に改善
+しない．50K 予算を増やすと v0.24.51 の累積 work 爆発が再発する．
+
+##### 最終的な cliff の状態 (v0.24.54)
+
+| Depth | v0.24.46 baseline | v0.24.54 最新 | 変化 |
+|:---:|:---|:---|:---|
+| 17 | 367K Mate(15) | 367K Mate(15) | 不変 |
+| 21 | 6.02M Unknown | 5.99M Unknown | 実質不変 |
+| 25 | 10.3M Unknown | 10.33M Unknown | 実質不変 |
+
+**39手詰 cliff は突破されていない**．一連の試行 (施策 α, A-4, A-5,
+A-6 v1/v2, 方針 X) は cliff を動かせなかった．副次的改善としては:
+
+- **v0.24.50 施策 A-4 (DN inflation)**: depth=21 で -30% ノード，
+  depth=25 で -18% ノード (cliff 不変だが節約効果)
+- **v0.24.53 Strategy X 基盤**: proof_tag 機構，将来的施策の土台
+
+##### 得られた重要な知見
+
+**cliff の本質** (v0.24.46 診断から判明):
+
+- 境界層 thrashing: 93% のノードが `ply = depth - 2` 近傍に集中
+- 約 50% が **ply=depth-2 の単一 ply** に集中 (chain aigoma の 2 手サイクル)
+- 2.75M 〜 4.4M visits は **ユニーク (pos_key, hand) 組合せ**で，
+  chain aigoma の駒種 × 捕獲後持ち駒 variation が指数的に増殖
+
+**これまでの施策が cliff を動かせなかった理由**:
+
+1. **局所最適化の限界**: 境界層の per-node 処理を最適化しても
+   ユニーク位置数 N は変わらない．総 work は O(N)
+2. **ProvenTT 汚染回避の制約**: heuristic filter は REMAINING_INFINITE
+   不変条件と矛盾し，tag 機構だけでは親伝搬問題が未解決
+3. **PNS 委譲の限界**: PNS は同一 arena 内 re-visit 抑制が利点だが，
+   異なる境界位置間では arena 再利用できず効果ゼロ
+
+**真の cliff 突破に必要なアプローチ** (今後検討):
+
+- **unique 位置数 N の削減**: §8.5 cross_deduce の強化 (hand_gte 拡張で
+  より多くの chain drop を collapse)
+- **position-level equivalence**: 駒種変化に対する structural equivalence
+  を探索側で active 利用する
+- **CH strategic pruning**: chain aigoma の構造的性質 (forward chain
+  length) を使い depth-limit 到達前に切り上げる
+- **Strategy X 基盤を activated tag propagation 付きで発展**: 施策 α の
+  tag propagation 機構を実装し再評価
+- **並列 df-pn** (§11.6): 既に「対象外」と判定されたが，N 並列で
+  線形 speedup を検討する価値あり
+
+##### 次のアクション項目 (v0.24.54 時点)
+
+1. **Strategy X 基盤 (v0.24.53)** は採用済みで cliff に寄与しないが
+   infrastructure として維持．将来の施策で活用可能
+2. **施策 α (tag propagation 付き)** を次世代 PR として検討．
+   look_up_pn_dn_with_tag + 親 MID の tag 追跡
+3. **unique 位置数削減系 (cross_deduce 強化)** を独立施策として設計
+4. 39 手詰 cliff は現状 v0.24.33 での境界 (ply 14 Mate(25)) 維持．
+   500M 予算で ply 14 到達可能 (v0.24.33 で確認済み)
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |

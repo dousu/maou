@@ -2016,9 +2016,11 @@ impl TranspositionTable {
                 let e = &fe.entry;
                 // ProvenEntry は常に path_dependent=false (設計上，path-dep
                 // エントリは WorkingTT に格納される)．
+                // v0.24.53: remaining フィールドは meta に変更されたため
+                // proof_tag/tag_depth を出力する．
                 verbose_eprintln!(
-                    "  [P{}]: pn={} dn={} remaining={} path_dep=false hand={:?}",
-                    i, e.pn(), e.dn(), e.remaining(), &e.hand
+                    "  [P{}]: pn={} dn={} tag={} tag_depth={} path_dep=false hand={:?}",
+                    i, e.pn(), e.dn(), e.proof_tag(), e.tag_depth(), &e.hand
                 );
             }
         }
@@ -2068,6 +2070,8 @@ impl TranspositionTable {
         let mut inter_dn_buckets: [u64; 5] = [0; 5];
 
         // ProvenTT: proof / confirmed disproof のみ
+        // v0.24.53: ProvenEntry の disproof は remaining 非保持 (常に INFINITE)
+        // のため disproof_rem は常に [32] にカウントする．
         for fe in self.proven.iter() {
             if fe.pos_key == 0 { continue; }
             let e = &fe.entry;
@@ -2075,8 +2079,7 @@ impl TranspositionTable {
                 proof_count += 1;
             } else {
                 disproof_count += 1;
-                let ri = if e.remaining() == REMAINING_INFINITE { 32 } else { (e.remaining() as usize).min(31) };
-                disproof_rem[ri] += 1;
+                disproof_rem[32] += 1;
             }
         }
         // WorkingTT: intermediate + depth-limited disproof

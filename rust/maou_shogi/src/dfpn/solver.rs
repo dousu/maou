@@ -11,6 +11,7 @@ use crate::movegen;
 use crate::moves::Move;
 use crate::types::{Color, Piece, PieceType, HAND_KINDS};
 
+use super::entry::PnsNode;
 use super::tt::TranspositionTable;
 #[cfg(feature = "profile")]
 use super::profile::ProfileStats;
@@ -256,6 +257,20 @@ pub struct DfPnSolver {
     /// AND ノード訪問で複数 child に inflation が発火するとその分加算される．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_a4_inflations: u64,
+    /// TT 診断: 施策 α 再評価 (v0.24.54+) で境界層 filter が発火した MID 数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_alpha_x_filter_applied: u64,
+    /// 施策 α 再評価 (v0.24.54+, 試行は revert): 現在 MID 呼出しで chain
+    /// drop filter が適用されたかを示すフラグ (未使用だが field は残留)．
+    pub(super) alpha_x_filter_active: bool,
+    /// 施策 A-6 再評価 (v0.24.54+): 境界層 PNS 責任転嫁の残り呼出予算．
+    ///
+    /// v0.24.51 の失敗原因 (各 boundary call で 100K ノード × 膨大なユニーク
+    /// 境界数 → 数百億の累積 work) を回避するため，**グローバル呼出数制限**
+    /// として導入．solve() 入口で `A6_BOUNDARY_PNS_MAX_CALLS` (=100) に
+    /// リセットされ，`mid_via_pns_boundary` 呼出毎に 1 ずつ減算．0 になったら
+    /// 境界層 PNS 委譲を停止し通常 MID にフォールバックする．
+    pub(super) a6_boundary_pns_calls_remaining: u32,
     /// TT 診断: AND ノード MID ループで deferred_children あり & all_proved=false の回数．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_deferred_not_ready: u64,
@@ -410,6 +425,10 @@ impl DfPnSolver {
             diag_cd_entered_main: 0,
             #[cfg(feature = "tt_diag")]
             diag_a4_inflations: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_alpha_x_filter_applied: 0,
+            alpha_x_filter_active: false,
+            a6_boundary_pns_calls_remaining: 0,
             #[cfg(feature = "tt_diag")]
             diag_deferred_not_ready: 0,
             #[cfg(feature = "tt_diag")]
@@ -646,6 +665,12 @@ impl DfPnSolver {
     /// (祖先の証明に包含されるため)．table.store は pn==0 を store_proven に
     /// ルーティングするため，ProvenTT のみが影響を受け WorkingTT への
     /// 副作用はない．
+    ///
+    /// 施策 α 再評価 (v0.24.54+): `alpha_x_filter_active == true` の場合，
+    /// pn=0 (proof) の格納を `store_tagged_proof` 経由で FILTER_DEPENDENT
+    /// tag 付き (tag_depth = current_ids_depth) に route する．disproof (dn=0)
+    /// と intermediate (pn>0, dn>0) は従来通り．IDS 遷移時に
+    /// `clear_proven_disproofs_below` で汚染防止．
     #[inline]
     pub(super) fn store(
         &mut self,
@@ -850,6 +875,11 @@ impl DfPnSolver {
         self.timed_out = false;
         self.next_gc_check = 100_000;
         self.attacker = board.turn;
+        self.alpha_x_filter_active = false;
+        /// 施策 A-6 再評価: 境界層 PNS 責任転嫁の呼出数グローバル上限．
+        /// 10 回 × 5K ノード/回 = 50K ノード相当の追加予算 (solve の小さな一部)．
+        const A6_BOUNDARY_PNS_MAX_CALLS: u32 = 10;
+        self.a6_boundary_pns_calls_remaining = A6_BOUNDARY_PNS_MAX_CALLS;
         #[cfg(feature = "profile")]
         {
             self.profile_stats = ProfileStats::default();
@@ -1379,6 +1409,42 @@ impl DfPnSolver {
             profile_timed!(self, movegen_defense_ns, movegen_defense_count,
                 self.generate_defense_moves(board))
         };
+
+        // NOTE: 施策 α 再評価 (v0.24.54) の試みは soundness 違反で revert:
+        // FILTER_DEPENDENT tag を親 MID に propagate する仕組みが必要だが，
+        // 本 PR で実装していない．詳細は benchmarks.md §10.2 参照．
+        // Strategy X 基盤 (v0.24.53) は保持．
+        let save_alpha_x = self.alpha_x_filter_active;
+
+        // 施策 A-6 再評価 (v0.24.54): 境界層 PNS 責任転嫁．
+        //
+        // AND ノードで `remaining <= 2 && chain_bb_cache 非空` の場合，
+        // 通常の MID 再帰の代わりに小規模 PNS sub-solve を起動する．PNS の
+        // 結果は完全証明/確定反証のみ TT に store されるため ABSOLUTE 扱いで
+        // 汚染リスクなし．
+        //
+        // v0.24.51 の失敗原因 (per-call 100K × N_boundary = 数百億 work) を
+        // 回避するため，**グローバル呼出数制限** (`a6_boundary_pns_calls_remaining`)
+        // を導入．予算内の限定的な境界層 PNS 委譲のみ許可する．
+        //
+        // 呼出し条件:
+        // - AND ノード (`!or_node`)
+        // - `remaining <= 2`
+        // - `chain_bb_cache` 非空 (chain aigoma 検出)
+        // - `a6_boundary_pns_calls_remaining > 0` (予算あり)
+        if !or_node
+            && remaining <= 2
+            && !self.chain_bb_cache.is_empty()
+            && self.a6_boundary_pns_calls_remaining > 0
+        {
+            self.a6_boundary_pns_calls_remaining -= 1;
+            let _ = moves; // PNS が独自に生成するため未使用
+            self.mid_via_pns_boundary(board);
+            // path_len 操作は不要 (push 前の early return, v0.24.51 と同構造)．
+            // save_alpha_x restore は流れない経路なので明示復元は不要
+            // (save_alpha_x は local var だが self.alpha_x_filter_active は未変更).
+            return;
+        }
 
         // Dynamic Move Ordering: TT Best Move + Killer Moves
         // 前回の探索で最善だった手を優先的に展開し，カットオフを早める．
@@ -1987,6 +2053,7 @@ impl DfPnSolver {
             }
             self.store(pos_key, p, 0, INF, REMAINING_INFINITE, pos_key as u32);
             debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+            self.alpha_x_filter_active = save_alpha_x;
             self.path_len -= 1;
             return;
         }
@@ -2128,6 +2195,7 @@ impl DfPnSolver {
                 prev_cdn = post_cdn;
             }
             debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+            self.alpha_x_filter_active = save_alpha_x;
             self.path_len -= 1;
             #[cfg(feature = "tt_diag")]
             { self.diag_single_child_exits += 1; }
@@ -2340,6 +2408,7 @@ impl DfPnSolver {
 
                 if proved_or_disproved {
                     debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+                    self.alpha_x_filter_active = save_alpha_x;
                     self.path_len -= 1;
                     return;
                 }
@@ -2386,6 +2455,7 @@ impl DfPnSolver {
                         );
                     }
                     debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+                    self.alpha_x_filter_active = save_alpha_x;
                     self.path_len -= 1;
                     return;
                 }
@@ -2617,6 +2687,7 @@ impl DfPnSolver {
                     #[cfg(feature = "tt_diag")]
                     { self.diag_loop_break_proved += 1; }
                     debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+                    self.alpha_x_filter_active = save_alpha_x;
                     self.path_len -= 1;
                     return;
                 }
@@ -2665,6 +2736,7 @@ impl DfPnSolver {
                         REMAINING_INFINITE, pos_key as u32,
                     );
                     debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+                    self.alpha_x_filter_active = save_alpha_x;
                     self.path_len -= 1;
                     return;
                 }
@@ -3185,7 +3257,64 @@ impl DfPnSolver {
 
         // パスから除去
         debug_assert_eq!(self.path[self.path_len - 1], full_hash);
+        self.alpha_x_filter_active = save_alpha_x;
         self.path_len -= 1;
+    }
+
+    /// 施策 A-6 再評価 (v0.24.54): 境界層 PNS 責任転嫁．
+    ///
+    /// MID の AND 境界層 (`remaining <= 2 && chain_bb_cache 非空`) で呼び出され，
+    /// 通常の MID 再帰の代わりに **小規模 arena での PNS** を起動する．
+    ///
+    /// # v0.24.51 失敗からの改善
+    ///
+    /// v0.24.51 では per-call 100K ノード予算 × 数百万のユニーク境界位置 =
+    /// 数百億ノードの累積 work で無限ループ状態に陥った．v0.24.54 では:
+    ///
+    /// - グローバル呼出数上限 (`a6_boundary_pns_calls_remaining`, 初期 100) で
+    ///   総呼出回数を制限 (呼出側で実施済み)
+    /// - per-call 予算を 100K → 10K ノードに縮小
+    /// - total work ≈ 100 calls × 10K nodes = 1M ノード (有限)
+    ///
+    /// # Soundness
+    ///
+    /// PNS の `pns_store_to_tt` は完全証明 (pn=0) / 確定反証 (dn=0) のみを
+    /// TT に書き込む既存の validated な規則で動作する．PNS の結果は
+    /// ABSOLUTE tag として扱われ，Strategy X の FILTER_DEPENDENT 系統とは
+    /// 独立 (PNS は filter を適用しないため常に sound)．
+    ///
+    /// # 動作
+    ///
+    /// - 専用 10K arena + `self.max_nodes` 一時 override
+    /// - `pns_main_with_arena(board, &mut arena)` を呼び出す．PNS root の
+    ///   `or_node` は `board.turn == self.attacker` から動的決定される
+    ///   (pns.rs の v0.24.51 変更が残存．boundary = 常に AND root のはず)
+    /// - PNS 完了後 solver state を restore
+    /// - 結果は TT 経由で親 MID に伝搬 (通常の look_up_pn_dn)
+    pub(super) fn mid_via_pns_boundary(&mut self, board: &mut Board) {
+        /// 境界層 PNS arena の最大ノード数 (v0.24.51 の 100K から縮小)．
+        const BOUNDARY_ARENA_NODES: usize = 5_000;
+        /// 境界層 PNS ノード予算 (solver.max_nodes の一時 override)．
+        const BOUNDARY_NODE_BUDGET: u64 = 5_000;
+
+        // solver state を save
+        let saved_max_nodes = self.max_nodes;
+
+        // PNS 予算を境界用に制限
+        self.max_nodes = self
+            .nodes_searched
+            .saturating_add(BOUNDARY_NODE_BUDGET);
+
+        // 専用 arena を allocate．Frontier Variant とは独立．
+        let mut arena: Vec<PnsNode> =
+            Vec::with_capacity(BOUNDARY_ARENA_NODES);
+
+        // PNS 起動．root の or_node は pns.rs の v0.24.51 変更により
+        // board.turn から動的決定される．境界層では常に AND root．
+        let _pv = self.pns_main_with_arena(board, &mut arena);
+
+        // solver state を restore
+        self.max_nodes = saved_max_nodes;
     }
 
     /// 既に生成済みの王手リストを使って1手詰め判定する．
