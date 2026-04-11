@@ -1753,6 +1753,12 @@ impl DfPnSolver {
 
             // Zero-proof early skip: 2 サイクル連続で PNS が proof=0 なら
             // PNS フェーズをスキップし，MID に全予算を集中する．
+            //
+            // 注: これは一方向ラッチである．一度スキップ状態に入ると
+            // `consecutive_zero_proofs` は更新されないため，当該 Frontier Variant
+            // の残りのイテレーションで PNS は再起動されない．MID が新たな進捗を
+            // 出しても PNS は実行されない設計選択であり，PNS が非生産的と
+            // 判定された後は MID に全予算を集中することを優先する．
             let skip_pns = consecutive_zero_proofs >= 2;
 
             if !skip_pns {

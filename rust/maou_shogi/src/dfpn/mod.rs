@@ -90,12 +90,12 @@ const PN_UNIT: u32 = 16;
 /// これにより df-pn の自然な閾値制御で king move → drop の順序が実現される．
 const INTERPOSE_DN_BIAS: u32 = 8 * PN_UNIT;
 
-/// MID ループの dn 閾値フロア(スラッシング防止)．
-///
-/// 子ノードの dn が小さすぎると MID ループが閾値超過で即座に返り，
-/// 進捗のない空転が発生する．dn_threshold を最低 DN_FLOOR まで引き上げることで
-/// 子ノードに十分な探索予算を確保し，スラッシングを防止する．
-const DN_FLOOR: u32 = 100 * PN_UNIT;
+// MID ループの dn 閾値フロア(スラッシング防止)は v0.24.41 で
+// `DfPnSolver::param_dn_floor_mult` (デフォルト 100) に移行した．
+// 旧 `const DN_FLOOR: u32 = 100 * PN_UNIT;` は削除．
+// 子ノードの dn が小さすぎると MID ループが閾値超過で即座に返り，
+// 進捗のない空転が発生するため，dn_threshold を最低
+// `param_dn_floor_mult * PN_UNIT` まで引き上げる．
 
 /// TCA (Threshold Controlling Algorithm, Kishimoto & Müller 2008; Kishimoto 2010)
 /// 過小評価対策．

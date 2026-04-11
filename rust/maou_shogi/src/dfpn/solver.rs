@@ -18,7 +18,7 @@ use super::{
     adjust_hand_for_move, edge_cost_and, edge_cost_or,
     position_key, propagate_nm_remaining, push_move, snda_dedup,
     CheckCache,
-    DEEP_DFPN_R, DN_FLOOR, EPSILON_DENOM_ADAPTIVE, INF, INTERPOSE_DN_BIAS, MAX_MOVES, PN_UNIT,
+    DEEP_DFPN_R, EPSILON_DENOM_ADAPTIVE, INF, INTERPOSE_DN_BIAS, MAX_MOVES, PN_UNIT,
     REMAINING_INFINITE, STAGNATION_LIMIT, TCA_EXTEND_DENOM, ZERO_PROGRESS_LIMIT,
 };
 
@@ -144,8 +144,6 @@ pub struct DfPnSolver {
     pub(super) param_pn_floor_denom: u32,
     /// DN_FLOOR の PN_UNIT 倍率(デフォルト 100: DN_FLOOR = 100 * PN_UNIT)．
     pub(super) param_dn_floor_mult: u32,
-    /// INTERPOSE_DN_BIAS の PN_UNIT 倍率(デフォルト 8)．
-    pub(super) param_interpose_dn_mult: u32,
     /// Deep df-pn の深さ係数 R(デフォルト 4)．
     pub(super) param_deep_dfpn_r: u32,
     /// 最終 IDS depth (solve 時の depth)．
@@ -327,7 +325,6 @@ impl DfPnSolver {
             param_pn_floor_numer: 2,
             param_pn_floor_denom: 3,
             param_dn_floor_mult: 100,
-            param_interpose_dn_mult: 8,
             param_deep_dfpn_r: DEEP_DFPN_R,
             saved_depth_for_epsilon: 0,
             killer_table: Vec::new(),
