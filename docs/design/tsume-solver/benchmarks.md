@@ -1104,6 +1104,161 @@ GC Phase 2 は ProvenTT 充填率が 70% を超過した時にのみ発火する
 120M backward 解析では到達しないため，no-op バグは挙動に影響していなかった．
 ただし長期実行や大予算 (500M+) でのバグ顕在化を防ぐため修正は必須．
 
+#### v0.24.44 ply25 gap 診断と施策優先順位の組み替え
+
+v0.24.44 で `test_tsume_39te_ply25_gap_diagnosis` を追加し，「個別サブ問題は
+200K 以内で解けるのに統合探索は指数爆発する」という §10.2 冒頭の観察に対し，
+verbose+tt_diag+profile の全カウンタを使った定量診断を行った．
+ログは `/tmp/tsume_39te_ply25_gap_diagnosis.log`．
+
+**診断構成 (3 フェーズ):**
+
+- **Phase 0a**: ply 25 AND node を直接 solve (depth=15, 5M budget)．
+  DfPn が root を OR として扱うため attacker 反転して NoMate を返し不成立．
+  (設計上の制約として記録)
+- **Phase 0b**: ply 25 AND node の 23 守備応手を個別に fresh solver で solve
+  (各 depth=14, 500K budget, 15s timeout)．個別総和を計測．
+- **Phase 1**: ply 24 OR node (5g6f を打つ前) を 3 種の depth (17, 21, 25) で
+  solve し，depth inflation による counter 変化を観測．
+
+**Phase 0b 実測結果 (v0.24.44, 500K budget / 15s per defender):**
+
+| カテゴリ | 応手 | ノード範囲 | 結果 |
+|---------|------|-----------|------|
+| 即詰み (P/L/N/S/G/B\*2g) | 6 手 | 各 1 | Mate(1) |
+| 簡単な合駒 (1g1h, P\*3g, B\*3g, N\*3g) | 4 手 | 38〜586 | Mate(11-13) |
+| 中程度 (P\*4g〜N\*5g, 1g1f) | 6 手 | 322〜32,751 | Mate(11-15) |
+| **Unknown (解けず)** | **L\*6g, B\*6g, B\*7g** | **7,167〜8,703** | **timeout** |
+| 不詰 | P\*7g, N\*7g | 52,298〜122,029 | NoMate |
+| 重い | N\*6g | 133,575 | Mate(11) |
+
+個別合計ノード数: **405,821** (Unknown 3 件含む)．
+
+**重要**: v0.22.0 時点の「23 応手すべて 200K 以内で解ける，合計 1.5M」という
+記述は v0.24.44 では成立しない．**3 応手 (L\*6g, B\*6g, B\*7g) が 500K/15s では
+解けず Unknown** となる．benchmarks.md 冒頭 (§10.2 先頭) の個別サブ問題の難度
+記述は現状の measurement に基づいて再評価が必要である．
+
+**Phase 1 実測結果 (v0.24.44, ply 24 OR node depth inflation):**
+
+| Depth | Nodes | Time | 結果 | proven | disproven | **intermediate** | pns\_cycles |
+|:-----:|------:|-----:|:----:|-------:|----------:|----------------:|:-----------:|
+| **17** | **367,331** | 54.5s | **Mate(15)** ✓ | 8,121 | 143,053 | **75,358** | 1 |
+| 21 | 6,021,120 | 120.7s | Unknown | 95,311 | 84,300 | **0** | 2 |
+| 25 | 10,303,488 | 150.7s | Unknown | 229,487 | 159,176 | **0** | 3 |
+
+v0.24.0 の「depth 21 = 4.1M Mate(21), depth 23 = 50M Unknown」に対し，
+v0.24.44 では **cliff が depth 19〜21 に前進**している．depth=17 は同等
+(367K Mate(15)) だが，depth=21 以降は大幅に悪化．
+
+**診断結果 — gap の真の原因 (4 層構造):**
+
+| 層 | 現象 | 診断データ |
+|:---:|------|-----------|
+| I | **IDS depth 切替時に intermediate エントリが全消去され中間進捗がリセット** | depth=17 で 75K intermediate → depth=21 で 0 |
+| II | **`cross_deduce` と `prefilter` が合駒チェーンでほぼ発火しない** | cross\_deduce=0 @depth=17, prefilter\_hits=17〜45 |
+| III | 結果として合駒チェーンの不詰証明が毎 IDS step でゼロから再構築される | disproven=143K→84K→159K (不安定) |
+| IV | 個別サブ問題自体に想定より難しいものがある | 3/23 が 500K budget で Unknown |
+
+**合駒最適化カウンタ遷移 (depth 依存):**
+
+| カウンタ | depth=17 | depth=21 | depth=25 | 評価 |
+|:---|---:|---:|---:|:---|
+| `prefilter_hits` (§8.4) | 45 | 45 | 17 | 高 depth で減少 |
+| `cross_deduce_hits` (§8.5) | **0** | 38 | 132 | **depth=17 でも 0** |
+| `deferred_already_proven` | 4 | 0 | 7 | ほぼゼロ |
+| `capture_tt_hits` (§5.4) | 20 | 0 | 0 | **depth≥21 で完全停止** |
+| `refut_tt_hits` | 0 | 45,889 | 15 | depth=21 で異常スパイク |
+
+特に重要な発見:
+
+- **`cross_deduce_hits = 0` が depth=17 でも観測**: 同一マス駒種横断の
+  証明転用 (§8.5) が実質機能していない．優先度の高い修復対象．
+- **`capture_tt_hits = 0` at depth≥21**: インライン詰み検出で TT 内の
+  proof を使う経路が，intermediate=0 状態では完全不能．
+- **`refut_tt_hits` が depth=21 で 45,889 → depth=25 で 15 に急落**:
+  depth=21 だけ REMAINING\_INFINITE disproof が残って refut cache が
+  機能するが，depth=25 では消失．非常に不安定な挙動．
+
+**MID プロファイル (全 depth 共通の支配項):**
+
+`child_init` が 70-71% の CPU 時間を占める．内訳 `ci_do/undo_move` 7.5%,
+`ci_inline` 3-6%, `ci_resolve` 5-6%．残りは TT lookup + 初期化ロジック．
+
+##### 施策優先順位の組み替え
+
+診断結果を踏まえ，「今後の方向性」(v0.24.33 時点) の優先順位を組み替える．
+従来の提案で「サブ問題ウォームアップ」が最優先だったが，Phase 0b の実測で
+**個別サブ問題の 3 件が 500K budget で Unknown** となり，ウォームアップ
+単体では不十分であることが判明した．また intermediate=0 問題が
+全施策の効果を阻害していることが明らかになった．
+
+**最優先 (施策 I): IDS depth 切替時の intermediate 選択的保持 (新規)**
+
+現在の `clear_working()` は IDS depth 昇格時に WorkingTT を全消去するため，
+depth=17 で積み上げた 75K intermediate エントリが depth=19 以降で全て失われる．
+これにより合駒チェーンの不詰部分証明が深い IDS step で再構築を強いられる．
+
+- 実装方針: 課題 F (v0.24.38) の `clear_proven_disproofs_below(min_depth)` の
+  **intermediate 版** を導入し，「現在 IDS depth に近い intermediate」の
+  一部を次の IDS step に持ち越す
+- 保持基準の候補: `remaining >= (next_ids_depth - 4)` や `amount >= threshold`
+- soundness 検証: intermediate は pn>0, dn>0 の暫定値なので「次の step で
+  再計算される」前提の保持．path\_dependent フラグは必須チェック
+- 期待効果: Phase 1 の depth=21 で 6M Unknown → 数倍の改善見込み
+- リスク: 保持した intermediate が次 step の閾値伝搬を阻害する可能性
+  (§6.6.3 の amount ベース置換と相互作用)
+
+**高優先 (施策 II): cross\_deduce の修復と駒種横断 disproof 共有の実装**
+
+Phase 1 で **`cross_deduce_hits = 0` が depth=17 で観測** された事実は，
+§8.5「同一マス証明転用」が実質的に機能していないことを示す．
+これは 従来プロポーザル §「駒種横断 disproof 共有」の前提を覆す発見であり，
+まず **既存の cross\_deduce 実装がなぜ 0 ヒットなのか** の原因究明が先決．
+
+- Step 1: `cross_deduce_children` の呼び出し経路を確認し，発火条件
+  (deferred\_children の更新順序など) を検証
+- Step 2: 修復後，proof 転用に加えて **disproof 転用版 (hand\_lte 方向)**
+  を実装．Zobrist XOR 差分近傍走査 (§6.6.4) を駒種差分に拡張
+- 期待効果: 合駒チェーンの disproven エントリ (Phase 1 で 84K〜159K) の
+  大部分が共有可能になり，disproof 生成コストを 数分の一 に削減
+
+**中優先 (施策 III): IDS 段階刻みの細分化と Frontier 早期発火**
+
+元の施策 4 を維持．施策 I の intermediate 保持と組み合わせることで
+相乗効果がある．v0.24.40 の「IDS depth 32+ で +4 刻み」を更に細分化し，
+22 → 24 → 26 → 28 → 30 → 32 → 35 → 38 → 41 とする．
+
+**再評価 (施策 IV): サブ問題ウォームアップは単体不可，施策 I と統合する**
+
+当初の最優先案 (サブ問題を個別解決してから統合探索) は，Phase 0b で
+**個別サブ問題の 3 件が 500K で Unknown** となる事実から，単体では
+効果が期待できない．ただし施策 I (intermediate 保持) と組み合わせれば，
+ウォームアップで生成した intermediate が IDS step 間で保持され，
+統合探索で有効に再利用できる可能性がある．単独プロジェクトとしては
+降格し，施策 I の検証フェーズで併せて評価する．
+
+**据え置き (施策 V): Aigoma 局所 Mini-solver**
+
+元の施策 3．depth 非依存の独立 solver で合駒チェーンを local 解決する
+アプローチは魅力的だが，施策 I-II の効果を見極めてから判断する．
+
+**不採用 (元施策 6): pattern disproof cache**
+
+Phase 1 の disproven エントリ数 (84K〜229K) が proven (95K〜229K) と同程度
+であることから，「pattern cache で多くを共有」の前提が成立しない可能性が
+高い．TT ベースの施策 II (駒種横断 disproof 共有) の方が既存インフラを
+活用できる．
+
+##### 次のアクション項目
+
+1. **`cross_deduce_hits = 0` の原因調査** (`solver.rs:3559` 付近)．
+   最も少ないコストで大きな知見が得られる可能性が高い
+2. `clear_working()` / `retain_proofs_only()` の挙動確認と intermediate
+   選択的保持の soundness 分析 (施策 I の実装準備)
+3. L\*6g / B\*6g / B\*7g の個別再計測 (depth=14 設定が不適切かの確認)．
+   Phase 0b の設定バグの可能性を排除する
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
