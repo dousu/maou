@@ -18,7 +18,7 @@ use super::{
     adjust_hand_for_move, edge_cost_and, edge_cost_or,
     position_key, propagate_nm_remaining, push_move, snda_dedup,
     CheckCache,
-    DEEP_DFPN_R, DN_FLOOR, INF, INTERPOSE_DN_BIAS, MAX_MOVES, PN_UNIT,
+    DEEP_DFPN_R, EPSILON_DENOM_ADAPTIVE, INF, INTERPOSE_DN_BIAS, MAX_MOVES, PN_UNIT,
     REMAINING_INFINITE, STAGNATION_LIMIT, TCA_EXTEND_DENOM, ZERO_PROGRESS_LIMIT,
 };
 
@@ -131,6 +131,25 @@ pub struct DfPnSolver {
     pub(super) next_gc_check: u64,
     /// overflow GC のクールダウン(次に GC を許可するノード数)．
     next_overflow_gc: u64,
+    // === チューニング可能パラメータ ===
+    /// 1+ε の epsilon 除数．
+    ///
+    /// - `EPSILON_DENOM_ADAPTIVE` (0): depth-adaptive モード．
+    ///   `saved_depth_for_epsilon >= 19` なら 2，それ以外は 3．
+    /// - 正の値: その値を固定除数として使用(テスト用)．
+    pub(super) param_epsilon_denom: u32,
+    /// AND pn_floor の分子(デフォルト 2: pn_floor = eff_pn_th * 2/3)．
+    pub(super) param_pn_floor_numer: u32,
+    /// AND pn_floor の分母(デフォルト 3)．
+    pub(super) param_pn_floor_denom: u32,
+    /// DN_FLOOR の PN_UNIT 倍率(デフォルト 100: DN_FLOOR = 100 * PN_UNIT)．
+    pub(super) param_dn_floor_mult: u32,
+    /// Deep df-pn の深さ係数 R(デフォルト 4)．
+    pub(super) param_deep_dfpn_r: u32,
+    /// 最終 IDS depth (solve 時の depth)．
+    /// IDS 中に self.depth が変化するため，epsilon の depth-adaptive 判定に
+    /// 最終 depth を保持する．mid_fallback の入口で設定される．
+    pub(super) saved_depth_for_epsilon: u32,
     /// Killer Move テーブル(OR ノード用)．
     ///
     /// ply ごとに最大 2 つの killer move(Move16)を保持する．
@@ -141,6 +160,11 @@ pub struct DfPnSolver {
     /// プロファイリング統計情報(`profile` feature 有効時のみ)．
     #[cfg(feature = "profile")]
     pub(super) profile_stats: ProfileStats,
+    /// 直前の PNS サイクルで TT に格納された proof (pn=0) エントリ数．
+    ///
+    /// `pns_main_with_arena` の出口で `pns_store_to_tt` の戻り値が格納される．
+    /// Frontier Variant の zero-proof early skip 判定に使用する．
+    pub(super) last_pns_proof_stores: u64,
     /// 診断: PNS 空回り(pn/dn 不変)イテレーション数．
     ///
     /// 500M 予算テスト等で予算が有効に使われているかを確認する．
@@ -152,6 +176,22 @@ pub struct DfPnSolver {
     /// 診断: PNS pn/dn 変化があったイテレーション数．
     #[cfg(feature = "verbose")]
     pub(super) dbg_pns_changed_iters: u64,
+    /// 診断: PNS が TT に格納した新規 proof (pn=0) エントリ数(累計)．
+    ///
+    /// `pns_store_to_tt` で実際に TT に書き込まれた証明ノード数．
+    /// MID がこれらの proof を TT ヒットで再利用できるため，
+    /// PNS の実効的な生産性を測定する指標となる．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_pns_proof_stores: u64,
+    /// 診断: PNS サイクルごとのアリーナ新規ノード数(累計)．
+    ///
+    /// 各 PNS サイクルで展開された新規ノード数．アリーナが成長して
+    /// いなければ PNS は既知領域を走査しているだけであり，真の空振りを示す．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_pns_arena_growth: u64,
+    /// 診断: Frontier Variant の PNS サイクル数(累計)．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_pns_cycles: u64,
     /// 診断: `refutable_check_with_cache` の TT 経路ヒット数．
     #[cfg(feature = "verbose")]
     pub(super) dbg_refut_tt_hits: u64,
@@ -281,6 +321,12 @@ impl DfPnSolver {
             tt_gc_threshold: 0,
             next_gc_check: 0,
             next_overflow_gc: 0,
+            param_epsilon_denom: EPSILON_DENOM_ADAPTIVE,
+            param_pn_floor_numer: 2,
+            param_pn_floor_denom: 3,
+            param_dn_floor_mult: 100,
+            param_deep_dfpn_r: DEEP_DFPN_R,
+            saved_depth_for_epsilon: 0,
             killer_table: Vec::new(),
             table: TranspositionTable::new(),
             nodes_searched: 0,
@@ -299,10 +345,17 @@ impl DfPnSolver {
             attacker: Color::Black,
             #[cfg(feature = "profile")]
             profile_stats: ProfileStats::default(),
+            last_pns_proof_stores: 0,
             #[cfg(feature = "verbose")]
             dbg_pns_spin_iters: 0,
             #[cfg(feature = "verbose")]
             dbg_pns_changed_iters: 0,
+            #[cfg(feature = "verbose")]
+            dbg_pns_proof_stores: 0,
+            #[cfg(feature = "verbose")]
+            dbg_pns_arena_growth: 0,
+            #[cfg(feature = "verbose")]
+            dbg_pns_cycles: 0,
             #[cfg(feature = "verbose")]
             dbg_refut_tt_hits: 0,
             #[cfg(feature = "verbose")]
@@ -363,6 +416,25 @@ impl DfPnSolver {
             diag_single_child_exits: 0,
             #[cfg(feature = "tt_diag")]
             diag_node_limit_exits: 0,
+        }
+    }
+
+    /// 1+ε の実効 epsilon 除数を返す．
+    ///
+    /// `param_epsilon_denom` が `EPSILON_DENOM_ADAPTIVE` (0) の場合は
+    /// `saved_depth_for_epsilon` に基づいて depth-adaptive に決定する．
+    /// 正の値が設定されている場合はその値をそのまま返す(テスト用)．
+    #[inline(always)]
+    fn effective_eps_denom(&self) -> u32 {
+        if self.param_epsilon_denom != EPSILON_DENOM_ADAPTIVE {
+            self.param_epsilon_denom
+        } else {
+            let d = if self.saved_depth_for_epsilon > 0 {
+                self.saved_depth_for_epsilon
+            } else {
+                self.depth
+            };
+            if d >= 19 { 2 } else { 3 }
         }
     }
 
@@ -488,7 +560,7 @@ impl DfPnSolver {
             let ply = (self.depth as u32).saturating_sub(remaining as u32);
             let half_depth = self.depth / 2;
             if ply > half_depth {
-                let biased_pn = PN_UNIT + (ply - half_depth) / DEEP_DFPN_R * PN_UNIT;
+                let biased_pn = PN_UNIT + (ply - half_depth) / self.param_deep_dfpn_r * PN_UNIT;
                 (biased_pn, PN_UNIT, 0)
             } else {
                 (PN_UNIT, PN_UNIT, 0)
@@ -828,7 +900,14 @@ impl DfPnSolver {
             // 深い探索では **探索側のノード予算が先に尽きる**ので PV 抽出
             // が律速要因になることはない．ply 20 は v0.24.27 でも 120M
             // ノード予算 + 1800s timeout で Unknown だった．
-            const PV_VISIT_BUDGET: u64 = 10_000_000;
+            // PV 抽出の visit 予算．探索ノード数に応じてスケーリングする．
+            //
+            // 固定 10M visits では深い探索(97M+ ノード)後に AND ノードの
+            // 全 defender 評価で予算超過し MateNoPV が発生する．
+            // 探索ノード数の 1/4 を基準に 10M〜50M の範囲で動的に設定する．
+            // 上限 50M は PV 抽出の過大な時間消費を防止する(24M budget で
+            // PV 抽出に 11 分+ かかるケースを回避)．
+            let pv_visit_budget: u64 = (self.nodes_searched / 4).max(10_000_000).min(50_000_000);
 
             // PV 候補とその抽出が完全だったかを集める．
             // pv_extraction_incomplete フラグを extract_pv_limited 呼び出し
@@ -840,7 +919,7 @@ impl DfPnSolver {
                     self.depth = pv.len() as u32;
                     self.complete_or_proofs(board);
                     self.depth = saved_depth;
-                    let final_moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
+                    let final_moves = self.extract_pv_limited(board, pv_visit_budget);
                     let extraction_complete = !self.pv_extraction_incomplete;
                     let moves = if !final_moves.is_empty()
                         && final_moves.len() <= pv.len()
@@ -860,7 +939,7 @@ impl DfPnSolver {
                 // アリーナ PV が取れなかった場合は TT ベースにフォールバック
                 self.complete_or_proofs(board);
 
-                let moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
+                let moves = self.extract_pv_limited(board, pv_visit_budget);
                 let extraction_complete = !self.pv_extraction_incomplete;
                 if moves.is_empty() {
                     return TsumeResult::CheckmateNoPv {
@@ -872,7 +951,7 @@ impl DfPnSolver {
                     self.depth = moves.len() as u32;
                     self.complete_or_proofs(board);
                     self.depth = saved_depth;
-                    let final_moves = self.extract_pv_limited(board, PV_VISIT_BUDGET);
+                    let final_moves = self.extract_pv_limited(board, pv_visit_budget);
                     let final_complete = extraction_complete && !self.pv_extraction_incomplete;
                     let moves = if !final_moves.is_empty()
                         && final_moves.len() <= moves.len()
@@ -2701,7 +2780,7 @@ impl DfPnSolver {
                 let child_dn_th = eff_dn_th
                     .saturating_sub(current_dn)
                     .saturating_add(best_pn_dn.1)
-                    .max(DN_FLOOR)
+                    .max(self.param_dn_floor_mult * PN_UNIT)
                     .min(INF - 1);
                 // OR ノード pn 閾値: 1+ε trick (sibling_based)．
                 //
@@ -2710,7 +2789,7 @@ impl DfPnSolver {
                 // 自然精度 epsilon (§10.2 方針A): divide-at-unit-scale を外し，
                 // 除算の自然精度を活かす．second_best=3S のとき epsilon=28，
                 // sibling_based=76(4.75S) となり ~19%/level の閾値余裕を確保する．
-                let epsilon_or = second_best / 3 + PN_UNIT;
+                let epsilon_or = second_best / self.effective_eps_denom() + PN_UNIT;
                 let sibling_based_or = second_best.saturating_add(epsilon_or);
                 let child_pn_th = sibling_based_or.max(2 * PN_UNIT).min(INF - 1);
                 (child_pn_th, child_dn_th)
@@ -2746,9 +2825,11 @@ impl DfPnSolver {
                 // 閾値減衰を (1/2)^N → (2/3)^N に改善する．
                 // 6 AND レベルで (2/3)^6 ≈ 0.088 vs (1/2)^6 ≈ 0.016 → 5.6倍．
                 // u64 に昇格して乗算オーバーフローを防止する．
-                let pn_floor_raw = ((eff_pn_th as u64 * 2 / 3) as u32).max(PN_UNIT);
+                let pn_floor_raw = ((eff_pn_th as u64 * self.param_pn_floor_numer as u64
+                    / self.param_pn_floor_denom as u64) as u32).max(PN_UNIT);
+                let dn_floor_param = self.param_dn_floor_mult * PN_UNIT;
                 let pn_floor = if chain_king_sq.is_some() {
-                    DN_FLOOR.max(pn_floor_raw)
+                    dn_floor_param.max(pn_floor_raw)
                 } else {
                     pn_floor_raw
                 };
@@ -2763,8 +2844,8 @@ impl DfPnSolver {
                     .max(pn_floor)
                     .max(progress_floor)
                     .min(INF - 1);
-                // 自然精度 epsilon (§10.2 方針A): OR ノードと同じく自然精度．
-                let epsilon = second_best / 3 + PN_UNIT;
+                // 自然精度 epsilon (§10.2 方針A): OR ノードと同じく depth-adaptive．
+                let epsilon = second_best / self.effective_eps_denom() + PN_UNIT;
                 let sibling_based = second_best.saturating_add(epsilon);
                 // AND ノード dn 閾値の最低保証．
                 //
@@ -2777,10 +2858,10 @@ impl DfPnSolver {
                 // キャップ(eff_dn_th.min(...))を外して dn_floor を保証し，
                 // チェーン末端の証明に十分な探索予算を確保する(§3 最適化)．
                 let child_dn_th = if chain_king_sq.is_some() {
-                    sibling_based.max(DN_FLOOR).min(INF - 1)
+                    sibling_based.max(dn_floor_param).min(INF - 1)
                 } else {
                     eff_dn_th
-                        .min(sibling_based.max(DN_FLOOR))
+                        .min(sibling_based.max(dn_floor_param))
                         .min(INF - 1)
                 };
                 (child_pn_th, child_dn_th)

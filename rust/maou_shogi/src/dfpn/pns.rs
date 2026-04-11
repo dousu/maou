@@ -1370,6 +1370,7 @@ impl DfPnSolver {
         self.diag_root_pk = pk;
         self.diag_root_hand = att_hand;
         let saved_depth = self.depth;
+        self.saved_depth_for_epsilon = saved_depth;
         let mut ids_depth: u32 = 2;
         let total_max_nodes = self.max_nodes;
         // PNS で蓄積された中間エントリ(pn>0, dn>0)を除去し，
@@ -1411,6 +1412,7 @@ impl DfPnSolver {
                 ids_depth = saved_depth;
             }
             self.depth = ids_depth;
+            self.table.current_ids_depth = ids_depth;
             self.path_len = 0;
             let remaining = ids_depth as u16;
             let (root_pn, _, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
@@ -1663,27 +1665,43 @@ impl DfPnSolver {
             let time_exceeded = ids_depth < saved_depth
                 && remaining_time < self.timeout.as_secs_f64() * 0.25;
 
-            // IDS 反復間でのクリーンアップ:
-            // 1. WorkingTT を全クリア(構造的不詰エントリ + path-dep disproof の汚染防止)
-            // 2. ProvenTT の confirmed disproof を除去(NoMate バグ対策 §6.6.3)
+            // IDS 反復間でのクリーンアップ + depth 進行:
+            // WorkingTT を全クリア(構造的不詰エントリ + path-dep disproof の汚染防止)
             self.table.clear_working();
-            self.table.clear_proven_disproofs();
 
             if stagnated || time_exceeded {
                 ids_depth = saved_depth;
             } else {
                 // 深さ進行:
-                // saved_depth > 31 の場合: 段階的 IDS (2→4→8→16→32→41)
-                //   深い問題では段階的に TT を構築して探索効率を上げる
+                // saved_depth > 31 の場合: 段階的 IDS
+                //   depth ≤ 32: 倍増 (2→4→8→16→32)
+                //   depth > 32: +4 刻み (32→36→40→41)
+                //   深い depth での TT ウォームアップを段階的に行い，
+                //   プレフィルタ (§8.4) のヒット率を向上させる．
+                //   v0.24.38 の選択的 disproof 保持と相乗効果:
+                //   中間ステップの NM disproof が次のステップに引き継がれる．
                 // saved_depth <= 31 の場合: 直接ジャンプ (2→4→31)
                 //   浅い問題では中間深さの探索が無駄になるため
-                let next = ids_depth.saturating_mul(2).max(ids_depth + 2);
+                let next = if ids_depth >= 32 {
+                    // 32 以降は +4 刻みで段階的に進行
+                    ids_depth + 4
+                } else {
+                    ids_depth.saturating_mul(2).max(ids_depth + 2)
+                };
                 if saved_depth <= 31 && next > 4 && next < saved_depth {
                     ids_depth = saved_depth;
                 } else {
                     ids_depth = next.min(saved_depth);
                 }
             }
+
+            // ProvenTT の浅い confirmed disproof を選択的に除去:
+            // 次の IDS depth の半分未満で確認された disproof のみ除去し，
+            // それ以上の depth で確認された disproof は保持する．
+            // 例: IDS 2→4→8→16→32→41 で depth 8→16 に進行する場合，
+            // threshold=8 で depth<8 (depth=2,4) の disproof を除去，
+            // depth=8 の disproof は保持する．
+            self.table.clear_proven_disproofs_below(ids_depth / 2);
 
             prev_root_pn = root_pn2;
             prev_root_dn = root_dn2;
@@ -1718,6 +1736,10 @@ impl DfPnSolver {
 
         let mut frontier_iters = 0u32;
         const MAX_FRONTIER_ITERS: u32 = 50;
+        // Zero-proof early skip: PNS が連続して proof=0 を返した場合，
+        // PNS サイクルをスキップして MID に全予算を回す．
+        // 1 回だけ proof=0 は偶然の可能性があるため 2 連続で判定する．
+        let mut consecutive_zero_proofs: u32 = 0;
 
         while frontier_iters < MAX_FRONTIER_ITERS
             && self.nodes_searched < total_max_nodes
@@ -1729,19 +1751,78 @@ impl DfPnSolver {
                 break;
             }
 
-            // PNS フェーズ: TT を更新しフロンティアを特定
-            let pns_budget = (remaining_budget / 20).max(10_000).min(50_000);
-            self.max_nodes = self.nodes_searched.saturating_add(pns_budget);
-            let _pv = self.pns_main_with_arena(board, &mut arena);
+            // Zero-proof early skip: 2 サイクル連続で PNS が proof=0 なら
+            // PNS フェーズをスキップし，MID に全予算を集中する．
+            //
+            // 注: これは一方向ラッチである．一度スキップ状態に入ると
+            // `consecutive_zero_proofs` は更新されないため，当該 Frontier Variant
+            // の残りのイテレーションで PNS は再起動されない．MID が新たな進捗を
+            // 出しても PNS は実行されない設計選択であり，PNS が非生産的と
+            // 判定された後は MID に全予算を集中することを優先する．
+            let skip_pns = consecutive_zero_proofs >= 2;
 
-            let (r_pn, r_dn, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
-            if r_pn == 0 || r_dn == 0 {
-                break; // PNS で証明または反証完了
+            if !skip_pns {
+                // PNS フェーズ: TT を更新しフロンティアを特定
+                // 予算の動的調整: 前サイクルで proof を生産していた場合は
+                // 予算を拡大(remaining/10 = 10%)し，より多くの proof を蓄積して
+                // MID の TT ヒット率を向上させる．
+                // 初回(last_pns_proof_stores 未設定)または proof=0 の場合は
+                // 従来どおり remaining/20 = 5%．
+                let pns_ratio = if self.last_pns_proof_stores > 0 { 10 } else { 20 };
+                let pns_budget = (remaining_budget / pns_ratio).max(10_000).min(50_000);
+                self.max_nodes = self.nodes_searched.saturating_add(pns_budget);
+                #[cfg(feature = "verbose")]
+                let (proofs_before, growth_before, spin_before, changed_before) = (
+                    self.dbg_pns_proof_stores,
+                    self.dbg_pns_arena_growth,
+                    self.dbg_pns_spin_iters,
+                    self.dbg_pns_changed_iters,
+                );
+                let _pv = self.pns_main_with_arena(board, &mut arena);
+
+                // Zero-proof 判定: 直前の PNS サイクルの proof store 数を確認
+                if self.last_pns_proof_stores == 0 {
+                    consecutive_zero_proofs += 1;
+                } else {
+                    consecutive_zero_proofs = 0;
+                }
+
+                #[cfg(feature = "verbose")]
+                {
+                    let cycle_proofs = self.dbg_pns_proof_stores - proofs_before;
+                    let cycle_growth = self.dbg_pns_arena_growth - growth_before;
+                    let cycle_spin = self.dbg_pns_spin_iters - spin_before;
+                    let cycle_changed = self.dbg_pns_changed_iters - changed_before;
+                    let cycle_total = cycle_spin + cycle_changed;
+                    let cycle_spin_pct = if cycle_total > 0 {
+                        cycle_spin as f64 / cycle_total as f64 * 100.0
+                    } else { 0.0 };
+                    verbose_eprintln!(
+                        "[fv] iter {} pns: proofs={} arena_growth={} spin={:.1}% ({}/{}) budget={}",
+                        frontier_iters, cycle_proofs, cycle_growth,
+                        cycle_spin_pct, cycle_spin, cycle_total, pns_budget,
+                    );
+                }
+
+                let (r_pn, r_dn, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
+                if r_pn == 0 || r_dn == 0 {
+                    break; // PNS で証明または反証完了
+                }
+            } else {
+                verbose_eprintln!(
+                    "[fv] iter {} pns: SKIPPED (zero-proof early skip, {} consecutive)",
+                    frontier_iters, consecutive_zero_proofs,
+                );
             }
 
             // MID フェーズ: PNS で更新された TT を活用して局所探索
             let remaining_budget2 = total_max_nodes.saturating_sub(self.nodes_searched);
-            let mid_budget = (remaining_budget2 / 4).max(50_000).min(remaining_budget2);
+            let mid_budget = if skip_pns {
+                // PNS スキップ時は MID に多くの予算を配分
+                (remaining_budget2 / 3).max(50_000).min(remaining_budget2)
+            } else {
+                (remaining_budget2 / 4).max(50_000).min(remaining_budget2)
+            };
             self.max_nodes = self.nodes_searched.saturating_add(mid_budget);
             self.path_len = 0;
 
@@ -1762,6 +1843,11 @@ impl DfPnSolver {
             self.table.retain_proofs();
         }
         self.max_nodes = total_max_nodes;
+        #[cfg(feature = "verbose")]
+        verbose_eprintln!(
+            "[fv] done: {} iters, total proofs={} arena_growth={} cycles={}",
+            frontier_iters, self.dbg_pns_proof_stores, self.dbg_pns_arena_growth, self.dbg_pns_cycles,
+        );
     }
 
     // ================================================================
@@ -1843,6 +1929,8 @@ impl DfPnSolver {
         let mut spin_iters_local: u64 = 0;
         #[cfg(feature = "verbose")]
         let mut changed_iters_local: u64 = 0;
+        #[cfg(feature = "verbose")]
+        let arena_size_at_entry: usize = arena.len();
         loop {
             pns_iters += 1;
             #[cfg(feature = "verbose")]
@@ -2128,6 +2216,8 @@ impl DfPnSolver {
         {
             self.dbg_pns_spin_iters += spin_iters_local;
             self.dbg_pns_changed_iters += changed_iters_local;
+            self.dbg_pns_arena_growth += (arena.len() - arena_size_at_entry) as u64;
+            self.dbg_pns_cycles += 1;
         }
 
         // 診断: PNS 終了時の状態
@@ -2143,7 +2233,7 @@ impl DfPnSolver {
         }
 
         // 証明/反証結果を TT に格納(PV 抽出用)
-        self.pns_store_to_tt(&arena);
+        self.last_pns_proof_stores = self.pns_store_to_tt(&arena);
 
         // デバッグ: 証明ツリーの整合性チェック
         #[cfg(debug_assertions)]
@@ -2724,7 +2814,12 @@ impl DfPnSolver {
         }
     }
 
-    pub(super) fn pns_store_to_tt(&mut self, arena: &[PnsNode]) {
+    /// PNS アリーナの証明済みノードを TT に格納する．
+    ///
+    /// 証明済み(pn=0)の中間ノードのみを格納し，反証(dn=0)は格納しない．
+    /// 格納された proof エントリ数を返す．
+    pub(super) fn pns_store_to_tt(&mut self, arena: &[PnsNode]) -> u64 {
+        let mut proof_store_count: u64 = 0;
         for node in arena {
             if node.pn == 0 && node.expanded && !node.children.is_empty() {
                 // 証明済み中間ノード
@@ -2738,6 +2833,7 @@ impl DfPnSolver {
                             node.pos_key, node.hand, 0, INF,
                             REMAINING_INFINITE, node.pos_key as u32, best_move16,
                         );
+                        proof_store_count += 1;
                     }
                 } else {
                     // AND 証明: 全子が証明済み
@@ -2745,6 +2841,7 @@ impl DfPnSolver {
                         node.pos_key, node.hand, 0, INF,
                         REMAINING_INFINITE, node.pos_key as u32,
                     );
+                    proof_store_count += 1;
                 }
             } else if node.dn == 0 && node.expanded {
                 // PNS の反証(NM)は TT にバックプロパゲーションしない．
@@ -2759,6 +2856,11 @@ impl DfPnSolver {
                 // TT に個別に記録済みなので，backprop での追加格納は不要．
             }
         }
+        #[cfg(feature = "verbose")]
+        {
+            self.dbg_pns_proof_stores += proof_store_count;
+        }
+        proof_store_count
     }
 }
 

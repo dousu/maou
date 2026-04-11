@@ -945,6 +945,165 @@ longest resistance 再構成コストが予算を超過する．
 - `PV_VISIT_BUDGET` の引き上げ (10M → 50M 等)
 - PV 抽出アルゴリズムの効率化 (chain drop 子のスキップ等)
 
+**課題 D: PNS 生産性指標の計測基盤 (v0.24.35)**
+
+v0.24.35 で `verbose` feature に PNS 生産性指標を追加した．
+従来の root pn/dn 不変率(空振り率)に加え，PNS の実効的な生産性を測定する
+3 指標を `pns_main_with_arena` および `frontier_variant` で計測する:
+
+| 指標 | フィールド | 意味 |
+|------|----------|------|
+| proof store 数 | `dbg_pns_proof_stores` | `pns_store_to_tt` で TT に新規格納された pn=0 エントリ数 |
+| arena growth | `dbg_pns_arena_growth` | PNS サイクルで展開された新規アリーナノード数 |
+| PNS サイクル数 | `dbg_pns_cycles` | `pns_main_with_arena` の呼び出し回数 |
+
+Frontier Variant の各サイクルで `[fv] iter N pns: proofs=X arena_growth=Y spin=Z%`
+を出力し，サイクル単位の生産性を可視化する．
+
+**計測の目的:**
+
+1. root pn/dn 不変 ≠ 真の空振りであることを定量的に検証する
+2. Frontier PNS 予算比率(現行 remaining/20 = 5%)の adaptive 化の判断材料とする
+3. PNS が生産的なサイクル(proof store > 0)と非生産的なサイクル(arena growth = 0)を
+   区別し，非生産的サイクルで MID に予算を回す最適化の基盤とする
+
+**計測結果 (39手詰め 10M 予算 backward 解析):**
+
+| Ply | FV iters | Total proofs | Arena growth | Avg spin | Zero-proof cycles | Proof rate (/1K) |
+|-----|----------|-------------|-------------|----------|-------------------|-----------------|
+| 22 | 14 | 3,820 | 1,474K | 84.2% | 0/14 | 8.7 |
+| 18 | 5 | 3,249 | 1,485K | 83.6% | 0/5 | 13.0 |
+| 16 | 14 | 3,385 | 2,216K | 85.0% | 2/14 | 7.7 |
+
+**重要な所見:**
+
+- spin 率 83-85% でも全 ply で proof store は正値(平均 100-300 proofs/cycle)
+- arena growth は毎サイクル 10万〜20万ノード — PNS は新しい部分木を展開している
+- ply 16 で zero-proof サイクルが 2/14 出現 — 深い ply ほど PNS 生産性が低下する傾向
+
+**課題 E: Frontier PNS 予算の動的制御 (v0.24.36〜v0.24.37)**
+
+v0.24.36 で zero-proof early skip，v0.24.37 で proof rate ベース予算拡大を導入し，
+Frontier Variant の PNS 予算を前サイクルの proof store 数に基づいて動的制御する:
+
+- **zero-proof early skip (v0.24.36):** `consecutive_zero_proofs >= 2` で PNS スキップ，
+  MID 予算を `remaining/4` → `remaining/3` に増加
+- **proof rate ベース予算拡大 (v0.24.37):** 前サイクルの proof store > 0 の場合，
+  PNS 予算を `remaining/20 (5%)` → `remaining/10 (10%)` に倍増．
+  proof store が正値のサイクルでは PNS がより多くの proof を TT に蓄積でき，
+  後続 MID の TT ヒット率を向上させる
+- **proof store の取得:** `pns_store_to_tt` の戻り値(u64)を `last_pns_proof_stores` に格納
+
+**課題 F: IDS depth 切替時の ProvenTT disproof 選択的保持 (v0.24.38)**
+
+v0.24.38 で `clear_proven_disproofs()` を `clear_proven_disproofs_below(min_depth)` に
+変更し，ProvenTT の confirmed disproof を確認時の IDS depth に基づいて選択的に除去する．
+
+**実装:**
+
+- ProvenEntry の flags bits 1-6（disproof では未使用）に確認時の IDS depth を格納
+- `clear_proven_disproofs_below(min_depth)` は `disproof_depth() < min_depth` の
+  エントリのみ除去
+- IDS 切替時の閾値: `next_ids_depth / 2`
+  - 例: IDS 2→4→8→16→32→41 で 8→16 に進行する場合，
+    threshold=8 で depth<8 (depth=2,4) の disproof を除去し depth=8 を保持
+- TT に `current_ids_depth` フィールドを追加し，`store_proven` で自動的に記録
+
+**計測結果:**
+
+完全除去(clear なし)では ply 24 で +26% ノード増加の退行が発生したが，
+選択的除去(`ids_depth / 2` 閾値)では ply 24 ノード数が v0.24.37 と完全同一(367,331)
+に回復．浅い disproof のみ除去し，深い disproof を保持することで退行を回避．
+
+**安全性:** 全 127 テスト pass，ply 24 ノード数退行なし
+
+**課題 H: Depth-adaptive epsilon による閾値余裕の最適化 (v0.24.41)**
+
+パラメータグリッドサーチにより 1+ε の epsilon 除数が depth に依存する最適値を
+持つことを発見した．16 構成の網羅的テストで以下が判明:
+
+| Config | Ply24 Nodes (depth=17) | Ply22 10M (depth=19) |
+|--------|----------------------|---------------------|
+| baseline (eps_denom=3) | **367,331** (最適) | Unknown |
+| eps_denom=2 | 1,000,000 (+172% 退行) | **Mate(17) 8.1M** ✓ |
+| eps_denom=4 | 1,000,000 (+172% 退行) | Unknown |
+
+eps_denom=3 は depth=17 に最適だが depth=19 では不足．
+eps_denom=2 は depth=19 で ply 22 を解けるが depth=17 では退行．
+
+**depth-adaptive epsilon:**
+
+```
+eps_denom = if saved_depth >= 19 { 2 } else { 3 }
+```
+
+IDS の全反復で最終 depth (saved_depth) に基づいて eps_denom を決定し，
+浅い反復でも深い問題向けの epsilon 余裕を適用する．
+
+**計測結果 (10M backward 解析):**
+
+| Ply | baseline | depth-adaptive | 変化 |
+|-----|---------|---------------|------|
+| 24 (depth=17) | 367,331 | **367,331** | **同一(退行なし)** |
+| 22 (depth=19) | 10M Unknown | **8,111,974 Mate(17)** | **10M 内で解決可能に** |
+
+**計測結果 (120M backward 解析，v0.24.42):**
+
+| Ply | 残り | v0.24.33 nodes | v0.24.42 nodes | 変化 | v0.24.33 結果 | v0.24.42 結果 |
+|-----|-----|---------------|---------------|------|-------------|-------------|
+| 24 | 15 | 367,331 | 367,331 | 同一 | Mate(15) | Mate(15) |
+| 22 | 17 | 16,942,722 | 31,361,713 | +85% | Mate(17) | Mate(17) |
+| 20 | 19 | 76,683,642 | **39,118,955** | **-49%** | Mate(19) | Mate(19) |
+| 18 | 21 | 105,800,075 | **97,588,759** | **-7.8%** | Mate(21) | Mate(21) |
+| 16 | 23 | 119,400,000 | **117,080,263** | **-1.9%** | Mate(23) | Mate(23) |
+| 14 | 25 | 120M Unknown | (120M Unknown) | — | Unknown | Unknown |
+
+ply 20 で **49% ノード削減**が最大の効果．ply 22 はノード数増加(+85%)だが，
+10M 予算で baseline が Unknown のところ 8.1M で解ける(探索の質が向上)．
+境界は ply 14 で変化なし．
+
+**課題 I: PV visit 予算の動的スケーリング (v0.24.42)**
+
+v0.24.41 の depth-adaptive epsilon により ply 18 の探索パターンが変化し，
+PV\_VISIT\_BUDGET=10M (固定) では AND ノードの全 defender 評価で
+予算超過して MateNoPV が発生していた．
+
+PV visit 予算を探索ノード数に応じてスケーリング:
+
+```
+pv_visit_budget = min(max(nodes_searched / 4, 10M), 50M)
+```
+
+- ply 18: 97.6M 探索 → budget 24M → **MateNoPV → Mate(21) 解消**
+- 上限 50M で過大な PV 抽出時間を防止
+
+**課題 J: GC Phase 2 no-op バグ修正 (v0.24.43)**
+
+v0.24.38 の `clear_proven_disproofs()` → `clear_proven_disproofs_below(min_depth)`
+リファクタリング時に，GC Phase 2 の呼び出しが
+`clear_proven_disproofs_below(0)` のまま残されていた．
+
+**バグ:** `disproof_depth() < 0` は u32 で常に false → no-op．
+コメント「全 confirmed disproof を除去」とは真逆の挙動になり，
+元の `clear_proven_disproofs()` の無条件全除去機能が失われていた．
+
+**修正:** `clear_proven_disproofs_below(u32::MAX)` で全 disproof を除去．
+
+**120M backward 解析での検証 (v0.24.42 vs v0.24.43):**
+
+| Ply | v0.24.42 nodes | v0.24.43 nodes | 変化 |
+|-----|---------------|---------------|------|
+| 24 | 367,331 | 367,331 | 同一 |
+| 22 | 31,361,713 | 31,361,713 | 同一 |
+| 20 | 39,118,955 | 39,118,955 | 同一 |
+| 18 | 97,588,759 (Mate(21)) | 97,588,759 (Mate(21)) | 同一 |
+| 16 | 117,080,263 | 117,080,263 | 同一 |
+
+**リグレッションなし．** 全 ply でノード数完全同一．
+GC Phase 2 は ProvenTT 充填率が 70% を超過した時にのみ発火する Phase であり，
+120M backward 解析では到達しないため，no-op バグは挙動に影響していなかった．
+ただし長期実行や大予算 (500M+) でのバグ顕在化を防ぐため修正は必須．
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |

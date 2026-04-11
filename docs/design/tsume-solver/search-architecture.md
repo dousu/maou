@@ -63,12 +63,12 @@ PNS で未解決の場合に自動的に Phase 2 として呼び出される．
 
 **実装:** `mid_fallback()` 関数 (`pns.rs`)．
 
-- **深さ進行**: 倍増ステップ
+- **深さ進行**: 倍増 + 線形ステップ (v0.24.40 で改善)
 
 ```
-  depth=41 (long):  2 -> 4 -> 8 -> 16 -> 32 -> 41
-                    |    |    |     |     |      |
-                    +--->+--->+---->+---->+----->+
+  depth=41 (long):  2 -> 4 -> 8 -> 16 -> 32 -> 36 -> 40 -> 41
+                    |    |    |     |     |     |      |      |
+                    倍増 (≤32)              +4 刻み (>32)
                     retain proofs between each step
 
   depth=31 (short): 2 -> 4 -> 31
@@ -81,7 +81,10 @@ PNS で未解決の場合に自動的に Phase 2 として呼び出される．
   最終反復にノードを温存
 - **反復間 TT 清掃**:
   - `clear_working()`: WorkingTT 全クリア(構造的不詰エントリ + path-dep disproof の汚染防止)
-  - `clear_proven_disproofs()`: ProvenTT の confirmed disproof を除去(NoMate バグ対策)
+  - `clear_proven_disproofs_below(ids_depth / 2)`: ProvenTT の浅い confirmed disproof のみ
+    選択的に除去(v0.24.38)．ProvenEntry flags bits 1-6 に格納された確認 IDS depth に基づき，
+    次の depth の半分未満で確認された disproof を除去し，深い disproof は保持する．
+    全除去では ply 24 で +26% ノード退行が発生するため選択的除去を採用
   - rem=0 仮反証は TT に格納しないため，別途削除処理は不要(v0.24.14 以降，§6.6.4 参照)
 - **NM 昇格**: 反復終了後に `depth_limit_all_checks_refutable()` で全王手が
   反駁可能と確認できれば，NM を `REMAINING_INFINITE` に昇格

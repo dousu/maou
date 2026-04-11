@@ -157,6 +157,10 @@ pub(super) struct TranspositionTable {
     /// mid() が TT store 前にセットする．ply が小さい(ルートに近い)ほど
     /// amount が高くなり，eviction 耐性が上がる．
     pub(super) hint_ply: u32,
+    /// 現在の IDS depth．confirmed disproof の ProvenTT 格納時に
+    /// `ProvenEntry::new_disproof(hand, ids_depth)` で確認 depth を記録する．
+    /// `mid_fallback` の IDS ループで更新される．
+    pub(super) current_ids_depth: u32,
     /// WorkingTT のクラスタ overflow 累積カウンタ．
     /// store 時に空きスロットが見つからず eviction が発生するたびにインクリメント．
     /// `drain_working_overflow()` でリセットし，呼び出し側が GC 判断に使用する．
@@ -224,6 +228,7 @@ impl TranspositionTable {
             proven_mask: proven_clusters - 1,
             working_mask: working_clusters - 1,
             hint_ply: 0,
+            current_ids_depth: 0,
             working_overflow_since_gc: 0,
             working_peak_cluster_fill: 0,
             overflow_distinct_keys_sum: 0,
@@ -791,7 +796,7 @@ impl TranspositionTable {
         let new_entry = if is_proof {
             ProvenEntry::new_proof(hand, best_move, mate_distance)
         } else {
-            ProvenEntry::new_disproof(hand)
+            ProvenEntry::new_disproof(hand, self.current_ids_depth)
         };
         let new_priority = new_entry.amount();
 
@@ -1450,10 +1455,17 @@ impl TranspositionTable {
     /// IDS depth 切り替え時に呼び出す．浅い IDS depth で REMAINING_INFINITE
     /// として格納された confirmed disproof が，深い depth の探索を汚染する
     /// のを防ぐ(NoMate バグ対策)．Proof (pn=0) は影響を受けない．
-    pub(super) fn clear_proven_disproofs(&mut self) {
+    /// ProvenTT の confirmed disproof のうち，確認 depth が `min_depth` 未満の
+    /// ものを除去する．`min_depth` 以上で確認された disproof は保持する．
+    ///
+    /// IDS depth 切替時に浅い depth で確認された disproof のみ除去し，
+    /// 深い depth の disproof を再利用可能にする．
+    pub(super) fn clear_proven_disproofs_below(&mut self, min_depth: u32) {
         for fe in self.proven.iter_mut() {
             if fe.pos_key != 0 && !fe.entry.is_proof() {
-                fe.pos_key = 0;
+                if fe.entry.disproof_depth() < min_depth {
+                    fe.pos_key = 0;
+                }
             }
         }
     }
@@ -1781,7 +1793,7 @@ impl TranspositionTable {
         }
 
         // Phase 2: 全 confirmed disproof を除去
-        self.clear_proven_disproofs();
+        self.clear_proven_disproofs_below(u32::MAX);
         if self.proven_len() <= target {
             return initial - self.proven_len();
         }
