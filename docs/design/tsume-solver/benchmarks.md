@@ -2025,6 +2025,242 @@ v0.24.47 の A-1 (tagged proof) と同じ構造
    ProvenTT 側の変更が不可避かもしれない．12 → 16 byte 化のコスト分析を
    再実施する
 
+#### v0.24.50 施策 A-4 実装結果 (効果限定，不完全突破)
+
+v0.24.50 で A-4 (境界層 DN inflation) を実装した．実装は §A-5 設計
+検討で sound と判明した「DN 初期値の inflate (pn aggregation 非影響)」
+ルート．`remaining <= 2 && chain_bb_cache 非空` の AND ノードで
+chain drop の初期 dn に `BOUNDARY_CHAIN_MULT = 8` 倍の bias を加算する．
+
+**測定結果 (`test_tsume_39te_ply25_gap_diagnosis` Phase 1):**
+
+| Depth | Baseline (v0.24.46) | A-4 (v0.24.50) | Δ nodes |
+|:---:|---:|---:|---:|
+| 17 | 367K / Mate(15) | 367K / Mate(15) | 不変 |
+| 21 | 6.02M / Unknown | **4.23M** / Unknown | **-30%** |
+| 25 | 10.3M / Unknown | **8.42M** / Unknown | **-18%** |
+
+**TT 組成の変化 (depth=21):**
+
+| Metric | Baseline | A-4 | Δ |
+|:---|---:|---:|:---|
+| proven | 95,311 | 69,424 | -27% (予想外の減少) |
+| disproven | 84,300 | **2,262,638** | **+2590%** (大幅増) |
+| intermediate | 0 | 592,263 | 新規 |
+
+`a4_inflations` カウンタは depth=25 で 4,390,896 回発火 (AND 訪問の
+~52%)．境界層 thrashing は若干緩和されるが cliff 突破には至らず．
+disproven 方向に work がシフトし proven discovery が減少する傾向が
+観測された．
+
+**結論**:
+
+- A-4 単体では cliff 突破能力なし (depth=21/25 共に Unknown 維持)
+- Soundness ✅ (全 128 テスト pass + `test_tsume_39te_5g4f_p4g_escape_verify`
+  で false Checkmate 生成なし)
+- 新 `test_tsume_39te_ply24_mate15_soundness_depth25` を追加し Mate 結果
+  時の canonical PV strict verify + Unknown 結果は許容の soundness-only
+  regression test として保持
+
+A-4 は **施策 A-6 (PNS 責任転嫁)** や **施策 I (intermediate 保持)**
+との組合せで再評価する価値がある副次施策として残す．
+
+#### v0.24.51 施策 A-6 (= 施策 δ) 設計: 境界層 PNS 責任転嫁
+
+ユーザ指示により A-6 の設計検討に進む．A-5 (境界層局所 resolver) が
+「親情報伝搬問題」で独立施策として成立しなかった教訓を踏まえ，
+**親への情報伝搬を TT を介する自然な経路に委ねる**設計とする．
+
+##### 目的と key insight
+
+**目的**: 境界層 AND ノード (`remaining <= 2` + chain aigoma 検出) の
+評価を **PNS (Proof Number Search)** に移譲する．PNS の best-first 選択
+(most-proving node descent) と arena 管理により，df-pn 境界層で発生する
+thrashing を構造的に回避する．
+
+**Key insight** (設計調査で判明): 現行の `pns_main_with_arena(board, arena)`
+は root 中心設計だが **board が指す現在局面をそのまま利用するため，MID
+の再帰呼出しの代わりに境界局面で呼び出すことが可能**．PNS は完全証明
+(`pn=0`) と確定反証 (`dn=0`) のみを TT に store するため，部分評価が
+TT を汚染するリスクは無い．`pns_store_to_tt` は `pns_flush_proofs`
+経由で **完全解決された arena ノードのみ flush** する．
+
+##### 設計の 3 候補
+
+**δ-1: MID 再帰の直接置換** (最有力)
+
+境界層検出時に `self.mid(board, ..., !or_node)` の再帰呼出しを
+`self.pns_main_with_arena(board, &mut temp_arena)` に置き換える．
+
+- 動作: MID の child 評価ループで各 AND 子に対し，通常の MID 再帰
+  ではなく小さな arena で PNS を起動．PNS が完全解決したら TT 経由で
+  結果が親 MID に伝搬
+- 親情報伝搬: 通常の TT lookup (`look_up_pn_dn`) 経由．特別な経路不要
+- soundness: ✅ PNS の TT store 規則により汚染不可
+- 実装コスト: 中 (temp arena 管理 + MID 呼出経路の分岐)
+- リスク: PNS arena メモリ (100K ノード × 100B = 10MB per call) と
+  allocation 頻度
+
+**δ-2: PNS-only サブサーバ**
+
+境界層を検出したら完全独立した PNS solver インスタンスを起動する．
+
+- 動作: 新規 `DfPnSolver` インスタンスを作成し境界局面で `solve`
+- 親情報伝搬: サブ solver の TT は破棄．結果を pn/dn として return
+- soundness: ✅ 完全独立のため汚染不可
+- 実装コスト: 高 (solver 構築 + TT 共有設計の破壊)
+- リスク: 毎回の solver 構築コスト，TT 共有しないため proof 再利用なし
+
+**δ-3: PNS arena の部分再利用**
+
+Frontier Variant の既存 arena を境界層からも利用する．
+
+- 動作: Frontier Variant の arena を境界層から subtree として拡張
+- 親情報伝搬: arena 内部で完結 (TT 書き込み不要)
+- soundness: ⚠️ arena 状態が複数呼出元と共有されるため混乱のリスク
+- 実装コスト: 高 (arena 状態管理の大幅リファクタ)
+- 判定: **不採用** (複雑度が高く副作用リスクが大きい)
+
+##### δ-1 の詳細設計
+
+**呼出経路**:
+
+現行 MID AND ループ (`solver.rs:2100` 付近) での再帰呼出し:
+
+```rust
+// 現行: 通常の MID 再帰
+let captured = board.do_move(m);
+self.mid(board, pn_threshold, dn_threshold, ply + 1, !or_node);
+board.undo_move(m, captured);
+```
+
+施策 A-6 適用後:
+
+```rust
+let captured = board.do_move(m);
+// 施策 A-6: 境界層 PNS 責任転嫁
+let post_remaining = self.depth.saturating_sub(ply + 1) as u16;
+let post_or_node = !or_node;
+let should_delegate_pns = !post_or_node  // AND ノードに降りる時のみ
+    && post_remaining <= 2
+    && !self.chain_bb_cache.is_empty();
+if should_delegate_pns {
+    self.mid_via_pns_boundary(board, ply + 1);
+} else {
+    self.mid(board, pn_threshold, dn_threshold, ply + 1, !or_node);
+}
+board.undo_move(m, captured);
+```
+
+**新関数 `mid_via_pns_boundary`**:
+
+```rust
+pub(super) fn mid_via_pns_boundary(&mut self, board: &mut Board, ply: u32) {
+    // 小さな temp arena を allocate (100K ノード)
+    const BOUNDARY_ARENA_NODES: usize = 100_000;
+    let mut arena: Vec<PnsNode> = Vec::with_capacity(BOUNDARY_ARENA_NODES);
+
+    // solver state を一時 override (PNS の max_nodes を制限)
+    let saved_max_nodes = self.max_nodes;
+    self.max_nodes = self.nodes_searched.saturating_add(BOUNDARY_ARENA_NODES as u64);
+
+    // PNS を起動．内部で TT を参照/更新する
+    let _pv = self.pns_main_with_arena(board, &mut arena);
+
+    // 状態復元
+    self.max_nodes = saved_max_nodes;
+
+    // 結果は TT 経由で親に伝搬．arena は drop される．
+    // 親 MID が後続の `look_up_pn_dn` で PNS が書き込んだ proof/disproof
+    // を読み取る．
+}
+```
+
+**soundness 分析**:
+
+1. **TT 汚染不可**: `pns_main_with_arena` は完全証明 (`pn=0`) と確定反証
+   (`dn=0`) のみを `pns_store_to_tt` 経由で TT に書き込む．中間値は
+   arena 内に留まり arena 破棄で消失する
+2. **depth context**: PNS は `self.depth` を参照しない (local remaining を
+   board から計算)．outer IDS depth の制約に束縛されず sub-position の
+   完全解を求める
+3. **親情報伝搬**: PNS が書き込んだ proof/disproof は親 MID の
+   `look_up_pn_dn` で自然に読み取られる．MID に特別な戻り値変換は不要
+4. **soundness validation**: `test_tsume_39te_ply24_mate15_regression` と
+   `test_tsume_39te_5g4f_p4g_escape_verify` を回帰テストとして併用
+
+**リスク と対策**:
+
+| リスク | 対策 |
+|:---|:---|
+| arena allocation 頻度 | per-call `Vec::with_capacity(100K)` は ~10MB．頻度が高ければ solver に boundary_arena field を追加して再利用 |
+| PNS 非収束時の fallback | PNS が arena 飽和で return した場合 (TT に何も書かない)，親 MID の後続 lookup は miss．必要なら通常 MID に fallback |
+| 親情報伝搬の整合性 | PNS の TT store が `REMAINING_INFINITE` であることを前提．深い ids_depth での再探索で汚染となる可能性は否定しきれない → depth=17 の既存 regression test で validate |
+| arena メモリ圧迫 | `BOUNDARY_ARENA_NODES` は実測で調整．初期値 100K は Frontier Variant の 5M の 2%．メモリ圧迫なし |
+
+##### 実装計画 (段階的)
+
+**ステップ 1**: `mid_via_pns_boundary` 関数の雛形実装
+- temp arena allocation + `pns_main_with_arena` 呼出し
+- solver state の save/restore
+- 診断 counter `diag_a6_invocations`, `diag_a6_converged`, `diag_a6_arena_full` 追加
+
+**ステップ 2**: MID AND 子ループでの条件付き分岐実装
+- `solver.rs:2100` 付近の再帰呼出しに boundary 検出 + delegation 追加
+- PNS 呼出前後での board 状態一致を assert で検証
+
+**ステップ 3**: 既存テストスイート全 pass 確認
+- 非 ignored 128 テスト回帰
+- `test_tsume_39te_5g4f_p4g_escape_verify` + `test_tsume_39te_ply24_mate15_soundness_depth25`
+- `test_tsume_39te_ply25_gap_diagnosis` で counter 遷移を観測
+
+**ステップ 4**: 効果測定
+- Phase 1 depth=17/21/25 の nodes 削減率
+- `diag_a6_invocations` / `diag_a6_converged` 発火頻度
+- ply 分布の境界層集中 (ply 15/19/23) の変化
+
+**ステップ 5**: 改善イテレーション
+- 効果が限定的なら `BOUNDARY_ARENA_NODES` を 1M に拡大
+- PNS 収束率が低いなら境界条件 (`remaining <= 2`) を `remaining <= 3` に緩和
+- soundness 違反があれば revert して失敗 variant を記録
+
+##### 期待効果と保守的見積もり
+
+**楽観シナリオ**: PNS の best-first 選択により境界層の thrashing が
+解消され，ply 19/23 visits が 数百 K 以下に削減．depth=21 で Mate(15)
+に到達する可能性．
+
+**保守的シナリオ**: PNS arena が 100K ノードで飽和し，多くの境界
+呼出しで proof/disproof が TT に書き込まれない．親 MID の後続 lookup
+が miss し，通常 MID 再帰に fallback するのと同等の性能に収束．効果
+なしだが退行もない．
+
+**悲観シナリオ**: PNS が境界で無関係な deep subtree を展開し，
+各境界呼出しが想定の 100K ノード予算を大幅に超過．全体の NPS が
+大幅低下．→ この場合は `BOUNDARY_ARENA_NODES` を縮小して再試験
+
+##### A-5 の失敗点を踏まえた設計上の配慮
+
+A-5 の検討で判明した「親情報伝搬問題」は δ-1 設計では以下により
+回避される:
+
+1. **TT 経由の自然な情報伝搬**: PNS が書き込んだ proof/disproof は
+   親 MID の既存 `look_up_pn_dn` で読み取られる．A-5 のように「return
+   value として unknown を返す」必要がない
+2. **親の MID ループ自体は変更しない**: A-5 は MID 入口で短絡を
+   試みたが δ-1 は re-entrant な PNS 呼出しのみで MID 本体には
+   介入しない
+3. **soundness 証明が TT store 規則に帰着**: PNS の `pns_store_to_tt`
+   が既に validated な規則 (proven/disproven のみ flush) を使うため
+   新規 soundness 証明が不要
+
+##### 次のアクション項目 (v0.24.51)
+
+1. **本設計ドキュメントのレビュー** (ユーザ確認待ち)
+2. 承認後，**ステップ 1〜3 を順次実装**
+3. **ステップ 4 で効果測定** し結果を本セクションに追記
+4. 効果次第で **A-4 + A-6 の組合せ測定** (副次施策との相乗効果)
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
