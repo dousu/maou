@@ -3531,6 +3531,129 @@ v0.24.33 baseline (backward\_120m / backward\_500m) との比較:
 - **full puzzle (ply 0)**: 前半 (ply 0→10) の推定コストは数十億 nodes．
   1B〜5B budget で ply 8→0 到達の可能性があるが未検証．
 
+#### 10.2.1 39 手詰め問題の残課題 (v0.24.60 時点の構造的分析)
+
+v0.24.55〜60 の改善により depth cliff は解消され，500M budget の境界は
+ply 12→10 に前進した．しかし full puzzle (ply 0→38) の end-to-end 解法
+には以下の構造的課題が残存している．
+
+##### 課題 1: chain aigoma の組合せ爆発 (探索ノードの指数増大)
+
+**現象**: 探索ノードの **93% が depth 境界の 4 ply に集中** する．
+
+```
+depth=17: ply 13-16 に 261K / 283K = 92.3% のノードが集中
+depth=21: ply 17-20 に 5,450K / 5,876K = 92.8% のノードが集中
+```
+
+特に `remaining=2` (ply = depth-2) では block→capture の 2 手サイクルが
+支配的で，全ノードの **~50% がこの 1 ply に集中** する．
+
+**原因**: chain aigoma (合駒チェーン) で守備側が複数マス × 複数駒種の
+合駒を打つたびに `(pos_key, hand)` の unique 組合せが指数的に増加する．
+ply 26→24 で TT entries が 189 → 321K (**×1,700**) に爆発し，その
+83% が disproven entries．
+
+**v0.24.60 の改善**: multi-step cross\_deduce (v0.24.59) と IDS warmup
+(v0.24.60) で chain aigoma 領域のノード数を 20-50% 削減したが，
+指数的な増大構造自体は解消されていない．
+
+**取り組みの方向**:
+
+- **合駒等価クラス**: 駒種が異なるが proof 構造が等価な合駒をグループ化し
+  TT entries を集約する．chain drop の `(pos_key, hand)` 空間を構造的に
+  圧縮する施策
+- **structural pruning**: chain の末端で remaining が小さいノードを早期に
+  刈る．depth 境界 4 ply に集中するノードの大半を回避
+
+##### 課題 2: IDS depth 切替時の intermediate entry 消失
+
+**現象**: IDS の depth 切替で WorkingTT の intermediate entries (pn>0,
+dn>0 の探索中間結果) が消失し，次の depth で **ゼロから再探索** が発生．
+
+**定量**: v0.24.44 の診断で depth=17→21 切替時に 75K intermediate
+entries が消失．chain aigoma の部分証明 (不詰の途中結果) の再構築に
+数百万ノードを要する．
+
+**v0.24.45 の部分修正**: `retain_working_intermediates` で intermediate を
+選択的に保持し remaining をシフト．ただし depth 差分が大きい場合に
+shift 後の remaining が `REMAINING_INFINITE` を超えて除去されるケースが
+残る．
+
+**取り組みの方向**:
+
+- intermediate の IDS 間保持率の向上: shift 後の remaining 上限の緩和
+- depth 刻みの細分化: 倍増 (2→4→8→16) をより細かいステップにして
+  delta を小さく保つ
+
+##### 課題 3: TT 容量の構造的制約
+
+**現象**: WorkingTT のクラスタ方式 (hand\_hash 混合インデクシング) により
+**実効容量が理論値の ~52%** に制限される．hand のバリエーションが多い
+chain aigoma では異なる hand が同一クラスタに衝突し overflow する．
+
+**定量**:
+
+- WorkingTT overflow: 3.1M entries (全 store の ~37%)
+- ply 12 (500M budget): TT 使用率 92.2% で budget edge ギリギリ
+
+overflow した entries は GC で除去され，再訪問時に再計算が必要．
+deep ply ではこの再計算コストがノード増大の一因．
+
+**取り組みの方向**:
+
+- TT サイズの増大: 現行 DevContainer (2GB RAM) の制約内で最大化
+- overflow 耐性の改善: linear probing への部分的移行 (NPS とのトレードオフ)
+- hand 等価クラスによる TT entries の圧縮
+
+##### 課題 4: 浅い ply (ply 0-10) の探索空間
+
+**現象**: chain aigoma 領域 (ply 12-24) が改善されても，ply 0-10 の
+序盤部分が次のボトルネックとして顕在化．序盤は chain aigoma ではなく
+広い分岐 (駒取り・手作りの多数の候補手) が支配的．
+
+**定量**: backward 解析で ply 0-12 のノード比率は depth 間でほぼ一定
+(0.55-1.42×)．**序盤のコストは depth に依存せず一定の高コスト**．
+
+**cross\_deduce / prefilter が効かない理由**: これらは合駒チェーンに
+特化しており，序盤の通常手 (非合駒) には効果がない．
+
+**取り組みの方向**:
+
+- **budget 拡大**: 1B〜5B nodes で ply 8-0 到達の可能性 (未検証)
+- **序盤特化の枝刈り**: 王手生成の初期値改善，非有効手の DN ペナルティ
+- **並列探索**: 独立 sub-tree の並列化 (現行 single-threaded)
+
+##### 課題 5: PV 抽出の不完全性
+
+**現象**: 深い ply (ply 18) で proof は成功 (pn=0) するが PV (最善手順)
+の復元に失敗し **MateNoPV** を返す．
+
+**原因**: PV 抽出は AND ノードで全 defender response を評価する必要があり，
+chain aigoma の AND ノードでは 20+ の response がある．PV\_VISIT\_BUDGET
+(10M) 内で全 response を評価し切れない場合に MateNoPV．
+
+**定量**: v0.24.60 の 500M backward で ply 18 が MateNoPV (235M nodes
+で proof 成功だが PV 不完全)．ply 16 は v0.24.60 で Mate(23) に改善
+(v0.24.33 では MateNoPV)．
+
+**取り組みの方向**:
+
+- PV\_VISIT\_BUDGET の動的スケーリング: proof 時の TT 状態から必要
+  budget を推定
+- ProvenTT の mate\_distance 情報を活用した shortest resistance の
+  高速選択
+
+##### 優先度と改善ポテンシャル
+
+| 優先度 | 課題 | 改善ポテンシャル | 難易度 |
+|:---:|:---|:---|:---:|
+| **高** | 課題 1: chain aigoma 指数爆発 | ply 10→0 到達に必須 | 高 |
+| **高** | 課題 4: 浅い ply の探索空間 | full puzzle 解決に必須 | 中 |
+| **中** | 課題 2: IDS 間 intermediate 消失 | 10-30% ノード削減の見込み | 低 |
+| **中** | 課題 3: TT 容量制約 | overflow 削減で間接的に改善 | 中 |
+| **低** | 課題 5: PV 抽出不完全 | 正確性向上 (性能には非影響) | 低 |
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
