@@ -339,7 +339,7 @@ fn hand_gte(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> bool {
 ///
 /// 同様に香 → 飛も成立(飛の利き ⊇ 香の利き，竜 ⊇ 成香)．
 #[inline(always)]
-fn hand_gte_forward_chain(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> bool {
+pub(super) fn hand_gte_forward_chain(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> bool {
     // 高速パス: 全駒種で a[i] >= b[i] なら即 true
     if hand_gte(a, b) {
         return true;

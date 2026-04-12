@@ -63,35 +63,50 @@ PNS で未解決の場合に自動的に Phase 2 として呼び出される．
 
 **実装:** `mid_fallback()` 関数 (`pns.rs`)．
 
-- **深さ進行**: 倍増 + 線形ステップ (v0.24.40 で改善)
+- **深さ進行** (v0.24.60):
 
 ```
-  depth=41 (long):  2 -> 4 -> 8 -> 16 -> 32 -> 36 -> 40 -> 41
-                    |    |    |     |     |     |      |      |
-                    倍増 (≤32)              +4 刻み (>32)
-                    retain proofs between each step
-
-  depth=31 (short): 2 -> 4 -> 31
-                    |    |     |
-                    +--->+---->+  (skip 8,16: jump to full depth)
+  depth ≤ 19:      2 -> 4 -> depth  (直接ジャンプ)
+  depth 20-31:     2 -> 4 -> [warmup] -> 8 -> 16 -> depth (段階的)
+  depth > 31:      2 -> 4 -> 8 -> 16 -> 32 -> 36 -> ... (倍増→+4)
 ```
 
-  - `depth ≤ 31` の場合: 2 → 4 → depth (中間ステップを省略)
+  - `depth ≤ 19`: 直接ジャンプ．epsilon denom=3 が自然に適用され cliff 不発生
+  - `depth > 19`: 段階的 IDS + **warmup mid\_fallback** (後述)
+  - `depth > 32`: +4 刻み
+
+- **Warmup mid\_fallback** (v0.24.60, depth > 19):
+
+  full-depth step の直前に `warmup_depth = saved_depth - 4` で
+  nested `mid_fallback` (PNS + IDS) を実行する:
+
+  - 予算: 残りの 1/3
+  - epsilon: `param_epsilon_denom = 3` を強制 (scoped)
+  - 目的: 浅い depth で proof を ProvenTT に蓄積し，full-depth では
+    `root_pn=0` で即座に完了させる
+
+  warmup により depth は純粋な上限として機能し，depth 増加時の性能劣化
+  (cliff) を解消する．例:
+
+  ```
+  depth=21: warmup at 17 → Mate(15) proof蓄積 → full: root_pn=0, break
+  depth=25: warmup at 21 → Mate(15) proof蓄積 → full: root_pn=0, break
+  ```
+
 - **予算配分**: 各浅い反復に `remaining_budget / (remaining_steps + 1)` を割り当て，
   最終反復にノードを温存
-- **反復間 TT 清掃**:
-  - `clear_working()`: WorkingTT 全クリア(構造的不詰エントリ + path-dep disproof の汚染防止)
+- **反復間 TT 管理**:
+  - `retain_working_intermediates()`: WorkingTT の intermediate を選択的に保持し
+    remaining をシフト (v0.24.45)
   - `clear_proven_disproofs_below(ids_depth / 2)`: ProvenTT の浅い confirmed disproof のみ
-    選択的に除去(v0.24.38)．ProvenEntry flags bits 1-6 に格納された確認 IDS depth に基づき，
-    次の depth の半分未満で確認された disproof を除去し，深い disproof は保持する．
-    全除去では ply 24 で +26% ノード退行が発生するため選択的除去を採用
-  - rem=0 仮反証は TT に格納しないため，別途削除処理は不要(v0.24.14 以降，§6.6.4 参照)
+    選択的に除去(v0.24.38)
+  - rem=0 仮反証は TT に格納しない (v0.24.14 以降，§6.6.4 参照)
 - **NM 昇格**: 反復終了後に `depth_limit_all_checks_refutable()` で全王手が
   反駁可能と確認できれば，NM を `REMAINING_INFINITE` に昇格
 
 **出典との差異:**
-- 論文の IDS-dfpn は単純な深さ制限増加だが，maou_shogi では倍増ステップ +
-  適応的予算配分 + 反復間 TT 清掃を組み合わせた独自方式
+- 論文の IDS-dfpn は単純な深さ制限増加だが，maou\_shogi では倍増ステップ +
+  warmup mid\_fallback + 適応的予算配分 + 反復間 TT 管理を組み合わせた独自方式
 - MID 呼び出し時の閾値は `INF-1`(事実上無制限)で，深さ制限のみで探索範囲を制御
 
 ### 2.4 全体フロー

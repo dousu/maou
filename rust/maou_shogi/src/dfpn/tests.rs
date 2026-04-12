@@ -1379,7 +1379,9 @@ use crate::types::{Color, PieceType};
     #[test]
     fn test_no_checkmate_gold_interposition() {
         let sfen = "7gk/8p/5P2s/7P1/9/9/9/9/9 b BN2rb3g3s3n4l15p 1";
-        let result = solve_tsume(sfen, Some(31), Some(1_000_000), None).unwrap();
+        // v0.24.60: budget 1M → 2M. IDS warmup (depth > 19) が予算 1/3 を
+        // 消費するため，full-depth での NoCheckmate 判定に十分な余裕を確保．
+        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
 
         match &result {
             TsumeResult::NoCheckmate { .. } => {}
@@ -2394,6 +2396,75 @@ use crate::types::{Color, PieceType};
             }
             TsumeResult::NoCheckmate { .. } => panic!("expected Mate(15), got NoMate"),
             TsumeResult::Unknown { .. } => panic!("expected Mate(15), got Unknown"),
+        }
+    }
+
+    /// 39手詰め ply24 depth=25 soundness regression (v0.24.50+)．
+    ///
+    /// 施策 A-4 (境界層 DN inflation) と今後の境界層施策が canonical PV を
+    /// 壊さないことを保証する soundness-only test．
+    ///
+    /// **strict mode** (default): 探索結果が Checkmate なら PV を canonical と
+    /// 完全一致で比較．Unknown は許容 (cliff 未突破を受け入れる)．
+    /// NoCheckmate / 異なる PV は panic (soundness 違反)．
+    ///
+    /// 背景: v0.24.47 施策 α は `moves.len() == 15` しか verify せず，
+    /// 初手が `5g6f` から `5g4f` に変化した false Checkmate を見逃した．
+    /// 同じ失敗を繰り返さないため，Mate 結果は strict に verify する．
+    ///
+    /// Unknown を許容するのは，本 test が **A-4 の期待する cliff 突破を
+    /// 測るための benchmark ではなく soundness guard** として機能させる
+    /// ため．depth=25 Unknown は v0.24.46 baseline と同じで退行ではない．
+    #[test]
+    fn test_tsume_39te_ply24_mate15_soundness_depth25() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+        let expected_pv = [
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i",
+            "S*6i", "8i6i", "6h6i+", "S*2h", "1i2i",
+            "2h3g", "2i3i", "2g2h", "3i4i", "2h4h",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix_pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        // 小さめの予算で高速に判定する (cliff 突破目的ではなく soundness guard)
+        let mut solver = DfPnSolver::with_timeout(25, 3_000_000, 32767, 300);
+        solver.set_find_shortest(false);
+
+        let result = solver.solve(&mut board);
+
+        match result {
+            TsumeResult::Checkmate { moves, .. } => {
+                // Mate 結果なら canonical と完全一致必須
+                let pv_usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                let pv_refs: Vec<&str> = pv_usi.iter().map(|s| s.as_str()).collect();
+                assert_eq!(
+                    pv_refs, expected_pv,
+                    "depth=25 PV mismatch (soundness risk)\n  got:      {}\n  expected: {}",
+                    pv_usi.join(" "), expected_pv.join(" "),
+                );
+            }
+            TsumeResult::CheckmateNoPv { .. } => {
+                // MateNoPV は PV 不明だが最低限 15 手であることは確認できる
+                // が，canonical の verify ができないため panic
+                panic!("unexpected CheckmateNoPv; cannot verify canonical PV");
+            }
+            TsumeResult::NoCheckmate { .. } =>
+                panic!("got NoCheckmate — critical soundness break (valid mate position)"),
+            TsumeResult::Unknown { .. } => {
+                // Unknown は許容: cliff 未突破で探索が時間 / ノード上限に到達した
+                // 場合は v0.24.46 baseline と同じ挙動であり退行ではない
+            }
         }
     }
 
@@ -6821,4 +6892,539 @@ use crate::types::{Color, PieceType};
             .join()
             .unwrap();
         eprintln!("結果: /tmp/param_grid_search.log");
+    }
+
+    /// 39手詰め ply25 gap 診断テスト．
+    ///
+    /// 目的: benchmarks.md §10.2 の「ply 25 AND ノードの 23 応手を個別に
+    /// 探索すると全て 200K 以内で解け，合計 ~1.5M ノード」という観察と，
+    /// 統合探索での爆発 (depth=23+ で 50M Unknown) との乖離を定量化する．
+    ///
+    /// 3 フェーズ構成:
+    ///
+    /// - **Phase 0a**: ply 25 AND node 全体を統合解く (浅い depth)．
+    ///   個別和 (1.5M) と統合 (?) の比を見る．
+    /// - **Phase 0b**: ply 25 AND node の各守備応手について個別 solve．
+    ///   benchmarks.md の 1.5M 合計を再現確認する．
+    /// - **Phase 1**: ply 24 OR node (5g6f を打つ前) を 3 種の depth で
+    ///   solve し，depth inflation による counter 爆発を観測する．
+    ///
+    /// 各フェーズで verbose+tt_diag+profile の全カウンタを出力する．
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   --features verbose,tt_diag,profile \
+    ///   test_tsume_39te_ply25_gap_diagnosis -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply25_gap_diagnosis() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply25_gap_diagnosis.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            // ↓ 以下が ply 24 以降
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 39手詰め ply25 gap 診断").unwrap();
+        writeln!(out, " SFEN: {}", sfen).unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+        // ply 24 board (24 手打った後 = 攻め手番，直後に 5g6f を打つ OR root)
+        let mut board24 = Board::new();
+        board24.set_sfen(sfen).unwrap();
+        for usi in &pv[..24] {
+            let m = board24.move_from_usi(usi).unwrap();
+            board24.do_move(m);
+        }
+        writeln!(out, "\n[ply24] board SFEN: {}", board24.sfen()).unwrap();
+        writeln!(out, "[ply24] turn: {:?} (attacker, OR root)", board24.turn).unwrap();
+
+        // ply 25 board (25 手打った後 = 守備手番，AND node with 23 responses)
+        let mut board25 = board24.clone();
+        let m_5g6f = board25.move_from_usi("5g6f").unwrap();
+        board25.do_move(m_5g6f);
+        writeln!(out, "\n[ply25] board SFEN: {}", board25.sfen()).unwrap();
+        writeln!(out, "[ply25] turn: {:?} (defender, AND node)", board25.turn).unwrap();
+
+        let report_counters =
+            |out: &mut std::fs::File, label: &str, solver: &mut DfPnSolver| {
+            writeln!(out, "  [{}]", label).unwrap();
+            writeln!(out, "    nodes_searched = {}", solver.nodes_searched).unwrap();
+            writeln!(out, "    max_ply        = {}", solver.max_ply).unwrap();
+            writeln!(out, "    TT entries     = {}", solver.table.len()).unwrap();
+            writeln!(out, "    prefilter_hits = {}", solver.prefilter_hits).unwrap();
+            #[cfg(feature = "verbose")]
+            {
+                writeln!(out, "    pns_spin_iters    = {}", solver.dbg_pns_spin_iters).unwrap();
+                writeln!(out, "    pns_changed_iters = {}", solver.dbg_pns_changed_iters).unwrap();
+                writeln!(out, "    pns_proof_stores  = {}", solver.dbg_pns_proof_stores).unwrap();
+                writeln!(out, "    pns_arena_growth  = {}", solver.dbg_pns_arena_growth).unwrap();
+                writeln!(out, "    pns_cycles        = {}", solver.dbg_pns_cycles).unwrap();
+                writeln!(out, "    refut_tt_hits     = {}", solver.dbg_refut_tt_hits).unwrap();
+                writeln!(out, "    refut_memo_hits   = {}", solver.dbg_refut_memo_hits).unwrap();
+                writeln!(out, "    refut_rec_true    = {}", solver.dbg_refut_recursive_true).unwrap();
+                writeln!(out, "    refut_rec_false   = {}", solver.dbg_refut_recursive_false).unwrap();
+            }
+            #[cfg(feature = "tt_diag")]
+            {
+                writeln!(out, "    deferred_act(mid)  = {}", solver.diag_mid_deferred_activations).unwrap();
+                writeln!(out, "    deferred_act(pns)  = {}", solver.diag_pns_deferred_activations).unwrap();
+                writeln!(out, "    deferred_already_proven = {}", solver.diag_pns_deferred_already_proven).unwrap();
+                writeln!(out, "    cross_deduce_hits  = {}", solver.diag_cross_deduce_hits).unwrap();
+                writeln!(out, "    cd_guard_and_drop  = {}", solver.diag_cd_guard_and_drop).unwrap();
+                writeln!(out, "    cd_guard_child_proven = {}", solver.diag_cd_guard_child_proven).unwrap();
+                writeln!(out, "    cd_no_siblings     = {}", solver.diag_cd_no_siblings).unwrap();
+                writeln!(out, "    cd_entered_main    = {}", solver.diag_cd_entered_main).unwrap();
+                writeln!(out, "    a4_inflations      = {}", solver.diag_a4_inflations).unwrap();
+                writeln!(out, "    deferred_ready     = {}", solver.diag_deferred_ready).unwrap();
+                writeln!(out, "    deferred_not_ready = {}", solver.diag_deferred_not_ready).unwrap();
+                writeln!(out, "    deferred_enqueued  = {}", solver.diag_deferred_enqueued).unwrap();
+                writeln!(out, "    mid_loop_iters     = {}", solver.diag_mid_loop_iters).unwrap();
+                writeln!(out, "    prefilter_miss     = {}", solver.diag_prefilter_miss).unwrap();
+                writeln!(out, "    prefilter_skip     = {}", solver.diag_prefilter_skip_remaining).unwrap();
+                writeln!(out, "    capture_tt_calls   = {}", solver.diag_capture_tt_calls).unwrap();
+                writeln!(out, "    capture_tt_hits    = {}", solver.diag_capture_tt_hits).unwrap();
+                writeln!(out, "    threshold_exits    = {}", solver.diag_threshold_exits).unwrap();
+                writeln!(out, "    terminal_exits     = {}", solver.diag_terminal_exits).unwrap();
+                writeln!(out, "    init_and_disp_exits = {}", solver.diag_init_and_disproof_exits).unwrap();
+                writeln!(out, "    single_child_exits = {}", solver.diag_single_child_exits).unwrap();
+                writeln!(out, "    node_limit_exits   = {}", solver.diag_node_limit_exits).unwrap();
+                writeln!(out, "    ply_visits (non-zero):").unwrap();
+                for (i, v) in solver.diag_ply_visits.iter().enumerate() {
+                    if *v > 0 {
+                        writeln!(out, "      ply {:2}: visits={:<10} proofs={}",
+                            i, v, solver.diag_ply_proofs[i]).unwrap();
+                    }
+                }
+                let tt_proven = solver.table.count_proven();
+                let tt_disproven = solver.table.count_disproven();
+                let tt_intermediate = solver.table.count_intermediate();
+                writeln!(out, "    TT composition: proven={} disproven={} intermediate={}",
+                    tt_proven, tt_disproven, tt_intermediate).unwrap();
+            }
+            #[cfg(feature = "profile")]
+            {
+                solver.sync_tt_profile();
+                writeln!(out, "{}", solver.profile_stats).unwrap();
+            }
+        };
+
+        // ======== Phase 0a: ply 25 AND node 統合 (浅い depth=15) ========
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, " Phase 0a: ply 25 AND node 統合 (depth=15, 5M budget)").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        {
+            let mut test_board = board25.clone();
+            // depth=15 → 残り 14 手分の余裕
+            let mut solver = DfPnSolver::with_timeout(15, 5_000_000, 32767, 60);
+            solver.set_find_shortest(false);
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+            let result_str = match &result {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+            writeln!(out, "  result = {}, time = {:.2}s", result_str, elapsed.as_secs_f64()).unwrap();
+            report_counters(&mut out, "Phase0a", &mut solver);
+            out.flush().unwrap();
+        }
+
+        // ======== Phase 0b: ply 25 の各守備応手を個別解決 ========
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, " Phase 0b: ply 25 個別応手 (各 depth=14, 500K budget)").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        let defenses = {
+            let mut tmp_solver = DfPnSolver::default_solver();
+            let mut tmp_board = board25.clone();
+            tmp_solver.generate_defense_moves(&mut tmp_board)
+        };
+        writeln!(out, "defender moves: {}", defenses.len()).unwrap();
+        writeln!(out, "{:>4} {:>10} {:>12} {:>8} {:>10}",
+            "#", "Move", "Nodes", "Time(s)", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(52)).unwrap();
+
+        let mut individual_total_nodes: u64 = 0;
+        for (i, def_mv) in defenses.iter().enumerate() {
+            let mut child_board = board25.clone();
+            child_board.do_move(*def_mv);
+            // 14 手の余裕 (各サブ問題は Mate(13) 以下なので十分)
+            let mut sub_solver = DfPnSolver::with_timeout(14, 500_000, 32767, 15);
+            sub_solver.set_find_shortest(false);
+            let start = Instant::now();
+            let result = sub_solver.solve(&mut child_board);
+            let elapsed = start.elapsed();
+            let (status, nodes) = match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } =>
+                    (format!("Mate({})", moves.len()), *nodes_searched),
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    ("MateNoPV".into(), *nodes_searched),
+                TsumeResult::NoCheckmate { nodes_searched } =>
+                    ("NoMate".into(), *nodes_searched),
+                TsumeResult::Unknown { nodes_searched } =>
+                    ("Unknown".into(), *nodes_searched),
+            };
+            individual_total_nodes += nodes;
+            writeln!(out, "{:>4} {:>10} {:>12} {:>8.2} {:>10}",
+                i + 1, def_mv.to_usi(), nodes,
+                elapsed.as_secs_f64(), status).unwrap();
+            out.flush().unwrap();
+        }
+        writeln!(out, "{}", "-".repeat(52)).unwrap();
+        writeln!(out, "個別合計ノード数: {}", individual_total_nodes).unwrap();
+
+        // ======== Phase 1: ply 24 OR node depth inflation ========
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, " Phase 1: ply 24 OR node depth inflation").unwrap();
+        writeln!(out, " (同じ root 局面を異なる depth で解き，counter 変化を観測)").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+        let depth_targets: &[(u32, u64, u64)] = &[
+            // (depth, max_nodes, timeout_s)
+            (17, 2_000_000, 90),    // doc: 317K, 既知 working
+            (21, 10_000_000, 120),  // doc: 4.1M, まだ working
+            (25, 15_000_000, 150),  // doc: 50M Unknown ← cliff
+        ];
+
+        for &(depth, max_nodes, timeout_s) in depth_targets {
+            writeln!(out, "\n{}", "-".repeat(80)).unwrap();
+            writeln!(out, "Phase 1: depth={} budget={}M timeout={}s",
+                depth, max_nodes / 1_000_000, timeout_s).unwrap();
+            writeln!(out, "{}", "-".repeat(80)).unwrap();
+            let mut test_board = board24.clone();
+            let mut solver = DfPnSolver::with_timeout(depth, max_nodes, 32767, timeout_s);
+            solver.set_find_shortest(false);
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+            let result_str = match &result {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+            let nps_k = if elapsed.as_secs_f64() > 0.0 {
+                (solver.nodes_searched as f64 / elapsed.as_secs_f64()) / 1000.0
+            } else { 0.0 };
+            writeln!(out, "  result = {}, time = {:.2}s, NPS = {:.1}k",
+                result_str, elapsed.as_secs_f64(), nps_k).unwrap();
+            let label = format!("Phase1_depth{}", depth);
+            report_counters(&mut out, &label, &mut solver);
+            out.flush().unwrap();
+        }
+
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 診断完了: {}", out_path).unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        eprintln!("結果: /tmp/tsume_39te_ply25_gap_diagnosis.log");
+    }
+
+    /// v0.24.47 施策 α の soundness 違反を検証する診断テスト．
+    ///
+    /// **検証内容**: 5g4f (施策 α が root で選んだ手) 後に defender が P*4g
+    /// (銀の裏に歩合) を打った局面が **本当に defender 逃げ切りか**を
+    /// クリーン codebase (strategy α revert 済み) で確認する．
+    ///
+    /// 期待結果:
+    /// - Case A (P*4g が有効な escape): 局面 = attacker 番 OR node．solve() は
+    ///   NoMate または Unknown を返す → 5g4f は PV として不正 → strategy α 不正
+    /// - Case B (P*4g でも攻め方が詰ませられる): solve() は Checkmate を返す →
+    ///   strategy α は soundness を壊していない (別の理由で PV が変わっている)
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_5g4f_p4g_escape_verify() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_5g4f_p4g_verify.log";
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix_pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        writeln!(out, "=== ply 24 position (prefix_pv 24 手適用後) ===").unwrap();
+        writeln!(out, "SFEN: {}", board.sfen()).unwrap();
+        writeln!(out, "turn: {:?} (attacker = OR root)", board.turn).unwrap();
+
+        // Step 1: attacker が 5g4f を打つ
+        let m_5g4f = board.move_from_usi("5g4f").unwrap();
+        board.do_move(m_5g4f);
+        writeln!(out, "\n=== after 5g4f (ply 25) ===").unwrap();
+        writeln!(out, "SFEN: {}", board.sfen()).unwrap();
+        writeln!(out, "turn: {:?} (defender = AND node)", board.turn).unwrap();
+        writeln!(out, "in_check: {}", board.is_in_check(board.turn)).unwrap();
+
+        // Step 2: 守備方応手を列挙し P*4g が含まれるか確認
+        let mut defense_solver = DfPnSolver::default_solver();
+        let mut defense_board = board.clone();
+        let defenses = defense_solver.generate_defense_moves(&mut defense_board);
+        writeln!(out, "\n=== defender responses: {} moves ===", defenses.len()).unwrap();
+        let mut p4g_found = false;
+        for d in &defenses {
+            let usi = d.to_usi();
+            if usi == "P*4g" {
+                p4g_found = true;
+            }
+            writeln!(out, "  {}", usi).unwrap();
+        }
+        writeln!(out, "P*4g in defense moves: {}", p4g_found).unwrap();
+
+        // Step 3: P*4g が legal なら実際に打って attacker 番で solve
+        if p4g_found {
+            let m_p4g = board.move_from_usi("P*4g").unwrap();
+            board.do_move(m_p4g);
+            writeln!(out, "\n=== after P*4g (ply 26) ===").unwrap();
+            writeln!(out, "SFEN: {}", board.sfen()).unwrap();
+            writeln!(out, "turn: {:?} (attacker = OR root)", board.turn).unwrap();
+
+            // 十分な予算で solve．max 13 手詰め (Mate(13) 以下) なら 5g4f は
+            // 最短 14 手詰めの有効な初手 (mate(13) + 打った 1 手 = 14 手)．
+            // Mate > 13 なら 5g4f ルートは Mate(15) より長く canonical 不一致．
+            let mut solver = DfPnSolver::with_timeout(17, 5_000_000, 32767, 300);
+            solver.set_find_shortest(true);
+            let result = solver.solve(&mut board);
+            writeln!(out, "\n=== solve result ===").unwrap();
+            match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } => {
+                    let pv_usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                    writeln!(out, "Checkmate in {} moves (nodes={})",
+                        moves.len(), nodes_searched).unwrap();
+                    writeln!(out, "PV: {}", pv_usi.join(" ")).unwrap();
+                    writeln!(out, "\n結論: 5g4f → P*4g 後も {} 手で詰む．", moves.len()).unwrap();
+                    writeln!(out, "→ 5g4f + P*4g 合流で合計 {} 手 (5g4f 1 手 + P*4g 1 手 + Mate({}))",
+                        2 + moves.len(), moves.len()).unwrap();
+                    if moves.len() <= 13 {
+                        writeln!(out, "→ 5g4f ルートは 最短 {} 手詰め (2 + {} = {} 手) で canonical (15 手) より {} か",
+                            2 + moves.len(), moves.len(), 2 + moves.len(),
+                            if 2 + moves.len() < 15 { "短い" } else { "同じ" }).unwrap();
+                    } else {
+                        writeln!(out, "→ 5g4f ルートは 合計 {} 手 で canonical (15 手) より長い",
+                            2 + moves.len()).unwrap();
+                    }
+                }
+                TsumeResult::CheckmateNoPv { nodes_searched } =>
+                    writeln!(out, "CheckmateNoPv (nodes={})", nodes_searched).unwrap(),
+                TsumeResult::NoCheckmate { nodes_searched } => {
+                    writeln!(out, "**NoCheckmate** (nodes={})", nodes_searched).unwrap();
+                    writeln!(out, "\n結論: 5g4f → P*4g は **defender 逃げ切り**を確定．").unwrap();
+                    writeln!(out, "→ 5g4f は Mate(15) canonical の有効な初手ではなく，").unwrap();
+                    writeln!(out, "   施策 α (v0.24.47) が浅い IDS で false proven を").unwrap();
+                    writeln!(out, "   生成し ProvenTT に汚染エントリを残した soundness 違反．").unwrap();
+                }
+                TsumeResult::Unknown { nodes_searched } => {
+                    writeln!(out, "**Unknown** (nodes={})", nodes_searched).unwrap();
+                    writeln!(out, "\n結論: 予算不足で判定できず．予算拡大で再実行推奨．").unwrap();
+                }
+            }
+        } else {
+            writeln!(out, "\n結論: P*4g は legal defense ではない (盤面状態要確認)").unwrap();
+        }
+
+        out.flush().unwrap();
+        eprintln!("結果: {}", out_path);
+    }
+
+    // ========================================================================
+    // 施策 X (v0.24.53): ProvenEntry proof_tag 拡張の単体テスト
+    // ========================================================================
+
+    /// `ProvenEntry::new_tagged_proof` の round-trip 検証．
+    /// 各 tag と tag_depth の組合せで `proof_tag()` / `tag_depth()` が
+    /// 正しい値を返すことを確認する．
+    #[test]
+    fn test_proven_entry_tagged_proof_round_trip() {
+        use super::entry::{
+            ProvenEntry, PROOF_TAG_ABSOLUTE, PROOF_TAG_FILTER_DEPENDENT,
+            PROOF_TAG_PROVISIONAL, PROOF_TAG_DEPTH_LIMITED, PROOF_TAG_INVALID,
+        };
+        let hand = [1u8, 0, 0, 0, 0, 0, 0];
+        let best_move = 0x1234u16;
+
+        // ABSOLUTE (既存 new_proof と等価)
+        let e = ProvenEntry::new_tagged_proof(hand, best_move, 15, PROOF_TAG_ABSOLUTE, 0);
+        assert!(e.is_proof());
+        assert_eq!(e.proof_tag(), PROOF_TAG_ABSOLUTE);
+        assert_eq!(e.tag_depth(), 0);
+        assert_eq!(e.mate_distance(), Some(15));
+        assert_eq!(e.best_move, best_move);
+        assert_eq!(e.hand, hand);
+
+        // FILTER_DEPENDENT with depth=17
+        let e = ProvenEntry::new_tagged_proof(hand, best_move, 7, PROOF_TAG_FILTER_DEPENDENT, 17);
+        assert!(e.is_proof());
+        assert_eq!(e.proof_tag(), PROOF_TAG_FILTER_DEPENDENT);
+        assert_eq!(e.tag_depth(), 17);
+        assert_eq!(e.mate_distance(), Some(7));
+
+        // PROVISIONAL with depth=25
+        let e = ProvenEntry::new_tagged_proof(hand, best_move, 5, PROOF_TAG_PROVISIONAL, 25);
+        assert_eq!(e.proof_tag(), PROOF_TAG_PROVISIONAL);
+        assert_eq!(e.tag_depth(), 25);
+
+        // DEPTH_LIMITED
+        let e = ProvenEntry::new_tagged_proof(hand, best_move, 3, PROOF_TAG_DEPTH_LIMITED, 7);
+        assert_eq!(e.proof_tag(), PROOF_TAG_DEPTH_LIMITED);
+        assert_eq!(e.tag_depth(), 7);
+
+        // tag_depth overflow (>63) → clamped to 63
+        let e = ProvenEntry::new_tagged_proof(hand, best_move, 11, PROOF_TAG_FILTER_DEPENDENT, 100);
+        assert_eq!(e.tag_depth(), 63);
+
+        // INVALID tag
+        let e = ProvenEntry::new_tagged_proof(hand, best_move, 1, PROOF_TAG_INVALID, 0);
+        assert_eq!(e.proof_tag(), PROOF_TAG_INVALID);
+    }
+
+    /// `ProvenEntry::new_proof` は `new_tagged_proof(.., ABSOLUTE, 0)` に委譲する
+    /// ため backward compat を保証する．
+    #[test]
+    fn test_proven_entry_new_proof_defaults_to_absolute() {
+        use super::entry::{ProvenEntry, PROOF_TAG_ABSOLUTE};
+        let hand = [0u8, 0, 0, 0, 0, 0, 1];
+        let e = ProvenEntry::new_proof(hand, 0x5678, 13);
+        assert!(e.is_proof());
+        assert_eq!(e.proof_tag(), PROOF_TAG_ABSOLUTE);
+        assert_eq!(e.tag_depth(), 0);
+        assert_eq!(e.mate_distance(), Some(13));
+    }
+
+    /// disproof エントリは `proof_tag()` で ABSOLUTE，`tag_depth()` で 0 を
+    /// 返す (backward compat + 明示的な zero 返却)．
+    #[test]
+    fn test_proven_entry_disproof_tag_accessors() {
+        use super::entry::{ProvenEntry, PROOF_TAG_ABSOLUTE};
+        let hand = [0u8; 7];
+        let e = ProvenEntry::new_disproof(hand, 25);
+        assert!(!e.is_proof());
+        assert_eq!(e.disproof_depth(), 25);
+        // disproof entry は tag 非対応: accessor は ABSOLUTE/0 を返す
+        assert_eq!(e.proof_tag(), PROOF_TAG_ABSOLUTE);
+        assert_eq!(e.tag_depth(), 0);
+    }
+
+    /// `ProvenEntry::amount` (eviction priority) が tag に応じて変化することを
+    /// 確認する．ABSOLUTE proof > non-ABSOLUTE proof > disproof の順序．
+    #[test]
+    fn test_proven_entry_amount_tag_priority() {
+        use super::entry::{
+            ProvenEntry, PROOF_TAG_ABSOLUTE, PROOF_TAG_FILTER_DEPENDENT,
+            PROOF_TAG_PROVISIONAL,
+        };
+        let hand = [0u8; 7];
+
+        // ABSOLUTE proof without distance: 64
+        let abs = ProvenEntry::new_tagged_proof(hand, 0, 0, PROOF_TAG_ABSOLUTE, 0);
+        assert_eq!(abs.amount(), 64);
+
+        // FILTER_DEPENDENT proof without distance: 48
+        let filt = ProvenEntry::new_tagged_proof(hand, 0, 0, PROOF_TAG_FILTER_DEPENDENT, 0);
+        assert_eq!(filt.amount(), 48);
+
+        // PROVISIONAL proof without distance: 48
+        let prov = ProvenEntry::new_tagged_proof(hand, 0, 0, PROOF_TAG_PROVISIONAL, 0);
+        assert_eq!(prov.amount(), 48);
+
+        // confirmed disproof: 32
+        let disp = ProvenEntry::new_disproof(hand, 10);
+        assert_eq!(disp.amount(), 32);
+
+        // ABSOLUTE proof with distance 15: 0x80 | 15 = 143
+        let abs_d = ProvenEntry::new_tagged_proof(hand, 0, 15, PROOF_TAG_ABSOLUTE, 0);
+        assert_eq!(abs_d.amount(), 0x80 | 15);
+
+        // 順序性: ABSOLUTE+distance > ABSOLUTE > non-ABSOLUTE > disproof
+        assert!(abs_d.amount() > abs.amount());
+        assert!(abs.amount() > filt.amount());
+        assert!(filt.amount() > disp.amount());
+    }
+
+    /// `clear_proven_disproofs_below` が non-ABSOLUTE proof を
+    /// 選択的に除去することを検証する (施策 X の統合動作)．
+    #[test]
+    fn test_clear_proven_disproofs_below_includes_tagged_proofs() {
+        use super::entry::{
+            PROOF_TAG_FILTER_DEPENDENT, PROOF_TAG_PROVISIONAL,
+        };
+        use super::tt::TranspositionTable;
+        let mut tt = TranspositionTable::new();
+
+        let hand = [1u8, 0, 0, 0, 0, 0, 0];
+        let pk = 0xDEADBEEF_12345678u64;
+
+        // ABSOLUTE proof at tag_depth=0 (should never be removed)
+        tt.store_with_best_move_and_distance(
+            pk, hand, 0, u32::MAX, 0x7FFF, pk as u32, 0x100, 15,
+        );
+
+        // 3 pos_keys with different tags for diversity
+        // 同一 pk + 同一 hand は cluster 内で上書きされるため，異なる pk を使う
+        let pk_filter = 0x1111_1111_1111_1111u64;
+        let pk_prov = 0x2222_2222_2222_2222u64;
+
+        // FILTER_DEPENDENT at depth=5
+        tt.store_tagged_proof_for_test(
+            pk_filter, hand, 0x200, 10, PROOF_TAG_FILTER_DEPENDENT, 5,
+        );
+
+        // PROVISIONAL at depth=15
+        tt.store_tagged_proof_for_test(
+            pk_prov, hand, 0x300, 8, PROOF_TAG_PROVISIONAL, 15,
+        );
+
+        // clear at min_depth=10: FILTER_DEPENDENT (depth=5 < 10) should be removed
+        // PROVISIONAL (depth=15 >= 10) should be kept
+        // ABSOLUTE is never affected
+        tt.clear_proven_disproofs_below(10);
+
+        // ABSOLUTE proof remains
+        let (pn, _, _) = tt.look_up(pk, &hand, 0x7FFF, false);
+        assert_eq!(pn, 0, "ABSOLUTE proof should be preserved");
+
+        // FILTER_DEPENDENT removed
+        let (pn, _, _) = tt.look_up(pk_filter, &hand, 0x7FFF, false);
+        assert_ne!(pn, 0, "FILTER_DEPENDENT proof at depth<10 should be removed");
+
+        // PROVISIONAL preserved
+        let (pn, _, _) = tt.look_up(pk_prov, &hand, 0x7FFF, false);
+        assert_eq!(pn, 0, "PROVISIONAL proof at depth>=10 should be preserved");
+
+        // Second clear at higher min_depth: PROVISIONAL (depth=15) also removed
+        tt.clear_proven_disproofs_below(20);
+        let (pn, _, _) = tt.look_up(pk_prov, &hand, 0x7FFF, false);
+        assert_ne!(pn, 0, "PROVISIONAL proof at depth<20 should be removed");
+
+        // ABSOLUTE still preserved
+        let (pn, _, _) = tt.look_up(pk, &hand, 0x7FFF, false);
+        assert_eq!(pn, 0, "ABSOLUTE proof must never be removed");
     }

@@ -59,33 +59,77 @@ const _: () = assert!(
 ///
 /// 必要なフィールド:
 /// - `hand`: hand_gte_forward_chain 比較
-/// - `flags`: proof / confirmed disproof の種別 + mate_distance の pack
+/// - `flags`: proof / confirmed disproof の種別 + mate_distance / disproof depth
 /// - `best_move`: PV 表示用 attacker move
-/// - `remaining`: confirmed disproof の depth-limited 判定 (proof は常に INFINITE)
+/// - `meta`: proof tag + tag_depth (施策 X, v0.24.53+)
 ///
 /// レイアウト (12 bytes):
-/// ```
+/// ```text
 /// hand: [u8; 7]       (7 bytes, offset 0)
 /// flags: u8           (1 byte, offset 7)
 ///   bit 0: is_proof (1) or confirmed_disproof (0)
 ///   bit 7: distance_set (mate_distance is valid)
-///   bits 1-6: mate_distance (0-63 plies)
+///   bits 1-6: mate_distance (0-63 plies) OR disproof confirmed depth
 /// best_move: u16      (2 bytes, offset 8)
-/// remaining: u16      (2 bytes, offset 10)
+/// meta: u16           (2 bytes, offset 10)
+///   proof 時 (is_proof=1):
+///     bits 0-3:   proof_tag (0-15; 0=ABSOLUTE, 1=FILTER_DEPENDENT,
+///                            2=PROVISIONAL, 3=DEPTH_LIMITED, 15=INVALID)
+///     bits 4-9:   tag_depth (0-63; tag が設定された IDS depth)
+///     bits 10-15: reserved
+///   disproof 時 (is_proof=0):
+///     常に 0 (disproof の depth 情報は flags bits 1-6 に格納)
 /// ```
 /// 合計 12 bytes (alignment は u16 = 2)．
 ///
 /// `mate_distance` が 0-63 に制限されることに注意 (案 B の 0-127 より狭い)．
 /// 64+ プライの詰みは distance unknown 扱いで slow path にフォールバック．
+///
+/// # proof_tag の役割 (v0.24.53+)
+///
+/// ProvenTT は永続エントリのストアであり従来 `REMAINING_INFINITE` 不変条件
+/// (depth 非依存) を前提としていた．施策 α/A-5/A-6 は全てこの不変条件と
+/// 矛盾し汚染を引き起こした．proof_tag は以下を可能にする:
+///
+/// - **ABSOLUTE (0)**: 完全 df-pn proof．既存の永続 proof と同じ
+/// - **FILTER_DEPENDENT (1)**: 施策 α 等の heuristic filter 下で生成．
+///   IDS depth 境界で選択除去される
+/// - **PROVISIONAL (2)**: PNS 局所 resolver / 境界 sub-solver 結果．
+///   Frontier サイクル境界で除去される
+/// - **DEPTH_LIMITED (3)**: 予約 (特定 depth でのみ valid な proof)
+/// - **INVALID (15)**: sentinel (GC で除去)
+///
+/// non-ABSOLUTE proof は `clear_proven_disproofs_below(min_depth)` で
+/// tag_depth < min_depth の場合に除去される (confirmed disproof と同じ
+/// 選択的除去メカニズム．v0.24.53 で統合)．
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub(super) struct ProvenEntry {
     pub(super) hand: [u8; HAND_KINDS],
     /// bit 0: is_proof, bit 7: distance_set, bits 1-6: distance (0-63)
+    /// or disproof_depth (0-63).
     pub(super) flags: u8,
     pub(super) best_move: u16,
-    pub(super) remaining: u16,
+    /// proof 時: tag + tag_depth + reserved を pack．
+    /// disproof 時: 常に 0 (disproof は flags bits 1-6 に depth 情報を持つ)．
+    pub(super) meta: u16,
 }
+
+/// proof_tag の定数定義．`ProvenEntry::proof_tag()` が返す値．
+pub(super) const PROOF_TAG_ABSOLUTE: u8 = 0;
+pub(super) const PROOF_TAG_FILTER_DEPENDENT: u8 = 1;
+pub(super) const PROOF_TAG_PROVISIONAL: u8 = 2;
+#[allow(dead_code)]
+pub(super) const PROOF_TAG_DEPTH_LIMITED: u8 = 3;
+#[allow(dead_code)]
+pub(super) const PROOF_TAG_INVALID: u8 = 15;
+
+/// proof_tag を meta に pack するマスク．
+const PROOF_TAG_MASK: u16 = 0x000F;
+/// tag_depth を meta に pack するマスク (シフト後)．
+const TAG_DEPTH_MASK: u16 = 0x003F;
+/// tag_depth のビット位置．
+const TAG_DEPTH_SHIFT: u16 = 4;
 
 const _: () = assert!(
     std::mem::size_of::<ProvenEntry>() == 12,
@@ -97,7 +141,7 @@ impl ProvenEntry {
         hand: [0; HAND_KINDS],
         flags: 0,
         best_move: 0,
-        remaining: 0,
+        meta: 0,
     };
 
     /// proof エントリかどうか (bit 0)．
@@ -124,12 +168,30 @@ impl ProvenEntry {
         0
     }
 
-    /// remaining value (0-32767).
-    /// proof entries の値は常に `REMAINING_INFINITE` (0x7FFF)．
-    /// disproof entries の値は store 時の depth．
+    /// proof_tag を取得する (v0.24.53+)．
+    ///
+    /// - proof 時: meta bits 0-3 (ABSOLUTE/FILTER_DEPENDENT/PROVISIONAL/...)
+    /// - disproof 時: 常に ABSOLUTE 扱い (disproof は tag 非対応)
     #[inline(always)]
-    pub(super) fn remaining(&self) -> u16 {
-        self.remaining & REMAINING_MASK
+    pub(super) fn proof_tag(&self) -> u8 {
+        if self.is_proof() {
+            (self.meta & PROOF_TAG_MASK) as u8
+        } else {
+            PROOF_TAG_ABSOLUTE
+        }
+    }
+
+    /// tag_depth を取得する (v0.24.53+)．
+    ///
+    /// - proof 時: meta bits 4-9 (tag が設定された IDS depth, 0-63)
+    /// - disproof 時: 0 (disproof は flags 経由の disproof_depth() を使う)
+    #[inline(always)]
+    pub(super) fn tag_depth(&self) -> u32 {
+        if self.is_proof() {
+            ((self.meta >> TAG_DEPTH_SHIFT) & TAG_DEPTH_MASK) as u32
+        } else {
+            0
+        }
     }
 
     /// mate_distance を取得する (proof + distance_set のときのみ Some)．
@@ -145,10 +207,14 @@ impl ProvenEntry {
 
     /// エントリの eviction priority (高いほど保持優先)．
     ///
-    /// - proof with distance: `0x80 | min(distance, 63)` → 128..191
+    /// - ABSOLUTE proof with distance: `0x80 | min(distance, 63)` → 128..191
     ///   (distance が大きい = 長い詰み筋ほど高 priority)
-    /// - proof without distance: 64 (mid)
+    /// - ABSOLUTE proof without distance: 64 (mid)
+    /// - non-ABSOLUTE proof (FILTER_DEPENDENT/PROVISIONAL): 48 (mid-low)
     /// - confirmed disproof: 32 (low)
+    ///
+    /// non-ABSOLUTE proof は ABSOLUTE proof より低い priority で eviction
+    /// 対象になりやすい．tag 付き proof は一時的であり失っても再計算可能．
     ///
     /// `DfPnEntry::amount` と意味が異なることに注意(DfPnEntry は ply ベース)．
     /// Plan D では proven entries の eviction は距離/種別ベース．
@@ -157,24 +223,51 @@ impl ProvenEntry {
         if let Some(d) = self.mate_distance() {
             0x80 | (d.min(63) as u8)
         } else if self.is_proof() {
-            64
+            if self.proof_tag() == PROOF_TAG_ABSOLUTE {
+                64
+            } else {
+                48
+            }
         } else {
             32
         }
     }
 
-    /// proof エントリを構築する．
+    /// ABSOLUTE proof エントリを構築する (default tag)．
+    ///
+    /// 既存コードはこの経路を使用する．tag=ABSOLUTE, tag_depth=0．
     #[inline(always)]
     pub(super) fn new_proof(
         hand: [u8; HAND_KINDS],
         best_move: u16,
         mate_distance: u16,
     ) -> Self {
+        Self::new_tagged_proof(hand, best_move, mate_distance, PROOF_TAG_ABSOLUTE, 0)
+    }
+
+    /// tag 付き proof エントリを構築する (v0.24.53+)．
+    ///
+    /// - `tag`: PROOF_TAG_* 定数のいずれか (0-15)
+    /// - `tag_depth`: tag が設定された IDS depth (0-63，63 超過は clamp)
+    ///
+    /// non-ABSOLUTE tag を指定すると，後続 IDS depth 境界で
+    /// `clear_proven_disproofs_below(min_depth)` により選択除去される
+    /// (tag_depth < min_depth の場合)．
+    #[inline(always)]
+    pub(super) fn new_tagged_proof(
+        hand: [u8; HAND_KINDS],
+        best_move: u16,
+        mate_distance: u16,
+        tag: u8,
+        tag_depth: u32,
+    ) -> Self {
+        let meta = (tag as u16 & PROOF_TAG_MASK)
+            | ((tag_depth.min(63) as u16) << TAG_DEPTH_SHIFT);
         Self {
             hand,
             flags: Self::encode_proof_flags(mate_distance),
             best_move,
-            remaining: REMAINING_INFINITE,
+            meta,
         }
     }
 
@@ -192,7 +285,7 @@ impl ProvenEntry {
             hand,
             flags: Self::encode_disproof_flags(ids_depth),
             best_move: 0,
-            remaining: REMAINING_INFINITE,
+            meta: 0,
         }
     }
 
@@ -240,6 +333,9 @@ impl ProvenEntry {
 }
 
 /// `REMAINING_INFINITE` は `tt.rs` で定義されるが，entry.rs からも参照する．
+/// v0.24.53 で ProvenEntry の remaining フィールドが meta にリネームされた
+/// 後，現在の用途は DfPnEntry 用のみ．
+#[allow(dead_code)]
 const REMAINING_INFINITE: u16 = 0x7FFF;
 
 impl DfPnEntry {

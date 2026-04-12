@@ -1370,6 +1370,9 @@ impl DfPnSolver {
         self.diag_root_pk = pk;
         self.diag_root_hand = att_hand;
         let saved_depth = self.depth;
+        // v0.24.60: saved_depth_for_epsilon は full-depth 用に saved_depth
+        // を保持する (baseline 互換)．warmup mini-IDS 内のみ一時的に
+        // 0 に設定し self.depth ベースの epsilon を使用する．
         self.saved_depth_for_epsilon = saved_depth;
         let mut ids_depth: u32 = 2;
         let total_max_nodes = self.max_nodes;
@@ -1424,7 +1427,13 @@ impl DfPnSolver {
                 break;
             }
             let _budget = if ids_depth < saved_depth {
-                // 残り IDS ステップ数に応じた予算配分．
+                // 中間 IDS step の予算配分:
+                // remaining_budget / (remaining_steps + 1) の均等割り．
+                //
+                // remaining_steps は (saved_depth - ids_depth) / 2 + 1 で
+                // 概算．浅い step (depth=2,4) は allocated budget の
+                // ごく一部しか消費せず，未消費分が後続 step に蓄積
+                // されるため，深い step ほど実質的に多くの budget を得る．
                 let remaining_budget =
                     total_max_nodes.saturating_sub(self.nodes_searched);
                 let remaining_steps =
@@ -1448,6 +1457,101 @@ impl DfPnSolver {
             self.max_ply = 0;
 
             if ids_depth == saved_depth {
+                // (v0.24.60) Warmup MID: full-depth 前に浅い depth で MID を
+                // 1 回実行し，ProvenTT を予熱する．
+                //
+                // ## 目的
+                //
+                // depth > 19 の full-depth MID は chain aigoma の指数爆発
+                // により mate 発見に膨大な nodes を消費する (depth=25 で
+                // 15M+ Unknown)．Warmup MID で saved_depth * 2/3 程度の
+                // 浅い depth を予算 1/3 で解くことで:
+                //
+                // 1. mate proof が ProvenTT に蓄積される
+                // 2. full-depth MID の prefilter/cross_deduce が hit し
+                //    chain aigoma を即座に刈り取る
+                // 3. depth=25 でも depth=17 同等の効率で mate を発見可能
+                //
+                // ## 予算配分
+                //
+                // warmup: total の 1/3 (chain 浅い → ~500K で十分)
+                // full: 残り全て (warmup で解決済みなら root_pn=0 → 即完了)
+                //
+                // ## 適用条件
+                //
+                // saved_depth > 19 (浅い depth では直接ジャンプで十分)
+                // warmup_depth > 4 (depth=2,4 のウォームアップ済み)
+                if saved_depth > 19
+                    && self.nodes_searched < total_max_nodes
+                    && !self.timed_out
+                {
+                    let warmup_depth = saved_depth.saturating_sub(4);
+                    if warmup_depth > 4 {
+                        // (v0.24.60) Warmup: nested mid_fallback で
+                        // ProvenTT を予熱する．
+                        //
+                        // nested mid_fallback は内部で retain_proofs_only を
+                        // 呼ぶため **WorkingTT の intermediate は消去される**．
+                        // これは既知の制約であり (§10.2.1 課題 2)，warmup が
+                        // proof 発見に失敗した場合は full-depth MID が
+                        // intermediate ゼロから再探索する必要がある．
+                        //
+                        // warmup_depth = saved - 4 の根拠:
+                        // - depth=21 → warmup=17: remaining=17 で 15 手詰を
+                        //   確実に発見可能 (baseline depth=17 と同等)
+                        // - depth=25 → warmup=21: remaining=21 + denom=3 で
+                        //   proof 発見
+                        //
+                        // 再帰の深さ:
+                        // nested mid_fallback は warmup_depth > 19 のとき
+                        // さらに再帰的に warmup を呼ぶ．最大ネスト回数は
+                        // (saved_depth - 19) / 4 回:
+                        //   depth=25 → warmup(21) → warmup(17) → 終了
+                        //   depth=41 → warmup(37) → ... → warmup(21)
+                        //            → warmup(17) → 終了 (最大 6 回)
+                        // 各ネストで retain_proofs_only が呼ばれるため，
+                        // WorkingTT は各回でリセットされる．
+                        let warmup_budget = (total_max_nodes
+                            .saturating_sub(self.nodes_searched)) / 3;
+                        let save_max_nodes = self.max_nodes;
+                        self.max_nodes = self.nodes_searched
+                            .saturating_add(warmup_budget);
+                        verbose_eprintln!(
+                            "[ids] warmup mid_fallback: depth={} budget={}K",
+                            warmup_depth, warmup_budget / 1000
+                        );
+                        // Warmup 中は denom=3 (loose) を強制．
+                        let save_eps = self.param_epsilon_denom;
+                        self.param_epsilon_denom = 3;
+                        // nested mid_fallback: PNS + IDS を warmup_depth で
+                        // 完全実行し，proof 発見に必要な TT 状態を構築する．
+                        self.depth = warmup_depth;
+                        self.mid_fallback(board);
+                        // epsilon を full-depth 用に復元
+                        self.param_epsilon_denom = save_eps;
+                        // saved_depth_for_epsilon を復元:
+                        // nested mid_fallback が warmup_depth で上書き
+                        // するため，outer の saved_depth に戻す．
+                        // 現状 ≥19 で一律 denom=2 のため無害だが，
+                        // 閾値変更時の暗黙の依存を防止する．
+                        self.saved_depth_for_epsilon = saved_depth;
+                        // Warmup 後に root を再チェック
+                        self.depth = saved_depth;
+                        let (rp, _, _) = self.look_up_pn_dn(
+                            pk, &att_hand, saved_depth as u16,
+                        );
+                        if rp == 0 {
+                            verbose_eprintln!(
+                                "[ids] warmup solved! nodes={}",
+                                self.nodes_searched
+                            );
+                            self.max_nodes = save_max_nodes;
+                            break;
+                        }
+                        self.max_nodes = save_max_nodes;
+                    }
+                }
+
                 // フルデプス: MID 先行(動的予算) + Frontier Variant フォールバック．
                 //
                 // 方針B(§10.2): MID を固定 1/2 予算ではなくチャンク分割し，
@@ -1665,34 +1769,69 @@ impl DfPnSolver {
             let time_exceeded = ids_depth < saved_depth
                 && remaining_time < self.timeout.as_secs_f64() * 0.25;
 
-            // IDS 反復間でのクリーンアップ + depth 進行:
-            // WorkingTT を全クリア(構造的不詰エントリ + path-dep disproof の汚染防止)
-            self.table.clear_working();
+            // IDS 反復間での depth 進行判断．
+            // 施策 I (v0.24.45): WorkingTT の全クリアは廃止し，intermediate
+            // エントリを選択的に保持する．保持時は remaining を depth 差分だけ
+            // シフトし，新 depth での初期下限値として再利用する．
+            let prev_ids_depth = ids_depth;
 
             if stagnated || time_exceeded {
                 ids_depth = saved_depth;
             } else {
-                // 深さ進行:
-                // saved_depth > 31 の場合: 段階的 IDS
-                //   depth ≤ 32: 倍増 (2→4→8→16→32)
-                //   depth > 32: +4 刻み (32→36→40→41)
-                //   深い depth での TT ウォームアップを段階的に行い，
-                //   プレフィルタ (§8.4) のヒット率を向上させる．
-                //   v0.24.38 の選択的 disproof 保持と相乗効果:
-                //   中間ステップの NM disproof が次のステップに引き継がれる．
-                // saved_depth <= 31 の場合: 直接ジャンプ (2→4→31)
-                //   浅い問題では中間深さの探索が無駄になるため
+                // (v0.24.60) 深さ進行
+                //
+                // depth ≤ 32: 倍増 (2→4→8→16→32)
+                // depth > 32: +4 刻み (32→36→40→...)
+                //
+                // saved_depth ≤ 19: 直接ジャンプ (2→4→saved_depth)
+                //   浅い問題は warmup 不要で直接ジャンプが最効率．
+                //   depth ≤ 19 は epsilon denom=3 (自然に loose) のため
+                //   cliff は発生しない．
+                //
+                // saved_depth > 19: 段階的 IDS + warmup
+                //   warmup mid_fallback が中間 depth の proof 蓄積を担う．
+                //   warmup が proof を発見した場合は IDS ループ冒頭の
+                //   root_pn==0 check で即座に break する．
+                //   段階的 IDS は warmup miss 時のフォールバック．
                 let next = if ids_depth >= 32 {
-                    // 32 以降は +4 刻みで段階的に進行
                     ids_depth + 4
                 } else {
                     ids_depth.saturating_mul(2).max(ids_depth + 2)
                 };
-                if saved_depth <= 31 && next > 4 && next < saved_depth {
+                if saved_depth <= 19 && next > 4 && next < saved_depth {
                     ids_depth = saved_depth;
                 } else {
                     ids_depth = next.min(saved_depth);
                 }
+            }
+
+            // 施策 I (v0.24.45): WorkingTT から intermediate を選択的に保持．
+            //
+            // `test_tsume_39te_ply25_gap_diagnosis` (v0.24.44) で「depth=17 で
+            // 75K intermediate → depth=21 で 0」という中間進捗の全消去が観測され，
+            // 合駒チェーンの不詰部分証明が毎 IDS step でゼロから再構築される
+            // 問題の原因となっていた．
+            //
+            // 保持条件 (`retain_working_intermediates` 参照):
+            //   pn>0 && dn>0 && !path_dependent && remaining < INFINITE
+            //
+            // 保持時は `remaining` に depth 差分 (delta) を加算する．
+            // 旧 depth で計算された pn/dn は新 depth での初期下限値として
+            // 安全に再利用される (より多くの remaining = より多くの探索が
+            // 必要 → 旧 pn/dn は常に真の値以下)．
+            //
+            // delta は通常 2〜4 (段階的 IDS)．stagnation で saved_depth に
+            // 直接ジャンプする場合は delta が大きくなりうるが，
+            // shift 後の remaining が REMAINING_INFINITE を超えない限り
+            // 安全に保持される (超える場合は個別に除去される)．
+            if ids_depth > prev_ids_depth {
+                let delta = (ids_depth - prev_ids_depth) as u16;
+                // min_remaining=0: 全ての非 path-dep intermediate を保持
+                self.table.retain_working_intermediates(0, delta);
+            } else {
+                // depth が進まない (stagnated で prev == saved_depth) or
+                // depth が減る (起きえないが防御的に) → 従来通り全クリア
+                self.table.clear_working();
             }
 
             // ProvenTT の浅い confirmed disproof を選択的に除去:
@@ -1840,6 +1979,15 @@ impl DfPnSolver {
             // サイクル間 TT 清掃: MID が蓄積した中間エントリを除去し，
             // 次の PNS サイクルが新鮮な状態でフロンティアを選択できるようにする．
             // 証明(pn=0)と確定反証(dn=0, 非経路依存)は保持する．
+            //
+            // NOTE (v0.24.45): 当初は `retain_proofs_and_intermediates()` で
+            // 非 path-dep intermediate も保持する案を試みたが，
+            // `test_no_checkmate_gold_interposition` で soundness 違反が発生した．
+            // Frontier サイクル境界は PNS アリーナが破棄される境界であり，
+            // stale intermediate pn/dn を次サイクルに持ち越すと proof 伝搬に
+            // 影響する．Frontier サイクル境界では従来通り全 intermediate を
+            // 除去する方針を維持する．施策 I (IDS depth 切替時の保持) のみ
+            // 採用．詳細は benchmarks.md §10.2 v0.24.45 参照．
             self.table.retain_proofs();
         }
         self.max_nodes = total_max_nodes;

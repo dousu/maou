@@ -20,7 +20,7 @@
 ## 1. 概要
 
 maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, Nagai 2002) を
-基盤とし，Best-First PNS と IDS-dfpn(Frontier Variant 統合）の
+基盤とし，Best-First PNS と IDS-dfpn (Frontier Variant 統合) の
 2フェーズ探索を採用する．
 
 ### 設計目標
@@ -119,3 +119,10 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 71 | PV visit 予算の動的スケーリング (10M〜50M) | maou 独自 | §10.2 | v0.24.42 |
 | 72 | チューニング可能パラメータ (param\_epsilon\_denom 等) | maou 独自 | §11.8 | v0.24.41 |
 | 73 | GC Phase 2 no-op バグ修正 (`clear_proven_disproofs_below(u32::MAX)`) | maou 独自 | §6.6 | v0.24.43 |
+| 74 | ply25 gap 診断テスト (4 層構造の特定 + 施策再優先化) | maou 独自 | §10.2 | v0.24.44 |
+| 75 | cross\_deduce neighbor\_scan 有効化 (相互マス証明の近傍走査) | maou 独自 | §8.5 | v0.24.55 |
+| 76 | cross\_deduce forward-chain transitive closure | maou 独自 | §8.5 | v0.24.57 |
+| 77 | prefilter A-fix: 2 段階 lookup + either-or or\_ph + 適応的 neighbor\_scan | maou 独自 | §8.4 | v0.24.58 |
+| 78 | multi-step cross\_deduce: cross\_deduce 後の異マス prefilter re-trigger + cascade | maou 独自 | §8.5 | v0.24.59 |
+| 79 | IDS warmup mid\_fallback: depth > 19 の full-depth 前に saved-4 で nested IDS + forced denom=3 | maou 独自 | §2.3, §10.2 | v0.24.60 |
+| 80 | IDS 直接ジャンプを depth ≤ 19 に制限 (旧 ≤ 31 → cliff 解消) | maou 独自 | §2.3, §10.2 | v0.24.60 |

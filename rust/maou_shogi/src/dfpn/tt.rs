@@ -442,12 +442,18 @@ impl TranspositionTable {
             }
         }
         // Pass 2: confirmed disproof(dn=0) — 自クラスタ
+        // 注意: ProvenTT の confirmed disproof は常に depth 非依存として
+        // 格納されるため，query 側の `remaining` との比較は不要 (v0.24.53 で
+        // ProvenEntry.remaining フィールドを meta にリネームし remaining()
+        // accessor を削除したことで明示化)．depth 情報は flags bits 1-6 の
+        // disproof_depth() に格納されており，`clear_proven_disproofs_below`
+        // での選択的除去で管理する．
+        let _ = remaining;
         for fe in home {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
             if !e.is_proof()
                 && hand_gte_forward_chain(&e.hand, hand)
-                && e.remaining() >= remaining
             {
                 return (e.pn(), 0, e.source());
             }
@@ -464,7 +470,6 @@ impl TranspositionTable {
                 let e = &fe.entry;
                 if !e.is_proof()
                     && hand_gte_forward_chain(&e.hand, hand)
-                    && e.remaining() >= remaining
                 {
                     NEIGHBOR_DIAG[1].fetch_add(1, Ordering::Relaxed);
                     return (e.pn(), 0, e.source());
@@ -594,6 +599,41 @@ impl TranspositionTable {
         self.look_up_working(pos_key, hand, remaining, neighbor_scan)
     }
 
+    /// 施策 X-N A-fix (v0.24.58): 同一 pos_key の hand バリアント数を
+    /// 自クラスタから推定する．
+    ///
+    /// 本関数は `try_prefilter_block` で `neighbor_scan` を条件付きで
+    /// 有効化するために使用される．自クラスタに pos_key と一致するが
+    /// hand が異なる ProvenTT エントリが 1 個以上存在する場合 `true` を返す．
+    ///
+    /// 原理:
+    /// - ProvenTT クラスタは `pos_key ^ hand_hash(hand)` でインデックス．
+    ///   異なる hand は異なるクラスタに分散するのが基本．
+    /// - 自クラスタ内に pos_key 一致かつ hand 不一致のエントリがある場合，
+    ///   hand_hash の衝突か同一 pos_key を異なる hand で store したかの
+    ///   いずれか．いずれの場合も hand バリアントが TT 上に複数存在し，
+    ///   neighbor_scan で追加 proof 発見の期待値が高い．
+    /// - 真の variant 数 (全クラスタの全 hand) の正確なカウントは高価な
+    ///   ため本関数は **cheap な下界推定** として機能する．
+    ///
+    /// cost: 自クラスタ走査 1 回 (PROVEN_CLUSTER_SIZE エントリ).
+    pub(super) fn proven_has_other_hand_variant(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> bool {
+        let pos_key = Self::safe_key(pos_key);
+        for fe in self.proven_cluster(pos_key, hand) {
+            if fe.pos_key == pos_key
+                && fe.entry.is_proof()
+                && fe.entry.hand != *hand
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// 指定局面に proof エントリ(pn=0)が存在するかチェックする．
     ///
     /// 自クラスタ + 持ち駒-1の近傍クラスタ(±1限定)を走査する．
@@ -704,6 +744,89 @@ impl TranspositionTable {
             best_move, mate_distance);
     }
 
+    /// 施策 X (v0.24.53+): tag 付き proof を ProvenTT に格納する．
+    ///
+    /// 通常の `store` 経路と異なり，明示的に proof_tag (FILTER_DEPENDENT /
+    /// PROVISIONAL / ABSOLUTE) を指定して永続性を制御する．non-ABSOLUTE tag
+    /// を指定した proof は `clear_proven_disproofs_below(min_depth)` で
+    /// `tag_depth < min_depth` の場合に除去される．
+    ///
+    /// 呼出用途:
+    /// - 施策 α (境界層 chain drop filter): FILTER_DEPENDENT で store
+    /// - 施策 A-6 (PNS 境界責任転嫁): PROVISIONAL で store
+    ///
+    /// pn != 0 を指定すると panic する (tagged proof は必ず確定証明)．
+    pub(super) fn store_tagged_proof(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+        best_move: u16,
+        mate_distance: u16,
+        tag: u8,
+        tag_depth: u32,
+    ) {
+        let pos_key = Self::safe_key(pos_key);
+        let new_entry = super::entry::ProvenEntry::new_tagged_proof(
+            hand, best_move, mate_distance, tag, tag_depth,
+        );
+        let new_priority = new_entry.amount();
+        let p_start = self.proven_cluster_start(pos_key, &hand);
+
+        // 同一 hand の proof がいれば priority 比較で上書き判定
+        {
+            let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
+            for fe in p_cluster.iter_mut() {
+                if fe.pos_key != pos_key { continue; }
+                if fe.entry.is_proof() && fe.entry.hand == hand {
+                    if new_priority >= fe.entry.amount() {
+                        fe.pos_key = 0;
+                    } else {
+                        return; // 既存の方が価値高
+                    }
+                }
+            }
+        }
+
+        // 空スロット or 最弱スロットに挿入
+        let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
+        // Phase 1: 空スロット
+        for fe in p_cluster.iter_mut() {
+            if fe.pos_key == 0 {
+                fe.pos_key = pos_key;
+                fe.entry = new_entry;
+                return;
+            }
+        }
+        // Phase 2: 最弱の eviction (eviction priority 最小の entry と置換)
+        let mut min_idx: usize = 0;
+        let mut min_prio = u8::MAX;
+        for (i, fe) in p_cluster.iter().enumerate() {
+            let prio = fe.entry.amount();
+            if prio < min_prio {
+                min_prio = prio;
+                min_idx = i;
+            }
+        }
+        if new_priority > min_prio {
+            p_cluster[min_idx].pos_key = pos_key;
+            p_cluster[min_idx].entry = new_entry;
+        }
+    }
+
+    /// テスト用: tagged proof を直接ストアする (store_tagged_proof のエイリアス)．
+    #[cfg(test)]
+    pub(super) fn store_tagged_proof_for_test(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+        best_move: u16,
+        mate_distance: u16,
+        tag: u8,
+        tag_depth: u32,
+    ) {
+        self.store_tagged_proof(pos_key, hand, best_move, mate_distance, tag, tag_depth);
+    }
+
     /// 経路依存フラグ付きで転置表を更新する．
     #[inline(always)]
     pub(super) fn store_path_dep(
@@ -738,6 +861,8 @@ impl TranspositionTable {
 
         // === 共通: 既存の証明/反証に支配されているなら挿入不要 ===
         // ProvenTT をチェック (Plan D: ProvenEntry ベース)
+        // 注意: v0.24.53 以降，ProvenTT の confirmed disproof は depth 非依存
+        // として格納されるため `remaining` との比較は不要．
         for fe in self.proven_cluster(pos_key, &hand) {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
@@ -748,7 +873,6 @@ impl TranspositionTable {
             if !e.is_proof()
                 && !path_dependent
                 && hand_gte_forward_chain(&e.hand, &hand)
-                && e.remaining() >= remaining
             {
                 #[cfg(feature = "verbose")] { self.diag_dominated_skip += 1; }
                 return;
@@ -1293,6 +1417,11 @@ impl TranspositionTable {
     }
 
     /// 反証エントリの remaining を返す(±1近傍走査付き)．
+    ///
+    /// v0.24.53 以降: ProvenTT の confirmed disproof は常に depth 非依存
+    /// (`REMAINING_INFINITE` 相当) のため，該当クラスタで hit した場合は
+    /// `REMAINING_INFINITE` を返す．WorkingTT の depth-limited disproof は
+    /// 従来通り `DfPnEntry::remaining()` を使う．
     pub(super) fn get_disproof_remaining(
         &self,
         pos_key: u64,
@@ -1304,7 +1433,7 @@ impl TranspositionTable {
                 && !fe.entry.is_proof()
                 && hand_gte_forward_chain(&fe.entry.hand, hand)
             {
-                return fe.entry.remaining();
+                return REMAINING_INFINITE;
             }
         }
         for fe in self.working_cluster(pos_key, hand) {
@@ -1327,7 +1456,7 @@ impl TranspositionTable {
                     && !fe.entry.is_proof()
                     && hand_gte_forward_chain(&fe.entry.hand, hand)
                 {
-                    return fe.entry.remaining();
+                    return REMAINING_INFINITE;
                 }
             }
             let w_start = self.working_cluster_start_from_hash(pos_key, base_hh ^ diff);
@@ -1344,6 +1473,10 @@ impl TranspositionTable {
     }
 
     /// lookup が実際に使用する反証エントリの情報を返す(±1近傍走査付き)．
+    ///
+    /// v0.24.53 以降: ProvenTT の confirmed disproof は depth 非依存として
+    /// 格納されるため `remaining` 比較は不要 (常に REMAINING_INFINITE 相当)．
+    /// WorkingTT の depth-limited disproof は従来通り `remaining` 比較する．
     pub(super) fn get_effective_disproof_info(
         &self,
         pos_key: u64,
@@ -1355,9 +1488,8 @@ impl TranspositionTable {
             if fe.pos_key == pos_key
                 && !fe.entry.is_proof()
                 && hand_gte_forward_chain(&fe.entry.hand, hand)
-                && fe.entry.remaining() >= remaining
             {
-                return Some((fe.entry.remaining(), false));
+                return Some((REMAINING_INFINITE, false));
             }
         }
         for fe in self.working_cluster(pos_key, hand) {
@@ -1380,9 +1512,8 @@ impl TranspositionTable {
                 if fe.pos_key == pos_key
                     && !fe.entry.is_proof()
                     && hand_gte_forward_chain(&fe.entry.hand, hand)
-                    && fe.entry.remaining() >= remaining
                 {
-                    return Some((fe.entry.remaining(), false));
+                    return Some((REMAINING_INFINITE, false));
                 }
             }
             let w_start = self.working_cluster_start_from_hash(pos_key, base_hh ^ diff);
@@ -1439,6 +1570,66 @@ impl TranspositionTable {
         self.working_overflow_since_gc = 0;
     }
 
+    /// IDS depth 切替時に WorkingTT から intermediate エントリを選択的に保持する (v0.24.45)．
+    ///
+    /// 施策 I: `test_tsume_39te_ply25_gap_diagnosis` (v0.24.44) で特定された
+    /// 「IDS depth 切替時の intermediate 全消去」問題への対策．
+    ///
+    /// # 保持条件
+    ///
+    /// 以下を全て満たすエントリのみ保持する:
+    /// 1. `pn > 0 && dn > 0` (intermediate; proven/disproven は既に ProvenTT にあるか除去される)
+    /// 2. `!path_dependent` (GHI 不整合防止)
+    /// 3. `remaining >= min_remaining` (前 IDS step の上位 N ply 分の作業のみ保持)
+    /// 4. `remaining != REMAINING_INFINITE` (depth-limited のみ; 仮値は除外)
+    ///
+    /// # remaining の shift
+    ///
+    /// 保持したエントリの `remaining` に `delta_remaining` を加算する．
+    /// 旧 IDS depth で計算された pn/dn は新 depth でも**下限値として有効**である
+    /// (より多くの remaining = より多くの探索必要 → 旧 pn/dn は安全な初期下限)．
+    /// 加算後の値が `REMAINING_INFINITE` を超える場合は保持しない．
+    ///
+    /// # 返り値
+    ///
+    /// 保持したエントリ数．0 なら通常の `clear_working()` と同じ効果．
+    ///
+    /// # 注意
+    ///
+    /// - path-dependent disproof は常に除去する (GHI 対策)
+    /// - depth-limited disproof (dn=0, remaining < INFINITE) も除去する
+    ///   (新 depth では無効になる可能性が高い)
+    /// - 保持後は `working_overflow_since_gc` をリセットする
+    pub(super) fn retain_working_intermediates(
+        &mut self,
+        min_remaining: u16,
+        delta_remaining: u16,
+    ) -> usize {
+        let mut kept = 0usize;
+        for fe in self.working.iter_mut() {
+            if fe.pos_key == 0 { continue; }
+            let entry = &mut fe.entry;
+            let rem = entry.remaining();
+            let is_intermediate = entry.pn > 0 && entry.dn > 0;
+            let is_path_dep = entry.path_dependent();
+            let is_depth_limited = rem < REMAINING_INFINITE;
+            let new_rem = rem.saturating_add(delta_remaining);
+            let keep = is_intermediate
+                && !is_path_dep
+                && is_depth_limited
+                && rem >= min_remaining
+                && new_rem < REMAINING_INFINITE;
+            if keep {
+                entry.set_remaining(new_rem);
+                kept += 1;
+            } else {
+                fe.pos_key = 0;
+            }
+        }
+        self.working_overflow_since_gc = 0;
+        kept
+    }
+
     /// WorkingTT の overflow カウンタを取得しリセットする．
     ///
     /// 前回の drain/GC/clear 以降に発生したクラスタ overflow の累積回数を返す．
@@ -1450,20 +1641,46 @@ impl TranspositionTable {
         count
     }
 
-    /// ProvenTT の confirmed disproof を除去する．
+    /// ProvenTT の ephemeral エントリ (confirmed disproof + non-ABSOLUTE proof)
+    /// を選択的に除去する．
     ///
-    /// IDS depth 切り替え時に呼び出す．浅い IDS depth で REMAINING_INFINITE
-    /// として格納された confirmed disproof が，深い depth の探索を汚染する
-    /// のを防ぐ(NoMate バグ対策)．Proof (pn=0) は影響を受けない．
-    /// ProvenTT の confirmed disproof のうち，確認 depth が `min_depth` 未満の
-    /// ものを除去する．`min_depth` 以上で確認された disproof は保持する．
+    /// IDS depth 切り替え時に呼び出す．2 種のエントリを一括管理する:
     ///
-    /// IDS depth 切替時に浅い depth で確認された disproof のみ除去し，
-    /// 深い depth の disproof を再利用可能にする．
+    /// 1. **confirmed disproof** (is_proof=0): 浅い IDS depth で REMAINING_INFINITE
+    ///    として格納された confirmed disproof が深い depth の探索を汚染する
+    ///    のを防ぐ (NoMate バグ対策)．`disproof_depth() < min_depth` のエントリ
+    ///    のみ除去し，`min_depth` 以上のものは保持する．
+    ///
+    /// 2. **non-ABSOLUTE proof** (is_proof=1 かつ proof_tag != ABSOLUTE)
+    ///    (施策 X, v0.24.53+): heuristic filter 下で生成された FILTER_DEPENDENT /
+    ///    PROVISIONAL proof が，後続 IDS step を汚染するのを防ぐ．`tag_depth()
+    ///    < min_depth` のエントリのみ除去．
+    ///
+    /// **ABSOLUTE proof は永続**: 完全 df-pn 探索による proof (tag=ABSOLUTE)
+    /// は depth 非依存の真理として扱われ除去されない．従来の `new_proof` 経由
+    /// のエントリはすべて ABSOLUTE tag で格納されるため backward compat．
+    ///
+    /// 施策 α (v0.24.47, revert) や A-6 (v0.24.51, revert) の失敗は，
+    /// ProvenTT の REMAINING_INFINITE 不変条件下で heuristic proof が
+    /// 汚染していたため．proof_tag 付きエントリと本 API の統合により
+    /// soundness を保ちつつ heuristic 施策を適用可能になる．
+    ///
+    /// 呼出元 (pns.rs:~1704): IDS depth 遷移で `clear_proven_disproofs_below(next_ids_depth / 2)`
+    /// として呼ばれる．proof/disproof 共通の閾値で動作する．
     pub(super) fn clear_proven_disproofs_below(&mut self, min_depth: u32) {
         for fe in self.proven.iter_mut() {
-            if fe.pos_key != 0 && !fe.entry.is_proof() {
-                if fe.entry.disproof_depth() < min_depth {
+            if fe.pos_key == 0 { continue; }
+            let e = &fe.entry;
+            if e.is_proof() {
+                // 施策 X: non-ABSOLUTE proof を tag_depth ベースで選択除去
+                if e.proof_tag() != super::entry::PROOF_TAG_ABSOLUTE
+                    && e.tag_depth() < min_depth
+                {
+                    fe.pos_key = 0;
+                }
+            } else {
+                // 既存: confirmed disproof を disproof_depth ベースで選択除去
+                if e.disproof_depth() < min_depth {
                     fe.pos_key = 0;
                 }
             }
@@ -1834,9 +2051,11 @@ impl TranspositionTable {
                 let e = &fe.entry;
                 // ProvenEntry は常に path_dependent=false (設計上，path-dep
                 // エントリは WorkingTT に格納される)．
+                // v0.24.53: remaining フィールドは meta に変更されたため
+                // proof_tag/tag_depth を出力する．
                 verbose_eprintln!(
-                    "  [P{}]: pn={} dn={} remaining={} path_dep=false hand={:?}",
-                    i, e.pn(), e.dn(), e.remaining(), &e.hand
+                    "  [P{}]: pn={} dn={} tag={} tag_depth={} path_dep=false hand={:?}",
+                    i, e.pn(), e.dn(), e.proof_tag(), e.tag_depth(), &e.hand
                 );
             }
         }
@@ -1886,6 +2105,8 @@ impl TranspositionTable {
         let mut inter_dn_buckets: [u64; 5] = [0; 5];
 
         // ProvenTT: proof / confirmed disproof のみ
+        // v0.24.53: ProvenEntry の disproof は remaining 非保持 (常に INFINITE)
+        // のため disproof_rem は常に [32] にカウントする．
         for fe in self.proven.iter() {
             if fe.pos_key == 0 { continue; }
             let e = &fe.entry;
@@ -1893,8 +2114,7 @@ impl TranspositionTable {
                 proof_count += 1;
             } else {
                 disproof_count += 1;
-                let ri = if e.remaining() == REMAINING_INFINITE { 32 } else { (e.remaining() as usize).min(31) };
-                disproof_rem[ri] += 1;
+                disproof_rem[32] += 1;
             }
         }
         // WorkingTT: intermediate + depth-limited disproof
