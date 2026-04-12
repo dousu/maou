@@ -7434,10 +7434,13 @@ use crate::types::{Color, PieceType};
         assert_eq!(pn, 0, "ABSOLUTE proof must never be removed");
     }
 
-    /// ply 2 NoMate 調査用テスト (v0.24.62)
+    /// ply 2 false NoMate 回帰テスト (v0.24.63)．
+    ///
+    /// 39手詰め PV 上の ply 2 局面 (37手詰め) を depth=39, 10M budget で solve し，
+    /// NoCheckmate を返さないことを検証する．Unknown は正常 (budget 不足)．
+    /// v0.24.60 以前では IDS NM 昇格判定のバグにより false NoMate が発生していた．
     #[test]
-    #[ignore]
-    fn test_tsume_39te_ply2_nomate_investigation() {
+    fn test_tsume_39te_ply2_no_false_nomate() {
         let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
         let pv = [
             "7b6b", "5b4c",

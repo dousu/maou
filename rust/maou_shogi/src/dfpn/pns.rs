@@ -1717,9 +1717,15 @@ impl DfPnSolver {
             }
             // IDS NM 判定: 構造的判定のみ信頼する．
             //
-            // 1. NM remaining が REMAINING_INFINITE なら真の不詰として打ち切る．
+            // 1. NM remaining が REMAINING_INFINITE **かつ** 現在の IDS depth が
+            //    残り手数以上なら真の不詰として打ち切る．
             //    MID が深さ制限なしに全パスを網羅して NM を確定した場合にのみ
             //    REMAINING_INFINITE が伝搬される．
+            //    ただし ids_depth < remaining の場合は，前の IDS サイクルや
+            //    warmup の MID が蓄積した ProvenTT の confirmed disproof が
+            //    浅い depth の look_up でヒットしただけの可能性がある．
+            //    この場合は depth-limited 仮 NM と同等に扱い昇格しない．
+            //    (v0.24.63: ply 2 NoMate バグの修正)
             // 2. 全王手が再帰的に反証可能なら REMAINING_INFINITE に昇格して打ち切る．
             //
             // depth 制限由来の仮 NM (remaining < REMAINING_INFINITE) は昇格しない．
@@ -1727,10 +1733,18 @@ impl DfPnSolver {
             // これを真の不詰と判定すると偽陽性が発生する(例: 39手詰め)．
             if root_dn2 == 0 {
                 let root_nm_rem = self.table.get_disproof_remaining(pk, &att_hand);
-                verbose_eprintln!("[ids] NM: depth={} nm_rem={} REMAINING_INFINITE={}",
-                    ids_depth, root_nm_rem, REMAINING_INFINITE);
-                if root_nm_rem == REMAINING_INFINITE {
-                    verbose_eprintln!("[ids] NM INFINITE, break");
+                verbose_eprintln!("[ids] NM: depth={}/{} nm_rem={} REMAINING_INFINITE={}",
+                    ids_depth, saved_depth, root_nm_rem, REMAINING_INFINITE);
+                // v0.24.63: ids_depth >= saved_depth ガードを追加．
+                // ids_depth が saved_depth (solve() に渡された真の目標深さ) 未満
+                // の場合，TT の REMAINING_INFINITE disproof は前の IDS サイクルや
+                // warmup の深い depth が蓄積した結果であり，現在の浅い depth では
+                // まだ全パスを網羅していない．昇格すると false NoMate が発生する．
+                // (remaining は ids_depth と同値のため，ガード条件には使えない)
+                if root_nm_rem == REMAINING_INFINITE
+                    && ids_depth >= saved_depth
+                {
+                    verbose_eprintln!("[ids] NM INFINITE (ids_depth >= saved_depth), break");
                     break;
                 }
                 let checks = self.generate_check_moves_cached(board);
@@ -1739,9 +1753,13 @@ impl DfPnSolver {
                 } else {
                     self.depth_limit_all_checks_refutable(board, &checks)
                 };
-                verbose_eprintln!("[ids] refutable={} checks={}", refutable, checks.len());
-                if checks.is_empty() || refutable {
-                    verbose_eprintln!("[ids] NM promoted to INFINITE, break");
+                verbose_eprintln!("[ids] refutable={} checks={} ids_depth={}/{}",
+                    refutable, checks.len(), ids_depth, saved_depth);
+                // v0.24.63: refutable 昇格にも ids_depth >= saved_depth ガードを適用．
+                // 浅い IDS depth で refutable=true が出ても，saved_depth に達して
+                // いなければ depth-limited な scope でしか反証可能性を確認していない．
+                if (checks.is_empty() || refutable) && ids_depth >= saved_depth {
+                    verbose_eprintln!("[ids] NM promoted to INFINITE (ids_depth >= saved_depth), break");
                     // att_hand で保存(TT ヒット率最大化)
                     self.table.store(
                         pk, att_hand, INF, 0, REMAINING_INFINITE, pk as u32,
