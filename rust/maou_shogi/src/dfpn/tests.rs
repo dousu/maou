@@ -7433,3 +7433,49 @@ use crate::types::{Color, PieceType};
         let (pn, _, _) = tt.look_up(pk, &hand, 0x7FFF, false);
         assert_eq!(pn, 0, "ABSOLUTE proof must never be removed");
     }
+
+    /// ply 2 NoMate 調査用テスト (v0.24.62)
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply2_nomate_investigation() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        eprintln!("ply 2 SFEN: {}", board.sfen());
+        eprintln!("Turn: {:?} (attacker=Sente expected)", board.turn);
+
+        let remaining = 37u32;
+        let depth = remaining.saturating_add(2).min(41);
+        eprintln!("remaining={} depth={}", remaining, depth);
+
+        let mut solver = DfPnSolver::with_timeout(depth, 10_000_000, 32767, 600);
+        solver.set_find_shortest(false);
+
+        let result = solver.solve(&mut board);
+        eprintln!("Result: {:?}", result);
+        eprintln!("Nodes: {} MaxPly: {}", solver.nodes_searched, solver.max_ply);
+
+        match &result {
+            TsumeResult::NoCheckmate { .. } => {
+                panic!("BUG: ply 2 returned NoMate but should be on 39-move PV");
+            }
+            TsumeResult::Unknown { .. } => {
+                eprintln!("Unknown (expected with 10M budget)");
+            }
+            TsumeResult::Checkmate { moves, .. } => {
+                eprintln!("Mate({}) — unexpected with 10M budget", moves.len());
+            }
+            TsumeResult::CheckmateNoPv { .. } => {
+                eprintln!("MateNoPV");
+            }
+        }
+    }
