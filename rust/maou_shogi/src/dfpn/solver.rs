@@ -306,6 +306,13 @@ pub struct DfPnSolver {
     /// した回数の累積．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_reverse_disproof_hits: u64,
+    /// TT 診断 (v0.24.62): multi-step 逆方向不詰共有で異マスの兄弟ドロップに
+    /// disproof が伝搬された回数．
+    ///
+    /// 同一マスの reverse_disproof_sharing 直後に，**異なるマス** のドロップに
+    /// 対しても reverse_disproof_sharing を re-trigger して伝搬した回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_multi_step_reverse_disproof_hits: u64,
     /// TT 診断: ply ごとの MID 訪問回数(最大64手)．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_ply_visits: [u64; 64],
@@ -464,6 +471,8 @@ impl DfPnSolver {
             diag_multi_step_hits: 0,
             #[cfg(feature = "tt_diag")]
             diag_reverse_disproof_hits: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_multi_step_reverse_disproof_hits: 0,
             #[cfg(feature = "tt_diag")]
             diag_ply_visits: [0u64; 64],
             #[cfg(feature = "tt_diag")]
@@ -3345,6 +3354,52 @@ impl DfPnSolver {
                     self.reverse_disproof_sharing(
                         board, m, &children, remaining,
                     );
+
+                    // Multi-step 逆方向不詰共有 (v0.24.62):
+                    //
+                    // reverse_disproof_sharing は disproved_move と **同一マス** の
+                    // 兄弟ドロップのみ対象．しかし disproved_move の sub-tree 探索中
+                    // に WorkingTT に蓄積された deeper chain step の disproof が
+                    // **異なるマス** のドロップにも適用できる場合がある:
+                    //
+                    // 例 (39te, ply 25 AND):
+                    //   - P*5g が disproven → Rx5g の post-capture (pc_pk, H) が
+                    //     disproven として WorkingTT に蓄積される
+                    //   - 異なるマスの drop P*4g → Rx4g でも同じ pc_pk に至る場合，
+                    //     reverse_disproof_sharing が hand 支配で disproof を伝搬可能
+                    //
+                    // 実装: disproven でない全 drop children に対して
+                    // reverse_disproof_sharing を re-trigger する．
+                    // reverse_disproof_sharing 直後は WorkingTT に新規 disproof
+                    // entry が蓄積されている確率が最も高い timing．
+                    let disproved_sq = m.to_sq();
+                    for j in 0..children.len() {
+                        let (mj, _, child_pk_j, child_hand_j) = &children[j];
+                        if !mj.is_drop() { continue; }
+                        // 同一マスは reverse_disproof_sharing が処理済み
+                        if mj.to_sq() == disproved_sq { continue; }
+                        // 既に disproven なら skip
+                        let (_, cdn_j, _) = self.look_up_pn_dn(
+                            *child_pk_j, child_hand_j,
+                            remaining.saturating_sub(1),
+                        );
+                        if cdn_j == 0 { continue; }
+                        // 異マスの child j に対して reverse_disproof_sharing を試行
+                        let prev_hits = {
+                            #[cfg(feature = "tt_diag")]
+                            { self.diag_reverse_disproof_hits }
+                            #[cfg(not(feature = "tt_diag"))]
+                            { 0u64 }
+                        };
+                        self.reverse_disproof_sharing(
+                            board, *mj, &children, remaining,
+                        );
+                        #[cfg(feature = "tt_diag")]
+                        {
+                            let new_hits = self.diag_reverse_disproof_hits - prev_hits;
+                            self.diag_multi_step_reverse_disproof_hits += new_hits;
+                        }
+                    }
                 }
             }
 

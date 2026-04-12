@@ -6990,6 +6990,7 @@ use crate::types::{Color, PieceType};
                 writeln!(out, "    deferred_already_proven = {}", solver.diag_pns_deferred_already_proven).unwrap();
                 writeln!(out, "    cross_deduce_hits  = {}", solver.diag_cross_deduce_hits).unwrap();
                 writeln!(out, "    reverse_disproof   = {}", solver.diag_reverse_disproof_hits).unwrap();
+                writeln!(out, "    ms_reverse_dis     = {}", solver.diag_multi_step_reverse_disproof_hits).unwrap();
                 writeln!(out, "    cd_guard_and_drop  = {}", solver.diag_cd_guard_and_drop).unwrap();
                 writeln!(out, "    cd_guard_child_proven = {}", solver.diag_cd_guard_child_proven).unwrap();
                 writeln!(out, "    cd_no_siblings     = {}", solver.diag_cd_no_siblings).unwrap();
