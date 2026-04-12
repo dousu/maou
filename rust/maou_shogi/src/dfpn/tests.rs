@@ -6142,6 +6142,8 @@ use crate::types::{Color, PieceType};
                 s.diag_deferred_ready,
                 s.diag_deferred_not_ready,
                 s.diag_cross_deduce_hits);
+            #[cfg(feature = "tt_diag")]
+            eprintln!("  reverse_disproof_hits={}", s.diag_reverse_disproof_hits);
         }
 
         // 8g6g 後の各防御手を個別に OR node として解く
@@ -6432,6 +6434,7 @@ use crate::types::{Color, PieceType};
             full_solver.diag_pns_deferred_activations).unwrap();
         writeln!(out, "PNS deferred already proven: {}", full_solver.diag_pns_deferred_already_proven).unwrap();
         writeln!(out, "Cross-deduce hits (MID): {}", full_solver.diag_cross_deduce_hits).unwrap();
+        writeln!(out, "Reverse disproof hits: {}", full_solver.diag_reverse_disproof_hits).unwrap();
 
         // ========================================
         // Phase 4: 正常性チェック
@@ -6986,6 +6989,7 @@ use crate::types::{Color, PieceType};
                 writeln!(out, "    deferred_act(pns)  = {}", solver.diag_pns_deferred_activations).unwrap();
                 writeln!(out, "    deferred_already_proven = {}", solver.diag_pns_deferred_already_proven).unwrap();
                 writeln!(out, "    cross_deduce_hits  = {}", solver.diag_cross_deduce_hits).unwrap();
+                writeln!(out, "    reverse_disproof   = {}", solver.diag_reverse_disproof_hits).unwrap();
                 writeln!(out, "    cd_guard_and_drop  = {}", solver.diag_cd_guard_and_drop).unwrap();
                 writeln!(out, "    cd_guard_child_proven = {}", solver.diag_cd_guard_child_proven).unwrap();
                 writeln!(out, "    cd_no_siblings     = {}", solver.diag_cd_no_siblings).unwrap();
