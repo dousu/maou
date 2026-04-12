@@ -298,6 +298,14 @@ pub struct DfPnSolver {
     /// prefilter re-check により proven 化された異マス children 数．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_multi_step_hits: u64,
+    /// TT 診断 (v0.24.61): 逆方向不詰共有 (reverse disproof sharing) で
+    /// post-capture level の disproof が兄弟ドロップに伝搬された回数．
+    ///
+    /// 強い駒の合駒が不詰 (cdn == 0) → 弱い駒の合駒も不詰 (hand_gte_forward_chain
+    /// の逆方向支配) を利用し，捕獲後局面 `(pc_pk, hand_weak)` に disproof を格納
+    /// した回数の累積．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_reverse_disproof_hits: u64,
     /// TT 診断: ply ごとの MID 訪問回数(最大64手)．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_ply_visits: [u64; 64],
@@ -454,6 +462,8 @@ impl DfPnSolver {
             diag_prefilter_fc_reject: 0,
             #[cfg(feature = "tt_diag")]
             diag_multi_step_hits: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_reverse_disproof_hits: 0,
             #[cfg(feature = "tt_diag")]
             diag_ply_visits: [0u64; 64],
             #[cfg(feature = "tt_diag")]
@@ -3245,7 +3255,7 @@ impl DfPnSolver {
             if !or_node && m.is_drop() {
                 #[cfg(feature = "tt_diag")]
                 { self.diag_cd_guard_and_drop += 1; }
-                let (cpn_after, _, _) = self.look_up_pn_dn(
+                let (cpn_after, cdn_after, _) = self.look_up_pn_dn(
                     children[best_idx].2,
                     &children[best_idx].3,
                     remaining.saturating_sub(1),
@@ -3319,6 +3329,22 @@ impl DfPnSolver {
                             );
                         }
                     }
+                }
+
+                // 逆方向不詰共有 (v0.24.61): disproven な合駒子から
+                // post-capture level の disproof を兄弟ドロップに伝搬する．
+                //
+                // cdn_after == 0 は「この合駒に対し攻方が詰ませられない」を
+                // 意味する．攻方の全応手 (捕獲を含む) が不詰のため，捕獲後
+                // 局面 (pc_pk, H_disproved) も不詰である．
+                //
+                // forward-chain 逆方向支配: H_disproved ≥_fc H_j のとき
+                // (pc_pk, H_j) も不詰 → WorkingTT に disproof を格納して
+                // 兄弟 j の MID 評価で捕獲応手を即座に省略可能にする．
+                if cdn_after == 0 {
+                    self.reverse_disproof_sharing(
+                        board, m, &children, remaining,
+                    );
                 }
             }
 
@@ -4047,6 +4073,134 @@ impl DfPnSolver {
 
         #[cfg(feature = "tt_diag")]
         { self.diag_cross_deduce_hits += closure_transfers; }
+    }
+
+    /// 逆方向不詰共有 (v0.24.61): disproven な合駒子から post-capture level の
+    /// disproof を兄弟ドロップに伝搬する．
+    ///
+    /// # 原理
+    ///
+    /// AND ノードの子 (守備方ドロップ) が disproven (cdn == 0) のとき，攻方の
+    /// **全ての**応手が不詰であるため，捕獲応手も不詰である:
+    ///
+    /// - 守備方が駒 P_i を合駒 → 攻方が P_i を捕獲 → 捕獲後局面 (pc_pk, H_i) も不詰
+    /// - H_i ≥_fc H_j (強い駒を捕獲した手駒は弱い駒を捕獲した手駒を支配)
+    /// - **H_i で詰まない → H_j でも詰まない** (逆方向 forward-chain 支配)
+    ///
+    /// この disproof を WorkingTT に格納することで，兄弟ドロップの MID 評価時に
+    /// 捕獲応手が即座に TT ヒットし，そのサブツリー探索を省略できる．
+    ///
+    /// # Soundness
+    ///
+    /// - WorkingTT に depth-limited disproof (`pn=INF, dn=0, remaining=R-2`) として
+    ///   格納するため ProvenTT を汚染しない
+    /// - IDS depth 切替時に `clear_working()` で自然に除去される
+    /// - `hand_gte_forward_chain` の正当性: 攻方のリソースが多い H_i で不詰なら，
+    ///   リソースが少ない H_j でも不詰
+    #[inline(never)]
+    pub(super) fn reverse_disproof_sharing(
+        &mut self,
+        board: &mut Board,
+        disproved_move: Move,
+        children: &ArrayVec<
+            (Move, u64, u64, [u8; HAND_KINDS]),
+            MAX_MOVES,
+        >,
+        remaining: u16,
+    ) {
+        let target_sq = disproved_move.to_sq();
+        let pc_remaining = remaining.saturating_sub(2);
+        if pc_remaining == 0 {
+            return;
+        }
+
+        // 同一マスに兄弟ドロップがなければスキップ
+        let has_siblings = children.iter().any(|(mj, _, _, _)| {
+            mj.is_drop() && mj.to_sq() == target_sq && *mj != disproved_move
+        });
+        if !has_siblings {
+            return;
+        }
+
+        let disproved_pt = match disproved_move.drop_piece_type() {
+            Some(pt) => pt,
+            None => return,
+        };
+        let disproved_hi = match disproved_pt.hand_index() {
+            Some(hi) => hi,
+            None => return,
+        };
+
+        // 合駒を実行し，攻方の捕獲手を探索
+        let captured_by_block = board.do_move(disproved_move);
+        let legal = movegen::generate_legal_moves(board);
+        #[cfg(feature = "tt_diag")]
+        let mut disproof_count: u64 = 0;
+
+        for cap_mv in legal.iter().filter(|mv| {
+            mv.to_sq() == target_sq && mv.captured_piece_raw() > 0
+        }) {
+            let cap_piece = board.do_move(*cap_mv);
+
+            if !board.is_in_check(board.turn) {
+                board.undo_move(*cap_mv, cap_piece);
+                continue;
+            }
+
+            let pc_pk = position_key(board);
+            // base_hand: disproved_move を捕獲した後の攻方持ち駒
+            // (disproved_pt を含む = 強い方の手駒)
+            let base_hand = board.hand[self.attacker.index()];
+            board.undo_move(*cap_mv, cap_piece);
+
+            // 各兄弟ドロップについて逆方向支配を確認
+            for (mj, _, _, _) in children.iter() {
+                if !mj.is_drop() || mj.to_sq() != target_sq {
+                    continue;
+                }
+                if mj.to_move16() == disproved_move.to_move16() {
+                    continue;
+                }
+
+                let pt_j = match mj.drop_piece_type() {
+                    Some(pt) => pt,
+                    None => continue,
+                };
+                let hi_j = match pt_j.hand_index() {
+                    Some(hi) => hi,
+                    None => continue,
+                };
+
+                // 兄弟 j を捕獲した場合の攻方持ち駒を計算
+                let mut hand_j = base_hand;
+                hand_j[disproved_hi] = hand_j[disproved_hi].saturating_sub(1);
+                hand_j[hi_j] = hand_j[hi_j].saturating_add(1);
+
+                // 逆方向支配: base_hand (強い) ≥_fc hand_j (弱い)
+                // → base_hand で不詰なら hand_j でも不詰
+                if super::hand_gte_forward_chain(&base_hand, &hand_j) {
+                    // 既に disproof が存在するか確認 (無駄な store を回避)
+                    let (_, existing_dn, _) = self.table.look_up(
+                        pc_pk, &hand_j, pc_remaining, false,
+                    );
+                    if existing_dn == 0 {
+                        continue; // 既に disproven
+                    }
+                    // post-capture level に depth-limited disproof を格納
+                    self.table.store(
+                        pc_pk, hand_j, INF, 0,
+                        pc_remaining, pc_pk as u32,
+                    );
+                    #[cfg(feature = "tt_diag")]
+                    { disproof_count += 1; }
+                }
+            }
+        }
+
+        board.undo_move(disproved_move, captured_by_block);
+
+        #[cfg(feature = "tt_diag")]
+        { self.diag_reverse_disproof_hits += disproof_count; }
     }
 }
 

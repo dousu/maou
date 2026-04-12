@@ -1409,6 +1409,8 @@ impl DfPnSolver {
         let mut prev_prefilter_skip = self.diag_prefilter_skip_remaining;
         #[cfg(feature = "tt_diag")]
         let mut prev_prefilter_miss = self.diag_prefilter_miss;
+        #[cfg(feature = "tt_diag")]
+        let mut prev_reverse_disproof = self.diag_reverse_disproof_hits;
 
         loop {
             if ids_depth > saved_depth {
@@ -1640,16 +1642,17 @@ impl DfPnSolver {
                 let d_deferred = self.diag_mid_deferred_activations - prev_deferred_act;
                 let d_pf_skip = self.diag_prefilter_skip_remaining - prev_prefilter_skip;
                 let d_pf_miss = self.diag_prefilter_miss - prev_prefilter_miss;
+                let d_rev_dis = self.diag_reverse_disproof_hits - prev_reverse_disproof;
                 let ids_elapsed = self.start_time.elapsed().as_secs_f64();
                 verbose_eprintln!("[ids_diag] depth={}/{} budget={} used={} TT_pos={} root_pn={} root_dn={} max_ply={} \
-                    prefilter_hit={} prefilter_skip_rem={} prefilter_miss={} cross={} act={} \
+                    prefilter_hit={} prefilter_skip_rem={} prefilter_miss={} cross={} rev_dis={} act={} \
                     cap_tt={}/{} thr_exits={} term_exits={} in_path={} lb_prov={} lb_thr={} lb_nodes={} \
                     init_and_dis={} single_ch={} node_lim={} time={:.2}s",
                     ids_depth, saved_depth, _budget, used,
                     self.table.len(), pn, dn,
                     self.max_ply,
                     d_prefilter, d_pf_skip, d_pf_miss,
-                    d_cross, d_deferred,
+                    d_cross, d_rev_dis, d_deferred,
                     self.diag_capture_tt_hits, self.diag_capture_tt_calls,
                     self.diag_threshold_exits,
                     self.diag_terminal_exits,
@@ -1702,6 +1705,7 @@ impl DfPnSolver {
                 prev_deferred_act = self.diag_mid_deferred_activations;
                 prev_prefilter_skip = self.diag_prefilter_skip_remaining;
                 prev_prefilter_miss = self.diag_prefilter_miss;
+                prev_reverse_disproof = self.diag_reverse_disproof_hits;
             }
             let (root_pn2, root_dn2, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
             verbose_eprintln!("[ids] after MID: depth={} root_pn={} root_dn={} nodes={} time={:.1}s",
