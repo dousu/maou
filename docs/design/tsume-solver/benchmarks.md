@@ -3542,27 +3542,33 @@ ply 12→10 に前進した．しかし full puzzle (ply 0→38) の end-to-end 
 **現象**: 探索ノードの **93% が depth 境界の 4 ply に集中** する．
 
 ```
-depth=17: ply 13-16 に 261K / 283K = 92.3% のノードが集中
-depth=21: ply 17-20 に 5,450K / 5,876K = 92.8% のノードが集中
+v0.24.60 tt_diag 検証:
+  depth=17: ply 13-16 に 7,199 / 7,772 visits = 92.6% が集中
+  depth=25: ply 13-24 に 7,977 / 8,229 visits = 96.9% が集中
+  (v0.24.33 の 92.3% / 92.8% とほぼ同一 — 構造は不変)
 ```
 
-特に `remaining=2` (ply = depth-2) では block→capture の 2 手サイクルが
-支配的で，全ノードの **~50% がこの 1 ply に集中** する．
+特に ply = depth-2 に visits の **~50% が集中** する
+(depth=17 で ply 15 = 4,142 visits = 53.3%)．
 
 **原因**: chain aigoma (合駒チェーン) で守備側が複数マス × 複数駒種の
 合駒を打つたびに `(pos_key, hand)` の unique 組合せが指数的に増加する．
-ply 26→24 で TT entries が 189 → 321K (**×1,700**) に爆発し，その
-83% が disproven entries．
+TT composition は **disproven entries が 64-69%** を占める
+(depth=17: 183K/288K, depth=25: 950K/1.38M)．
 
-**v0.24.60 の改善**: multi-step cross\_deduce (v0.24.59) と IDS warmup
-(v0.24.60) で chain aigoma 領域のノード数を 20-50% 削減したが，
-指数的な増大構造自体は解消されていない．
+**v0.24.60 での改善と限界**: multi-step cross\_deduce (v0.24.59) で
+cross\_deduce\_hits が **0 → 218** (depth=17)，**0 → 2,366** (depth=25)
+に改善されたが，ノード集中構造自体は解消されていない．
+prefilter は **99.3% miss** (66 hits / 8,934 misses, depth=17) と
+ヒット率が極めて低く，改善の余地が大きい．
 
 **取り組みの方向**:
 
 - **合駒等価クラス**: 駒種が異なるが proof 構造が等価な合駒をグループ化し
   TT entries を集約する．chain drop の `(pos_key, hand)` 空間を構造的に
   圧縮する施策
+- **prefilter hit 率の改善**: 現行 99.3% miss → TT proof の蓄積戦略を
+  見直し prefilter の発火率を向上
 - **structural pruning**: chain の末端で remaining が小さいノードを早期に
   刈る．depth 境界 4 ply に集中するノードの大半を回避
 
@@ -3572,16 +3578,26 @@ ply 26→24 で TT entries が 189 → 321K (**×1,700**) に爆発し，その
 dn>0 の探索中間結果) が消失し，次の depth で **ゼロから再探索** が発生．
 
 **定量**: v0.24.44 の診断で depth=17→21 切替時に 75K intermediate
-entries が消失．chain aigoma の部分証明 (不詰の途中結果) の再構築に
-数百万ノードを要する．
+entries が消失．v0.24.60 でも depth=21 step の TT composition は
+intermediate=0 (95K → 0) であり，**warmup の retain\_proofs\_only が
+WorkingTT を全消去** している問題が新たに判明:
+
+```
+v0.24.60 tt_diag:
+  depth=17: intermediate = 95,625
+  depth=21: intermediate = 0  ← warmup の retain_proofs_only で消去
+  depth=25: intermediate = 365,181  ← warmup が proof 発見 → 本体は正常
+```
 
 **v0.24.45 の部分修正**: `retain_working_intermediates` で intermediate を
-選択的に保持し remaining をシフト．ただし depth 差分が大きい場合に
-shift 後の remaining が `REMAINING_INFINITE` を超えて除去されるケースが
-残る．
+選択的に保持し remaining をシフト．ただし v0.24.60 の warmup
+mid\_fallback が内部で `retain_proofs_only` を呼ぶため，warmup が
+proof 発見に失敗した場合に intermediate が全消去される副作用がある．
 
 **取り組みの方向**:
 
+- warmup mid\_fallback の intermediate 保全: retain\_proofs\_only の
+  代替として intermediate を保持する warmup 方式の検討
 - intermediate の IDS 間保持率の向上: shift 後の remaining 上限の緩和
 - depth 刻みの細分化: 倍増 (2→4→8→16) をより細かいステップにして
   delta を小さく保つ
