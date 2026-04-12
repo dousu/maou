@@ -1771,57 +1771,27 @@ impl DfPnSolver {
             if stagnated || time_exceeded {
                 ids_depth = saved_depth;
             } else {
-                // 深さ進行 (v0.24.60): 一律 +4 ステップ
+                // (v0.24.60) 深さ進行
                 //
-                // 初期 ids_depth=3 (インライン詰みチェック 3 手に対応) から
-                // +4 刻みで段階的に増加 (3→7→11→15→19→23→27→31→...)．
+                // depth ≤ 32: 倍増 (2→4→8→16→32)
+                // depth > 32: +4 刻み (32→36→40→...)
                 //
-                // ## 旧方式 (倍増 + 直接ジャンプ) の問題
+                // saved_depth ≤ 19: 直接ジャンプ (2→4→saved_depth)
+                //   浅い問題は warmup 不要で直接ジャンプが最効率．
+                //   depth ≤ 19 は epsilon denom=3 (自然に loose) のため
+                //   cliff は発生しない．
                 //
-                // v0.24.40 以前:
-                //   saved_depth ≤ 31: 2→4→saved_depth (直接ジャンプ)
-                //   saved_depth > 31: 2→4→8→16→32→+4 (倍増)
-                //
-                // 直接ジャンプは中間 depth で発見される proof を
-                // ProvenTT に蓄積する機会を奪い，depth 増加時の
-                // 性能劣化 (cliff) の根本原因となっていた．
-                // 倍増 (2→4→8→16→32) も jump 幅が大きく同様の問題．
-                //
-                //   depth=17: IDS 2→4→17    → 450K nodes, Mate(15) ✓
-                //   depth=25: IDS 2→4→25    → 15M nodes, Unknown ✗
-                //
-                // ## 新方式 (+4 一律)
-                //
-                // +4 刻みにより proof が蓄積される中間 depth を確実に通過:
-                //
-                //   depth=17: 3→7→11→15→17 → depth=15 で Mate(15) 発見
-                //   depth=25: 3→7→11→15→... → 同上
-                //   depth=41: 3→7→...→39→41 → 段階的 TT warming
-                //
-                // +4 はインライン詰みチェック (3 手) を上回り，
-                // 各 step で有意な progress が期待される最小幅．
-                // 全ステップが奇数 (3,7,11,...) となり攻め方終了の
-                // 自然な parity と一致する．
-                // (v0.24.60) 深さ進行: 段階的 IDS + depth > 19 中間 step
-                //
-                // ## 基本進行: 倍増 (depth ≤ 32) / +4 刻み (depth > 32)
-                //
-                // ## depth ≤ 19: 直接ジャンプ (2→4→saved_depth)
-                //   浅い問題では中間 depth の budget 消費がコスト高．
-                //
-                // ## depth > 19: 中間 step を 1 段挿入
-                //   max(saved_depth - 8, 15) に中間 step を設けることで，
-                //   proof 蓄積に適した depth を確実に経由する．
-                //
-                // 深さ進行:
-                // saved_depth > 31 の場合: 段階的 IDS (倍増 → +4)
-                // saved_depth <= 31 の場合: 直接ジャンプ (2→4→saved)
+                // saved_depth > 19: 段階的 IDS + warmup
+                //   warmup mid_fallback が中間 depth の proof 蓄積を担う．
+                //   warmup が proof を発見した場合は IDS ループ冒頭の
+                //   root_pn==0 check で即座に break する．
+                //   段階的 IDS は warmup miss 時のフォールバック．
                 let next = if ids_depth >= 32 {
                     ids_depth + 4
                 } else {
                     ids_depth.saturating_mul(2).max(ids_depth + 2)
                 };
-                if saved_depth <= 31 && next > 4 && next < saved_depth {
+                if saved_depth <= 19 && next > 4 && next < saved_depth {
                     ids_depth = saved_depth;
                 } else {
                     ids_depth = next.min(saved_depth);
