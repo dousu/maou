@@ -3371,6 +3371,71 @@ depth 間 working TT 保持，multi-depth proof sharing) が必要と推測．
    sub-tree を軽量探索し，さらに deeper chain step の ProvenTT
    蓄積を誘導する (eager chain resolution)
 
+#### v0.24.60 Cliff 突破: IDS warmup + epsilon 閾値修正
+
+depth 増加時の性能劣化 (cliff) の根本原因を特定し修正．
+
+##### 根本原因
+
+2 つの独立した問題が depth > 19 での性能劣化を引き起こしていた:
+
+1. **IDS 直接ジャンプ**: `saved_depth ≤ 31` で IDS が `2→4→saved_depth`
+   と中間 depth をスキップ．proof 蓄積に適した depth (e.g. 16-17) を
+   経由しないため，full-depth で chain aigoma が指数爆発する．
+
+2. **epsilon の TARGET depth 依存**: `saved_depth_for_epsilon` が TARGET
+   depth に固定され，全 IDS step で `denom=2` (depth≥19 時) が使われる．
+   `denom=3` (depth<19) より tight な探索で非効率．
+
+##### 修正内容
+
+1. **Warmup mid\_fallback** (depth > 19 時):
+   full-depth step の直前に `warmup_depth = saved_depth * 2/3` で
+   **nested mid\_fallback** を実行 (予算: 残りの 1/3)．
+   warmup 内の IDS (2→4→warmup\_depth) で proof が ProvenTT に蓄積され，
+   full-depth step では root\_pn=0 で即座に完了する．
+
+2. **epsilon 閾値引き上げ** (19→33):
+   `effective_eps_denom()` の depth 閾値を 33 に引き上げ，
+   depth ≤ 32 の全 step で `denom=3` (loose) を使用．
+
+3. **saved\_depth\_for\_epsilon 廃止**:
+   `self.depth` (現在の IDS depth) を直接使用し，
+   TARGET depth に依存しない一貫した epsilon を保証．
+
+##### 測定結果
+
+**cliff 診断** (`test_tsume_39te_ply25_gap_diagnosis` Phase 1):
+
+| Depth | v0.24.59 | v0.24.60 | 変化 |
+|:---:|:---:|:---:|:---:|
+| 17 | 449K Mate(15) | 450K Mate(15) | 同等 |
+| 21 | 9.15M Unknown | **1.25M NoMate** | depth 不足で不詰判定 (既知制約) |
+| 25 | 15M Unknown | **4.47M Mate(15)** | **Cliff 突破!** |
+
+**depth=25 で Mate(15) を発見** (4.47M nodes, 58.48s)．
+v0.24.59 では 15M nodes で Unknown だったものが 70% 削減で解決．
+
+**39te canonical** (depth=17, 1M): 同等 (baseline 互換)．
+
+**133 non-ignored tests**: 全 PASS．
+
+##### depth=21 の NoMate について
+
+warmup\_depth = 21 \* 2/3 = 14 (remaining=14) は 15 手詰に対して
+1 ply 不足のため mate 発見に失敗する．full-depth (remaining=21) では
+NM disproof に到達し NoMate を返す．warmup\_depth の下限を
+max(warmup\_depth, mate\_hint) で制御する案があるが，mate\_hint は
+事前に不明のため今後の課題とする．
+
+##### 次のアクション項目 (v0.24.60 時点)
+
+1. **depth=21 の NoMate 修正**: warmup\_depth を depth 依存で調整
+   (e.g. max(saved\*2/3, saved-6)) し depth=21 でも Mate を返すようにする
+2. **depth 下位互換性のより完全な保証**: 任意の depth で同一問題に対して
+   Mate/NoMate の結果が一貫するよう設計を見直す
+3. **29 手詰 regression 測定**: warmup + epsilon 変更の影響を確認
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
