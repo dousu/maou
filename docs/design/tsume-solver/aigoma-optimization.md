@@ -125,6 +125,37 @@ flowchart TD
 深い反復では浅いレベルの合駒がプレフィルタで即座にスキップされる．
 これによりチェーン合駒がボトムアップに折り畳まれる．
 
+#### 8.4.1 or_ph 計算と A-fix (v0.24.58)
+
+プレフィルタで捕獲後局面の証明 (`pc_ph`) を発見した後，OR ノードの
+proof\_hand (`or_ph`) を導出する．この or\_ph は child\_pk に格納し，
+init\_and\_proof に累積して AND 証明の判定に使用される．
+
+##### v0.24.55 以前 (baseline clamp)
+
+```
+or_ph = pc_ph - X_cap           // saturating_sub
+or_ph[k] = min(or_ph[k], child_hand[k])   // clamp
+```
+
+componentwise clamp は own-cluster match (componentwise dominance) では
+正常に動作するが，forward-chain substitution match 時に unsound な
+proof を生成する:
+
+- `pc_ph = [0,5,0,0,0,0,0]` (5 lances)，`pc_hand = [0,0,0,0,0,0,5]` (5 rooks)
+- clamp 後 `or_ph = [0,0,0,0,0,0,0]` → 「空手で詰む」(FALSE)
+
+##### v0.24.58 A-fix (2 段階 lookup + either-or 選択)
+
+- **Phase 1**: own cluster のみ lookup (`neighbor_scan=false`)．
+  hit → baseline clamp 方式を踏襲 (wider dominance，実害なし)．
+- **Phase 2**: Phase 1 miss 時，`proven_has_other_hand_variant` で
+  同一 `pos_key` の hand バリアントが存在する場合のみ `neighbor_scan=true`
+  で再 lookup (適応的 neighbor\_scan)．
+  hit → either-or 方式で sound な or\_ph を選択:
+  - **tight**: `or_ph = pc_ph - X_cap` (`child_hand ≥_fc or_ph` 成立時)
+  - **trivial**: `or_ph = child_hand` (fallback，常に sound)
+
 ### 8.5 同一マス証明転用
 
 同一マスへの異なる駒種の合駒間で TT エントリを相互利用する．

@@ -748,6 +748,20 @@ Zobrist hash の XOR 差分特性を利用し，持ち駒 ±1 のクラスタを
 
 PV 復元用の `look_up_proven_subset` は Zobrist 差分で全部分集合を走査．
 
+**改善 4b: 適応的 neighbor\_scan の基盤 (v0.24.58)**
+
+`proven_has_other_hand_variant(pos_key, hand)` は自クラスタ内に
+pos\_key が一致するが hand が異なる ProvenTT エントリの有無を判定する
+安価な helper(PROVEN\_CLUSTER\_SIZE エントリの走査のみ)．
+
+`try_prefilter_block` の 2 段階 lookup で Phase 2 (neighbor\_scan) の
+発火判定に使用する:
+
+- 自クラスタ内に hand バリアントが存在 → neighbor\_scan の追加 proof
+  発見期待値が高い → Phase 2 発火
+- 存在しない → neighbor\_scan は 7 クラスタの空振りに終わる公算が
+  大きい → Phase 2 スキップ
+
 **改善 5: サンプリング GC (v0.24.10, KomoringHeights 参考)**
 
 KomoringHeights (`github.com/komori-n/KomoringHeights`) の GC 方式を参考に

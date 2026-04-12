@@ -3256,6 +3256,18 @@ if ppn == 0 {
 
 **133 non-ignored tests**: 全 PASS．
 
+**cliff 診断** (`test_tsume_39te_ply25_gap_diagnosis` Phase 1):
+
+| Depth | Budget | Nodes | Time | Result |
+|:---:|:---:|:---:|:---:|:---:|
+| 17 | 2M | 449,960 | 38.69s | Mate(15) |
+| 21 | 10M | 9,221,120 | 120.64s | Unknown (timeout) |
+| 25 | 15M | 15,000,000 | 122.29s | Unknown (node limit) |
+
+cliff (depth 21/25 Unknown) は突破されず．A-fix は prefilter
+soundness 修正であり，cliff の根本原因 (chain aigoma 指数爆発) には
+直接作用しない．depth 17 の Mate(15) は v0.24.57 baseline と同等．
+
 ##### 結論
 
 A-fix は **soundness 改善 + 性能同等** のリファクタリング:
