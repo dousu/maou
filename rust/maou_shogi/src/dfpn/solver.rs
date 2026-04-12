@@ -46,6 +46,111 @@ pub enum TsumeResult {
     Unknown { nodes_searched: u64 },
 }
 
+/// 捕獲後局面の proof/disproof 情報を要約する直接マップキャッシュ (v0.24.64)．
+///
+/// TT の hand_hash Zobrist 混合によるクラスタ分散を迂回し，`pos_key` のみで
+/// O(1) lookup を実現する．`try_prefilter_block` の TT lookup 前に参照し，
+/// proof/disproof ヒット時は TT lookup を完全にスキップできる．
+///
+/// ## エントリ構造
+///
+/// - `min_proof_hand`: この pos_key で詰む最弱の攻方手駒 (要素ごとの min)
+/// - `max_disproof_hand`: この pos_key で詰まない最強の攻方手駒 (要素ごとの max)
+///
+/// ## ライフサイクル
+///
+/// - `solve()` 入口で全クリア
+/// - IDS 反復間は保持 (proof は depth 非依存，disproof は保守的な方向)
+/// - cross_deduce / prefilter / reverse_disproof_sharing で更新
+const PC_SUMMARY_SIZE: usize = 65536; // 64K entries, ~1.3 MB
+
+struct PostCaptureSummary {
+    /// `(pos_key, min_proof_hand, max_disproof_hand)` の直接マップ．
+    /// pos_key == 0 は空エントリを表す．
+    keys: Vec<u64>,
+    proof_hands: Vec<[u8; HAND_KINDS]>,
+    disproof_hands: Vec<[u8; HAND_KINDS]>,
+}
+
+impl PostCaptureSummary {
+    fn new() -> Self {
+        Self {
+            keys: vec![0u64; PC_SUMMARY_SIZE],
+            proof_hands: vec![[u8::MAX; HAND_KINDS]; PC_SUMMARY_SIZE],
+            disproof_hands: vec![[0u8; HAND_KINDS]; PC_SUMMARY_SIZE],
+        }
+    }
+
+    fn clear(&mut self) {
+        self.keys.fill(0);
+        self.proof_hands.fill([u8::MAX; HAND_KINDS]);
+        self.disproof_hands.fill([0u8; HAND_KINDS]);
+    }
+
+    #[inline]
+    fn idx(pos_key: u64) -> usize {
+        (pos_key as usize) & (PC_SUMMARY_SIZE - 1)
+    }
+
+    /// proof hand を記録する．要素ごとの min を取り最弱手駒を保持する．
+    #[inline]
+    fn record_proof(&mut self, pos_key: u64, proof_hand: &[u8; HAND_KINDS]) {
+        let i = Self::idx(pos_key);
+        if self.keys[i] == pos_key {
+            // 既存エントリ: 要素ごとの min
+            for k in 0..HAND_KINDS {
+                self.proof_hands[i][k] = self.proof_hands[i][k].min(proof_hand[k]);
+            }
+        } else {
+            // 新規 or 衝突: 上書き
+            self.keys[i] = pos_key;
+            self.proof_hands[i] = *proof_hand;
+            self.disproof_hands[i] = [0u8; HAND_KINDS];
+        }
+    }
+
+    /// disproof hand を記録する．要素ごとの max を取り最強手駒を保持する．
+    #[inline]
+    fn record_disproof(&mut self, pos_key: u64, disproof_hand: &[u8; HAND_KINDS]) {
+        let i = Self::idx(pos_key);
+        if self.keys[i] == pos_key {
+            // 既存エントリ: 要素ごとの max
+            for k in 0..HAND_KINDS {
+                self.disproof_hands[i][k] = self.disproof_hands[i][k].max(disproof_hand[k]);
+            }
+        } else {
+            // 新規 or 衝突: 上書き
+            self.keys[i] = pos_key;
+            self.disproof_hands[i] = *disproof_hand;
+            self.proof_hands[i] = [u8::MAX; HAND_KINDS];
+        }
+    }
+
+    /// proof hand を lookup する．
+    /// `hand ≥_fc min_proof_hand` なら proven と判定可能．
+    #[inline]
+    fn lookup_proof(&self, pos_key: u64) -> Option<&[u8; HAND_KINDS]> {
+        let i = Self::idx(pos_key);
+        if self.keys[i] == pos_key && self.proof_hands[i] != [u8::MAX; HAND_KINDS] {
+            Some(&self.proof_hands[i])
+        } else {
+            None
+        }
+    }
+
+    /// disproof hand を lookup する．
+    /// `max_disproof_hand ≥_fc hand` なら disproven と判定可能．
+    #[inline]
+    fn lookup_disproof(&self, pos_key: u64) -> Option<&[u8; HAND_KINDS]> {
+        let i = Self::idx(pos_key);
+        if self.keys[i] == pos_key && self.disproof_hands[i] != [0u8; HAND_KINDS] {
+            Some(&self.disproof_hands[i])
+        } else {
+            None
+        }
+    }
+}
+
 /// Df-Pn ソルバー．
 pub struct DfPnSolver {
     /// 最大探索手数．
@@ -121,6 +226,16 @@ pub struct DfPnSolver {
     pub(super) check_cache: CheckCache,
     /// TT ベース合駒プレフィルタの発火回数(診断用)．
     pub(super) prefilter_hits: u64,
+    /// 捕獲後局面の proof/disproof サマリキャッシュ (v0.24.64)．
+    ///
+    /// TT の hand_hash クラスタ分散を迂回し，prefilter の miss 率を改善する．
+    pub(super) pc_summary: PostCaptureSummary,
+    /// サマリキャッシュの proof ヒット回数 (tt_diag 診断用)．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_pc_summary_proof_hits: u64,
+    /// サマリキャッシュの disproof ヒット回数 (tt_diag 診断用)．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_pc_summary_disproof_hits: u64,
     /// NM 昇格の反証判定キャッシュ: 判定が false だった局面キーの集合．
     ///
     /// `depth_limit_all_checks_refutable` は局面のみに依存し探索深さに依存しないため，
@@ -378,6 +493,11 @@ impl DfPnSolver {
             pv_extraction_incomplete: false,
             check_cache: CheckCache::new(),
             prefilter_hits: 0,
+            pc_summary: PostCaptureSummary::new(),
+            #[cfg(feature = "tt_diag")]
+            diag_pc_summary_proof_hits: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_pc_summary_disproof_hits: 0,
             refutable_check_failed: FxHashSet::default(),
             tt_gc_threshold: 0,
             next_gc_check: 0,
@@ -903,6 +1023,7 @@ impl DfPnSolver {
         self.killer_table.clear();
         self.check_cache.clear();
         self.refutable_check_failed.clear();
+        self.pc_summary.clear();
         self.start_time = Instant::now();
         self.timed_out = false;
         self.next_gc_check = 100_000;
@@ -3720,13 +3841,35 @@ impl DfPnSolver {
             let pc_pk = position_key(board);
             let pc_hand = board.hand[self.attacker.index()];
 
+            // サマリキャッシュによる高速判定 (v0.24.64)．
+            // TT の hand_hash クラスタ分散を迂回し O(1) で proof を検出．
+            if let Some(min_ph) = self.pc_summary.lookup_proof(pc_pk) {
+                if hand_gte_forward_chain(&pc_hand, min_ph) {
+                    // pc_hand ≥_fc min_proof_hand → 証明済み
+                    #[cfg(feature = "tt_diag")]
+                    { self.diag_pc_summary_proof_hits += 1; }
+                    // or_ph = child_hand (conservative)
+                    self.table.store(
+                        child_pk, *child_hand, 0, INF,
+                        remaining.saturating_sub(1), child_pk as u32,
+                    );
+                    let adj = adjust_hand_for_move(block_move, child_hand);
+                    for k in 0..HAND_KINDS {
+                        and_proof[k] = and_proof[k].max(adj[k]);
+                    }
+                    proved = true;
+                    board.undo_move(*cap_mv, cap_piece);
+                    break;
+                }
+            }
+
             // メイン TT で捕獲後局面の証明を参照．
             //
-            // ## 施策 X-N 候補 A-fix (v0.24.58): 2 段階 lookup + either-or or_ph 選択
+            // ## 施策 X-N 候補 A-fix (v0.24.58): 2 段�� lookup + either-or or_ph ���択
             //
             // ### v0.24.56 退行の根本原因
             //
-            // v0.24.56 で `neighbor_scan=false` → `true` の 1 行変更を
+            // v0.24.56 �� `neighbor_scan=false` → `true` の 1 行変更を
             // 試みた際，test_tsume_39te_ply24_mate15_regression が Unknown
             // に退行した．原因は `or_ph = pc_ph - X_cap` 後の
             // `or_ph.min(child_hand)` clamp が forward-chain substitution
@@ -3800,6 +3943,8 @@ impl DfPnSolver {
             if ppn == 0 {
                 // 捕獲後局面が証明済み → 合駒の OR ノードも証明
                 let pc_ph = self.table.get_proof_hand(pc_pk, &pc_hand);
+                // サマリキャッシュに proof hand を記録
+                self.pc_summary.record_proof(pc_pk, &pc_ph);
 
                 // OR ノードの証明駒: 捕獲で得る駒分を差し引く
                 let cap_raw = cap_mv.captured_piece_raw();
@@ -3996,6 +4141,8 @@ impl DfPnSolver {
 
                 if ppn == 0 {
                     let pc_ph = self.table.get_proof_hand(pc_pk, &hand_j);
+                    // サマリキャッシュに proof hand を記録
+                    self.pc_summary.record_proof(pc_pk, &pc_ph);
                     let mut or_ph = pc_ph;
                     or_ph[hi_j] = or_ph[hi_j].saturating_sub(1);
                     for k in 0..HAND_KINDS {
@@ -4206,6 +4353,8 @@ impl DfPnSolver {
             // base_hand: disproved_move を捕獲した後の攻方持ち駒
             // (disproved_pt を含む = 強い方の手駒)
             let base_hand = board.hand[self.attacker.index()];
+            // サマリキャッシュに disproof hand を記録
+            self.pc_summary.record_disproof(pc_pk, &base_hand);
             board.undo_move(*cap_mv, cap_piece);
 
             // 各兄弟ドロップについて逆方向支配を確認

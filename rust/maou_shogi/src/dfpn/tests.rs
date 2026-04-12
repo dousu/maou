@@ -6991,6 +6991,8 @@ use crate::types::{Color, PieceType};
                 writeln!(out, "    cross_deduce_hits  = {}", solver.diag_cross_deduce_hits).unwrap();
                 writeln!(out, "    reverse_disproof   = {}", solver.diag_reverse_disproof_hits).unwrap();
                 writeln!(out, "    ms_reverse_dis     = {}", solver.diag_multi_step_reverse_disproof_hits).unwrap();
+                writeln!(out, "    pc_sum_proof_hits  = {}", solver.diag_pc_summary_proof_hits).unwrap();
+                writeln!(out, "    pc_sum_dis_hits    = {}", solver.diag_pc_summary_disproof_hits).unwrap();
                 writeln!(out, "    cd_guard_and_drop  = {}", solver.diag_cd_guard_and_drop).unwrap();
                 writeln!(out, "    cd_guard_child_proven = {}", solver.diag_cd_guard_child_proven).unwrap();
                 writeln!(out, "    cd_no_siblings     = {}", solver.diag_cd_no_siblings).unwrap();
