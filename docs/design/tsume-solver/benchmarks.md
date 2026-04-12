@@ -3371,37 +3371,86 @@ depth 間 working TT 保持，multi-depth proof sharing) が必要と推測．
    sub-tree を軽量探索し，さらに deeper chain step の ProvenTT
    蓄積を誘導する (eager chain resolution)
 
-#### v0.24.60 Cliff 突破: IDS warmup + epsilon 閾値修正
+#### v0.24.60 Cliff 完全突破: IDS warmup mid\_fallback + scoped epsilon
 
-depth 増加時の性能劣化 (cliff) の根本原因を特定し修正．
+depth 増加時の性能劣化 (cliff) の根本原因を特定し完全修正．
+depth=17/21/25 の全てで Mate(15) を発見．
+
+##### 問題の定義: depth は上限として機能すべき
+
+詰将棋ソルバーにおいて `depth` は探索の深さ上限であり，`depth=25` は
+`depth=17` と **少なくとも同等以上** の性能を持つべきである．しかし
+v0.24.59 以前では:
+
+- `depth=17`: 450K nodes → **Mate(15)** ✓
+- `depth=21`: 9.15M nodes → **Unknown** ✗
+- `depth=25`: 15M nodes → **Unknown** ✗
+
+depth が大きいほど性能が悪化する逆説的な挙動 (cliff) が存在した．
 
 ##### 根本原因
 
 2 つの独立した問題が depth > 19 での性能劣化を引き起こしていた:
 
-1. **IDS 直接ジャンプ**: `saved_depth ≤ 31` で IDS が `2→4→saved_depth`
-   と中間 depth をスキップ．proof 蓄積に適した depth (e.g. 16-17) を
-   経由しないため，full-depth で chain aigoma が指数爆発する．
+**問題 1: IDS 直接ジャンプ** (`pns.rs` IDS 進行ロジック)
 
-2. **epsilon の TARGET depth 依存**: `saved_depth_for_epsilon` が TARGET
-   depth に固定され，全 IDS step で `denom=2` (depth≥19 時) が使われる．
-   `denom=3` (depth<19) より tight な探索で非効率．
+`saved_depth ≤ 31` の場合，IDS が `2→4→saved_depth` と中間 depth を
+全てスキップしていた (v0.24.40 導入)．スキップにより proof 蓄積に
+適した中間 depth (e.g. 16-17) を経由しないまま full-depth に到達し，
+chain aigoma の指数爆発を prefilter/cross\_deduce で刈り取れなくなる:
+
+```
+depth=17: IDS 2→4→17         → depth=17 で proof 発見 ✓
+depth=25: IDS 2→4→25 (skip!) → chain 爆発で Unknown ✗
+```
+
+**問題 2: epsilon の TARGET depth 依存** (`solver.rs` effective\_eps\_denom)
+
+`saved_depth_for_epsilon = saved_depth` (TARGET depth) を epsilon 計算に
+使用していたため，全 IDS step で `denom=2` (depth≥19 時) が適用された．
+`denom=3` (depth<19) より tight な探索となり，同一 IDS depth でも
+target が大きいほど非効率になる:
+
+```
+depth=17 target → denom=3 (17 < 19, loose) → 450K で Mate
+depth=25 target → denom=2 (25 ≥ 19, tight) → 全 step で非効率
+```
 
 ##### 修正内容
 
-1. **Warmup mid\_fallback** (depth > 19 時):
-   full-depth step の直前に `warmup_depth = saved_depth * 2/3` で
-   **nested mid\_fallback** を実行 (予算: 残りの 1/3)．
-   warmup 内の IDS (2→4→warmup\_depth) で proof が ProvenTT に蓄積され，
-   full-depth step では root\_pn=0 で即座に完了する．
+**修正 1: Warmup mid\_fallback** (`pns.rs` full-depth step 直前)
 
-2. **epsilon 閾値引き上げ** (19→33):
-   `effective_eps_denom()` の depth 閾値を 33 に引き上げ，
-   depth ≤ 32 の全 step で `denom=3` (loose) を使用．
+`saved_depth > 19` のとき，full-depth step の直前に
+`warmup_depth = saved_depth - 4` で **nested mid\_fallback** を実行する:
 
-3. **saved\_depth\_for\_epsilon 廃止**:
-   `self.depth` (現在の IDS depth) を直接使用し，
-   TARGET depth に依存しない一貫した epsilon を保証．
+```rust
+// 予算: 残りの 1/3
+let warmup_budget = remaining / 3;
+self.depth = warmup_depth;
+self.param_epsilon_denom = 3; // forced denom=3
+self.mid_fallback(board);      // PNS + IDS (2→4→warmup_depth)
+self.param_epsilon_denom = save; // restore
+```
+
+warmup 内の IDS で proof が ProvenTT に蓄積され，full-depth step では
+`root_pn=0` で即座に完了する．warmup\_depth = saved\_depth - 4 により:
+
+- `depth=21` → warmup=17: remaining=17 で 15 手詰を確実に発見
+- `depth=25` → warmup=21: remaining=21 + denom=3 で proof 発見
+- `depth=31` → warmup=27: 同様
+
+**修正 2: Scoped epsilon** (`pns.rs` warmup 内のみ)
+
+warmup 中のみ `param_epsilon_denom = 3` を強制し，warmup\_depth ≥ 19
+でも denom=3 (loose) を使用する．full-depth では adaptive
+(`saved_depth_for_epsilon` ベース) に復元し baseline 互換を維持する．
+
+**修正 3: IDS 直接ジャンプの制限** (`pns.rs` 深さ進行)
+
+直接ジャンプの条件を `saved_depth ≤ 31` → `saved_depth ≤ 19` に変更．
+depth ≤ 19 は epsilon denom=3 が自然に適用され cliff が構造的に発生
+しないため直接ジャンプが最効率．depth > 19 は warmup + 段階的 IDS
+で proof 蓄積を保証する．
 
 ##### 測定結果
 
@@ -3410,31 +3459,32 @@ depth 増加時の性能劣化 (cliff) の根本原因を特定し修正．
 | Depth | v0.24.59 | v0.24.60 | 変化 |
 |:---:|:---:|:---:|:---:|
 | 17 | 449K Mate(15) | 450K Mate(15) | 同等 |
-| 21 | 9.15M Unknown | **1.25M NoMate** | depth 不足で不詰判定 (既知制約) |
-| 25 | 15M Unknown | **4.47M Mate(15)** | **Cliff 突破!** |
+| 21 | 9.15M Unknown | **2.36M Mate(15)** | **-74% 突破** |
+| 25 | 15M Unknown | **4.70M Mate(15)** | **-69% 突破** |
 
-**depth=25 で Mate(15) を発見** (4.47M nodes, 58.48s)．
-v0.24.59 では 15M nodes で Unknown だったものが 70% 削減で解決．
+**depth=17/21/25 の全てで Mate(15) を発見．** depth は上限として
+のみ機能し，性能の下位互換性が保たれるようになった．
 
 **39te canonical** (depth=17, 1M): 同等 (baseline 互換)．
 
 **133 non-ignored tests**: 全 PASS．
 
-##### depth=21 の NoMate について
+##### v0.24.55〜v0.24.60 の累積改善サマリ
 
-warmup\_depth = 21 \* 2/3 = 14 (remaining=14) は 15 手詰に対して
-1 ply 不足のため mate 発見に失敗する．full-depth (remaining=21) では
-NM disproof に到達し NoMate を返す．warmup\_depth の下限を
-max(warmup\_depth, mate\_hint) で制御する案があるが，mate\_hint は
-事前に不明のため今後の課題とする．
+| 版 | 施策 | 39te (depth=17) | 29te | cliff (depth=25) |
+|:---:|:---|:---:|:---:|:---:|
+| v0.24.54 | baseline | ~52s | 510s | 15M Unknown |
+| v0.24.55 | cross\_deduce neighbor\_scan | 同等 | -4.5% | Unknown |
+| v0.24.57 | transitive closure | 同等 | -14.5% | Unknown |
+| v0.24.58 | A-fix prefilter soundness | 同等 | +1.4% | Unknown |
+| v0.24.59 | multi-step cross\_deduce | **-25%** | **-33%** | Unknown |
+| v0.24.60 | IDS warmup + scoped eps | 同等 | TBD | **4.70M Mate(15)** |
 
 ##### 次のアクション項目 (v0.24.60 時点)
 
-1. **depth=21 の NoMate 修正**: warmup\_depth を depth 依存で調整
-   (e.g. max(saved\*2/3, saved-6)) し depth=21 でも Mate を返すようにする
-2. **depth 下位互換性のより完全な保証**: 任意の depth で同一問題に対して
-   Mate/NoMate の結果が一貫するよう設計を見直す
-3. **29 手詰 regression 測定**: warmup + epsilon 変更の影響を確認
+1. **29te regression 測定**: warmup + epsilon 変更の 29te への影響確認
+2. **深い問題の depth 下位互換性テスト**: 39te 以外の long-mate 問題で
+   depth 増加時の挙動を検証
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 

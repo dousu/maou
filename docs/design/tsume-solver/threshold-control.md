@@ -57,24 +57,41 @@ PN\_UNIT=16 では `second_best = 3S = 48` のとき `epsilon = 16 + 16 = 32`，
 `sibling_based = 80`(5.0S)となり，PN\_UNIT=1 の 4S に対し ~25% の閾値余裕が
 各 OR/AND レベルで得られる．12 レベルの累積で `1.25^12 ≈ 15 倍` の余裕．
 
-**Depth-adaptive epsilon (v0.24.41):**
+**Depth-adaptive epsilon (v0.24.41, v0.24.60 改訂):**
 
 パラメータグリッドサーチ(16 構成)により，epsilon 除数の最適値が
 depth に依存することを発見した:
 
 | depth | eps\_denom | 根拠 |
 |-------|-----------|------|
-| ≤ 17 | 3 | ply 24 (depth=17) で 367K ノードが最適．他値は全て budget cap(1M) |
+| < 19 | 3 | ply 24 (depth=17) で 367K ノードが最適．他値は全て budget cap(1M) |
 | ≥ 19 | 2 | ply 22 (depth=19) を 10M 予算で初めて解ける(8.1M Mate(17))．eps=3 では Unknown |
 
 ```rust
-let eps_denom = if saved_depth >= 19 { 2 } else { 3 };
+let eps_denom = if self.depth >= 19 { 2 } else { 3 };
 let epsilon = second_best / eps_denom + PN_UNIT;
 ```
 
-`saved_depth_for_epsilon` フィールドで IDS の最終 depth を保持し，
-IDS の全反復(浅い反復含む)で最終 depth に基づいた eps\_denom を使用する．
-これにより浅い IDS 反復でも深い問題向けの閾値余裕が適用される．
+v0.24.41 では `saved_depth_for_epsilon` (TARGET depth) を使用していたが，
+v0.24.60 で以下の問題を修正:
+
+- **Cliff 問題**: TARGET depth ≥ 19 のとき全 IDS step で denom=2 が
+  適用され，depth=17 (denom=3) より非効率になる．depth=25 target では
+  depth=4 の浅い IDS step でも denom=2 が使われ，性能劣化の一因となった．
+
+- **修正**: `saved_depth_for_epsilon` を廃止し `self.depth` (現在の
+  IDS depth) を使用する．ただし v0.24.60 では **warmup 中のみ**
+  `param_epsilon_denom = 3` を強制する scoped 方式を採用:
+
+  ```rust
+  // Warmup (depth > 19 の full-depth step 直前):
+  self.param_epsilon_denom = 3;  // forced loose
+  self.mid_fallback(board);       // nested IDS at warmup_depth
+  self.param_epsilon_denom = save; // restore for full-depth
+  ```
+
+  warmup 中は denom=3 により depth=17 と同等の探索効率を得る．
+  full-depth では adaptive (saved\_depth ベース) に復元し baseline 互換．
 
 **120M backward 解析での効果:**
 
