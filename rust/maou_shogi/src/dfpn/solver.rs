@@ -236,6 +236,7 @@ pub struct DfPnSolver {
     /// サマリキャッシュの disproof ヒット回数 (tt_diag 診断用)．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_pc_summary_disproof_hits: u64,
+    // diag_chain_inner_outer_hits: 試行不採用 (v0.24.65, soundness 違反で revert)
     /// NM 昇格の反証判定キャッシュ: 判定が false だった局面キーの集合．
     ///
     /// `depth_limit_all_checks_refutable` は局面のみに依存し探索深さに依存しないため，
@@ -3524,6 +3525,7 @@ impl DfPnSolver {
                 }
             }
 
+
         }
 
         // パスから除去
@@ -4406,5 +4408,17 @@ impl DfPnSolver {
         #[cfg(feature = "tt_diag")]
         { self.diag_reverse_disproof_hits += disproof_count; }
     }
+
+    // chain_inner_outer_propagation (v0.24.65): 試行不採用．
+    //
+    // 「内側チェーンマスの全ドロップが proved → 外側も proved」の論理は
+    // unsound であった．AND ノードの各子 (守備方応手) は独立した防御手であり，
+    // 内側マスの合駒が proved (攻方突破可能) でも外側マスの合駒は独立に
+    // 評価される必要がある．内側 proved は「攻方がその合駒を捕獲して先に
+    // 進める」を意味するが，外側の合駒は別の応手として独立に存在し，
+    // 内側の結果で外側を省略する論理的根拠がない．
+    //
+    // test_tsume_39te_ply24_mate15_regression で Mate(15) → Mate(5) の
+    // soundness 違反が発生したため revert．
 }
 
