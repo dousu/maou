@@ -3291,6 +3291,86 @@ pruning) が今後の焦点となる．
    aggressive な neighbor_scan 設定 (例: variant check を外す) と
    組み合わせれば 29te で追加改善の余地があるか確認
 
+#### v0.24.59 候補 C: multi-step cross_deduce
+
+v0.24.58 の次アクション項目 (1) に従い候補 C を実装．
+
+##### 設計
+
+`cross_deduce_children` が同一マス兄弟の証明を完了した直後に，
+**異なるマス** のドロップ children に対して prefilter を再発火する．
+
+```
+MID main loop (AND node):
+  child_i (drop@sq_S) proven → cross_deduce_children (同一マス)
+  → 候補 C: for each unproven drop child_j (sq ≠ sq_S):
+      try_prefilter_block(child_j)
+      if hit → cross_deduce_children(child_j) で連鎖発火
+```
+
+##### 原理
+
+chain aigoma ではドロップ child_i の sub-tree 探索中に deeper chain
+step (例: Rx5g → P*4g → Rx4g) の captured position が ProvenTT に
+蓄積される．同一 pos_key (rook@4g) は ply 25 の直接 drop P*4g →
+Rx4g 経由でもアクセス可能であるため，prefilter の re-trigger により
+sub-tree 探索を省略して即時証明できる．
+
+cross_deduce_children 直後は ProvenTT への新規 entry 蓄積直後であり，
+prefilter のヒット率が init 時より向上している timing を利用する．
+
+##### 測定結果
+
+**39 手詰 canonical** (`test_tsume_39te_ply24_mate15_regression`):
+
+| 版 | time | Δ |
+|:---:|:---:|:---:|
+| v0.24.57 baseline | ~52s | — |
+| v0.24.58 A-fix | ~55s | +5% |
+| v0.24.59 候補 C | **~39s** | **-25%** |
+
+**29 手詰 regression** (`test_tsume_6_29te` + `_no_pns`):
+
+| 版 | time | Δ |
+|:---:|:---:|:---:|
+| v0.24.57 baseline | 510.62s | — |
+| v0.24.58 A-fix | 517.84s | +1.4% |
+| v0.24.59 候補 C | **344.11s** | **-33%** |
+
+**133 non-ignored tests**: 全 PASS (131.36s，v0.24.58 170s から -23%)．
+
+**cliff 診断** (`test_tsume_39te_ply25_gap_diagnosis` Phase 1):
+
+| Depth | Budget | Nodes | Result |
+|:---:|:---:|:---:|:---:|
+| 17 | 2M | 449,960 | Mate(15) |
+| 21 | 10M | 9,152,512 | Unknown |
+| 25 | 15M | 15,000,000 | Unknown |
+
+cliff (depth 21/25 Unknown) は依然未突破．候補 C の multi-step 伝搬は
+depth 17 レベル (chain が浅い) では顕著な効果を発揮するが，depth
+21/25 では deeper chain の sub-tree が未探索のため prefilter の
+re-trigger 対象となる ProvenTT entry が不足している．
+
+##### 結論
+
+候補 C は **39te -25%，29te -33%** の有意な性能改善を達成．chain
+aigoma の同一 AND 内での proof cascade (cross_deduce → prefilter
+re-trigger → cross_deduce 連鎖) が有効に機能する．
+
+cliff 突破には depth 21+ で ProvenTT 蓄積を確保する別の施策 (IDS
+depth 間 working TT 保持，multi-depth proof sharing) が必要と推測．
+
+##### 次のアクション項目 (v0.24.59 時点)
+
+1. **cliff 専用プロファイリング**: depth 21/25 の ply 別 visit 分布を
+   tt_diag で取得し，ボトルネック ply を特定
+2. **IDS 間 ProvenTT 活用**: clear\_working 後も ProvenTT の proof を
+   活用する prefilter / cross\_deduce の強化
+3. **multi-step 再帰拡張**: 候補 C で新たに proven 化された child の
+   sub-tree を軽量探索し，さらに deeper chain step の ProvenTT
+   蓄積を誘導する (eager chain resolution)
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |

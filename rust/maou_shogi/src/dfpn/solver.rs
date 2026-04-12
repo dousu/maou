@@ -294,6 +294,10 @@ pub struct DfPnSolver {
     /// forward-chain soundness guard により skip した回数．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_prefilter_fc_reject: u64,
+    /// TT 診断 (v0.24.59 候補 C): multi-step cross_deduce で
+    /// prefilter re-check により proven 化された異マス children 数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_multi_step_hits: u64,
     /// TT 診断: ply ごとの MID 訪問回数(最大64手)．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_ply_visits: [u64; 64],
@@ -448,6 +452,8 @@ impl DfPnSolver {
             diag_prefilter_miss: 0,
             #[cfg(feature = "tt_diag")]
             diag_prefilter_fc_reject: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_multi_step_hits: 0,
             #[cfg(feature = "tt_diag")]
             diag_ply_visits: [0u64; 64],
             #[cfg(feature = "tt_diag")]
@@ -3256,6 +3262,62 @@ impl DfPnSolver {
                     {
                         self.profile_stats.cross_deduce_ns += _cd_start.elapsed().as_nanos() as u64;
                         self.profile_stats.cross_deduce_count += 1;
+                    }
+
+                    // 候補 C (v0.24.59): multi-step cross_deduce．
+                    //
+                    // cross_deduce_children は solved_move と **同一マス** の
+                    // 兄弟ドロップのみを対象とするが，solved_move の sub-tree
+                    // 解決時に ProvenTT に蓄積された deeper chain step の proof
+                    // が **異なるマス** のドロップにも適用できる場合がある:
+                    //
+                    // 例 (39te cliff, ply 25 AND):
+                    //   - P*5g が解決 → Rx5g の sub-tree で Rx4g, Rx3g 等の
+                    //     captured position が ProvenTT に蓄積される
+                    //   - 異なるマスの drop P*4g → Rx4g → **同一 pos_key**
+                    //     (ply 25 からの直接 capture と P*5g sub-tree 内の
+                    //     capture は board 上同一)
+                    //   - ProvenTT に proof が存在すれば prefilter で即証明可能
+                    //
+                    // 実装: unproven な drop children 全体に prefilter を
+                    // re-trigger する．cross_deduce_children 直後は ProvenTT に
+                    // 新規 entry が蓄積されている確率が最も高い timing であり，
+                    // prefilter のヒット率が初回訪問時より向上する．
+                    //
+                    // 追加で新たに proven 化された child に対しては同一マスの
+                    // cross_deduce + transitive closure を連鎖的に発火させ，
+                    // 波及的な証明伝搬 (cascade) を行う．
+                    //
+                    // コスト: children 数 N × prefilter 1 回 (movegen + TT lookup)
+                    // = 23 × ~1μs = ~23μs/call．cross_deduce 自体が per-solve
+                    // 数百〜数千回しか発火しないため全体コストは微小．
+                    let solved_sq = m.to_sq();
+                    for j in 0..children.len() {
+                        let (mj, _, child_pk_j, child_hand_j) = &children[j];
+                        if !mj.is_drop() { continue; }
+                        // 同一マスは cross_deduce_children が処理済み
+                        if mj.to_sq() == solved_sq { continue; }
+                        // 既に proven なら skip
+                        let (cpn_j, _, _) = self.look_up_pn_dn(
+                            *child_pk_j, child_hand_j,
+                            remaining.saturating_sub(1),
+                        );
+                        if cpn_j == 0 { continue; }
+                        // prefilter re-check (dummy and_proof，init 累積不要)
+                        let mut dummy_proof = [0u8; HAND_KINDS];
+                        let hit = self.try_prefilter_block(
+                            board, *mj, child_hand_j, remaining,
+                            &mut dummy_proof,
+                        );
+                        if hit {
+                            #[cfg(feature = "tt_diag")]
+                            { self.diag_multi_step_hits += 1; }
+                            // 新たに proven 化された child の同一マス兄弟にも
+                            // cross_deduce を連鎖発火
+                            self.cross_deduce_children(
+                                board, *mj, &children, remaining,
+                            );
+                        }
                     }
                 }
             }

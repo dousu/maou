@@ -171,6 +171,27 @@ proof を生成する:
 3. TT で捕獲後局面を参照: `look_up(pc_pk, &hand_j, pc_remaining)`
 4. pn=0 なら合駒 j も証明 → `deferred_children` から除去
 
+#### 8.5.1 multi-step cross\_deduce (v0.24.59 候補 C)
+
+`cross_deduce_children` は同一マスの兄弟のみを対象とするが，chain
+aigoma では子 A (square S) の sub-tree 探索中に deeper chain step
+(例: S-1, S-2) の captured position proof が ProvenTT に蓄積される．
+
+候補 C は cross\_deduce 完了直後に **異なるマス** のドロップ children
+全体に prefilter を再発火し，ProvenTT の新規 entry を即座に活用する:
+
+```
+cross_deduce_children(solved_move@sq_S) 完了
+→ for child_j (drop@sq_T, T ≠ S), unproven:
+    try_prefilter_block(child_j)
+    if hit → cross_deduce_children(child_j) 連鎖発火
+```
+
+新たに proven 化された child\_j に対しても同一マスの cross\_deduce +
+transitive closure を連鎖的に発火させる (proof cascade)．
+
+**効果**: 39te canonical -25%，29te -33% の性能改善を達成．
+
 ### 8.6 合駒 DN バイアス
 
 AND ノードの合駒(駒打ち)の初期 dn にバイアスを加算し，探索優先度を下げる．

@@ -123,3 +123,4 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 75 | cross\_deduce neighbor\_scan 有効化 (相互マス証明の近傍走査) | maou 独自 | §8.5 | v0.24.55 |
 | 76 | cross\_deduce forward-chain transitive closure | maou 独自 | §8.5 | v0.24.57 |
 | 77 | prefilter A-fix: 2 段階 lookup + either-or or\_ph + 適応的 neighbor\_scan | maou 独自 | §8.4 | v0.24.58 |
+| 78 | multi-step cross\_deduce: cross\_deduce 後の異マス prefilter re-trigger + cascade | maou 独自 | §8.5 | v0.24.59 |
