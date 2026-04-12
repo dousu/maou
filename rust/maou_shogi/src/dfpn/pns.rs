@@ -1427,23 +1427,13 @@ impl DfPnSolver {
                 break;
             }
             let _budget = if ids_depth < saved_depth {
-                // (v0.24.60) 中間 IDS step の 2 段階予算配分．
+                // 中間 IDS step の予算配分:
+                // remaining_budget / (remaining_steps + 1) の均等割り．
                 //
-                // +4 一律ステップでは中間 step 数が旧方式 (倍増) より
-                // 多くなる．浅い中間 step は proof 発見に至らない場合でも
-                // allocated budget を消費しうるため，2 段階で配分する:
-                //
-                // 1. **non-critical step** (ids_depth + 4 < saved_depth):
-                //    残り予算の 5% (= /20)．TT warming 目的．浅い step は
-                //    数千 nodes で完了し大半を未消費のまま次 step に回す．
-                //    深い non-critical step (e.g. depth=15 for saved=25) は
-                //    5% でも 750K (15M の場合) となり proof 発見に十分．
-                //
-                // 2. **penultimate step** (ids_depth + 4 ≥ saved_depth):
-                //    残り予算の 50% (= /2)．full-depth の直前に位置し，
-                //    proof 発見の最後のチャンスとなる重要な step．
-                //
-                // 最終 step (ids_depth == saved_depth) は full budget を割当．
+                // remaining_steps は (saved_depth - ids_depth) / 2 + 1 で
+                // 概算．浅い step (depth=2,4) は allocated budget の
+                // ごく一部しか消費せず，未消費分が後続 step に蓄積
+                // されるため，深い step ほど実質的に多くの budget を得る．
                 let remaining_budget =
                     total_max_nodes.saturating_sub(self.nodes_searched);
                 let remaining_steps =
@@ -1497,19 +1487,30 @@ impl DfPnSolver {
                 {
                     let warmup_depth = saved_depth.saturating_sub(4);
                     if warmup_depth > 4 {
-                        // (v0.24.60) Warmup mini-IDS: full-depth 前に浅い
-                        // depth で MID を数回実行し ProvenTT を予熱する．
+                        // (v0.24.60) Warmup: nested mid_fallback で
+                        // ProvenTT を予熱する．
                         //
-                        // mid_fallback を呼ばず MID を直接実行することで
-                        // retain_proofs_only による WorkingTT 破壊を回避し，
-                        // outer IDS の TT 状態を保全する．
+                        // nested mid_fallback は内部で retain_proofs_only を
+                        // 呼ぶため **WorkingTT の intermediate は消去される**．
+                        // これは既知の制約であり (§10.2.1 課題 2)，warmup が
+                        // proof 発見に失敗した場合は full-depth MID が
+                        // intermediate ゼロから再探索する必要がある．
                         //
                         // warmup_depth = saved - 4 の根拠:
                         // - depth=21 → warmup=17: remaining=17 で 15 手詰を
                         //   確実に発見可能 (baseline depth=17 と同等)
-                        // - depth=25 → warmup=21: remaining=21 は chain
-                        //   aigoma で膨張するが budget 1/3 で制御
-                        //   (depth=25 with budget=15M: warmup gets ~5M)
+                        // - depth=25 → warmup=21: remaining=21 + denom=3 で
+                        //   proof 発見
+                        //
+                        // 再帰の深さ:
+                        // nested mid_fallback は warmup_depth > 19 のとき
+                        // さらに再帰的に warmup を呼ぶ．最大ネスト回数は
+                        // (saved_depth - 19) / 4 回:
+                        //   depth=25 → warmup(21) → warmup(17) → 終了
+                        //   depth=41 → warmup(37) → ... → warmup(21)
+                        //            → warmup(17) → 終了 (最大 6 回)
+                        // 各ネストで retain_proofs_only が呼ばれるため，
+                        // WorkingTT は各回でリセットされる．
                         let warmup_budget = (total_max_nodes
                             .saturating_sub(self.nodes_searched)) / 3;
                         let save_max_nodes = self.max_nodes;
@@ -1528,6 +1529,12 @@ impl DfPnSolver {
                         self.mid_fallback(board);
                         // epsilon を full-depth 用に復元
                         self.param_epsilon_denom = save_eps;
+                        // saved_depth_for_epsilon を復元:
+                        // nested mid_fallback が warmup_depth で上書き
+                        // するため，outer の saved_depth に戻す．
+                        // 現状 ≥19 で一律 denom=2 のため無害だが，
+                        // 閾値変更時の暗黙の依存を防止する．
+                        self.saved_depth_for_epsilon = saved_depth;
                         // Warmup 後に root を再チェック
                         self.depth = saved_depth;
                         let (rp, _, _) = self.look_up_pn_dn(
