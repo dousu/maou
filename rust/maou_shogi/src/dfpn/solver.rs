@@ -498,13 +498,7 @@ impl DfPnSolver {
             } else {
                 self.depth
             };
-            // v0.24.60: 閾値を 19→33 に引き上げ．
-            // v0.24.41 で depth=19 としていたが，IDS 段階的深化の中間
-            // step (depth=15, 19, 23 等) で denom=2 (tight) が使われると
-            // depth=17 (denom=3) より非効率になり depth 増加時の性能劣化
-            // を引き起こしていた．閾値を 33 に引き上げることで depth ≤ 32
-            // の全中間 step が denom=3 を使用し，一貫した探索効率を保つ．
-            if d >= 33 { 2 } else { 3 }
+            if d >= 19 { 2 } else { 3 }
         }
     }
 

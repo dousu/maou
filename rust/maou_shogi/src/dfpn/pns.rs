@@ -1370,14 +1370,10 @@ impl DfPnSolver {
         self.diag_root_pk = pk;
         self.diag_root_hand = att_hand;
         let saved_depth = self.depth;
-        // v0.24.60: saved_depth_for_epsilon を廃止し，self.depth (現在の
-        // IDS depth) を直接使用する．旧方式では TARGET depth に基づいて
-        // epsilon を決定していたため，depth=25 target の IDS 中間 step
-        // (depth=15 等) でも eps_denom=2 (tight) が使われ，depth=17 target
-        // (eps_denom=3, loose) より非効率だった．
-        // self.depth ベースにすることで，同一 IDS depth では target に
-        // 依存しない一貫した epsilon が使われる．
-        self.saved_depth_for_epsilon = 0;  // 0 → fallback to self.depth
+        // v0.24.60: saved_depth_for_epsilon は full-depth 用に saved_depth
+        // を保持する (baseline 互換)．warmup mini-IDS 内のみ一時的に
+        // 0 に設定し self.depth ベースの epsilon を使用する．
+        self.saved_depth_for_epsilon = saved_depth;
         let mut ids_depth: u32 = 2;
         let total_max_nodes = self.max_nodes;
         // PNS で蓄積された中間エントリ(pn>0, dn>0)を除去し，
@@ -1499,38 +1495,53 @@ impl DfPnSolver {
                     && self.nodes_searched < total_max_nodes
                     && !self.timed_out
                 {
-                    let warmup_depth = saved_depth * 2 / 3;
+                    let warmup_depth = saved_depth.saturating_sub(4);
                     if warmup_depth > 4 {
-                        // Warmup: 浅い depth で mid_fallback (IDS) を実行し
-                        // ProvenTT を予熱する．mid_fallback は内部で PNS +
-                        // IDS (2→4→warmup_depth) を実行し，proof 発見時は
-                        // ProvenTT に蓄積する．
+                        // (v0.24.60) Warmup mini-IDS: full-depth 前に浅い
+                        // depth で MID を数回実行し ProvenTT を予熱する．
+                        //
+                        // mid_fallback を呼ばず MID を直接実行することで
+                        // retain_proofs_only による WorkingTT 破壊を回避し，
+                        // outer IDS の TT 状態を保全する．
+                        //
+                        // warmup_depth = saved - 4 の根拠:
+                        // - depth=21 → warmup=17: remaining=17 で 15 手詰を
+                        //   確実に発見可能 (baseline depth=17 と同等)
+                        // - depth=25 → warmup=21: remaining=21 は chain
+                        //   aigoma で膨張するが budget 1/3 で制御
+                        //   (depth=25 with budget=15M: warmup gets ~5M)
                         let warmup_budget = (total_max_nodes
                             .saturating_sub(self.nodes_searched)) / 3;
-                        self.depth = warmup_depth;
+                        let save_max_nodes = self.max_nodes;
                         self.max_nodes = self.nodes_searched
                             .saturating_add(warmup_budget);
                         verbose_eprintln!(
                             "[ids] warmup mid_fallback: depth={} budget={}K",
                             warmup_depth, warmup_budget / 1000
                         );
+                        // Warmup 中は denom=3 (loose) を強制．
+                        let save_eps = self.param_epsilon_denom;
+                        self.param_epsilon_denom = 3;
+                        // nested mid_fallback: PNS + IDS を warmup_depth で
+                        // 完全実行し，proof 発見に必要な TT 状態を構築する．
+                        self.depth = warmup_depth;
                         self.mid_fallback(board);
-
-                        // Warmup 後に root を再チェック (full-depth remaining で)
+                        // epsilon を full-depth 用に復元
+                        self.param_epsilon_denom = save_eps;
+                        // Warmup 後に root を再チェック
                         self.depth = saved_depth;
-                        let full_remaining = saved_depth as u16;
                         let (rp, _, _) = self.look_up_pn_dn(
-                            pk, &att_hand, full_remaining,
+                            pk, &att_hand, saved_depth as u16,
                         );
                         if rp == 0 {
                             verbose_eprintln!(
                                 "[ids] warmup solved! nodes={}",
                                 self.nodes_searched
                             );
+                            self.max_nodes = save_max_nodes;
                             break;
                         }
-                        // Restore max_nodes for full-depth
-                        self.max_nodes = total_max_nodes;
+                        self.max_nodes = save_max_nodes;
                     }
                 }
 

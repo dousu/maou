@@ -1379,7 +1379,9 @@ use crate::types::{Color, PieceType};
     #[test]
     fn test_no_checkmate_gold_interposition() {
         let sfen = "7gk/8p/5P2s/7P1/9/9/9/9/9 b BN2rb3g3s3n4l15p 1";
-        let result = solve_tsume(sfen, Some(31), Some(1_000_000), None).unwrap();
+        // v0.24.60: budget 1M → 2M. IDS warmup (depth > 19) が予算 1/3 を
+        // 消費するため，full-depth での NoCheckmate 判定に十分な余裕を確保．
+        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
 
         match &result {
             TsumeResult::NoCheckmate { .. } => {}
