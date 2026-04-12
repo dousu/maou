@@ -599,6 +599,41 @@ impl TranspositionTable {
         self.look_up_working(pos_key, hand, remaining, neighbor_scan)
     }
 
+    /// 施策 X-N A-fix (v0.24.58): 同一 pos_key の hand バリアント数を
+    /// 自クラスタから推定する．
+    ///
+    /// 本関数は `try_prefilter_block` で `neighbor_scan` を条件付きで
+    /// 有効化するために使用される．自クラスタに pos_key と一致するが
+    /// hand が異なる ProvenTT エントリが 1 個以上存在する場合 `true` を返す．
+    ///
+    /// 原理:
+    /// - ProvenTT クラスタは `pos_key ^ hand_hash(hand)` でインデックス．
+    ///   異なる hand は異なるクラスタに分散するのが基本．
+    /// - 自クラスタ内に pos_key 一致かつ hand 不一致のエントリがある場合，
+    ///   hand_hash の衝突か同一 pos_key を異なる hand で store したかの
+    ///   いずれか．いずれの場合も hand バリアントが TT 上に複数存在し，
+    ///   neighbor_scan で追加 proof 発見の期待値が高い．
+    /// - 真の variant 数 (全クラスタの全 hand) の正確なカウントは高価な
+    ///   ため本関数は **cheap な下界推定** として機能する．
+    ///
+    /// cost: 自クラスタ走査 1 回 (PROVEN_CLUSTER_SIZE エントリ).
+    pub(super) fn proven_has_other_hand_variant(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> bool {
+        let pos_key = Self::safe_key(pos_key);
+        for fe in self.proven_cluster(pos_key, hand) {
+            if fe.pos_key == pos_key
+                && fe.entry.is_proof()
+                && fe.entry.hand != *hand
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// 指定局面に proof エントリ(pn=0)が存在するかチェックする．
     ///
     /// 自クラスタ + 持ち駒-1の近傍クラスタ(±1限定)を走査する．

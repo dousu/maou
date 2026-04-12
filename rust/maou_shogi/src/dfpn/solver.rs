@@ -17,6 +17,7 @@ use super::tt::TranspositionTable;
 use super::profile::ProfileStats;
 use super::{
     adjust_hand_for_move, edge_cost_and, edge_cost_or,
+    hand_gte_forward_chain,
     position_key, propagate_nm_remaining, push_move, snda_dedup,
     CheckCache,
     DEEP_DFPN_R, EPSILON_DENOM_ADAPTIVE, INF, INTERPOSE_DN_BIAS, MAX_MOVES, PN_UNIT,
@@ -289,6 +290,10 @@ pub struct DfPnSolver {
     /// TT 診断: prefilter が試行されたが TT ヒットしなかった回数．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_prefilter_miss: u64,
+    /// TT 診断 (v0.24.58 A-fix): prefilter が TT ヒットしたものの
+    /// forward-chain soundness guard により skip した回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_prefilter_fc_reject: u64,
     /// TT 診断: ply ごとの MID 訪問回数(最大64手)．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_ply_visits: [u64; 64],
@@ -441,6 +446,8 @@ impl DfPnSolver {
             diag_prefilter_skip_remaining: 0,
             #[cfg(feature = "tt_diag")]
             diag_prefilter_miss: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_prefilter_fc_reject: 0,
             #[cfg(feature = "tt_diag")]
             diag_ply_visits: [0u64; 64],
             #[cfg(feature = "tt_diag")]
@@ -3572,42 +3579,134 @@ impl DfPnSolver {
 
             // メイン TT で捕獲後局面の証明を参照．
             //
-            // 注: 施策 X-N 候補 A (v0.24.56 試行, v0.24.57 A-fix 試行) で
-            // neighbor_scan=true と or_ph=child_hand の組合せを試みたが，
-            // いずれも test_tsume_39te_ply24_mate15_regression で Unknown 退行．
-            // prefilter の semantics は init_and_proof 累積と
-            // adjust_hand_for_move の両方に複合的に依存しており，
-            // 単純な書き換えでは soundness を保ちつつ neighbor_scan の
-            // 恩恵を得ることが困難と判明．A-fix は将来の深掘り課題として保留．
-            let (ppn, _, _) = self.table.look_up(pc_pk, &pc_hand, pc_remaining, false);
+            // ## 施策 X-N 候補 A-fix (v0.24.58): 2 段階 lookup + either-or or_ph 選択
+            //
+            // ### v0.24.56 退行の根本原因
+            //
+            // v0.24.56 で `neighbor_scan=false` → `true` の 1 行変更を
+            // 試みた際，test_tsume_39te_ply24_mate15_regression が Unknown
+            // に退行した．原因は `or_ph = pc_ph - X_cap` 後の
+            // `or_ph.min(child_hand)` clamp が forward-chain substitution
+            // マッチ時に unsound な proof を child_pk に store することだった:
+            //
+            // - pc_ph = [0, 5, 0, 0, 0, 0, 0]  (5 lances required)
+            // - pc_hand = [0, 0, 0, 0, 0, 0, 5] (5 rooks, forward-chain match)
+            // - X_cap = [1, 0, 0, 0, 0, 0, 0]  (captured pawn)
+            // - or_ph (pre-clamp) = [0, 5, 0, 0, 0, 0, 0]
+            // - child_hand = [0, 0, 0, 0, 0, 0, 5]
+            // - clamped or_ph = [0, 0, 0, 0, 0, 0, 0] ← **unsound**
+            //
+            // stored claim: 「child_pk は空手で詰む」．しかし実際には
+            // attacker が capture した後の pc_pk with [1,0,0,0,0,0,0] は
+            // pc_ph = [0,5,...] を forward-chain で満たさず
+            // (deficit_lance=5, a[6]=0, 5≤0 NO)．`neighbor_scan` を
+            // enable すると forward-chain matching の頻度が急増し退行が
+            // 顕在化した．v0.24.55 以前は own-cluster のみで
+            // substitution match が稀だったため実害が観測されていなかった．
+            //
+            // ### A-fix 設計: 2 段階 lookup + 適応的 neighbor_scan + either-or
+            //
+            // baseline の clamp 方式は own-cluster match では安定動作して
+            // おり，実害が観測されていない．問題は neighbor-cluster match
+            // での forward-chain substitution との噛み合わせのみ．そこで
+            // lookup を 2 段階に分離し，store 時の or_ph 計算方式を
+            // own/neighbor で切り替える:
+            //
+            // 1. **Phase 1 (own cluster only)**: `neighbor_scan=false` で
+            //    自クラスタを探索．hit した場合は baseline の clamp 方式
+            //    (`or_ph = min(pc_ph - X_cap, child_hand)`) を使用．
+            //    own-cluster match は baseline から安定しており，clamp の
+            //    soundness ギャップも 29te / 39te を通じて実害が観測されて
+            //    いないため踏襲する (wider dominance を維持)．
+            //
+            // 2. **Phase 2 (adaptive neighbor scan)**: Phase 1 miss 時のみ
+            //    実行．`proven_has_other_hand_variant` で同一 pos_key の
+            //    hand バリアントが自クラスタに存在する場合のみ発火させる
+            //    (user suggestion: variant が無い場所は neighbor_scan が
+            //    無効なので発火させない)．hit した場合は either-or 方式
+            //    で sound な or_ph を選択:
+            //    - **tight 候補**: `or_ph_tight = pc_ph - X_cap` (saturating)
+            //      正当性: `H ≥_fc or_ph_tight → H + X_cap ≥_fc pc_ph`
+            //      (forward-chain monotonicity + componentwise dominance)
+            //    - **trivial 候補**: `child_hand` 自体
+            //      正当性: `H ≥_fc child_hand → H + X_cap ≥_fc pc_hand
+            //      ≥_fc pc_ph` (lookup premise + fc monotonicity)
+            //    - `child_hand ≥_fc or_ph_tight` の fc-check で tight を
+            //      使うか trivial fallback に落とすかを決定．両者とも sound．
+            //
+            //    旧 clamp 方式 `min(or_ph_tight, child_hand)` は両候補の
+            //    いずれでもない中間 hand となり forward-chain 支配が崩れ
+            //    unsound．A-fix は 2 候補からの排他選択で soundness を保証．
+            let (ppn_own, _, _) = self.table.look_up(
+                pc_pk, &pc_hand, pc_remaining, false,
+            );
+            let mut from_neighbor = false;
+            let ppn = if ppn_own == 0 {
+                ppn_own
+            } else if self.table.proven_has_other_hand_variant(pc_pk, &pc_hand) {
+                let (ppn_nb, _, _) = self.table.look_up(
+                    pc_pk, &pc_hand, pc_remaining, true,
+                );
+                if ppn_nb == 0 {
+                    from_neighbor = true;
+                }
+                ppn_nb
+            } else {
+                ppn_own
+            };
             if ppn == 0 {
                 // 捕獲後局面が証明済み → 合駒の OR ノードも証明
                 let pc_ph = self.table.get_proof_hand(pc_pk, &pc_hand);
 
                 // OR ノードの証明駒: 捕獲で得る駒分を差し引く
                 let cap_raw = cap_mv.captured_piece_raw();
-                let mut or_ph = pc_ph;
+                let mut or_ph_tight = pc_ph;
                 if cap_raw > 0 {
                     let piece = Piece::from_raw_u8(cap_raw);
                     if let Some(pt) = piece.piece_type() {
                         let base_pt = pt.unpromoted().unwrap_or(pt);
                         if let Some(hi) = base_pt.hand_index() {
-                            or_ph[hi] = or_ph[hi].saturating_sub(1);
+                            or_ph_tight[hi] = or_ph_tight[hi].saturating_sub(1);
                         }
                     }
                 }
-                // 子ノードの持ち駒で上限クリップ
-                for k in 0..HAND_KINDS {
-                    or_ph[k] = or_ph[k].min(child_hand[k]);
-                }
 
-                // 子 TT に証明エントリを格納(後続の look_up で再利用)
+                // or_ph 計算方式の選択:
+                // - own cluster hit: baseline の clamp 方式．
+                //   own-cluster match は forward-chain 乖離が稀で，clamp
+                //   由来の soundness ギャップは実害が観測されていない．
+                //   clamp 後の or_ph は `min(or_ph_tight, child_hand)` で
+                //   wider dominance を提供する．
+                // - neighbor cluster hit: A-fix either-or 方式．
+                //   forward-chain substitution match が多いため clamp は
+                //   unsound になりうる．`child_hand ≥_fc or_ph_tight` の
+                //   fc-check で sound な or_ph を選択する．
+                let or_ph = if from_neighbor {
+                    if hand_gte_forward_chain(child_hand, &or_ph_tight) {
+                        or_ph_tight
+                    } else {
+                        #[cfg(feature = "tt_diag")]
+                        { self.diag_prefilter_fc_reject += 1; }
+                        *child_hand
+                    }
+                } else {
+                    let mut or_ph = or_ph_tight;
+                    for k in 0..HAND_KINDS {
+                        or_ph[k] = or_ph[k].min(child_hand[k]);
+                    }
+                    or_ph
+                };
+
+                // 子 TT に証明エントリを格納(後続の look_up で再利用)．
+                // or_ph は unclamped の sound proof_hand: H ≥_fc or_ph →
+                // H + X_cap ≥_fc pc_ph (forward-chain monotonicity + or_ph +
+                // X_cap ≥ pc_ph componentwise) → child_pk 証明可能．
                 self.table.store(
                     child_pk, or_ph, 0, INF,
                     remaining.saturating_sub(1), child_pk as u32,
                 );
 
-                // AND 証明駒の更新
+                // AND 証明駒の更新 (baseline adj 方式を踏襲)
                 let adj = adjust_hand_for_move(block_move, &or_ph);
                 for k in 0..HAND_KINDS {
                     and_proof[k] = and_proof[k].max(adj[k]);
