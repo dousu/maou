@@ -62,7 +62,12 @@ pub enum TsumeResult {
 /// - `solve()` 入口で全クリア
 /// - IDS 反復間は保持 (proof は depth 非依存，disproof は保守的な方向)
 /// - cross_deduce / prefilter / reverse_disproof_sharing で更新
-const PC_SUMMARY_SIZE: usize = 65536; // 64K entries, ~1.3 MB
+/// - (v0.24.68) 容量を 64K → 256K に拡大し hash collision を削減．
+///   MID proof store 時の更新は不可: MID が store する proof hand は
+///   OR ノードの文脈であり，prefilter が lookup する post-capture 文脈
+///   の proof hand とは異なる．min_proof_hand が不当に縮小され
+///   探索パスが変化する退行が確認された (test_tsume_39te_ply24_mate15)
+const PC_SUMMARY_SIZE: usize = 262144; // 256K entries, ~5.2 MB
 
 struct PostCaptureSummary {
     /// `(pos_key, min_proof_hand, max_disproof_hand)` の直接マップ．
