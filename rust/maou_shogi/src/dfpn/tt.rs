@@ -1697,6 +1697,11 @@ impl TranspositionTable {
         self.proven.iter().filter(|fe| fe.pos_key != 0).count()
     }
 
+    /// ProvenTT の proof (pn=0) エントリ数を返す．
+    pub(super) fn proven_count(&self) -> usize {
+        self.proven.iter().filter(|fe| fe.pos_key != 0 && fe.entry.is_proof()).count()
+    }
+
     /// WorkingTT の非空エントリ数を返す(`len` のエイリアス)．
     pub(super) fn working_len(&self) -> usize {
         self.len()

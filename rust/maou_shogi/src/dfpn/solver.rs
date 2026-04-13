@@ -1086,50 +1086,64 @@ impl DfPnSolver {
             && self.nodes_searched < self.max_nodes
             && !self.timed_out
         {
-            // 段階的予算拡大 warmup (v0.24.65):
-            // warmup_depths が設定されている場合，浅い depth で先行 solve を
-            // 実行し ProvenTT に proof を蓄積する．proof は retain_proofs_only
-            // で保持され，最終 solve で活用される．
+            // Adaptive warmup 予算配分 (v0.24.65):
+            //
+            // warmup は proof 蓄積が目的であり，full solve ほどの予算は不要．
+            // 各 warmup 段に残り予算の小さな割合を割り当て，main solve に
+            // 予算の大部分を残す．
+            //
+            // 予算戦略:
+            // - 各 warmup 段: 残り予算の 10%，上限 1M (浅い段) / 2M (深い段)
+            // - main solve: 残り予算の全部 (warmup が少額なので 80%+ が残る)
+            //
+            // 早期終了:
+            // - warmup で proved (pn=0) → main solve 不要
+            // - warmup が proof を 1 件も蓄積しなかった → 以降スキップ
             if !self.warmup_depths.is_empty() {
                 let warmup_depths = self.warmup_depths.clone();
-                let n_phases = warmup_depths.len() as u64 + 1;
-                let budget_per_phase = (saved_max_nodes - self.nodes_searched) / n_phases;
                 let final_depth = self.depth;
+                let mut prev_proven_count = self.table.proven_count();
 
                 for (i, &wd) in warmup_depths.iter().enumerate() {
                     if wd >= final_depth { continue; }
-                    if self.nodes_searched >= self.max_nodes || self.timed_out {
+                    if self.nodes_searched >= saved_max_nodes || self.timed_out {
                         break;
                     }
-                    // warmup 段の予算を設定
-                    self.max_nodes = self.nodes_searched + budget_per_phase;
+
+                    let remaining_budget = saved_max_nodes - self.nodes_searched;
+                    let cap = if wd <= 17 { 1_000_000u64 } else { 2_000_000u64 };
+                    let warmup_budget = (remaining_budget / 10).min(cap).max(100_000);
+
+                    self.max_nodes = self.nodes_searched + warmup_budget;
                     self.depth = wd;
                     verbose_eprintln!(
-                        "[solve] warmup phase {}/{}: depth={} budget={}K nodes={}K time={:.1}s",
+                        "[solve] warmup {}/{}: depth={} budget={}K nodes={}K time={:.1}s",
                         i + 1, warmup_depths.len(), wd,
-                        budget_per_phase / 1000,
+                        warmup_budget / 1000,
                         self.nodes_searched / 1000,
                         self.start_time.elapsed().as_secs_f64(),
                     );
                     self.mid_fallback(board);
 
-                    // warmup 段の結果チェック
-                    let (wp, wd_val) = self.look_up_board(board);
+                    let (wp, _) = self.look_up_board(board);
+                    let new_proven = self.table.proven_count();
+                    let proofs_added = new_proven.saturating_sub(prev_proven_count);
                     verbose_eprintln!(
-                        "[solve] warmup phase {} done: pn={} dn={} nodes={}K time={:.1}s",
-                        i + 1, wp, wd_val,
+                        "[solve] warmup {} done: pn={} proofs=+{} nodes={}K time={:.1}s",
+                        i + 1, wp, proofs_added,
                         self.nodes_searched / 1000,
                         self.start_time.elapsed().as_secs_f64(),
                     );
-                    if wp == 0 {
-                        // warmup で解け��� → 最終 solve は不要
+
+                    if wp == 0 { break; }
+                    if proofs_added == 0 {
+                        verbose_eprintln!("[solve] warmup {}: no proofs, skip rest", i + 1);
                         break;
                     }
-                    // ProvenTT の proof を保持して中間エントリを除去
+                    prev_proven_count = new_proven;
                     self.table.retain_proofs_only();
                 }
 
-                // depth と max_nodes を復元
                 self.depth = final_depth;
                 self.max_nodes = saved_max_nodes;
             }
