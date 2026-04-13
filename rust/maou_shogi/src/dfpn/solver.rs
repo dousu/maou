@@ -1763,37 +1763,16 @@ impl DfPnSolver {
 
         let save_alpha_x = self.alpha_x_filter_active;
 
-        // 施策 α 再実装 (v0.24.71): 境界層 chain drop filter + tag propagation
+        // 施策 α (v0.24.71): boundary chain drop filter は Frontier variant
+        // の PNS→MID サイクルとの相互作用で false proof が ABSOLUTE tag で
+        // 格納される問題があり，現時点では無効化．
+        // tag-aware look_up / tag propagation の infrastructure は保持する
+        // (将来の施策で活用可能)．
         //
-        // AND ノードで remaining ≤ 1 かつ chain aigoma 検出時，chain マスへの
-        // 合駒ドロップを move リストから除去する．
-        //
-        // filter_applied は local 変数として追跡し，AND ノード自身の proof
-        // store 時のみ FILTER_DEPENDENT tag を適用する．子孫 MID には伝搬しない
-        // (子孫の proof は genuine であり filter に依存しない)．
-        //
-        // soundness 保証:
-        // - tag-aware look_up_proven が stale FILTER_DEPENDENT proof をスキップ
-        //   (tag_depth < current_ids_depth の場合)
-        // - IDS 境界の clear_proven_disproofs_below が non-ABSOLUTE proof を除去
-        // - 深い IDS step では remaining > 1 となり filter 非発火 → 全 defense 探索
-        let mut filter_applied = false;
-        if !or_node
-            && remaining <= 1
-            && !self.chain_bb_cache.is_empty()
-        {
-            let chain_bb = self.chain_bb_cache;
-            let before = moves.len();
-            moves.retain(|m| {
-                !(m.is_drop() && chain_bb.contains(m.to_sq()))
-            });
-            let removed = before - moves.len();
-            if removed > 0 {
-                filter_applied = true;
-                #[cfg(feature = "tt_diag")]
-                { self.diag_alpha_x_filter_applied += 1; }
-            }
-        }
+        // 失敗の根本原因: PNS は filter context を認識せず，filter で除去した
+        // defense を含まない局面を ABSOLUTE proof として格納する．MID 内の
+        // filter_applied tracking では PNS 経由の proof を制御できない．
+        let filter_applied = false;
 
         // Dynamic Move Ordering: TT Best Move + Killer Moves
         // 前回の探索で最善だった手を優先的に展開し，カットオフを早める．
