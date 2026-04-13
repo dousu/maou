@@ -63,17 +63,33 @@ PNS で未解決の場合に自動的に Phase 2 として呼び出される．
 
 **実装:** `mid_fallback()` 関数 (`pns.rs`)．
 
-- **深さ進行** (v0.24.60):
+- **深さ進行** (v0.24.60+):
 
 ```
   depth ≤ 19:      2 -> 4 -> depth  (直接ジャンプ)
-  depth 20-31:     2 -> 4 -> [warmup] -> 8 -> 16 -> depth (段階的)
+  depth 20-31:     2 -> 4 -> [warmup(depth-4)] -> 8 -> 16 -> depth (段階的)
   depth > 31:      2 -> 4 -> 8 -> 16 -> 32 -> 36 -> ... (倍増→+4)
 ```
 
   - `depth ≤ 19`: 直接ジャンプ．epsilon denom=3 が自然に適用され cliff 不発生
   - `depth > 19`: 段階的 IDS + **warmup mid\_fallback** (後述)
   - `depth > 32`: +4 刻み
+
+- **solve() レベルの warmup** (v0.24.65, `set_warmup_depths()` で設定):
+
+  solve() の Phase 2 開始前に，指定された浅い depth で warmup solve を
+  実行し ProvenTT に proof を蓄積する:
+
+  ```
+  [Phase 1: PNS] → [Warmup: depth=17 (10% budget)] → [Warmup: depth=21 (10% budget)]
+                    → retain_proofs_only                → retain_proofs_only
+  → [Phase 2: IDS-dfpn at full depth (残り budget)]
+  ```
+
+  - 各 warmup 段の予算: 残り予算の 10%，上限 500K (浅い段) / 1M (深い段)
+  - warmup 段で proof が蓄積されなければ以降をスキップ (early exit)
+  - warmup ループ完了後に `retain_proofs_only()` で WorkingTT を clear し，
+    warmup の depth-limited NM が main solve に混入するのを防止 (v0.24.66)
 
 - **Warmup mid\_fallback** (v0.24.60, depth > 19):
 
@@ -103,6 +119,11 @@ PNS で未解決の場合に自動的に Phase 2 として呼び出される．
   - rem=0 仮反証は TT に格納しない (v0.24.14 以降，§6.6.4 参照)
 - **NM 昇格**: 反復終了後に `depth_limit_all_checks_refutable()` で全王手が
   反駁可能と確認できれば，NM を `REMAINING_INFINITE` に昇格
+  - **昇格ガード** (v0.24.63+): `ids_depth >= max(saved_depth, outer_solve_depth)`
+    を確認し，warmup mid\_fallback 内の浅い depth での false 昇格を防止
+  - **warmup 後 TT 清掃** (v0.24.66): warmup mid\_fallback 後に
+    `clear_working_entry(pk, hand)` で root の depth-limited NM を除去し
+    full-depth IDS での false NoCheckmate を防止
 
 **出典との差異:**
 - 論文の IDS-dfpn は単純な深さ制限増加だが，maou\_shogi では倍増ステップ +
@@ -117,13 +138,23 @@ flowchart TD
     B -->|budget: min\nmax_nodes/4, 150K| C{root proved?}
     C -->|yes| D[extract PV from arena]
     C -->|no| E[pns_store_to_tt: proof/disproof only]
-    E --> F[Phase 2: IDS-dfpn]
+    E --> WC{warmup_depths\nset?}
+    WC -->|no| F[Phase 2: IDS-dfpn]
+    WC -->|yes| WL[Warmup loop:\neach depth 10% budget]
+    WL --> WM[mid_fallback at warmup depth]
+    WM --> WP{proved?}
+    WP -->|yes| K[extract PV from TT]
+    WP -->|no| WN{proofs added?}
+    WN -->|no| WR[retain_proofs_only\nskip remaining warmup]
+    WN -->|yes| WRP[retain_proofs_only]
+    WRP -->|next warmup depth| WL
+    WR --> F
     F --> G[IDS loop: depth 2,4,8,...,full]
     G -->|shallow depth| H[MID: depth-first search]
     G -->|full depth| I[MID 1/2 budget]
     H --> J{proved/disproved?}
-    J -->|yes| K[extract PV from TT]
-    J -->|no| L[TT cleanup + NM promotion]
+    J -->|yes| K
+    J -->|no| L[TT cleanup + NM promotion\nguard: ids_depth >= outer_solve_depth]
     L -->|next depth| G
     I --> M{proved?}
     M -->|yes| K

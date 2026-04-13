@@ -3243,6 +3243,97 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: /tmp/tsume_39te_backward_10m.log");
     }
 
+    /// 39手詰め backward 10M + warmup depths (v0.24.65)．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_backward_10m_warmup() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_backward_10m_warmup.log";
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::io::BufWriter::new(
+            std::fs::File::create(out_path).unwrap());
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        let node_limit: u64 = 10_000_000;
+        let timeout: u64 = 600;
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 39手詰め逆順サブ問題 (10M nodes / 600s, warmup=[17,21])").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, "{:<6} {:<10} {:<14} {:<10} {:<10} {:<10} {}",
+            "Ply", "Remain", "Nodes", "Time(s)", "MaxPly", "TT_pos", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(90)).unwrap();
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        let mut positions: Vec<(usize, Board)> = Vec::new();
+        positions.push((0, board.clone()));
+        for ply_start in (0..38).step_by(2) {
+            let m1 = board.move_from_usi(pv[ply_start]).unwrap();
+            board.do_move(m1);
+            let m2 = board.move_from_usi(pv[ply_start + 1]).unwrap();
+            board.do_move(m2);
+            positions.push((ply_start + 2, board.clone()));
+        }
+        positions.reverse();
+
+        for (ply, pos) in &positions {
+            let remaining = 39 - ply;
+            let depth = (remaining + 2).min(41) as u32;
+
+            let mut test_board = pos.clone();
+            let mut solver = DfPnSolver::with_timeout(
+                depth, node_limit, 32767, timeout,
+            );
+            solver.set_find_shortest(false);
+            // warmup depths: depth > 21 なら [17, 21]，> 17 なら [17]
+            if depth > 21 {
+                solver.set_warmup_depths(&[17, 21]);
+            } else if depth > 17 {
+                solver.set_warmup_depths(&[17]);
+            }
+
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let result_str = match &result {
+                TsumeResult::Checkmate { moves, .. } =>
+                    format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } =>
+                    "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } =>
+                    "NoMate".to_string(),
+                TsumeResult::Unknown { .. } =>
+                    "Unknown".to_string(),
+            };
+
+            writeln!(out, "{:<6} {:<10} {:<14} {:<10.2} {:<10} {:<10} {}",
+                ply, remaining, solver.nodes_searched, elapsed.as_secs_f64(),
+                solver.max_ply, solver.table.len(), result_str).unwrap();
+            out.flush().unwrap();
+        }
+
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_backward_10m_warmup.log");
+    }
+
     /// 39手詰めの必要ノード数を推定する．
     ///
     /// 方針: ply 24 境界の 4 Unknown 応手(1g1f, N*6g, P*7g, N*7g)を
@@ -6142,6 +6233,8 @@ use crate::types::{Color, PieceType};
                 s.diag_deferred_ready,
                 s.diag_deferred_not_ready,
                 s.diag_cross_deduce_hits);
+            #[cfg(feature = "tt_diag")]
+            eprintln!("  reverse_disproof_hits={}", s.diag_reverse_disproof_hits);
         }
 
         // 8g6g 後の各防御手を個別に OR node として解く
@@ -6432,6 +6525,7 @@ use crate::types::{Color, PieceType};
             full_solver.diag_pns_deferred_activations).unwrap();
         writeln!(out, "PNS deferred already proven: {}", full_solver.diag_pns_deferred_already_proven).unwrap();
         writeln!(out, "Cross-deduce hits (MID): {}", full_solver.diag_cross_deduce_hits).unwrap();
+        writeln!(out, "Reverse disproof hits: {}", full_solver.diag_reverse_disproof_hits).unwrap();
 
         // ========================================
         // Phase 4: 正常性チェック
@@ -6986,6 +7080,10 @@ use crate::types::{Color, PieceType};
                 writeln!(out, "    deferred_act(pns)  = {}", solver.diag_pns_deferred_activations).unwrap();
                 writeln!(out, "    deferred_already_proven = {}", solver.diag_pns_deferred_already_proven).unwrap();
                 writeln!(out, "    cross_deduce_hits  = {}", solver.diag_cross_deduce_hits).unwrap();
+                writeln!(out, "    reverse_disproof   = {}", solver.diag_reverse_disproof_hits).unwrap();
+                writeln!(out, "    ms_reverse_dis     = {}", solver.diag_multi_step_reverse_disproof_hits).unwrap();
+                writeln!(out, "    pc_sum_proof_hits  = {}", solver.diag_pc_summary_proof_hits).unwrap();
+                writeln!(out, "    pc_sum_dis_hits    = {}", solver.diag_pc_summary_disproof_hits).unwrap();
                 writeln!(out, "    cd_guard_and_drop  = {}", solver.diag_cd_guard_and_drop).unwrap();
                 writeln!(out, "    cd_guard_child_proven = {}", solver.diag_cd_guard_child_proven).unwrap();
                 writeln!(out, "    cd_no_siblings     = {}", solver.diag_cd_no_siblings).unwrap();
@@ -7427,4 +7525,93 @@ use crate::types::{Color, PieceType};
         // ABSOLUTE still preserved
         let (pn, _, _) = tt.look_up(pk, &hand, 0x7FFF, false);
         assert_eq!(pn, 0, "ABSOLUTE proof must never be removed");
+    }
+
+    /// ply 2 false NoMate 回帰テスト (v0.24.63)．
+    ///
+    /// 39手詰め PV 上の ply 2 局面 (37手詰め) を depth=39, 10M budget で solve し，
+    /// NoCheckmate を返さないことを検証する．Unknown は正常 (budget 不足)．
+    /// v0.24.60 以前では IDS NM 昇格判定のバグにより false NoMate が発生していた．
+    #[test]
+    fn test_tsume_39te_ply2_no_false_nomate() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        eprintln!("ply 2 SFEN: {}", board.sfen());
+        eprintln!("Turn: {:?} (attacker=Sente expected)", board.turn);
+
+        let remaining = 37u32;
+        let depth = remaining.saturating_add(2).min(41);
+        eprintln!("remaining={} depth={}", remaining, depth);
+
+        let mut solver = DfPnSolver::with_timeout(depth, 10_000_000, 32767, 600);
+        solver.set_find_shortest(false);
+
+        let result = solver.solve(&mut board);
+        eprintln!("Result: {:?}", result);
+        eprintln!("Nodes: {} MaxPly: {}", solver.nodes_searched, solver.max_ply);
+
+        match &result {
+            TsumeResult::NoCheckmate { .. } => {
+                panic!("BUG: ply 2 returned NoMate but should be on 39-move PV");
+            }
+            TsumeResult::Unknown { .. } => {
+                eprintln!("Unknown (expected with 10M budget)");
+            }
+            TsumeResult::Checkmate { moves, .. } => {
+                eprintln!("Mate({}) — unexpected with 10M budget", moves.len());
+            }
+            TsumeResult::CheckmateNoPv { .. } => {
+                eprintln!("MateNoPV");
+            }
+        }
+    }
+
+    /// ply 20 NoMate 調査: warmup 使用時に false NoMate が発生するバグ (v0.24.66)
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply20_warmup_nomate_investigation() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv: Vec<&str> = vec![
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e",
+        ];
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        eprintln!("ply 20 SFEN: {}", board.sfen());
+
+        let remaining = 39 - 20;
+        let depth = (remaining + 2).min(41) as u32;
+        eprintln!("remaining={} depth={}", remaining, depth);
+
+        // warmup あり
+        let mut solver = DfPnSolver::with_timeout(depth, 10_000_000, 32767, 600);
+        solver.set_find_shortest(false);
+        solver.set_warmup_depths(&[17, 21]);
+
+        let result = solver.solve(&mut board);
+        eprintln!("Result: {:?}", result);
+        eprintln!("Nodes: {} MaxPly: {}", solver.nodes_searched, solver.max_ply);
+
+        match &result {
+            TsumeResult::NoCheckmate { .. } => {
+                panic!("BUG: ply 20 returned NoMate with warmup but should be Mate(19)");
+            }
+            _ => {}
+        }
     }

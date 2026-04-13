@@ -192,6 +192,54 @@ transitive closure を連鎖的に発火させる (proof cascade)．
 
 **効果**: 39te canonical -25%，29te -33% の性能改善を達成．
 
+#### 8.5.2 逆方向不詰共有 (v0.24.61)
+
+cross\_deduce は **proof 方向** (弱い駒で詰む → 強い駒でも詰む) の伝搬のみ
+だが，**disproof の逆方向** (強い駒で詰まない → 弱い駒でも詰まない) の
+伝搬も有効である．
+
+**原理:** 守備方が強い駒 (飛車) を合駒 → 攻方が飛車を捕獲 → hand H\_strong で
+不詰 (cdn=0)．弱い駒 (歩) を合駒 → 攻方が歩を捕獲 → hand H\_weak は
+H\_strong より弱い → なおさら不詰．
+
+```
+hand_gte_forward_chain(H_strong, H_weak) = true
+→ H_strong で不詰 → H_weak でも不詰
+```
+
+**実装:** `reverse_disproof_sharing()` (`solver.rs`)
+
+MID main loop で子 (合駒 drop) の cdn が 0 になった直後に発火し，
+同一マスの兄弟ドロップに post-capture level の disproof を WorkingTT に格納．
+ProvenTT を汚染しない (depth-limited disproof のみ)．
+
+#### 8.5.3 multi-step 逆方向不詰共有 (v0.24.62)
+
+§8.5.1 と対称的に，**異なるマス** のドロップ children にも
+reverse\_disproof\_sharing を re-trigger する:
+
+```
+reverse_disproof_sharing(disproved_move@sq_S) 完了
+→ for child_j (drop@sq_T, T ≠ S), not disproven:
+    reverse_disproof_sharing(child_j)
+```
+
+**効果**: reverse\_disproof 発火 8-18 倍増，TT disproven -92%，
+depth=25 cliff 突破 (Unknown → Mate(15))．
+
+#### 8.5.4 Post-Capture Proof Summary Cache (v0.24.64)
+
+TT の hand\_hash Zobrist 混合によるクラスタ分散を迂回する pos\_key ベースの
+直接マップキャッシュ (64K entries)．
+
+- `min_proof_hand`: この pos\_key で詰む最弱の攻方手駒
+- `max_disproof_hand`: この pos\_key で詰まない最強の攻方手駒
+
+`try_prefilter_block` の TT lookup 前に O(1) で参照し，
+`hand_gte_forward_chain` チェックで TT lookup を完全にスキップ可能．
+
+**効果**: prefilter\_hits +59%〜×3.7．
+
 ### 8.6 合駒 DN バイアス
 
 AND ノードの合駒(駒打ち)の初期 dn にバイアスを加算し，探索優先度を下げる．

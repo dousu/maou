@@ -1409,6 +1409,8 @@ impl DfPnSolver {
         let mut prev_prefilter_skip = self.diag_prefilter_skip_remaining;
         #[cfg(feature = "tt_diag")]
         let mut prev_prefilter_miss = self.diag_prefilter_miss;
+        #[cfg(feature = "tt_diag")]
+        let mut prev_reverse_disproof = self.diag_reverse_disproof_hits;
 
         loop {
             if ids_depth > saved_depth {
@@ -1529,6 +1531,11 @@ impl DfPnSolver {
                         self.mid_fallback(board);
                         // epsilon を full-depth 用に復元
                         self.param_epsilon_denom = save_eps;
+                        // v0.24.66: warmup 後に root 局面の depth-limited NM を
+                        // WorkingTT から除去する．root の dn=0 が残ると full-depth
+                        // IDS の look_up で即座にヒットして false NM になる．
+                        // root 以外の WorkingTT エントリは保持して活用する．
+                        self.table.clear_working_entry(pk, &att_hand);
                         // saved_depth_for_epsilon を復元:
                         // nested mid_fallback が warmup_depth で上書き
                         // するため，outer の saved_depth に戻す．
@@ -1640,16 +1647,17 @@ impl DfPnSolver {
                 let d_deferred = self.diag_mid_deferred_activations - prev_deferred_act;
                 let d_pf_skip = self.diag_prefilter_skip_remaining - prev_prefilter_skip;
                 let d_pf_miss = self.diag_prefilter_miss - prev_prefilter_miss;
+                let d_rev_dis = self.diag_reverse_disproof_hits - prev_reverse_disproof;
                 let ids_elapsed = self.start_time.elapsed().as_secs_f64();
                 verbose_eprintln!("[ids_diag] depth={}/{} budget={} used={} TT_pos={} root_pn={} root_dn={} max_ply={} \
-                    prefilter_hit={} prefilter_skip_rem={} prefilter_miss={} cross={} act={} \
+                    prefilter_hit={} prefilter_skip_rem={} prefilter_miss={} cross={} rev_dis={} act={} \
                     cap_tt={}/{} thr_exits={} term_exits={} in_path={} lb_prov={} lb_thr={} lb_nodes={} \
                     init_and_dis={} single_ch={} node_lim={} time={:.2}s",
                     ids_depth, saved_depth, _budget, used,
                     self.table.len(), pn, dn,
                     self.max_ply,
                     d_prefilter, d_pf_skip, d_pf_miss,
-                    d_cross, d_deferred,
+                    d_cross, d_rev_dis, d_deferred,
                     self.diag_capture_tt_hits, self.diag_capture_tt_calls,
                     self.diag_threshold_exits,
                     self.diag_terminal_exits,
@@ -1702,6 +1710,7 @@ impl DfPnSolver {
                 prev_deferred_act = self.diag_mid_deferred_activations;
                 prev_prefilter_skip = self.diag_prefilter_skip_remaining;
                 prev_prefilter_miss = self.diag_prefilter_miss;
+                prev_reverse_disproof = self.diag_reverse_disproof_hits;
             }
             let (root_pn2, root_dn2, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
             verbose_eprintln!("[ids] after MID: depth={} root_pn={} root_dn={} nodes={} time={:.1}s",
@@ -1713,9 +1722,15 @@ impl DfPnSolver {
             }
             // IDS NM 判定: 構造的判定のみ信頼する．
             //
-            // 1. NM remaining が REMAINING_INFINITE なら真の不詰として打ち切る．
+            // 1. NM remaining が REMAINING_INFINITE **かつ** 現在の IDS depth が
+            //    残り手数以上なら真の不詰として打ち切る．
             //    MID が深さ制限なしに全パスを網羅して NM を確定した場合にのみ
             //    REMAINING_INFINITE が伝搬される．
+            //    ただし ids_depth < remaining の場合は，前の IDS サイクルや
+            //    warmup の MID が蓄積した ProvenTT の confirmed disproof が
+            //    浅い depth の look_up でヒットしただけの可能性がある．
+            //    この場合は depth-limited 仮 NM と同等に扱い昇格しない．
+            //    (v0.24.63: ply 2 NoMate バグの修正)
             // 2. 全王手が再帰的に反証可能なら REMAINING_INFINITE に昇格して打ち切る．
             //
             // depth 制限由来の仮 NM (remaining < REMAINING_INFINITE) は昇格しない．
@@ -1723,10 +1738,18 @@ impl DfPnSolver {
             // これを真の不詰と判定すると偽陽性が発生する(例: 39手詰め)．
             if root_dn2 == 0 {
                 let root_nm_rem = self.table.get_disproof_remaining(pk, &att_hand);
-                verbose_eprintln!("[ids] NM: depth={} nm_rem={} REMAINING_INFINITE={}",
-                    ids_depth, root_nm_rem, REMAINING_INFINITE);
-                if root_nm_rem == REMAINING_INFINITE {
-                    verbose_eprintln!("[ids] NM INFINITE, break");
+                // v0.24.66: NM 昇格判定の depth ガード．
+                // warmup mid_fallback 内では saved_depth が warmup_depth に
+                // 上書きされるため，outer_solve_depth (solve() の真の depth) も
+                // 参照して max を取る．これにより warmup 内の浅い IDS depth で
+                // false NM 昇格が発生するのを防止する．
+                let nm_guard_depth = saved_depth.max(self.outer_solve_depth);
+                verbose_eprintln!("[ids] NM: depth={}/{} (guard={}) nm_rem={} REMAINING_INFINITE={}",
+                    ids_depth, saved_depth, nm_guard_depth, root_nm_rem, REMAINING_INFINITE);
+                if root_nm_rem == REMAINING_INFINITE
+                    && ids_depth >= nm_guard_depth
+                {
+                    verbose_eprintln!("[ids] NM INFINITE (ids_depth >= guard_depth), break");
                     break;
                 }
                 let checks = self.generate_check_moves_cached(board);
@@ -1735,9 +1758,10 @@ impl DfPnSolver {
                 } else {
                     self.depth_limit_all_checks_refutable(board, &checks)
                 };
-                verbose_eprintln!("[ids] refutable={} checks={}", refutable, checks.len());
-                if checks.is_empty() || refutable {
-                    verbose_eprintln!("[ids] NM promoted to INFINITE, break");
+                verbose_eprintln!("[ids] refutable={} checks={} ids_depth={}/{} guard={}",
+                    refutable, checks.len(), ids_depth, saved_depth, nm_guard_depth);
+                if (checks.is_empty() || refutable) && ids_depth >= nm_guard_depth {
+                    verbose_eprintln!("[ids] NM promoted to INFINITE (ids_depth >= guard_depth), break");
                     // att_hand で保存(TT ヒット率最大化)
                     self.table.store(
                         pk, att_hand, INF, 0, REMAINING_INFINITE, pk as u32,

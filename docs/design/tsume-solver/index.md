@@ -126,3 +126,10 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 78 | multi-step cross\_deduce: cross\_deduce 後の異マス prefilter re-trigger + cascade | maou 独自 | §8.5 | v0.24.59 |
 | 79 | IDS warmup mid\_fallback: depth > 19 の full-depth 前に saved-4 で nested IDS + forced denom=3 | maou 独自 | §2.3, §10.2 | v0.24.60 |
 | 80 | IDS 直接ジャンプを depth ≤ 19 に制限 (旧 ≤ 31 → cliff 解消) | maou 独自 | §2.3, §10.2 | v0.24.60 |
+| 81 | 逆方向不詰共有: disproven 合駒の post-capture disproof を兄弟に伝搬 | maou 独自 | §8.5, §10.2 | v0.24.61 |
+| 82 | Multi-step 逆方向不詰共有: 異マスの兄弟ドロップにも disproof 伝搬 | maou 独自 | §8.5, §10.2 | v0.24.62 |
+| 83 | IDS NM 昇格判定: `ids_depth >= saved_depth` ガードで false NoMate 防止 | maou 独自 | §10.2 | v0.24.63 |
+| 84 | Post-Capture Proof Summary Cache: pos\_key ベース O(1) proof/disproof lookup | maou 独自 | §8.4, §10.2 | v0.24.64 |
+| 85 | Adaptive warmup depths: solve() 内で段階的 depth の warmup solve を実行 | maou 独自 | §10.2 | v0.24.65 |
+| 86 | edge\_cost\_or 駒打ちペナルティ: 駒打ち静かな王手に +PN\_UNIT/2 | maou 独自 | §5.2, §10.2 | v0.24.66 |
+| 87 | Warmup NM false NoMate 修正: outer\_solve\_depth ガード + clear\_working\_entry | maou 独自 | §10.2 | v0.24.66 |
