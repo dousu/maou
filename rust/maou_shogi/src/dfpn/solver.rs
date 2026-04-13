@@ -939,6 +939,28 @@ impl DfPnSolver {
         );
     }
 
+    /// Tag 付き proof を転置表に格納する (v0.24.71)．
+    ///
+    /// 施策α の filter_applied AND ノードの proof store 用．
+    /// 子孫 MID の proof は genuine (ABSOLUTE) であり，この関数は
+    /// filter を適用した AND ノード自身の proof のみに使用する．
+    #[inline]
+    pub(super) fn store_proof_with_tag(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+        best_move: u16,
+        mate_distance: u16,
+        tag: u8,
+    ) {
+        if self.ancestor_has_proof() {
+            return;
+        }
+        self.table.store_tagged_proof(
+            pos_key, hand, best_move, mate_distance, tag, self.depth,
+        );
+    }
+
     /// TT Best Move を参照する(位置キー＋持ち駒指定)．
     #[inline]
     pub(super) fn look_up_best_move(
@@ -1739,40 +1761,38 @@ impl DfPnSolver {
                 self.generate_defense_moves(board))
         };
 
-        // NOTE: 施策 α 再評価 (v0.24.54) の試みは soundness 違反で revert:
-        // FILTER_DEPENDENT tag を親 MID に propagate する仕組みが必要だが，
-        // 本 PR で実装していない．詳細は benchmarks.md §10.2 参照．
-        // Strategy X 基盤 (v0.24.53) は保持．
         let save_alpha_x = self.alpha_x_filter_active;
 
-        // 施策 A-6 再評価 (v0.24.54): 境界層 PNS 責任転嫁．
+        // 施策 α 再実装 (v0.24.71): 境界層 chain drop filter + tag propagation
         //
-        // AND ノードで `remaining <= 2 && chain_bb_cache 非空` の場合，
-        // 通常の MID 再帰の代わりに小規模 PNS sub-solve を起動する．PNS の
-        // 結果は完全証明/確定反証のみ TT に store されるため ABSOLUTE 扱いで
-        // 汚染リスクなし．
+        // AND ノードで remaining ≤ 1 かつ chain aigoma 検出時，chain マスへの
+        // 合駒ドロップを move リストから除去する．
         //
-        // v0.24.51 の失敗原因 (per-call 100K × N_boundary = 数百億 work) を
-        // 回避するため，**グローバル呼出数制限** (`a6_boundary_pns_calls_remaining`)
-        // を導入．予算内の限定的な境界層 PNS 委譲のみ許可する．
+        // filter_applied は local 変数として追跡し，AND ノード自身の proof
+        // store 時のみ FILTER_DEPENDENT tag を適用する．子孫 MID には伝搬しない
+        // (子孫の proof は genuine であり filter に依存しない)．
         //
-        // 呼出し条件:
-        // - AND ノード (`!or_node`)
-        // - `remaining <= 2`
-        // - `chain_bb_cache` 非空 (chain aigoma 検出)
-        // - `a6_boundary_pns_calls_remaining > 0` (予算あり)
+        // soundness 保証:
+        // - tag-aware look_up_proven が stale FILTER_DEPENDENT proof をスキップ
+        //   (tag_depth < current_ids_depth の場合)
+        // - IDS 境界の clear_proven_disproofs_below が non-ABSOLUTE proof を除去
+        // - 深い IDS step では remaining > 1 となり filter 非発火 → 全 defense 探索
+        let mut filter_applied = false;
         if !or_node
-            && remaining <= 2
+            && remaining <= 1
             && !self.chain_bb_cache.is_empty()
-            && self.a6_boundary_pns_calls_remaining > 0
         {
-            self.a6_boundary_pns_calls_remaining -= 1;
-            let _ = moves; // PNS が独自に生成するため未使用
-            self.mid_via_pns_boundary(board);
-            // path_len 操作は不要 (push 前の early return, v0.24.51 と同構造)．
-            // save_alpha_x restore は流れない経路なので明示復元は不要
-            // (save_alpha_x は local var だが self.alpha_x_filter_active は未変更).
-            return;
+            let chain_bb = self.chain_bb_cache;
+            let before = moves.len();
+            moves.retain(|m| {
+                !(m.is_drop() && chain_bb.contains(m.to_sq()))
+            });
+            let removed = before - moves.len();
+            if removed > 0 {
+                filter_applied = true;
+                #[cfg(feature = "tt_diag")]
+                { self.diag_alpha_x_filter_applied += 1; }
+            }
         }
 
         // Dynamic Move Ordering: TT Best Move + Killer Moves
@@ -2380,7 +2400,12 @@ impl DfPnSolver {
             for k in 0..HAND_KINDS {
                 p[k] = p[k].min(att_hand[k]);
             }
-            self.store(pos_key, p, 0, INF, REMAINING_INFINITE, pos_key as u32);
+            if filter_applied {
+                self.store_proof_with_tag(pos_key, p, 0, 0,
+                    super::entry::PROOF_TAG_FILTER_DEPENDENT);
+            } else {
+                self.store(pos_key, p, 0, INF, REMAINING_INFINITE, pos_key as u32);
+            }
             debug_assert_eq!(self.path[self.path_len - 1], full_hash);
             self.alpha_x_filter_active = save_alpha_x;
             self.path_len -= 1;
@@ -2446,7 +2471,13 @@ impl DfPnSolver {
                             for k in 0..HAND_KINDS {
                                 proof[k] = proof[k].min(att_hand[k]);
                             }
-                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key as u32);
+                            // (v0.24.71) tag propagation: 子の tag を継承
+                            let child_tag = self.table.get_proof_tag(child_pk, child_hand);
+                            if child_tag != super::entry::PROOF_TAG_ABSOLUTE {
+                                self.store_proof_with_tag(pos_key, proof, m.to_move16(), 0, child_tag);
+                            } else {
+                                self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key as u32);
+                            }
                         } else {
                             // cdn == 0: 唯一の子が反証 → OR 反証
                             // att_hand で保存(TT ヒット率最大化)
@@ -2485,7 +2516,12 @@ impl DfPnSolver {
                             for k in 0..HAND_KINDS {
                                 proof[k] = child_ph[k].min(att_hand[k]);
                             }
-                            self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key as u32);
+                            if filter_applied {
+                                self.store_proof_with_tag(pos_key, proof, 0, 0,
+                                    super::entry::PROOF_TAG_FILTER_DEPENDENT);
+                            } else {
+                                self.store(pos_key, proof, 0, INF, REMAINING_INFINITE, pos_key as u32);
+                            }
                         }
                     }
                     break;
@@ -2682,10 +2718,22 @@ impl DfPnSolver {
                             proof[k] =
                                 proof[k].min(att_hand[k]);
                         }
-                        self.store(
-                            pos_key, proof, 0, INF,
-                            REMAINING_INFINITE, csrc,
+                        // (v0.24.71) tag propagation: 子の proof tag を継承．
+                        // 子が FILTER_DEPENDENT なら親 OR も FILTER_DEPENDENT．
+                        let child_tag = self.table.get_proof_tag(
+                            child_pk, child_hand,
                         );
+                        if child_tag != super::entry::PROOF_TAG_ABSOLUTE {
+                            self.store_proof_with_tag(
+                                pos_key, proof,
+                                children[i].0.to_move16(), 0, child_tag,
+                            );
+                        } else {
+                            self.store(
+                                pos_key, proof, 0, INF,
+                                REMAINING_INFINITE, csrc,
+                            );
+                        }
                         proved_or_disproved = true;
                         break;
                     }
@@ -3060,10 +3108,17 @@ impl DfPnSolver {
                         and_proof[k] =
                             and_proof[k].min(att_hand[k]);
                     }
-                    self.store(
-                        pos_key, and_proof, 0, INF,
-                        REMAINING_INFINITE, pos_key as u32,
-                    );
+                    if filter_applied {
+                        self.store_proof_with_tag(
+                            pos_key, and_proof, 0, 0,
+                            super::entry::PROOF_TAG_FILTER_DEPENDENT,
+                        );
+                    } else {
+                        self.store(
+                            pos_key, and_proof, 0, INF,
+                            REMAINING_INFINITE, pos_key as u32,
+                        );
+                    }
                     debug_assert_eq!(self.path[self.path_len - 1], full_hash);
                     self.alpha_x_filter_active = save_alpha_x;
                     self.path_len -= 1;
@@ -3140,10 +3195,31 @@ impl DfPnSolver {
             } else {
                 0
             };
-            profile_timed!(self, tt_store_ns, tt_store_count,
-                self.store_with_best_move_and_distance(
-                    pos_key, att_hand, store_pn, store_dn,
-                    remaining, best_source, best_move16, mate_dist));
+            // (v0.24.71) tag propagation: pn=0 の場合，tag を決定して store．
+            // AND: filter_applied なら FILTER_DEPENDENT
+            // OR: best child の tag を継承
+            let store_tag = if store_pn == 0 {
+                if !or_node && filter_applied {
+                    super::entry::PROOF_TAG_FILTER_DEPENDENT
+                } else if or_node {
+                    let best_child = &children[best_idx];
+                    self.table.get_proof_tag(best_child.1, &best_child.3)
+                } else {
+                    super::entry::PROOF_TAG_ABSOLUTE
+                }
+            } else {
+                super::entry::PROOF_TAG_ABSOLUTE // non-proof: tag irrelevant
+            };
+            if store_pn == 0 && store_tag != super::entry::PROOF_TAG_ABSOLUTE {
+                profile_timed!(self, tt_store_ns, tt_store_count,
+                    self.store_proof_with_tag(
+                        pos_key, att_hand, best_move16, mate_dist, store_tag));
+            } else {
+                profile_timed!(self, tt_store_ns, tt_store_count,
+                    self.store_with_best_move_and_distance(
+                        pos_key, att_hand, store_pn, store_dn,
+                        remaining, best_source, best_move16, mate_dist));
+            }
 
             // TCA (Kishimoto & Müller 2008; Kishimoto 2010): 過小評価対策
             //
@@ -3491,9 +3567,27 @@ impl DfPnSolver {
                             let penalty = tt_dn.saturating_sub(current_dn).max(PN_UNIT);
                             (current_pn, base.saturating_add(penalty).min(INF - 1))
                         };
-                        self.store_with_best_move(
-                            pos_key, att_hand, stag_pn, stag_dn,
-                            remaining, best_source, best_move16);
+                        // (v0.24.71) tag propagation for stagnation store
+                        let stag_tag = if stag_pn == 0 {
+                            if !or_node && filter_applied {
+                                super::entry::PROOF_TAG_FILTER_DEPENDENT
+                            } else if or_node {
+                                let best_child = &children[best_idx];
+                                self.table.get_proof_tag(best_child.1, &best_child.3)
+                            } else {
+                                super::entry::PROOF_TAG_ABSOLUTE
+                            }
+                        } else {
+                            super::entry::PROOF_TAG_ABSOLUTE
+                        };
+                        if stag_pn == 0 && stag_tag != super::entry::PROOF_TAG_ABSOLUTE {
+                            self.store_proof_with_tag(
+                                pos_key, att_hand, best_move16, 0, stag_tag);
+                        } else {
+                            self.store_with_best_move(
+                                pos_key, att_hand, stag_pn, stag_dn,
+                                remaining, best_source, best_move16);
+                        }
                         break;
                     }
                 } else {

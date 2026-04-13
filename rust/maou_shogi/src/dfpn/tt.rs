@@ -375,6 +375,26 @@ impl TranspositionTable {
         &self.working[start..start + WORKING_CLUSTER_SIZE]
     }
 
+    /// ProvenTT から指定 pos_key+hand の proof_tag を取得する．
+    ///
+    /// proof エントリが見つからない場合は PROOF_TAG_ABSOLUTE を返す．
+    pub(super) fn get_proof_tag(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> u8 {
+        let pos_key = Self::safe_key(pos_key);
+        let home = self.proven_cluster(pos_key, hand);
+        for fe in home {
+            if fe.pos_key != pos_key { continue; }
+            let e = &fe.entry;
+            if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
+                return e.proof_tag();
+            }
+        }
+        super::entry::PROOF_TAG_ABSOLUTE
+    }
+
     /// WorkingTT のみ検索: intermediate + depth-limited/path-dep disproof．
     ///
     /// `neighbor_scan=false`: 自クラスタのみ(探索ホットパス向け)．
@@ -458,11 +478,22 @@ impl TranspositionTable {
     ) -> (u32, u32, u32) {
         let pos_key = Self::safe_key(pos_key);
         let home = self.proven_cluster(pos_key, hand);
+        // Tag-aware proof lookup: non-ABSOLUTE proof は tag_depth <
+        // current_ids_depth の場合にスキップする．浅い IDS step で filter 付き
+        // で生成された FILTER_DEPENDENT proof が深い step で誤使用されるのを防止．
+        // 全 tag が ABSOLUTE の間は no-op (behavioral change なし)．
+        let ids_depth = self.current_ids_depth;
         // Pass 1: proof(pn=0) — 自クラスタ
         for fe in home {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
             if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
+                let tag = e.proof_tag();
+                if tag != super::entry::PROOF_TAG_ABSOLUTE
+                    && e.tag_depth() < ids_depth
+                {
+                    continue; // stale tagged proof: skip
+                }
                 return (0, e.dn(), e.source());
             }
         }
@@ -479,6 +510,12 @@ impl TranspositionTable {
                     if fe.pos_key != pos_key { continue; }
                     let e = &fe.entry;
                     if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
+                        let tag = e.proof_tag();
+                        if tag != super::entry::PROOF_TAG_ABSOLUTE
+                            && e.tag_depth() < ids_depth
+                        {
+                            continue;
+                        }
                         NEIGHBOR_DIAG[0].fetch_add(1, Ordering::Relaxed);
                         return (0, e.dn(), e.source());
                     }
@@ -553,11 +590,19 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
     ) -> Option<u16> {
         let pos_key = Self::safe_key(pos_key);
+        let ids_depth = self.current_ids_depth;
         // 自クラスタを走査して proof entry を探す
         for fe in self.proven_cluster(pos_key, hand) {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
             if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
+                // tag-aware: stale tagged proof をスキップ
+                let tag = e.proof_tag();
+                if tag != super::entry::PROOF_TAG_ABSOLUTE
+                    && e.tag_depth() < ids_depth
+                {
+                    continue;
+                }
                 return e.mate_distance();
             }
         }
@@ -584,6 +629,7 @@ impl TranspositionTable {
         }
 
         let pos_key = Self::safe_key(pos_key);
+        let ids_depth = self.current_ids_depth;
 
         // Zobrist diff で部分集合を列挙
         let mut sub_hand = [0u8; HAND_KINDS];
@@ -595,6 +641,13 @@ impl TranspositionTable {
                 if fe.pos_key != pos_key { continue; }
                 let e = &fe.entry;
                 if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
+                    // tag-aware: stale tagged proof をスキップ
+                    let tag = e.proof_tag();
+                    if tag != super::entry::PROOF_TAG_ABSOLUTE
+                        && e.tag_depth() < ids_depth
+                    {
+                        continue;
+                    }
                     return (0, e.dn(), e.source());
                 }
             }

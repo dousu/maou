@@ -1729,8 +1729,18 @@ impl DfPnSolver {
                 ids_depth, root_pn2, root_dn2, self.nodes_searched,
                 self.start_time.elapsed().as_secs_f64());
             if root_pn2 == 0 {
-                verbose_eprintln!("[ids] proved at depth={}, break", ids_depth);
-                break;
+                // (v0.24.71) tag-aware IDS break: FILTER_DEPENDENT proof で
+                // IDS を終了すると false Checkmate が返る．root の proof が
+                // ABSOLUTE の場合のみ break する．FILTER_DEPENDENT の場合は
+                // IDS を続行し，深い depth で全 defense を含む再探索を行う．
+                let root_tag = self.table.get_proof_tag(pk, &att_hand);
+                if root_tag == super::entry::PROOF_TAG_ABSOLUTE {
+                    verbose_eprintln!("[ids] proved (ABSOLUTE) at depth={}, break", ids_depth);
+                    break;
+                }
+                verbose_eprintln!(
+                    "[ids] proved (tag={}) at depth={}, continuing IDS for re-verification",
+                    root_tag, ids_depth);
             }
             // IDS NM 判定: 構造的判定のみ信頼する．
             //
