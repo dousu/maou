@@ -92,15 +92,20 @@ impl PostCaptureSummary {
         (pos_key as usize) & (PC_SUMMARY_SIZE - 1)
     }
 
-    /// proof hand を記録する．要素ごとの min を取り最弱手駒を保持する．
+    /// proof hand を記録する．
+    ///
+    /// 既存エントリがある場合，新しい proof hand が forward-chain で既存を
+    /// 支配する (より弱い) ときのみ上書きする．非比較な手駒同士の element-wise
+    /// min は false proof を生成するリスクがあるため行わない (v0.24.67)．
     #[inline]
     fn record_proof(&mut self, pos_key: u64, proof_hand: &[u8; HAND_KINDS]) {
         let i = Self::idx(pos_key);
         if self.keys[i] == pos_key {
-            // 既存エントリ: 要素ごとの min
-            for k in 0..HAND_KINDS {
-                self.proof_hands[i][k] = self.proof_hands[i][k].min(proof_hand[k]);
+            // 既存エントリ: 新 proof が既存を forward-chain 支配する場合のみ更新
+            if hand_gte_forward_chain(&self.proof_hands[i], proof_hand) {
+                self.proof_hands[i] = *proof_hand;
             }
+            // 逆方向 (既存が新を支配) や非比較の場合は既存を保持
         } else {
             // 新規 or 衝突: 上書き
             self.keys[i] = pos_key;
@@ -109,14 +114,18 @@ impl PostCaptureSummary {
         }
     }
 
-    /// disproof hand を記録する．要素ごとの max を取り最強手駒を保持する．
+    /// disproof hand を記録する．
+    ///
+    /// 既存エントリがある場合，新しい disproof hand が forward-chain で既存を
+    /// 支配する (より強い) ときのみ上書きする．非比較な手駒同士の element-wise
+    /// max は false disproof を生成するリスクがあるため行わない (v0.24.67)．
     #[inline]
     fn record_disproof(&mut self, pos_key: u64, disproof_hand: &[u8; HAND_KINDS]) {
         let i = Self::idx(pos_key);
         if self.keys[i] == pos_key {
-            // 既存エントリ: 要素ごとの max
-            for k in 0..HAND_KINDS {
-                self.disproof_hands[i][k] = self.disproof_hands[i][k].max(disproof_hand[k]);
+            // 既存エントリ: 新 disproof が既存を forward-chain 支配する場合のみ更新
+            if hand_gte_forward_chain(disproof_hand, &self.disproof_hands[i]) {
+                self.disproof_hands[i] = *disproof_hand;
             }
         } else {
             // 新規 or 衝突: 上書き
@@ -140,7 +149,11 @@ impl PostCaptureSummary {
 
     /// disproof hand を lookup する．
     /// `max_disproof_hand ≥_fc hand` なら disproven と判定可能．
+    ///
+    /// 現在は reverse\_disproof\_sharing が TT を直接参照するため未使用．
+    /// 将来の Disproof-Aware Prefilter (施策 A1-3) で使用予定．
     #[inline]
+    #[allow(dead_code)]
     fn lookup_disproof(&self, pos_key: u64) -> Option<&[u8; HAND_KINDS]> {
         let i = Self::idx(pos_key);
         if self.keys[i] == pos_key && self.disproof_hands[i] != [0u8; HAND_KINDS] {
@@ -234,7 +247,9 @@ pub struct DfPnSolver {
     #[cfg(feature = "tt_diag")]
     pub(super) diag_pc_summary_proof_hits: u64,
     /// サマリキャッシュの disproof ヒット回数 (tt_diag 診断用)．
+    /// 現在は未使用 (Disproof-Aware Prefilter 施策 A1-3 で使用予定)．
     #[cfg(feature = "tt_diag")]
+    #[allow(dead_code)]
     pub(super) diag_pc_summary_disproof_hits: u64,
     // diag_chain_inner_outer_hits: 試行不採用 (v0.24.65, soundness 違反で revert)
     /// NM 昇格の反証判定キャッシュ: 判定が false だった局面キーの集合．
@@ -3970,11 +3985,11 @@ impl DfPnSolver {
 
             // メイン TT で捕獲後局面の証明を参照．
             //
-            // ## 施策 X-N 候補 A-fix (v0.24.58): 2 段�� lookup + either-or or_ph ���択
+            // ## 施策 X-N 候補 A-fix (v0.24.58): 2 段階 lookup + either-or or_ph 選択
             //
             // ### v0.24.56 退行の根本原因
             //
-            // v0.24.56 �� `neighbor_scan=false` → `true` の 1 行変更を
+            // v0.24.56 で `neighbor_scan=false` → `true` の 1 行変更を
             // 試みた際，test_tsume_39te_ply24_mate15_regression が Unknown
             // に退行した．原因は `or_ph = pc_ph - X_cap` 後の
             // `or_ph.min(child_hand)` clamp が forward-chain substitution
@@ -4458,9 +4473,22 @@ impl DfPnSolver {
             // base_hand: disproved_move を捕獲した後の攻方持ち駒
             // (disproved_pt を含む = 強い方の手駒)
             let base_hand = board.hand[self.attacker.index()];
+            board.undo_move(*cap_mv, cap_piece);
+
+            // Soundness ガード: (pc_pk, base_hand) が実際に disproven かを
+            // TT で確認する．multi-step ループから呼ばれた場合，disproved_move
+            // が未反証 (cdn != 0) の可能性があり，その場合 base_hand の disproof
+            // は未確認であるため伝搬は unsound になる．(v0.24.67)
+            let (_, base_dn, _) = self.table.look_up(
+                pc_pk, &base_hand, pc_remaining, false,
+            );
+            if base_dn != 0 {
+                // (pc_pk, base_hand) が disproven でない → 伝搬スキップ
+                continue;
+            }
+
             // サマリキャッシュに disproof hand を記録
             self.pc_summary.record_disproof(pc_pk, &base_hand);
-            board.undo_move(*cap_mv, cap_piece);
 
             // 各兄弟ドロップについて逆方向支配を確認
             for (mj, _, _, _) in children.iter() {
