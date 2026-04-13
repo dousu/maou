@@ -186,12 +186,19 @@ fn edge_cost_or(m: Move, king_sq: Square) -> u32 {
     if promo || capture {
         return 0;
     }
-    // 静かな王手: 玉との距離でコスト決定
+    // 静かな王手: 玉との距離 + 駒打ちペナルティでコスト決定
+    //
+    // v0.24.65: 駒打ちの静かな王手は駒移動王手より一般に弱い
+    // (攻め駒の配置を改善せず持ち駒を消費するだけ)．
+    // 追加コスト PN_UNIT/2 で駒移動王手を優先させる．
+    // NPS への影響: ゼロ (Move の属性判定のみ)
     let to = m.to_sq();
     let dc = (to.col() as i8 - king_sq.col() as i8).unsigned_abs();
     let dr = (to.row() as i8 - king_sq.row() as i8).unsigned_abs();
     let dist = dc.max(dr);
-    if dist <= 2 { PN_UNIT } else { 2 * PN_UNIT }
+    let base = if dist <= 2 { PN_UNIT } else { 2 * PN_UNIT };
+    let drop_penalty = if m.is_drop() { PN_UNIT / 2 } else { 0 };
+    base + drop_penalty
 }
 
 /// AND ノード(守備側の応手)のエッジコストを計算する(DFPN-E)．
