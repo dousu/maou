@@ -3670,6 +3670,89 @@ chain aigoma の AND ノードでは 20+ の response がある．PV\_VISIT\_BUD
 | **中** | 課題 3: TT 容量制約 | overflow 削減で間接的に改善 | 中 |
 | **低** | 課題 5: PV 抽出不完全 | 正確性向上 (性能には非影響) | 低 |
 
+#### 10.2.2 v0.24.61〜v0.24.66 改善サマリ
+
+v0.24.60 以降，カテゴリ A (chain aigoma 指数爆発 + 浅い ply 探索空間) の
+改善を目的とした 6 施策を実装・評価した．
+
+##### 採用済み施策一覧
+
+| 版 | 施策 | 効果 |
+|:---:|:---|:---|
+| v0.24.61 | 逆方向不詰共有 (reverse disproof sharing) | depth=25 cliff 突破 (Unknown → Mate(15))，depth=21 -86% |
+| v0.24.62 | Multi-step 逆方向不詰共有 | reverse\_disproof 発火 8-18 倍，TT disproven -92% |
+| v0.24.63 | IDS NM 昇格 false NoMate バグ修正 | ply 2 false NoMate 解消 (既存バグ) |
+| v0.24.64 | Post-Capture Proof Summary Cache | prefilter hits +59%〜×3.7 |
+| v0.24.65 | Adaptive warmup depths | 10M budget で ply 22 Mate(17) 初達成 |
+| v0.24.66 | 駒打ち王手ペナルティ + warmup NM バグ修正 | ply 24 -10%，false NoMate 解消 |
+
+##### 試行不採用
+
+| 施策 | 不採用理由 |
+|:---|:---|
+| チェーン内側→外側証明伝搬 | AND ノードの子は独立な防御手であり内側 proved が外側を省略する論理的根拠がない (false Checkmate: Mate(15) → Mate(5)) |
+| is\_attacked\_by\_excluding ベースの edge\_cost\_or | per-child の board 操作で NPS -42%，探索パターン変化で退行 |
+
+##### Phase 1 (ply25 gap diagnosis) 推移
+
+| Depth | v0.24.60 | v0.24.62 | v0.24.64 | v0.24.66 |
+|:---:|:---|:---|:---|:---|
+| 17 | 450K Mate(15) | 450K Mate(15) | 451K Mate(15) | 405K Mate(15) |
+| 21 | 9.15M Unknown | 1.26M Unknown | 1.85M Unknown | — |
+| 25 | 10.3M Unknown | 3.93M Mate(15) | 4.83M Mate(15) | — |
+
+##### Backward 10M + Warmup 解析
+
+| Ply | Remain | v0.24.33 (baseline) | v0.24.64 (no warmup) | v0.24.66 (warmup) |
+|---:|---:|:---|:---|:---|
+| 24 | 15 | 367K Mate(15) | 451K Mate(15) | 405K Mate(15) |
+| **22** | **17** | **Unknown** | **Unknown** | **9.05M Mate(17)** |
+| 20 | 19 | 8.84M Mate(19) | 9.04M Mate(19) | Unknown (10M 不足) |
+| 18-0 | 21-39 | Unknown | Unknown | Unknown |
+
+**10M budget の境界が ply 22 → ply 20 に前進** (warmup により ply 22 が初めて
+10M 以内で解決可能になった)．ply 20 は warmup 予算消費 (~500K) により
+10M ではぎりぎり不足だが，false NoMate は解消済み．
+
+##### 発見・修正した既存バグ
+
+1. **IDS NM 昇格 false NoMate (v0.24.63)**: IDS の浅い depth での depth-limited
+   NM が前サイクルの ProvenTT confirmed disproof にヒットして REMAINING\_INFINITE
+   と判定される → `ids_depth >= saved_depth` ガードで修正
+
+2. **Warmup NM false NoMate (v0.24.66)**: warmup mid\_fallback の浅い depth が
+   WorkingTT に depth-limited NM (dn=0) を格納 → full-depth IDS の look\_up で
+   ヒット → false NoCheckmate → warmup 後の `retain_proofs_only()` および
+   `clear_working_entry()` で WorkingTT を clean にして修正
+
+##### 得られた教訓
+
+1. **AND ノードの子は独立した防御手**: チェーンの空間的配置から子間の依存関係を
+   導出する試みは全て soundness 違反に至った (施策 α, A-5, 内側→外側伝搬)
+
+2. **NPS は詰将棋ソルバーの最重要ファクター**: per-child の board 操作
+   (is\_attacked\_by\_excluding) は NPS を -42% 低下させ退行を引き起こす．
+   O(1) の Move 属性判定のみが許容される
+
+3. **depth-limited disproof と confirmed disproof の混同は false NoMate の根源**:
+   IDS の depth 切替や warmup で浅い depth の depth-limited NM が TT に残存し，
+   深い depth で look\_up がヒットして false NoCheckmate が発生する．
+   warmup 後の WorkingTT clear (`retain_proofs_only` / `clear_working_entry`) が必須
+
+4. **warmup は proof 蓄積に特化すべき**: warmup budget は全体の 5-10% で十分
+   (proof 蓄積が目的であり full solve ほどの予算は不要)．
+   過大な warmup 予算は main solve の予算を圧迫して退行を引き起こす
+
+##### 残存課題 (v0.24.66 時点)
+
+| 優先度 | 課題 | 状態 |
+|:---:|:---|:---|
+| **高** | chain aigoma 指数爆発 (93% 境界集中) | 逆方向不詰共有で緩和，根本未解消 |
+| **高** | 浅い ply (ply 0-10) の探索空間 | warmup で ply 22 突破，ply 20 以前は大予算が必要 |
+| **中** | IDS 間 intermediate 消失 | v0.24.45 の部分修正のまま |
+| **中** | TT 容量制約 | v0.24.60 改善のまま |
+| **低** | PV 抽出不完全 (MateNoPV) | v0.24.42 の動的スケーリングのまま |
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
