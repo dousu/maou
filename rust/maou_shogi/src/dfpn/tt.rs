@@ -321,11 +321,44 @@ impl TranspositionTable {
     }
 
     /// WorkingTT のクラスタ開始インデックス．
-    /// ProvenTT と同様に pos_key ^ hand_hash で持ち駒バリアントを分散する．
+    ///
+    /// (v0.24.69) forward-chain 正規化 hand hash を使用する:
+    /// Pawn(0)/Lance(1)/Rook(6) の個別カウントではなく総和で hash を計算し，
+    /// forward-chain 等価な手駒変種を同一クラスタに集約する．
+    /// これにより chain aigoma の intermediate エントリが共有可能になる．
+    ///
+    /// Knight(2)/Silver(3)/Gold(4)/Bishop(5) は forward-chain で代替不可のため
+    /// 個別にhash する（従来通り）．
     #[inline(always)]
     fn working_cluster_start(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> usize {
-        let mixed = pos_key ^ Self::hand_hash(hand);
+        let mixed = pos_key ^ Self::fc_hand_hash(hand);
         ((mixed as usize) & self.working_mask) * WORKING_CLUSTER_SIZE
+    }
+
+    /// Forward-chain 正規化 hand hash (v0.24.69)．
+    ///
+    /// Pawn(0)/Lance(1)/Rook(6) の個別カウントではなく総和を単一インデックス
+    /// (Pawn カウント) として hash する．これにより forward-chain 等価な手駒:
+    ///   [3,2,0,0,0,0,1] と [5,0,0,0,0,0,1] と [0,0,0,0,0,0,6]
+    /// が全て fc_total=6 → 同一クラスタにマッピングされる．
+    ///
+    /// Knight/Silver/Gold/Bishop は代替不可のため個別に hash する．
+    #[inline(always)]
+    fn fc_hand_hash(hand: &[u8; HAND_KINDS]) -> u64 {
+        use crate::zobrist::ZOBRIST;
+        use crate::types::Color;
+        // Forward-chain components: pawn(0) + lance(1) + rook(6) → 総和を pawn slot で hash
+        let fc_total = (hand[0] as usize) + (hand[1] as usize) + (hand[6] as usize);
+        // fc_total は最大 18+4+2=24 だが，hand_hash table は MAX_HAND_STATES
+        // (= 19 for pawn) なので clamp する
+        let fc_clamped = fc_total.min(18);
+        let mut h = ZOBRIST.hand_hash(Color::Black, 0, fc_clamped);
+        // Non-forward-chain components: knight(2), silver(3), gold(4), bishop(5) は個別
+        h ^= ZOBRIST.hand_hash(Color::Black, 2, hand[2] as usize);
+        h ^= ZOBRIST.hand_hash(Color::Black, 3, hand[3] as usize);
+        h ^= ZOBRIST.hand_hash(Color::Black, 4, hand[4] as usize);
+        h ^= ZOBRIST.hand_hash(Color::Black, 5, hand[5] as usize);
+        h
     }
 
     /// ProvenTT のクラスタスライスを返す(不変参照)．
@@ -357,6 +390,12 @@ impl TranspositionTable {
         let pos_key = Self::safe_key(pos_key);
         let working = self.working_cluster(pos_key, hand);
         let mut exact_match: Option<(u32, u32, u32)> = None;
+        // (v0.24.69) fc-dominated intermediate: hand_q ≥_fc hand_e なら
+        // entry の pn/dn を保守的初期値として使用可能．
+        // pn(entry) は pn(true) の上界（多い資源 → 証明が容易），
+        // dn(entry) は dn(true) の下界（多い資源 → 反証が困難）．
+        // exact match を優先し，なければ fc-dominated を fallback とする．
+        let mut fc_match: Option<(u32, u32, u32)> = None;
         for fe in working {
             if fe.pos_key != pos_key { continue; }
             let e = &fe.entry;
@@ -366,16 +405,21 @@ impl TranspositionTable {
             {
                 return (e.pn, 0, e.source);
             }
-            if exact_match.is_none()
-                && e.hand == *hand
-                && e.pn != 0
-                && e.dn != 0
-            {
-                exact_match = Some((e.pn, e.dn, e.source));
+            if e.pn != 0 && e.dn != 0 {
+                if e.hand == *hand {
+                    exact_match = Some((e.pn, e.dn, e.source));
+                } else if fc_match.is_none()
+                    && hand_gte_forward_chain(hand, &e.hand)
+                {
+                    fc_match = Some((e.pn, e.dn, e.source));
+                }
             }
         }
-        if exact_match.is_some() {
-            return exact_match.unwrap();
+        if let Some(m) = exact_match {
+            return m;
+        }
+        if let Some(m) = fc_match {
+            return m;
         }
 
         // 歩(k=0)の+1のみ disproof 近傍走査．
