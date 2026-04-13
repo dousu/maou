@@ -269,6 +269,12 @@ pub struct DfPnSolver {
     /// 空ならば warmup なし．非空の場合，solve() 内で各 depth の
     /// warmup solve を実行して ProvenTT に proof を蓄積する．
     pub(super) warmup_depths: Vec<u32>,
+    /// solve() に渡された真の目標 depth (v0.24.66)．
+    ///
+    /// warmup mid_fallback 内では `saved_depth` が warmup_depth に上書きされる
+    /// ため，IDS NM 昇格判定で true depth を参照するために保持する．
+    /// 0 の場合は未設定 (saved_depth をそのまま使用)．
+    pub(super) outer_solve_depth: u32,
     /// 最終 IDS depth (solve 時の depth)．
     /// IDS 中に self.depth が変化するため，epsilon の depth-adaptive 判定に
     /// 最終 depth を保持する．mid_fallback の入口で設定される．
@@ -515,6 +521,7 @@ impl DfPnSolver {
             param_deep_dfpn_r: DEEP_DFPN_R,
             saved_depth_for_epsilon: 0,
             warmup_depths: Vec::new(),
+            outer_solve_depth: 0,
             killer_table: Vec::new(),
             table: TranspositionTable::new(),
             nodes_searched: 0,
@@ -1049,6 +1056,7 @@ impl DfPnSolver {
         self.timed_out = false;
         self.next_gc_check = 100_000;
         self.attacker = board.turn;
+        self.outer_solve_depth = self.depth;
         self.alpha_x_filter_active = false;
         /// 施策 A-6 再評価: 境界層 PNS 責任転嫁の呼出数グローバル上限．
         /// 10 回 × 5K ノード/回 = 50K ノード相当の追加予算 (solve の小さな一部)．
