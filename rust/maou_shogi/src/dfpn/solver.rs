@@ -264,6 +264,11 @@ pub struct DfPnSolver {
     pub(super) param_dn_floor_mult: u32,
     /// Deep df-pn の深さ係数 R(デフォルト 4)．
     pub(super) param_deep_dfpn_r: u32,
+    /// 段階的予算拡大の warmup depth リスト (v0.24.65)．
+    ///
+    /// 空ならば warmup なし．非空の場合，solve() 内で各 depth の
+    /// warmup solve を実行して ProvenTT に proof を蓄積する．
+    pub(super) warmup_depths: Vec<u32>,
     /// 最終 IDS depth (solve 時の depth)．
     /// IDS 中に self.depth が変化するため，epsilon の depth-adaptive 判定に
     /// 最終 depth を保持する．mid_fallback の入口で設定される．
@@ -509,6 +514,7 @@ impl DfPnSolver {
             param_dn_floor_mult: 100,
             param_deep_dfpn_r: DEEP_DFPN_R,
             saved_depth_for_epsilon: 0,
+            warmup_depths: Vec::new(),
             killer_table: Vec::new(),
             table: TranspositionTable::new(),
             nodes_searched: 0,
@@ -661,6 +667,20 @@ impl DfPnSolver {
     /// `CheckmateNoPv` が返る場合に増やすと効果的．
     pub fn set_pv_nodes_per_child(&mut self, v: u64) -> &mut Self {
         self.pv_nodes_per_child = v;
+        self
+    }
+
+    /// 段階的予算拡大の warmup depth リストを設定する (v0.24.65)．
+    ///
+    /// 空 (デフォルト) なら warmup なし (従来の `solve()` と同一)．
+    /// 例: `&[17, 21]` を設定すると `solve()` 内で depth=17 → depth=21 の
+    /// 順に warmup solve を実行し，ProvenTT に proof を蓄積してから
+    /// full depth で最終 solve を実行する．
+    ///
+    /// warmup 各段では全ノード予算の 1/(N+1) を割り当て (N = warmup 段数)，
+    /// 残りを最終 solve に使用する．
+    pub fn set_warmup_depths(&mut self, depths: &[u32]) -> &mut Self {
+        self.warmup_depths = depths.to_vec();
         self
     }
 
@@ -1061,16 +1081,70 @@ impl DfPnSolver {
         let (root_pn_after_pns, root_dn_after_pns, _) =
             self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
 
-        // PNS で未解決 + 残り予算あり → MID フォールバック
+        // PNS で未解決 + 残り予算あり → warmup + MID フォールバック
         if root_pn_after_pns != 0 && root_dn_after_pns != 0
             && self.nodes_searched < self.max_nodes
             && !self.timed_out
         {
-            // PNS で蓄積した TT エントリを活用して IDS-dfpn を実行
-            verbose_eprintln!("[solve] MID fallback start: nodes={}", self.nodes_searched);
-            self.mid_fallback(board);
-            verbose_eprintln!("[solve] MID fallback end: nodes={} time={:.1}s",
-                self.nodes_searched, self.start_time.elapsed().as_secs_f64());
+            // 段階的予算拡大 warmup (v0.24.65):
+            // warmup_depths が設定されている場合，浅い depth で先行 solve を
+            // 実行し ProvenTT に proof を蓄積する．proof は retain_proofs_only
+            // で保持され，最終 solve で活用される．
+            if !self.warmup_depths.is_empty() {
+                let warmup_depths = self.warmup_depths.clone();
+                let n_phases = warmup_depths.len() as u64 + 1;
+                let budget_per_phase = (saved_max_nodes - self.nodes_searched) / n_phases;
+                let final_depth = self.depth;
+
+                for (i, &wd) in warmup_depths.iter().enumerate() {
+                    if wd >= final_depth { continue; }
+                    if self.nodes_searched >= self.max_nodes || self.timed_out {
+                        break;
+                    }
+                    // warmup 段の予算を設定
+                    self.max_nodes = self.nodes_searched + budget_per_phase;
+                    self.depth = wd;
+                    verbose_eprintln!(
+                        "[solve] warmup phase {}/{}: depth={} budget={}K nodes={}K time={:.1}s",
+                        i + 1, warmup_depths.len(), wd,
+                        budget_per_phase / 1000,
+                        self.nodes_searched / 1000,
+                        self.start_time.elapsed().as_secs_f64(),
+                    );
+                    self.mid_fallback(board);
+
+                    // warmup 段の結果チェック
+                    let (wp, wd_val) = self.look_up_board(board);
+                    verbose_eprintln!(
+                        "[solve] warmup phase {} done: pn={} dn={} nodes={}K time={:.1}s",
+                        i + 1, wp, wd_val,
+                        self.nodes_searched / 1000,
+                        self.start_time.elapsed().as_secs_f64(),
+                    );
+                    if wp == 0 {
+                        // warmup で解け��� → 最終 solve は不要
+                        break;
+                    }
+                    // ProvenTT の proof を保持して中間エントリを除去
+                    self.table.retain_proofs_only();
+                }
+
+                // depth と max_nodes を復元
+                self.depth = final_depth;
+                self.max_nodes = saved_max_nodes;
+            }
+
+            // 最終 MID フォールバック (full depth)
+            let (rp, rd) = self.look_up_board(board);
+            if rp != 0 && rd != 0
+                && self.nodes_searched < self.max_nodes
+                && !self.timed_out
+            {
+                verbose_eprintln!("[solve] MID fallback start: nodes={}", self.nodes_searched);
+                self.mid_fallback(board);
+                verbose_eprintln!("[solve] MID fallback end: nodes={} time={:.1}s",
+                    self.nodes_searched, self.start_time.elapsed().as_secs_f64());
+            }
         }
 
         let (root_pn, root_dn) = self.look_up_board(board);
