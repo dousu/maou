@@ -1531,6 +1531,11 @@ impl DfPnSolver {
                         self.mid_fallback(board);
                         // epsilon を full-depth 用に復元
                         self.param_epsilon_denom = save_eps;
+                        // v0.24.66: warmup 後に root 局面の depth-limited NM を
+                        // WorkingTT から除去する．root の dn=0 が残ると full-depth
+                        // IDS の look_up で即座にヒットして false NM になる．
+                        // root 以外の WorkingTT エントリは保持して活用する．
+                        self.table.clear_working_entry(pk, &att_hand);
                         // saved_depth_for_epsilon を復元:
                         // nested mid_fallback が warmup_depth で上書き
                         // するため，outer の saved_depth に戻す．

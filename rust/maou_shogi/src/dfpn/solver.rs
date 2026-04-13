@@ -1119,7 +1119,7 @@ impl DfPnSolver {
                     }
 
                     let remaining_budget = saved_max_nodes - self.nodes_searched;
-                    let cap = if wd <= 17 { 1_000_000u64 } else { 2_000_000u64 };
+                    let cap = if wd <= 17 { 500_000u64 } else { 1_000_000u64 };
                     let warmup_budget = (remaining_budget / 10).min(cap).max(100_000);
 
                     self.max_nodes = self.nodes_searched + warmup_budget;
@@ -1154,6 +1154,13 @@ impl DfPnSolver {
 
                 self.depth = final_depth;
                 self.max_nodes = saved_max_nodes;
+                // warmup 完了後: WorkingTT を clear して depth-limited disproof を
+                // 除去する．warmup の浅い depth で生成された depth-limited NM
+                // (dn=0, remaining < INFINITE) が main solve の look_up でヒット
+                // すると false NoCheckmate が発生するため，main solve 開始前に
+                // WorkingTT を clean にする．ProvenTT の proof は保持される．
+                // (v0.24.66: ply 20 NoMate バグの修正)
+                self.table.retain_proofs_only();
             }
 
             // 最終 MID フォールバック (full depth)

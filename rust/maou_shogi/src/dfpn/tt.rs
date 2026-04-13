@@ -1702,6 +1702,22 @@ impl TranspositionTable {
         self.proven.iter().filter(|fe| fe.pos_key != 0 && fe.entry.is_proof()).count()
     }
 
+    /// 特定の position_key + hand の WorkingTT エントリを除去する (v0.24.66)．
+    ///
+    /// warmup mid_fallback 後に root 局面の depth-limited NM を除去して
+    /// full-depth IDS での false NoCheckmate を防止する目的で使用．
+    pub(super) fn clear_working_entry(&mut self, pos_key: u64, hand: &[u8; HAND_KINDS]) {
+        let pos_key = Self::safe_key(pos_key);
+        let start = self.working_cluster_start(pos_key, hand);
+        for fe in &mut self.working[start..start + WORKING_CLUSTER_SIZE] {
+            if fe.pos_key == pos_key
+                && hand_gte_forward_chain(&fe.entry.hand, hand)
+            {
+                fe.pos_key = 0;
+            }
+        }
+    }
+
     /// WorkingTT の非空エントリ数を返す(`len` のエイリアス)．
     pub(super) fn working_len(&self) -> usize {
         self.len()

@@ -7575,3 +7575,43 @@ use crate::types::{Color, PieceType};
             }
         }
     }
+
+    /// ply 20 NoMate 調査: warmup 使用時に false NoMate が発生するバグ (v0.24.66)
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply20_warmup_nomate_investigation() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv: Vec<&str> = vec![
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e",
+        ];
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        eprintln!("ply 20 SFEN: {}", board.sfen());
+
+        let remaining = 39 - 20;
+        let depth = (remaining + 2).min(41) as u32;
+        eprintln!("remaining={} depth={}", remaining, depth);
+
+        // warmup あり
+        let mut solver = DfPnSolver::with_timeout(depth, 10_000_000, 32767, 600);
+        solver.set_find_shortest(false);
+        solver.set_warmup_depths(&[17, 21]);
+
+        let result = solver.solve(&mut board);
+        eprintln!("Result: {:?}", result);
+        eprintln!("Nodes: {} MaxPly: {}", solver.nodes_searched, solver.max_ply);
+
+        match &result {
+            TsumeResult::NoCheckmate { .. } => {
+                panic!("BUG: ply 20 returned NoMate with warmup but should be Mate(19)");
+            }
+            _ => {}
+        }
+    }
