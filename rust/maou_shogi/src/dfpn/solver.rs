@@ -406,6 +406,14 @@ pub struct DfPnSolver {
     /// 施策 α 再評価 (v0.24.54+, 試行は revert): 現在 MID 呼出しで chain
     /// drop filter が適用されたかを示すフラグ (未使用だが field は残留)．
     pub(super) alpha_x_filter_active: bool,
+    /// Warmup モード: true の場合，mid_fallback 入口で WorkingTT の
+    /// intermediate エントリを保持する (retain_proofs_only の代わりに
+    /// clear_proven_non_proofs のみ実行)．
+    ///
+    /// warmup 段間で前段の MID intermediate を次段に引き継ぐことで，
+    /// 合駒チェーンの不詰部分証明の再構築コストを削減する．
+    /// Frontier サイクル境界では使用しないこと (soundness 問題，v0.24.45 参照)．
+    pub(super) warmup_mode: bool,
     /// 施策 A-6 再評価 (v0.24.54+): 境界層 PNS 責任転嫁の残り呼出予算．
     ///
     /// v0.24.51 の失敗原因 (各 boundary call で 100K ノード × 膨大なユニーク
@@ -601,6 +609,7 @@ impl DfPnSolver {
             #[cfg(feature = "tt_diag")]
             diag_alpha_x_filter_applied: 0,
             alpha_x_filter_active: false,
+            warmup_mode: false,
             a6_boundary_pns_calls_remaining: 0,
             #[cfg(feature = "tt_diag")]
             diag_deferred_not_ready: 0,
@@ -1126,11 +1135,31 @@ impl DfPnSolver {
                 let warmup_depths = self.warmup_depths.clone();
                 let final_depth = self.depth;
                 let mut prev_proven_count = self.table.proven_count();
+                // 前段の warmup depth を追跡し，段間の remaining shift に使用する．
+                let mut prev_warmup_depth: Option<u32> = None;
 
                 for (i, &wd) in warmup_depths.iter().enumerate() {
                     if wd >= final_depth { continue; }
                     if self.nodes_searched >= saved_max_nodes || self.timed_out {
                         break;
+                    }
+
+                    // warmup 段間の intermediate 保持 (v0.24.67):
+                    //
+                    // 前段の MID が蓄積した intermediate エントリ (pn>0, dn>0) を
+                    // 次段に引き継ぐ．remaining に depth 差分を加算して安全に
+                    // 再利用する (旧 depth の pn/dn は新 depth での下限値)．
+                    //
+                    // 初回 warmup は PNS 後であり，PNS intermediate は MID と
+                    // 互換性がないため retain_proofs_only で除去する (従来動作)．
+                    if let Some(prev_wd) = prev_warmup_depth {
+                        let delta = (wd.saturating_sub(prev_wd)) as u16;
+                        let kept = self.table.retain_working_intermediates(0, delta);
+                        self.table.clear_proven_non_proofs();
+                        verbose_eprintln!(
+                            "[solve] warmup {}/{}: retained {} intermediates (delta={})",
+                            i + 1, warmup_depths.len(), kept, delta,
+                        );
                     }
 
                     let remaining_budget = saved_max_nodes - self.nodes_searched;
@@ -1146,7 +1175,12 @@ impl DfPnSolver {
                         self.nodes_searched / 1000,
                         self.start_time.elapsed().as_secs_f64(),
                     );
+                    // warmup_mode=true: mid_fallback 入口で WorkingTT intermediate
+                    // を保持する (retain_proofs_only の代わりに
+                    // clear_proven_non_proofs のみ実行)．
+                    self.warmup_mode = prev_warmup_depth.is_some();
                     self.mid_fallback(board);
+                    self.warmup_mode = false;
 
                     let (wp, _) = self.look_up_board(board);
                     let new_proven = self.table.proven_count();
@@ -1164,18 +1198,36 @@ impl DfPnSolver {
                         break;
                     }
                     prev_proven_count = new_proven;
-                    self.table.retain_proofs_only();
+                    prev_warmup_depth = Some(wd);
+                    // NOTE: retain_proofs_only() は不要．次ループ先頭の
+                    // retain_working_intermediates で intermediate を保持しつつ
+                    // depth-limited disproof と path-dep を除去する．
                 }
 
                 self.depth = final_depth;
                 self.max_nodes = saved_max_nodes;
-                // warmup 完了後: WorkingTT を clear して depth-limited disproof を
-                // 除去する．warmup の浅い depth で生成された depth-limited NM
-                // (dn=0, remaining < INFINITE) が main solve の look_up でヒット
-                // すると false NoCheckmate が発生するため，main solve 開始前に
-                // WorkingTT を clean にする．ProvenTT の proof は保持される．
-                // (v0.24.66: ply 20 NoMate バグの修正)
-                self.table.retain_proofs_only();
+                // warmup 完了後: WorkingTT の intermediate を main solve 用に
+                // 保持する．depth-limited disproof は retain_working_intermediates
+                // で自動的に除去される (false NoCheckmate 防止)．
+                // root 局面の depth-limited NM は個別に除去する (v0.24.66)．
+                //
+                // warmup が 1 段も実行されなかった場合は PNS intermediate が
+                // 残っているため従来通り retain_proofs_only で除去する．
+                if let Some(prev_wd) = prev_warmup_depth {
+                    let delta = (final_depth.saturating_sub(prev_wd)) as u16;
+                    let kept = self.table.retain_working_intermediates(0, delta);
+                    self.table.clear_proven_non_proofs();
+                    verbose_eprintln!(
+                        "[solve] warmup→main: retained {} intermediates (delta={})",
+                        kept, delta,
+                    );
+                    // root 局面の depth-limited NM を個別に除去:
+                    // warmup の浅い depth で dn=0 が格納されていると
+                    // full-depth IDS の look_up で false NoCheckmate が発生する．
+                    self.table.clear_working_entry(pk, &att_hand);
+                } else {
+                    self.table.retain_proofs_only();
+                }
             }
 
             // 最終 MID フォールバック (full depth)
