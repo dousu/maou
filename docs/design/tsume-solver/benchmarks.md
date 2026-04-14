@@ -3780,35 +3780,186 @@ warmup 使用時は intermediate 保持が事実上無効化されていた．
 
 非 ignored 134 テスト全 PASS．回帰なし．
 
-##### 残存課題 (v0.24.68 時点)
+##### 残存課題
+
+> **注記**: 本節は v0.24.73 時点の状態を反映する．
+> v0.24.68 の warmup 段間 intermediate 保持は v0.24.73 で revert された
+> (§10.2.4 参照)．
 
 **カテゴリ A: 探索空間の構造的問題**
 
-| 優先度 | 課題 | v0.24.60 時点 | v0.24.66 時点 |
+| 優先度 | 課題 | v0.24.66 時点 | v0.24.73 時点 |
 |:---:|:---|:---|:---|
-| **高** | chain aigoma 指数爆発 | 93% 境界集中 | 逆方向不詰共有 (v0.24.61-62) で TT disproven -92%，depth=25 cliff 突破．根本 (unique position 爆発) は未解消 |
-| **高** | 浅い ply (ply 0-10) | 大予算が必要 | adaptive warmup (v0.24.65) で ply 22 が 10M 以内に突破．駒打ちペナルティ (v0.24.66) で ply 24 -10%．ply 20 以前は依然大予算が必要 |
+| **高** | chain aigoma 指数爆発 | 93% 境界集中，unique position 爆発未解消 | fc-normalized hand hash (v0.24.70) で intermediate 共有を実現し ply 22 -7.4%．ただし境界 ply 集中構造 (~93%) 自体は不変 |
+| **高** | 浅い ply (ply 0-10) | ply 20 以前は大予算が必要 | 変更なし |
+| **高** | depth 境界 thrashing | 施策 α/A-5/A-6 が全て失敗 | 施策 α を proof\_tag propagation 付きで再実装 (v0.24.71) したが，Frontier variant の PNS が filter context を認識せず ABSOLUTE proof を格納する問題で無効化 (v0.24.72)．tag infrastructure は保持 |
 
 **カテゴリ B: TT 管理の問題**
 
-| 優先度 | 課題 | v0.24.60 時点 | v0.24.66 時点 |
+| 優先度 | 課題 | v0.24.66 時点 | v0.24.73 時点 |
 |:---:|:---|:---|:---|
-| **中→低** | IDS 間 intermediate 消失 | v0.24.45 の選択的保持のまま | v0.24.68 で warmup 段間の intermediate 保持を修正．warmup\_mode フラグにより mid\_fallback 入口で intermediate を保持し remaining shift 付きで次段に引き継ぐ．warmup なしの通常 solve では v0.24.45 のまま |
-| **中** | TT 容量制約 | overflow 3.1M (37%) | 変更なし．PostCaptureSummary (v0.24.64) が TT 外の O(1) キャッシュとして TT 容量圧力を間接的に緩和 |
-| **中→高** | depth-limited vs confirmed disproof の混同 | 未認識 | v0.24.63/66 で false NoMate バグとして顕在化．`outer_solve_depth` ガード + warmup 後 `clear_working_entry` / `retain_proofs_only` で対処したが，根本的には depth-limited disproof を WorkingTT に残したまま depth を切り替える設計に起因する構造的課題 |
+| **中** | IDS 間 intermediate 消失 | warmup 使用時は v0.24.45 施策 I が無効化 | v0.24.68 で warmup 段間保持を試みたが fc-normalized hash との相互作用で false proof が発生し revert (v0.24.73)．IDS 内部の `retain_working_intermediates` のみ有効 |
+| **中** | TT 容量制約 | overflow 3.1M (37%) | PostCaptureSummary 4x 拡大 (v0.24.69, 64K→256K) で hash collision 削減 |
+| **中→高** | depth-limited vs confirmed disproof の混同 | v0.24.63/66 で対処 | 変更なし |
 
 **カテゴリ C: ProvenTT の設計制約**
 
-| 優先度 | 課題 | v0.24.60 時点 | v0.24.66 時点 |
+| 優先度 | 課題 | v0.24.66 時点 | v0.24.73 時点 |
 |:---:|:---|:---|:---|
-| **中** | REMAINING\_INFINITE 不変条件 | 施策 α/A-5/A-6 が全て失敗 | proof\_tag 基盤 (v0.24.53) は導入済みだが tag propagation 未実装．施策 α の再評価は blocked |
-| **低→中** | NM 昇格判定の脆弱性 | 未認識 | v0.24.63 で `ids_depth >= saved_depth` ガード，v0.24.66 で `outer_solve_depth` ガードを追加．warmup mid\_fallback との相互作用で複数回バグが顕在化し，都度修正 |
+| **中** | REMAINING\_INFINITE 不変条件 | proof\_tag 基盤のみ，tag propagation 未実装 | tag-aware look\_up\_proven (v0.24.71) + IDS break guard + look\_up\_proven\_tag を実装．施策 α は PNS との相互作用で無効化だが infrastructure は完備 |
+| **低→中** | NM 昇格判定の脆弱性 | 都度修正 | 変更なし |
 
 **カテゴリ D: 正確性・出力品質**
 
-| 優先度 | 課題 | v0.24.60 時点 | v0.24.66 時点 |
+| 優先度 | 課題 | v0.24.66 時点 | v0.24.73 時点 |
 |:---:|:---|:---|:---|
 | **低** | PV 抽出不完全 (MateNoPV) | v0.24.42 の動的スケーリング | 変更なし |
+
+#### 10.2.4 v0.24.69〜v0.24.73 改善サマリ
+
+v0.24.68 以降，4 層構造問題の解消を目的とした 5 施策を実装・評価した．
+
+##### 採用済み施策一覧
+
+| 版 | 施策 | 効果 |
+|:---:|:---|:---|
+| v0.24.69 | PostCaptureSummary 容量 4x 拡大 (64K→256K) | hash collision 削減，ply 24 -14.6% (no-warmup 比較) |
+| v0.24.70 | fc-normalized hand hash + intermediate 共有 | ply 22 warmup -7.4%，ply 22 no-warmup Unknown→Mate(17) |
+| v0.24.71 | tag-aware look\_up\_proven + IDS break guard | proof\_tag infrastructure 完備 (施策 α 用) |
+
+##### 試行不採用
+
+| 施策 | 不採用理由 |
+|:---|:---|
+| v0.24.68 warmup 段間 intermediate 保持 | fc-normalized hash との組み合わせで false proof (Mate(7) at ply 22)．異なる depth の intermediate が fc-normalized クラスタで混合し remaining shift が不正確に (v0.24.73 revert) |
+| v0.24.69 MID proof store 時の summary 更新 | MID が store する proof hand は OR ノードの文脈であり，prefilter の post-capture 文脈と異なる．min\_proof\_hand が不当に縮小し探索パス退行 |
+| v0.24.71 施策 α (boundary chain drop filter) | Frontier variant の PNS が filter context を認識せず ABSOLUTE proof を格納．MID 内の filter\_applied tracking では PNS→MID サイクルを跨ぐ文脈管理不可 (v0.24.72 無効化) |
+
+##### バックワード解析 (v0.24.73)
+
+v0.24.69〜73 の累積改善が各 ply の sub-problem に与える効果を測定．
+v0.24.66 baseline との比較:
+
+**backward\_10m\_warmup (warmup=[17,21]):**
+
+| Ply | Remaining | v0.24.66 | v0.24.73 | Δ |
+|:---:|:---:|:---|:---|:---|
+| 38-26 | 1-13 | <1K Mate | <1K Mate | 同一 |
+| 24 | 15 | 405K Mate(15) | **385K Mate(15)** | **-5%** |
+| 22 | 17 | 9.05M Mate(17) | **8.38M Mate(17)** | **-7.4%** |
+| 20 | 19 | Unknown | Unknown | — |
+
+**backward\_10m (no warmup):**
+
+| Ply | Remaining | v0.24.64 | v0.24.73 | Δ |
+|:---:|:---:|:---|:---|:---|
+| 24 | 15 | 451K Mate(15) | **385K Mate(15)** | **-14.6%** |
+| **22** | **17** | **Unknown** | **9.89M Mate(17)** | **Unknown→解決** |
+| 20 | 19 | Unknown | Unknown | — |
+
+**主要な発見:**
+
+1. **fc-normalized hand hash の効果**: ply 22 warmup が 9.05M → 8.38M (-7.4%)．
+   Pawn/Lance/Rook の forward-chain 等価な hand variant を同一 WorkingTT
+   クラスタに集約し，intermediate エントリの共有を実現．
+
+2. **ply 22 が no-warmup でも解決**: v0.24.64 では 10M budget で Unknown だった
+   ply 22 が 9.89M で Mate(17) に到達．fc-normalized intermediate 共有 +
+   PostCaptureSummary 拡大の累積効果．
+
+3. **ply 24 の改善**: no-warmup で 451K → 385K (-14.6%)．PostCaptureSummary の
+   hash collision 削減が prefilter hit 率を改善．
+
+##### fc-normalized hand hash の設計 (v0.24.70)
+
+**概要**: WorkingTT の hand hash を forward-chain 正規化し，chain aigoma の
+intermediate エントリを手駒変種間で共有可能にした．
+
+**正規化規則**: Pawn(0)/Lance(1)/Rook(6) の個別カウントではなく総和で hash:
+```
+fc_hand_hash([3,2,0,0,0,0,1]) = hash(fc_total=6, K=0, S=0, G=0, B=0)
+fc_hand_hash([5,0,0,0,0,0,1]) = hash(fc_total=6, K=0, S=0, G=0, B=0)  ← 同一
+fc_hand_hash([0,0,0,0,0,0,6]) = hash(fc_total=6, K=0, S=0, G=0, B=0)  ← 同一
+```
+
+Knight/Silver/Gold/Bishop は代替不可のため個別に hash する．
+
+**look\_up\_working の変更**: intermediate match を exact match → forward-chain
+支配 (`hand_gte_forward_chain`) に緩和．exact match を優先し，なければ
+fc-dominated entry を fallback として使用:
+- pn(entry) は pn(true) の上界（資源が多い方が証明容易）
+- dn(entry) は dn(true) の下界（資源が多い方が反証困難）
+- default (PN\_UNIT, PN\_UNIT) より正確な初期推定値を提供
+
+**注意事項**: fc-normalized hash は WorkingTT のクラスタ分散を変更するため，
+warmup 段間の intermediate 保持 (remaining shift) と組み合わせると false
+proof を生成する (v0.24.73 で確認)．異なる depth の intermediate を fc-normalized
+クラスタで混合すると，remaining shift 後の pn/dn が不正確になる．
+
+##### proof\_tag propagation infrastructure (v0.24.71)
+
+**概要**: 施策 α (boundary chain drop filter) を soundness を保って
+再実装するための infrastructure を構築した．
+
+**実装内容:**
+
+1. **tt.rs**: `get_proof_tag()` — ProvenTT から proof entry の tag を取得
+2. **tt.rs**: `look_up_proven_tag()` — neighbor scan 込みで proof tag を取得
+3. **tt.rs**: tag-aware `look_up_proven()` — non-ABSOLUTE proof を
+   `tag_depth < current_ids_depth` の場合にスキップ
+4. **tt.rs**: `look_up_proven_subset()` / `look_up_mate_distance()` にも同様の
+   tag check を追加
+5. **solver.rs**: `store_proof_with_tag()` wrapper
+6. **pns.rs**: IDS break 条件で root proof が ABSOLUTE の場合のみ break
+
+**施策 α 実装の経緯:**
+
+v0.24.71 で filter\_applied local 変数による AND ノード限定の tag routing +
+OR ノードでの `get_proof_tag` 継承を実装し 134 テスト全 PASS を確認したが，
+backward\_10m\_warmup ベンチマークで以下の soundness 問題が発覚:
+
+- ply 22: Mate(7) (expected: Mate(17)) — false proof
+- ply 20: Mate(9) (expected: Mate(19)) — false proof
+
+**根本原因**: Frontier variant の PNS→MID サイクルで PNS が proof を格納する際，
+filter context を認識せず ABSOLUTE tag で store する．MID 内の `filter_applied`
+local tracking では PNS 経由の proof を制御できない．
+
+**v0.24.72 で filter を無効化**し tag infrastructure のみ保持した．
+
+**設計上の制約** (施策 α を sound に実装するために必要な条件):
+
+1. **PNS の filter context 認識**: PNS が proof を store する際，filter 文脈下
+   で探索された局面の proof を FILTER\_DEPENDENT tag で格納する仕組みが必要．
+   現行の PNS は `pns_store_to_tt` で全 proof を ABSOLUTE として格納する
+2. **Frontier variant のサイクル境界**: MID→PNS→MID のサイクルで filter 情報を
+   往復させる必要がある．PNS arena は cycle 間で破棄されるため arena 内に
+   filter state を保持できない
+3. **warmup との相互作用**: nested warmup の mid\_fallback でも filter が発火
+   するため，warmup→main の遷移で tag が正しく処理される必要がある
+
+##### 得られた教訓 (v0.24.69〜73)
+
+1. **fc-normalized hash と intermediate 保持の非互換性**: 異なる depth の
+   intermediate を fc-normalized クラスタで混合すると remaining shift が
+   不正確になる．fc-normalized hash は**同一 IDS step 内**での intermediate
+   共有にのみ安全に使用でき，**IDS step 間**の intermediate 引き継ぎには
+   適用できない
+
+2. **PostCaptureSummary の更新は文脈依存**: MID proof store 時に summary を
+   更新すると，OR 文脈の proof hand と post-capture 文脈の proof hand が
+   混同される．summary は prefilter / cross\_deduce で発見された
+   **post-capture 文脈の proof のみ**で更新すべき
+
+3. **PNS は MID の local 制御外**: MID 内の local 変数 (filter\_applied) で
+   制御できるのは MID 自身の proof store のみ．PNS は独立したアルゴリズムで
+   MID の filter context を認識しないため，MID→PNS→MID サイクルを跨ぐ
+   施策は PNS 側にも制御機構が必要
+
+4. **soundness テストの重要性**: non-ignored テスト (134 件) では検出できない
+   soundness 問題が ignored benchmark テスト (backward\_10m\_warmup) で
+   発覚した．特に warmup + fc-normalized hash の組み合わせは non-ignored
+   テストでは使用されないパスであり，ベンチマーク実行による検証が不可欠
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
