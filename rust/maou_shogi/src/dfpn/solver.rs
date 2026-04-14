@@ -935,7 +935,6 @@ impl DfPnSolver {
 
     /// Tag 付き proof を転置表に格納する (v0.24.71)．
     ///
-    /// Tag 付き proof を転置表に格納する (v0.24.71)．
     /// v0.24.72 で施策α filter 無効化後は tag propagation infrastructure
     /// の一部として保持．filter_applied が常に false のため現在は
     /// AND proof store の条件分岐から到達しない．
@@ -1212,22 +1211,15 @@ impl DfPnSolver {
                     }
                     prev_proven_count = new_proven;
                     prev_warmup_depth = Some(wd);
-                    // NOTE: retain_proofs_only() は不要．次ループ先頭の
-                    // retain_working_intermediates で intermediate を保持しつつ
-                    // depth-limited disproof と path-dep を除去する．
+                    // v0.24.73: 段間の retain_proofs_only はループ先頭で実行．
                 }
 
                 self.depth = final_depth;
                 self.max_nodes = saved_max_nodes;
-                // warmup 完了後: WorkingTT の intermediate を main solve 用に
-                // 保持する．depth-limited disproof は retain_working_intermediates
-                // で自動的に除去される (false NoCheckmate 防止)．
-                // root 局面の depth-limited NM は個別に除去する (v0.24.66)．
-                //
-                // warmup が 1 段も実行されなかった場合は PNS intermediate が
-                // 残っているため従来通り retain_proofs_only で除去する．
                 // warmup 完了後: WorkingTT を clear して depth-limited disproof を
-                // 除去する (v0.24.66 の retain_proofs_only に戻す)．
+                // 除去する．warmup の浅い depth で生成された depth-limited NM
+                // (dn=0, remaining < INFINITE) が main solve の look_up でヒット
+                // すると false NoCheckmate が発生する (v0.24.66)．
                 self.table.retain_proofs_only();
             }
 

@@ -3937,6 +3937,10 @@ local tracking では PNS 経由の proof を制御できない．
    filter state を保持できない
 3. **warmup との相互作用**: nested warmup の mid\_fallback でも filter が発火
    するため，warmup→main の遷移で tag が正しく処理される必要がある
+4. **get\_proof\_tag の neighbor scan 不足**: OR ノードの tag propagation で
+   子の proof tag を `get_proof_tag`（自クラスタのみ走査）で取得している．
+   proof がクラスタ衝突で別クラスタに格納された場合に ABSOLUTE を誤返却する．
+   施策 α 再有効化時は neighbor scan を含む lookup に置き換える必要がある
 
 ##### 得られた教訓 (v0.24.69〜73)
 
