@@ -1376,21 +1376,29 @@ impl DfPnSolver {
         self.saved_depth_for_epsilon = saved_depth;
         let mut ids_depth: u32 = 2;
         let total_max_nodes = self.max_nodes;
-        // PNS で蓄積された中間エントリ(pn>0, dn>0)を除去し，
-        // 証明(pn=0)のみ保持する．
+        // PNS で蓄積された中間エントリ(pn>0, dn>0)の処理．
         //
-        // 中間エントリを保持すると以下の問題が発生する:
-        // 1. HashMap サイズ増大により CPU キャッシュ効率が低下し NPS が半減する
-        //    (338K entries → ~126 NPS vs 12K entries → ~194 NPS)．
-        // 2. MID の child init で cpn>1/cdn>1 として扱われ，
-        //    底辺の簡単な詰みを再発見する機会が失われる．
+        // warmup_mode=false (通常): PNS intermediate を除去し proof のみ保持する．
+        //   中間エントリを保持すると以下の問題が発生する:
+        //   1. HashMap サイズ増大により CPU キャッシュ効率が低下し NPS が半減する
+        //      (338K entries → ~126 NPS vs 12K entries → ~194 NPS)．
+        //   2. MID の child init で cpn>1/cdn>1 として扱われ，
+        //      底辺の簡単な詰みを再発見する機会が失われる．
         //
-        // 証明エントリ(pn=0)は prefilter/cross_deduce に直接活用される．
-        self.table.retain_proofs_only();
+        // warmup_mode=true (nested warmup): ProvenTT の非 proof のみ除去し
+        //   WorkingTT intermediate を保持する．
+        //   v0.24.68 で solver.rs の warmup ループからも設定されていたが，
+        //   v0.24.73 で fc-normalized hash との soundness 問題のため revert．
+        //   現在は pns.rs の nested warmup (IDS 内 warmup mid_fallback) でのみ設定．
+        if self.warmup_mode {
+            self.table.clear_proven_non_proofs();
+        } else {
+            self.table.retain_proofs_only();
+        }
 
         #[cfg(feature = "tt_diag")]
-        eprintln!("[mid_fallback] after retain_proofs_only: TT_pos={} nodes_so_far={} total_budget={}",
-            self.table.len(), self.nodes_searched, total_max_nodes);
+        eprintln!("[mid_fallback] after TT cleanup (warmup={}): TT_pos={} nodes_so_far={} total_budget={}",
+            self.warmup_mode, self.table.len(), self.nodes_searched, total_max_nodes);
 
         // 停滞検出用: 前回の IDS 反復終了時の root pn/dn を保持する．
         // IDS 反復後に root_pn/dn が変化しなかった場合，MID が
@@ -1527,8 +1535,13 @@ impl DfPnSolver {
                         self.param_epsilon_denom = 3;
                         // nested mid_fallback: PNS + IDS を warmup_depth で
                         // 完全実行し，proof 発見に必要な TT 状態を構築する．
+                        // warmup_mode=true: mid_fallback 入口で WorkingTT
+                        // intermediate を保持し ProvenTT 非 proof のみ除去．
                         self.depth = warmup_depth;
+                        let save_warmup_mode = self.warmup_mode;
+                        self.warmup_mode = true;
                         self.mid_fallback(board);
+                        self.warmup_mode = save_warmup_mode;
                         // epsilon を full-depth 用に復元
                         self.param_epsilon_denom = save_eps;
                         // v0.24.66: warmup 後に root 局面の depth-limited NM を
@@ -1717,8 +1730,20 @@ impl DfPnSolver {
                 ids_depth, root_pn2, root_dn2, self.nodes_searched,
                 self.start_time.elapsed().as_secs_f64());
             if root_pn2 == 0 {
-                verbose_eprintln!("[ids] proved at depth={}, break", ids_depth);
-                break;
+                // (v0.24.71) tag-aware IDS break guard: FILTER_DEPENDENT proof で
+                // IDS を終了すると false Checkmate が返る．root の proof が
+                // ABSOLUTE の場合のみ break する．
+                // v0.24.72 で施策α filter 無効化後は FILTER_DEPENDENT proof が
+                // 生成されないため本 guard は実質 no-op だが，tag infrastructure
+                // として保持する．
+                let root_tag = self.table.get_proof_tag(pk, &att_hand);
+                if root_tag == super::entry::PROOF_TAG_ABSOLUTE {
+                    verbose_eprintln!("[ids] proved (ABSOLUTE) at depth={}, break", ids_depth);
+                    break;
+                }
+                verbose_eprintln!(
+                    "[ids] proved (tag={}) at depth={}, continuing IDS for re-verification",
+                    root_tag, ids_depth);
             }
             // IDS NM 判定: 構造的判定のみ信頼する．
             //
