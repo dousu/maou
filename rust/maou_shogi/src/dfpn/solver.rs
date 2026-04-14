@@ -426,6 +426,10 @@ pub struct DfPnSolver {
     /// スキップする (v0.24.75)．PNS の arena-limited false NM を防止．
     /// MID 探索では false (refutable disproof を通常の NM として使用)．
     pub(super) skip_refutable_disproof: bool,
+    /// 施策 C (v0.24.77): warmup を無効化するフラグ．
+    /// refutable disproof 機構が NM 蓄積を提供するため warmup は冗長．
+    /// デフォルト true = warmup 無効．set_skip_warmup(false) で再有効化可能．
+    pub(super) skip_warmup: bool,
     /// refutable check の再帰深さ (デフォルト 5)．
     pub(super) param_refutable_depth: u32,
     /// refutable check の呼び出し回数上限 (デフォルト 10,000)．
@@ -648,6 +652,7 @@ impl DfPnSolver {
             alpha_x_filter_active: false,
             warmup_mode: false,
             skip_refutable_disproof: false,
+            skip_warmup: true,
             param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
             param_refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
             a6_boundary_pns_calls_remaining: 0,
@@ -775,6 +780,17 @@ impl DfPnSolver {
     pub fn set_refutable_params(&mut self, depth: u32, call_limit: u32) -> &mut Self {
         self.param_refutable_depth = depth;
         self.param_refutable_call_limit = call_limit;
+        self
+    }
+
+    /// warmup の有効/無効を設定する (v0.24.77 施策 C)．
+    ///
+    /// デフォルト skip=true (warmup 無効)．refutable disproof 機構が
+    /// NM 蓄積を提供するため warmup は冗長で budget を無駄にする．
+    /// v0.24.77 の backward_10m_warmup で ply 22 が no-warmup の Mate(17) →
+    /// warmup 使用時 Unknown に退行することを確認．
+    pub fn set_skip_warmup(&mut self, skip: bool) -> &mut Self {
+        self.skip_warmup = skip;
         self
     }
 
@@ -1222,7 +1238,11 @@ impl DfPnSolver {
             // 早期終了:
             // - warmup で proved (pn=0) → main solve 不要
             // - warmup が proof を 1 件も蓄積しなかった → 以降スキップ
-            if !self.warmup_depths.is_empty() {
+            // (v0.24.77 施策 C) refutable disproof 機構が NM 蓄積を提供するため，
+            // 従来の warmup は budget を消費するだけで効果が限定的．
+            // backward_10m_warmup で ply 22 が no-warmup の Mate(17) → Unknown に退行することを確認．
+            // skip_warmup フラグで明示的に無効化可能 (デフォルト true = warmup 無効)．
+            if !self.warmup_depths.is_empty() && !self.skip_warmup {
                 let warmup_depths = self.warmup_depths.clone();
                 let final_depth = self.depth;
                 let mut prev_proven_count = self.table.proven_count();
