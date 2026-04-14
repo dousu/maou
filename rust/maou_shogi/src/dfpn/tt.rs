@@ -395,6 +395,47 @@ impl TranspositionTable {
         super::entry::PROOF_TAG_ABSOLUTE
     }
 
+    /// look_up_proven と同じロジック（neighbor scan 含む）で proof を検索し，
+    /// 見つかった proof の tag を返す．proof が見つからない場合は ABSOLUTE．
+    ///
+    /// get_proof_tag（自クラスタのみ）と異なり，neighbor scan を実行するため
+    /// 異なるクラスタに格納された proof の tag も取得できる．
+    /// solve() の soundness guard で root proof の tag 確認に使用する．
+    pub(super) fn look_up_proven_tag(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+    ) -> u8 {
+        let pos_key = Self::safe_key(pos_key);
+        // 自クラスタ + neighbor scan で proof を検索 (tag check なし)
+        let home = self.proven_cluster(pos_key, hand);
+        for fe in home {
+            if fe.pos_key != pos_key { continue; }
+            let e = &fe.entry;
+            if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
+                return e.proof_tag();
+            }
+        }
+        // neighbor scan (-1)
+        let base_hh = Self::hand_hash(hand);
+        for k in 0..HAND_KINDS {
+            if hand[k] == 0 { continue; }
+            let diff = Self::hand_hash_diff(k, hand[k], hand[k] - 1);
+            let start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
+            let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
+            for fe in cluster {
+                if fe.pos_key != pos_key { continue; }
+                let e = &fe.entry;
+                if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
+                    return e.proof_tag();
+                }
+            }
+        }
+        let _ = remaining;
+        super::entry::PROOF_TAG_ABSOLUTE
+    }
+
     /// WorkingTT のみ検索: intermediate + depth-limited/path-dep disproof．
     ///
     /// `neighbor_scan=false`: 自クラスタのみ(探索ホットパス向け)．
