@@ -1123,6 +1123,26 @@ impl TranspositionTable {
         hand: [u8; HAND_KINDS],
     ) {
         let pos_key = Self::safe_key(pos_key);
+
+        let p_start = self.proven_cluster_start(pos_key, &hand);
+
+        // hand_gte 支配チェック: 既存エントリが新 hand を支配するなら挿入不要
+        {
+            let p_cluster = &self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
+            for fe in p_cluster {
+                if fe.pos_key != pos_key { continue; }
+                let e = &fe.entry;
+                // 既存 proof が支配 → 不詰ではないので挿入不要
+                if e.is_proof() && hand_gte_forward_chain(&hand, &e.hand) {
+                    return;
+                }
+                // 既存 disproof (confirmed/refutable) が支配 → 冗長なので挿入不要
+                if !e.is_proof() && hand_gte_forward_chain(&e.hand, &hand) {
+                    return;
+                }
+            }
+        }
+
         let new_entry = ProvenEntry {
             hand,
             flags: ProvenEntry::encode_refutable_disproof_flags(self.current_ids_depth),
@@ -1130,13 +1150,13 @@ impl TranspositionTable {
             meta: 0,
         };
 
-        let p_start = self.proven_cluster_start(pos_key, &hand);
-
-        // 同一 pos_key・同一 hand の既存 refutable disproof を置換
+        // 新エントリに支配される既存 refutable disproof を除去
         let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
         for fe in p_cluster.iter_mut() {
             if fe.pos_key != pos_key { continue; }
-            if fe.entry.is_refutable_disproof() && fe.entry.hand == hand {
+            if fe.entry.is_refutable_disproof()
+                && hand_gte_forward_chain(&hand, &fe.entry.hand)
+            {
                 fe.pos_key = 0;
             }
         }
