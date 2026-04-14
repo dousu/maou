@@ -1447,6 +1447,9 @@ impl DfPnSolver {
             return false;
         }
         // Fallback: 再帰判定 (高コスト). false ならキャッシュ．
+        // true の場合は AND ノードが再帰内で ProvenTT に NM 格納済み (v0.24.74)．
+        // OR ノードは ProvenTT に格納しない — PNS の backprop で
+        // root_dn=0 の false NM を引き起こすため (v0.24.74 診断結果)．
         let result = self.depth_limit_all_checks_refutable(board, checks);
         if !result {
             self.refutable_check_failed.insert(pos_key);
@@ -1514,6 +1517,12 @@ impl DfPnSolver {
     /// `depth` は残りの再帰深さ(0 で打ち切り)．各再帰レベルで
     /// 王手→応手→次の王手 を確認し，最大 `depth` 段階まで追跡する．
     /// `calls` は呼び出し回数カウンタで，`limit` 超過時は false を返す．
+    ///
+    /// 各王手の反証が成功した場合，最外層の AND ノードのみを TT に
+    /// REMAINING_INFINITE の NM として格納する (v0.24.74)．
+    /// 再帰内部の AND ノードは格納しない(主探索位置との hash 衝突リスク回避)．
+    /// これにより後続の `all_checks_refutable_by_tt` が TT ヒットし，
+    /// 高コストな再帰判定の再実行を回避する．
     pub(super) fn all_checks_refutable_recursive(
         &mut self,
         board: &mut Board,
@@ -1521,6 +1530,18 @@ impl DfPnSolver {
         depth: u32,
         calls: &mut u32,
         limit: u32,
+    ) -> bool {
+        self.all_checks_refutable_recursive_inner(board, checks, depth, calls, limit, true)
+    }
+
+    fn all_checks_refutable_recursive_inner(
+        &mut self,
+        board: &mut Board,
+        checks: &[Move],
+        depth: u32,
+        calls: &mut u32,
+        limit: u32,
+        store_nm: bool,
     ) -> bool {
         for check in checks {
             *calls += 1;
@@ -1543,9 +1564,11 @@ impl DfPnSolver {
                     break;
                 }
                 // 再帰: 次の王手もすべて反証可能か確認
+                // 再帰内部では store_nm=false — 深い NM エントリが PNS の
+                // 探索トポロジーを escape path に偏向させ false NM を誘発するため
                 if depth > 0
-                    && self.all_checks_refutable_recursive(
-                        board, &next_checks, depth - 1, calls, limit,
+                    && self.all_checks_refutable_recursive_inner(
+                        board, &next_checks, depth - 1, calls, limit, false,
                     )
                 {
                     board.undo_move(*defense, cap_d);
@@ -1553,6 +1576,17 @@ impl DfPnSolver {
                     break;
                 }
                 board.undo_move(*defense, cap_d);
+            }
+            // (v0.24.74) 反証成功した最外層 AND ノードのみ ProvenTT に NM 格納．
+            // 再帰内部の AND ノードは格納しない — PNS の interior 探索に
+            // 影響を与え，探索を escape path に偏向させるため．
+            if has_refuting_defense && store_nm {
+                let and_pk = position_key(board);
+                let and_hand = board.hand[self.attacker.index()];
+                self.store(
+                    and_pk, and_hand, INF, 0,
+                    REMAINING_INFINITE, and_pk as u32,
+                );
             }
             board.undo_move(*check, captured);
             if !has_refuting_defense {

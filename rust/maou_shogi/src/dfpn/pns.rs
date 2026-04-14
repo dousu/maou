@@ -2427,6 +2427,31 @@ impl DfPnSolver {
             verbose_eprintln!("[pns_diag] arena={}/{} iters={} nodes_used={} root_pn={} root_dn={} TT_pos={} time={:.2}s",
                 arena.len(), PNS_MAX_ARENA_NODES, pns_iters, pns_nodes_used, root_pn, root_dn,
                 self.table.len(), pns_elapsed);
+
+            // (v0.24.74 診断) root.dn==0 (false NM 疑い) のとき子ノードの状態をダンプ
+            if root_dn == 0 && root_pn != 0 && arena[0].expanded {
+                verbose_eprintln!("[pns_false_nm] root.dn=0 detected! children:");
+                for &ci in &arena[0].children {
+                    let child = &arena[ci as usize];
+                    let src = if child.expanded { "expanded" } else { "leaf" };
+                    verbose_eprintln!(
+                        "  child[{}] move={} or={} pn={} dn={} expanded={} remaining={} pk={:#x} hand={:?} src={}",
+                        ci, child.move_from_parent.to_usi(), child.or_node,
+                        child.pn, child.dn, child.expanded, child.remaining,
+                        child.pos_key, child.hand, src,
+                    );
+                    // dn=0 の子: TT にどのような NM エントリがあるか確認
+                    if child.dn == 0 {
+                        let has_proof = self.table.has_proof(child.pos_key, &child.hand);
+                        let (tt_pn, tt_dn, _) = self.table.look_up(
+                            child.pos_key, &child.hand, REMAINING_INFINITE, true);
+                        verbose_eprintln!(
+                            "    TT lookup: pn={} dn={} has_proof={}", tt_pn, tt_dn, has_proof);
+                        // ProvenTT のエントリを直接ダンプ
+                        self.table.dump_entries(child.pos_key, &child.hand);
+                    }
+                }
+            }
         }
 
         // 証明/反証結果を TT に格納(PV 抽出用)
