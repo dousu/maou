@@ -405,27 +405,24 @@ pub struct DfPnSolver {
     /// AND ノード訪問で複数 child に inflation が発火するとその分加算される．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_a4_inflations: u64,
-    /// TT 診断: 施策 α 再評価 (v0.24.54+) で境界層 filter が発火した MID 数．
+    /// TT 診断: 施策 α (v0.24.54-v0.24.72) で境界層 filter が発火した MID 数．
+    /// v0.24.72 で filter 無効化後は更新されない．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_alpha_x_filter_applied: u64,
-    /// 施策 α 再評価 (v0.24.54+, 試行は revert): 現在 MID 呼出しで chain
-    /// drop filter が適用されたかを示すフラグ (未使用だが field は残留)．
+    /// 施策 α (v0.24.54-v0.24.72): chain drop filter フラグ．
+    /// v0.24.72 で filter 無効化後は常に false．tag infrastructure の
+    /// save/restore パターン保持のため field は残留．
     pub(super) alpha_x_filter_active: bool,
-    /// Warmup モード: true の場合，mid_fallback 入口で WorkingTT の
-    /// intermediate エントリを保持する (retain_proofs_only の代わりに
-    /// clear_proven_non_proofs のみ実行)．
+    /// Warmup モード (v0.24.68-v0.24.73): true の場合，mid_fallback 入口で
+    /// ProvenTT の非 proof のみ除去し WorkingTT intermediate を保持する．
     ///
-    /// warmup 段間で前段の MID intermediate を次段に引き継ぐことで，
-    /// 合駒チェーンの不詰部分証明の再構築コストを削減する．
-    /// Frontier サイクル境界では使用しないこと (soundness 問題，v0.24.45 参照)．
+    /// v0.24.73 で warmup 段間 intermediate 保持を revert したため，
+    /// 現在は solver.rs の warmup ループで true に設定されない．
+    /// pns.rs の nested warmup でのみ true に設定される．
     pub(super) warmup_mode: bool,
-    /// 施策 A-6 再評価 (v0.24.54+): 境界層 PNS 責任転嫁の残り呼出予算．
-    ///
-    /// v0.24.51 の失敗原因 (各 boundary call で 100K ノード × 膨大なユニーク
-    /// 境界数 → 数百億の累積 work) を回避するため，**グローバル呼出数制限**
-    /// として導入．solve() 入口で `A6_BOUNDARY_PNS_MAX_CALLS` (=100) に
-    /// リセットされ，`mid_via_pns_boundary` 呼出毎に 1 ずつ減算．0 になったら
-    /// 境界層 PNS 委譲を停止し通常 MID にフォールバックする．
+    /// 施策 A-6 (v0.24.54, v0.24.71 で施策α に置き換え後 v0.24.72 で無効化):
+    /// 境界層 PNS 責任転嫁の残り呼出予算．
+    /// 現在は `mid_via_pns_boundary` が呼ばれないため更新されない (dead code)．
     pub(super) a6_boundary_pns_calls_remaining: u32,
     /// TT 診断: AND ノード MID ループで deferred_children あり & all_proved=false の回数．
     #[cfg(feature = "tt_diag")]
@@ -875,11 +872,8 @@ impl DfPnSolver {
     /// ルーティングするため，ProvenTT のみが影響を受け WorkingTT への
     /// 副作用はない．
     ///
-    /// 施策 α 再評価 (v0.24.54+): `alpha_x_filter_active == true` の場合，
-    /// pn=0 (proof) の格納を `store_tagged_proof` 経由で FILTER_DEPENDENT
-    /// tag 付き (tag_depth = current_ids_depth) に route する．disproof (dn=0)
-    /// と intermediate (pn>0, dn>0) は従来通り．IDS 遷移時に
-    /// `clear_proven_disproofs_below` で汚染防止．
+    /// 施策 α (v0.24.54-v0.24.72): filter 無効化後は tag routing は
+    /// 行われない．Tag 付き proof の格納は `store_proof_with_tag` で行う．
     #[inline]
     pub(super) fn store(
         &mut self,
@@ -941,9 +935,10 @@ impl DfPnSolver {
 
     /// Tag 付き proof を転置表に格納する (v0.24.71)．
     ///
-    /// 施策α の filter_applied AND ノードの proof store 用．
-    /// 子孫 MID の proof は genuine (ABSOLUTE) であり，この関数は
-    /// filter を適用した AND ノード自身の proof のみに使用する．
+    /// Tag 付き proof を転置表に格納する (v0.24.71)．
+    /// v0.24.72 で施策α filter 無効化後は tag propagation infrastructure
+    /// の一部として保持．filter_applied が常に false のため現在は
+    /// AND proof store の条件分岐から到達しない．
     #[inline]
     pub(super) fn store_proof_with_tag(
         &mut self,

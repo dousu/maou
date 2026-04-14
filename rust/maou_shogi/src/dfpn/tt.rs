@@ -1704,9 +1704,10 @@ impl TranspositionTable {
 
     /// ProvenTT の非 proof エントリのみを除去する（WorkingTT は触らない）．
     ///
-    /// warmup 段間の遷移で使用する．WorkingTT の intermediate エントリは
-    /// 保持したまま，ProvenTT の confirmed disproof (浅い depth で生成された
-    /// ものが深い depth を汚染するリスク) を除去する．
+    /// ProvenTT の非 proof エントリのみを除去する（WorkingTT は触らない）．
+    /// nested warmup (warmup\_mode=true) の mid\_fallback 入口で使用する．
+    /// ProvenTT の confirmed disproof (浅い depth で生成されたものが深い
+    /// depth を汚染するリスク) を除去し，WorkingTT intermediate は保持する．
     pub(super) fn clear_proven_non_proofs(&mut self) {
         for fe in self.proven.iter_mut() {
             if fe.pos_key != 0 && !fe.entry.is_proof() {

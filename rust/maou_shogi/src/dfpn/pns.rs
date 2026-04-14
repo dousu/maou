@@ -1385,10 +1385,11 @@ impl DfPnSolver {
         //   2. MID の child init で cpn>1/cdn>1 として扱われ，
         //      底辺の簡単な詰みを再発見する機会が失われる．
         //
-        // warmup_mode=true (warmup 段間): 前段 MID の intermediate を保持する．
-        //   warmup 段間では intermediate は MID 由来であり互換性がある．
-        //   ProvenTT の非 proof のみ除去して WorkingTT intermediate を引き継ぐ．
-        //   (v0.24.67: warmup/intermediate 保持の整合性修正)
+        // warmup_mode=true (nested warmup): ProvenTT の非 proof のみ除去し
+        //   WorkingTT intermediate を保持する．
+        //   v0.24.68 で solver.rs の warmup ループからも設定されていたが，
+        //   v0.24.73 で fc-normalized hash との soundness 問題のため revert．
+        //   現在は pns.rs の nested warmup (IDS 内 warmup mid_fallback) でのみ設定．
         if self.warmup_mode {
             self.table.clear_proven_non_proofs();
         } else {
@@ -1534,8 +1535,8 @@ impl DfPnSolver {
                         self.param_epsilon_denom = 3;
                         // nested mid_fallback: PNS + IDS を warmup_depth で
                         // 完全実行し，proof 発見に必要な TT 状態を構築する．
-                        // warmup_mode=true: IDS で蓄積した intermediate を
-                        // nested mid_fallback 入口で保持する (v0.24.67)．
+                        // warmup_mode=true: mid_fallback 入口で WorkingTT
+                        // intermediate を保持し ProvenTT 非 proof のみ除去．
                         self.depth = warmup_depth;
                         let save_warmup_mode = self.warmup_mode;
                         self.warmup_mode = true;
@@ -1729,10 +1730,12 @@ impl DfPnSolver {
                 ids_depth, root_pn2, root_dn2, self.nodes_searched,
                 self.start_time.elapsed().as_secs_f64());
             if root_pn2 == 0 {
-                // (v0.24.71) tag-aware IDS break: FILTER_DEPENDENT proof で
+                // (v0.24.71) tag-aware IDS break guard: FILTER_DEPENDENT proof で
                 // IDS を終了すると false Checkmate が返る．root の proof が
-                // ABSOLUTE の場合のみ break する．FILTER_DEPENDENT の場合は
-                // IDS を続行し，深い depth で全 defense を含む再探索を行う．
+                // ABSOLUTE の場合のみ break する．
+                // v0.24.72 で施策α filter 無効化後は FILTER_DEPENDENT proof が
+                // 生成されないため本 guard は実質 no-op だが，tag infrastructure
+                // として保持する．
                 let root_tag = self.table.get_proof_tag(pk, &att_hand);
                 if root_tag == super::entry::PROOF_TAG_ABSOLUTE {
                     verbose_eprintln!("[ids] proved (ABSOLUTE) at depth={}, break", ids_depth);
