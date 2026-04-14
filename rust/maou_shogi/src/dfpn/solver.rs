@@ -1601,6 +1601,7 @@ impl DfPnSolver {
                 }
                 // 再帰: 次の王手もすべて反証可能か確認
                 // 再帰内部では store_nm=false — ProvenTT クラスタ圧迫を回避
+                // (全レベル格納は disproven 1.4M 件でクラスタ飽和を引き起こす)
                 if depth > 0
                     && self.all_checks_refutable_recursive_inner(
                         board, &next_checks, depth - 1, calls, limit, false,
