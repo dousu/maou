@@ -426,6 +426,10 @@ pub struct DfPnSolver {
     /// スキップする (v0.24.75)．PNS の arena-limited false NM を防止．
     /// MID 探索では false (refutable disproof を通常の NM として使用)．
     pub(super) skip_refutable_disproof: bool,
+    /// refutable check の再帰深さ (デフォルト 5)．
+    pub(super) param_refutable_depth: u32,
+    /// refutable check の呼び出し回数上限 (デフォルト 10,000)．
+    pub(super) param_refutable_call_limit: u32,
     /// 施策 A-6 (v0.24.54, v0.24.71 で施策α に置き換え後 v0.24.72 で無効化):
     /// 境界層 PNS 責任転嫁の残り呼出予算．
     /// 施策 α 再有効化まで dead code．
@@ -644,6 +648,8 @@ impl DfPnSolver {
             alpha_x_filter_active: false,
             warmup_mode: false,
             skip_refutable_disproof: false,
+            param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
+            param_refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
             a6_boundary_pns_calls_remaining: 0,
             #[cfg(feature = "tt_diag")]
             diag_deferred_not_ready: 0,
@@ -762,6 +768,13 @@ impl DfPnSolver {
     /// 残りを最終 solve に使用する．
     pub fn set_warmup_depths(&mut self, depths: &[u32]) -> &mut Self {
         self.warmup_depths = depths.to_vec();
+        self
+    }
+
+    /// refutable check のパラメータを設定する (v0.24.76)．
+    pub fn set_refutable_params(&mut self, depth: u32, call_limit: u32) -> &mut Self {
+        self.param_refutable_depth = depth;
+        self.param_refutable_call_limit = call_limit;
         self
     }
 
@@ -1491,7 +1504,8 @@ impl DfPnSolver {
     ) -> bool {
         let mut calls: u32 = 0;
         self.all_checks_refutable_recursive(
-            board, checks, 5, &mut calls, Self::REFUTABLE_CALL_LIMIT,
+            board, checks, self.param_refutable_depth, &mut calls,
+            self.param_refutable_call_limit,
         )
     }
 
@@ -1543,10 +1557,10 @@ impl DfPnSolver {
         true
     }
 
-    /// 呼び出し回数上限．組合せ爆発を防止する．
-    /// 各呼び出しで generate_defense_moves + generate_check_moves を実行するため，
-    /// デバッグビルドでの実行時間を考慮して小さめに設定する．
-    const REFUTABLE_CALL_LIMIT: u32 = 10_000;
+    /// デフォルトの refutable check 呼び出し回数上限．
+    const DEFAULT_REFUTABLE_CALL_LIMIT: u32 = 10_000;
+    /// デフォルトの refutable check 再帰深さ．
+    const DEFAULT_REFUTABLE_DEPTH: u32 = 5;
 
     /// `depth_limit_all_checks_refutable` の再帰本体．
     ///

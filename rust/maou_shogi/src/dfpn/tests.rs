@@ -7250,6 +7250,13 @@ use crate::types::{Color, PieceType};
             let mut test_board = board24.clone();
             let mut solver = DfPnSolver::with_timeout(depth, max_nodes, 32767, timeout_s);
             solver.set_find_shortest(false);
+            // 環境変数でパラメータチューニング (施策 B)
+            if let Ok(v) = std::env::var("REFUT_DEPTH") {
+                let d: u32 = v.parse().unwrap_or(5);
+                let l: u32 = std::env::var("REFUT_LIMIT")
+                    .ok().and_then(|s| s.parse().ok()).unwrap_or(10_000);
+                solver.set_refutable_params(d, l);
+            }
             let start = Instant::now();
             let result = solver.solve(&mut test_board);
             let elapsed = start.elapsed();
