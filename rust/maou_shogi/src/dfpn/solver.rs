@@ -1509,27 +1509,41 @@ impl DfPnSolver {
         )
     }
 
-    /// self.depth に応じた適応的 refutable check 再帰深さ (v0.24.77)．
+    /// IDS target depth に応じた適応的 refutable check 再帰深さ (v0.24.77)．
     ///
     /// `param_refutable_depth` が 0 (EFFECTIVE_DEPTH_ADAPTIVE) の場合，
-    /// IDS depth に比例した値を返す．明示的な値が設定されている場合はそれを使う．
+    /// outer_solve_depth (IDS target) に基づく log ベースの値を返す．
     ///
-    /// 適応ルール: self.depth に応じて 3/5/7 を選択．
-    /// - self.depth <= 17: 3 (浅い問題, NPS 優先)
-    /// - self.depth <= 21: 5 (中規模, バランス)
-    /// - self.depth > 21:  7 (深い問題, NM 検出率優先)
+    /// 設計意図 (ユーザー提案):
+    /// - self.depth (現 IDS step) ではなく outer_solve_depth (target) を使用
+    ///   → IDS 中間 step 全体で d が一貫し，TT 状態の不整合を回避
+    /// - log ベースで徐々に増加して飽和
+    ///   → 浅い問題では小さい d (NPS 優先)
+    ///   → 深い問題では大きい d (NM 検出率優先)
+    ///   → 飽和点があるため無限に増えない
+    ///
+    /// 式: d = min(target.ilog2() + 1, 7).max(3)
+    /// - target=4  (log2=2): d=3
+    /// - target=8  (log2=3): d=4
+    /// - target=16 (log2=4): d=5  ← backward_10m ply 20 (target=21) baseline と一致
+    /// - target=17-31:       d=5
+    /// - target=32+:         d=6
+    /// - target=64+:         d=7 (飽和)
     #[inline]
     fn effective_refutable_depth(&self) -> u32 {
         if self.param_refutable_depth != Self::EFFECTIVE_DEPTH_ADAPTIVE {
             return self.param_refutable_depth;
         }
-        if self.depth <= 17 {
-            3
-        } else if self.depth <= 21 {
-            5
+        let target = if self.outer_solve_depth > 0 {
+            self.outer_solve_depth
         } else {
-            7
+            self.depth
+        };
+        if target == 0 {
+            return 3;
         }
+        let log_val = (target as u32).ilog2() + 1;
+        log_val.min(7).max(3)
     }
 
     /// `param_refutable_depth = 0` は適応的 depth を意味する sentinel．
