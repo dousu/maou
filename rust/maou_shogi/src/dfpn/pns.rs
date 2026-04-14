@@ -3057,6 +3057,17 @@ impl DfPnSolver {
         {
             self.dbg_pns_proof_stores += proof_store_count;
         }
+        #[cfg(feature = "tt_diag")]
+        {
+            for node in arena {
+                if node.pn == 0 && node.expanded && !node.children.is_empty() {
+                    let ply = self.depth.saturating_sub(node.remaining as u32) as usize;
+                    if ply < 64 {
+                        self.diag_pns_proof_ply[ply] += 1;
+                    }
+                }
+            }
+        }
         proof_store_count
     }
 }

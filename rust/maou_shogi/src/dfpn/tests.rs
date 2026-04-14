@@ -7102,6 +7102,42 @@ use crate::types::{Color, PieceType};
                 writeln!(out, "    init_and_disp_exits = {}", solver.diag_init_and_disproof_exits).unwrap();
                 writeln!(out, "    single_child_exits = {}", solver.diag_single_child_exits).unwrap();
                 writeln!(out, "    node_limit_exits   = {}", solver.diag_node_limit_exits).unwrap();
+                writeln!(out, "    --- depth boundary diagnostics ---").unwrap();
+                writeln!(out, "    rem0_proof               = {}", solver.diag_rem0_proof).unwrap();
+                writeln!(out, "    rem0_provisional         = {}", solver.diag_rem0_provisional).unwrap();
+                let rem0_total = solver.diag_rem0_proof + solver.diag_rem0_provisional;
+                if rem0_total > 0 {
+                    let proof_rate = solver.diag_rem0_proof as f64
+                        / rem0_total as f64 * 100.0;
+                    writeln!(out, "    rem0_proof_rate          = {:.1}%", proof_rate).unwrap();
+                }
+                writeln!(out, "    boundary_or_no_checks    = {}", solver.diag_boundary_or_no_checks).unwrap();
+                writeln!(out, "    boundary_or_refutable    = {}", solver.diag_boundary_or_refutable).unwrap();
+                writeln!(out, "    boundary_or_not_refutable= {}", solver.diag_boundary_or_not_refutable).unwrap();
+                writeln!(out, "    boundary_and_total       = {}", solver.diag_boundary_and_total).unwrap();
+                let boundary_or_total = solver.diag_boundary_or_no_checks
+                    + solver.diag_boundary_or_refutable
+                    + solver.diag_boundary_or_not_refutable;
+                writeln!(out, "    boundary_or_total        = {}", boundary_or_total).unwrap();
+                if boundary_or_total > 0 {
+                    let thrash_pct = solver.diag_boundary_or_not_refutable as f64
+                        / boundary_or_total as f64 * 100.0;
+                    writeln!(out, "    boundary_thrash_rate     = {:.1}%", thrash_pct).unwrap();
+                    let refutable_with_checks = solver.diag_boundary_or_refutable
+                        + solver.diag_boundary_or_not_refutable;
+                    if refutable_with_checks > 0 {
+                        let avg_checks = solver.diag_boundary_or_checks_sum as f64
+                            / refutable_with_checks as f64;
+                        writeln!(out, "    boundary_avg_checks      = {:.1}", avg_checks).unwrap();
+                    }
+                }
+                writeln!(out, "    pns_proof_ply (non-zero):").unwrap();
+                for (i, v) in solver.diag_pns_proof_ply.iter().enumerate() {
+                    if *v > 0 {
+                        writeln!(out, "      ply {:2}: pns_proofs={}", i, v).unwrap();
+                    }
+                }
+                writeln!(out, "    --- ply visits ---").unwrap();
                 writeln!(out, "    ply_visits (non-zero):").unwrap();
                 for (i, v) in solver.diag_ply_visits.iter().enumerate() {
                     if *v > 0 {

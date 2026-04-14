@@ -503,6 +503,30 @@ pub struct DfPnSolver {
     /// TT 診断: ノード制限によるリターン回数．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_node_limit_exits: u64,
+    /// TT 診断: depth 境界 OR ノードで王手なし(NM store)の回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_boundary_or_no_checks: u64,
+    /// TT 診断: depth 境界 OR ノードで全王手 refutable(NM store)の回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_boundary_or_refutable: u64,
+    /// TT 診断: depth 境界 OR ノードで王手 not all refutable(仮反証，store なし)の回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_boundary_or_not_refutable: u64,
+    /// TT 診断: depth 境界 AND ノードのヒット回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_boundary_and_total: u64,
+    /// TT 診断: depth 境界 OR ノードでの王手手数の合計(平均算出用)．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_boundary_or_checks_sum: u64,
+    /// TT 診断: PNS proof store の ply 分布(最大 64 手)．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_pns_proof_ply: [u64; 64],
+    /// TT 診断: remaining=0 で proof 発見(仮反証回避)の回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_rem0_proof: u64,
+    /// TT 診断: remaining=0 で仮反証(provisional disproof)を返した回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_rem0_provisional: u64,
 }
 
 impl DfPnSolver {
@@ -662,6 +686,22 @@ impl DfPnSolver {
             diag_single_child_exits: 0,
             #[cfg(feature = "tt_diag")]
             diag_node_limit_exits: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_boundary_or_no_checks: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_boundary_or_refutable: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_boundary_or_not_refutable: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_boundary_and_total: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_boundary_or_checks_sum: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_pns_proof_ply: [0u64; 64],
+            #[cfg(feature = "tt_diag")]
+            diag_rem0_proof: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_rem0_provisional: 0,
         }
     }
 
@@ -1661,6 +1701,13 @@ impl DfPnSolver {
             #[cfg(feature = "tt_diag")]
             {
                 self.diag_terminal_exits += 1;
+                if remaining == 0 {
+                    if tt_pn == 0 {
+                        self.diag_rem0_proof += 1;
+                    } else {
+                        self.diag_rem0_provisional += 1;
+                    }
+                }
                 if ply == self.diag_ply && self.diag_terminal_exits <= 3 {
                     verbose_eprintln!("[tt_diag] ply={} terminal exit: tt_pn={} tt_dn={} remaining={}",
                         ply, tt_pn, tt_dn, remaining);
@@ -1703,16 +1750,32 @@ impl DfPnSolver {
             if or_node {
                 let checks = self.generate_check_moves_cached(board);
                 if checks.is_empty() {
+                    #[cfg(feature = "tt_diag")]
+                    { self.diag_boundary_or_no_checks += 1; }
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key as u32);
                 } else if self.all_checks_refutable_by_tt(board, &checks) {
+                    #[cfg(feature = "tt_diag")]
+                    {
+                        self.diag_boundary_or_refutable += 1;
+                        self.diag_boundary_or_checks_sum += checks.len() as u64;
+                    }
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key as u32);
+                } else {
+                    // rem=0 の仮反証は TT に store しない
+                    // (クラスタの 64.7% を占め overflow の主因)
+                    #[cfg(feature = "tt_diag")]
+                    {
+                        self.diag_boundary_or_not_refutable += 1;
+                        self.diag_boundary_or_checks_sum += checks.len() as u64;
+                    }
                 }
-                // else: rem=0 の仮反証は TT に store しない
-                // (クラスタの 64.7% を占め overflow の主因)
+            } else {
+                // AND ノードの深さ制限: rem=0 は TT に store しない
+                #[cfg(feature = "tt_diag")]
+                { self.diag_boundary_and_total += 1; }
             }
-            // AND ノードの深さ制限: rem=0 は TT に store しない
             #[cfg(feature = "profile")]
             {
                 self.profile_stats.depth_limit_terminal_ns += _depth_limit_start.elapsed().as_nanos() as u64;
