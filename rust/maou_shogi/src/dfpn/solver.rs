@@ -1504,10 +1504,36 @@ impl DfPnSolver {
     ) -> bool {
         let mut calls: u32 = 0;
         self.all_checks_refutable_recursive(
-            board, checks, self.param_refutable_depth, &mut calls,
+            board, checks, self.effective_refutable_depth(), &mut calls,
             self.param_refutable_call_limit,
         )
     }
+
+    /// self.depth に応じた適応的 refutable check 再帰深さ (v0.24.77)．
+    ///
+    /// `param_refutable_depth` が 0 (EFFECTIVE_DEPTH_ADAPTIVE) の場合，
+    /// IDS depth に比例した値を返す．明示的な値が設定されている場合はそれを使う．
+    ///
+    /// 適応ルール: self.depth に応じて 3/5/7 を選択．
+    /// - self.depth <= 17: 3 (浅い問題, NPS 優先)
+    /// - self.depth <= 21: 5 (中規模, バランス)
+    /// - self.depth > 21:  7 (深い問題, NM 検出率優先)
+    #[inline]
+    fn effective_refutable_depth(&self) -> u32 {
+        if self.param_refutable_depth != Self::EFFECTIVE_DEPTH_ADAPTIVE {
+            return self.param_refutable_depth;
+        }
+        if self.depth <= 17 {
+            3
+        } else if self.depth <= 21 {
+            5
+        } else {
+            7
+        }
+    }
+
+    /// `param_refutable_depth = 0` は適応的 depth を意味する sentinel．
+    const EFFECTIVE_DEPTH_ADAPTIVE: u32 = 0;
 
     /// TT ベースの NM 昇格判定(MID depth boundary 用)．
     ///
@@ -1559,8 +1585,8 @@ impl DfPnSolver {
 
     /// デフォルトの refutable check 呼び出し回数上限．
     const DEFAULT_REFUTABLE_CALL_LIMIT: u32 = 10_000;
-    /// デフォルトの refutable check 再帰深さ．
-    const DEFAULT_REFUTABLE_DEPTH: u32 = 5;
+    /// デフォルトの refutable check 再帰深さ (0 = 適応的，self.depth に基づく)．
+    const DEFAULT_REFUTABLE_DEPTH: u32 = 0;
 
     /// `depth_limit_all_checks_refutable` の再帰本体．
     ///
