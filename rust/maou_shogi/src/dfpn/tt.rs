@@ -208,6 +208,15 @@ pub(super) struct TranspositionTable {
     pub(super) diag_dominated_skip: u64,
     #[cfg(feature = "verbose")]
     pub(super) diag_remaining_dist: [u64; 33],
+    /// (v0.24.76) disproof 挿入の内訳: confirmed (ProvenTT), refutable (ProvenTT), working (WorkingTT)
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_disproof_confirmed: u64,
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_disproof_refutable: u64,
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_disproof_refutable_skip: u64,
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_disproof_working: u64,
 }
 
 impl TranspositionTable {
@@ -259,6 +268,14 @@ impl TranspositionTable {
             diag_dominated_skip: 0,
             #[cfg(feature = "verbose")]
             diag_remaining_dist: [0; 33],
+            #[cfg(feature = "tt_diag")]
+            diag_disproof_confirmed: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_disproof_refutable: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_disproof_refutable_skip: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_disproof_working: 0,
         }
     }
 
@@ -1097,6 +1114,8 @@ impl TranspositionTable {
                 else { self.diag_disproof_inserts += 1; }
                 self.diag_remaining_dist[rem_idx] += 1;
             }
+            #[cfg(feature = "tt_diag")]
+            if !is_proof { self.diag_disproof_confirmed += 1; }
             return;
         }
         // 満杯 → ProvenTT 専用の replace
@@ -1108,6 +1127,8 @@ impl TranspositionTable {
                 else { self.diag_disproof_inserts += 1; }
                 self.diag_remaining_dist[rem_idx] += 1;
             }
+            #[cfg(feature = "tt_diag")]
+            if !is_proof { self.diag_disproof_confirmed += 1; }
         }
     }
 
@@ -1138,6 +1159,8 @@ impl TranspositionTable {
                 }
                 // 既存 disproof (confirmed/refutable) が支配 → 冗長なので挿入不要
                 if !e.is_proof() && hand_gte_forward_chain(&e.hand, &hand) {
+                    #[cfg(feature = "tt_diag")]
+                    { self.diag_disproof_refutable_skip += 1; }
                     return;
                 }
             }
@@ -1166,12 +1189,17 @@ impl TranspositionTable {
         if let Some(slot) = p_cluster.iter_mut().find(|fe| fe.is_empty()) {
             slot.pos_key = pos_key;
             slot.entry = new_entry;
+            #[cfg(feature = "tt_diag")]
+            { self.diag_disproof_refutable += 1; }
             return;
         }
         // 満杯 → 最弱エントリを置換
         #[cfg(feature = "profile")]
         { self.proven_overflow_count += 1; }
-        Self::replace_weakest_proven(p_cluster, pos_key, new_entry);
+        if Self::replace_weakest_proven(p_cluster, pos_key, new_entry) {
+            #[cfg(feature = "tt_diag")]
+            { self.diag_disproof_refutable += 1; }
+        }
     }
 
     /// refutable disproof を lookup する (v0.24.75)．
@@ -1256,6 +1284,7 @@ impl TranspositionTable {
             slot.pos_key = pos_key;
             slot.entry = new_entry;
             #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
+            #[cfg(feature = "tt_diag")] { self.diag_disproof_working += 1; }
             // ピーク充填数の追跡
             let fill = self.working[w_start..w_start + WORKING_CLUSTER_SIZE].iter()
                 .filter(|fe| fe.pos_key != 0).count();
@@ -1268,6 +1297,7 @@ impl TranspositionTable {
         self.working_overflow_since_gc += 1;
         if Self::replace_weakest_for_disproof_in(w_cluster, pos_key, new_entry) {
             #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
+            #[cfg(feature = "tt_diag")] { self.diag_disproof_working += 1; }
             return;
         }
         // NM 同士の置換
@@ -1280,6 +1310,7 @@ impl TranspositionTable {
             {
                 fe.entry = new_entry;
                 #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
+                #[cfg(feature = "tt_diag")] { self.diag_disproof_working += 1; }
                 return;
             }
         }

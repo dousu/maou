@@ -7150,6 +7150,11 @@ use crate::types::{Color, PieceType};
                 let tt_intermediate = solver.table.count_intermediate();
                 writeln!(out, "    TT composition: proven={} disproven={} intermediate={}",
                     tt_proven, tt_disproven, tt_intermediate).unwrap();
+                writeln!(out, "    disproof inserts: confirmed={} refutable={} (skip={}) working={}",
+                    solver.table.diag_disproof_confirmed,
+                    solver.table.diag_disproof_refutable,
+                    solver.table.diag_disproof_refutable_skip,
+                    solver.table.diag_disproof_working).unwrap();
             }
             #[cfg(feature = "profile")]
             {
