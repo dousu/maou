@@ -1966,7 +1966,9 @@ impl DfPnSolver {
                     self.dbg_pns_spin_iters,
                     self.dbg_pns_changed_iters,
                 );
+                self.skip_refutable_disproof = true;
                 let _pv = self.pns_main_with_arena(board, &mut arena);
+                self.skip_refutable_disproof = false;
 
                 // Zero-proof 判定: 直前の PNS サイクルの proof store 数を確認
                 if self.last_pns_proof_stores == 0 {
@@ -2063,7 +2065,10 @@ impl DfPnSolver {
         let mut arena: Vec<PnsNode> = Vec::with_capacity(
             PNS_MAX_ARENA_NODES.min(1024 * 1024),
         );
-        self.pns_main_with_arena(board, &mut arena)
+        self.skip_refutable_disproof = true;
+        let result = self.pns_main_with_arena(board, &mut arena);
+        self.skip_refutable_disproof = false;
+        result
     }
 
     /// Best-First PNS メインループ(アリーナ再利用版)．
@@ -2523,8 +2528,9 @@ impl DfPnSolver {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key as u32);
                 } else if self.refutable_check_with_cache(board, pos_key, &checks) {
-                    self.store(pos_key, att_hand, INF, 0,
-                        REMAINING_INFINITE, pos_key as u32);
+                    // (v0.24.75) refutable disproof として格納．通常 lookup からは
+                    // 不可視とし PNS の arena-limited false NM を防止する．
+                    self.table.store_refutable_disproof(pos_key, att_hand);
                 } else {
                     self.store(pos_key, att_hand, INF, 0, 0, pos_key as u32);
                 }
@@ -2708,10 +2714,12 @@ impl DfPnSolver {
             // REMAINING_INFINITE 昇格: ハイブリッド判定 (上述と同じ経路)．
             if prop_rem != REMAINING_INFINITE {
                 let checks = self.generate_check_moves_cached(board);
-                if checks.is_empty()
-                    || self.refutable_check_with_cache(board, pos_key, &checks)
-                {
+                if checks.is_empty() {
                     prop_rem = REMAINING_INFINITE;
+                } else if self.refutable_check_with_cache(board, pos_key, &checks) {
+                    // (v0.24.75) refutable disproof として格納
+                    self.table.store_refutable_disproof(pos_key, att_hand);
+                    return;
                 }
             }
             self.store(pos_key, att_hand, INF, 0, prop_rem, pos_key as u32);

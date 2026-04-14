@@ -1111,6 +1111,90 @@ impl TranspositionTable {
         }
     }
 
+    /// refutable check で確認された NM を ProvenTT に格納する (v0.24.75)．
+    ///
+    /// confirmed disproof と同じ ProvenTT クラスタに格納するが，
+    /// `is_refutable_disproof()` = true のフラグを持つ．
+    /// 通常の `look_up_proven` からは不可視(PNS の arena-limited
+    /// false NM を防止)．`look_up_refutable_disproof` からのみ可視．
+    pub(super) fn store_refutable_disproof(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+    ) {
+        let pos_key = Self::safe_key(pos_key);
+        let new_entry = ProvenEntry {
+            hand,
+            flags: ProvenEntry::encode_refutable_disproof_flags(self.current_ids_depth),
+            best_move: 0,
+            meta: 0,
+        };
+
+        let p_start = self.proven_cluster_start(pos_key, &hand);
+
+        // 同一 pos_key・同一 hand の既存 refutable disproof を置換
+        let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
+        for fe in p_cluster.iter_mut() {
+            if fe.pos_key != pos_key { continue; }
+            if fe.entry.is_refutable_disproof() && fe.entry.hand == hand {
+                fe.pos_key = 0;
+            }
+        }
+
+        // 挿入
+        let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
+        if let Some(slot) = p_cluster.iter_mut().find(|fe| fe.is_empty()) {
+            slot.pos_key = pos_key;
+            slot.entry = new_entry;
+            return;
+        }
+        // 満杯 → 最弱エントリを置換
+        #[cfg(feature = "profile")]
+        { self.proven_overflow_count += 1; }
+        Self::replace_weakest_proven(p_cluster, pos_key, new_entry);
+    }
+
+    /// refutable disproof を lookup する (v0.24.75)．
+    ///
+    /// `all_checks_refutable_by_tt` 専用．通常の `look_up_proven` では
+    /// refutable disproof はスキップされるため，この関数で参照する．
+    /// ProvenTT クラスタ内の refutable disproof + confirmed disproof の
+    /// 両方にマッチする．
+    pub(super) fn has_refutable_or_confirmed_disproof(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> bool {
+        let pos_key = Self::safe_key(pos_key);
+        let home = self.proven_cluster(pos_key, hand);
+        for fe in home {
+            if fe.pos_key != pos_key { continue; }
+            let e = &fe.entry;
+            if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 指定位置の ProvenTT エントリが refutable disproof かどうかを返す (v0.24.75)．
+    pub(super) fn is_refutable_disproof_at(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> bool {
+        let pos_key = Self::safe_key(pos_key);
+        let home = self.proven_cluster(pos_key, hand);
+        for fe in home {
+            if fe.pos_key != pos_key { continue; }
+            let e = &fe.entry;
+            if e.is_refutable_disproof() && hand_gte_forward_chain(&e.hand, hand) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// WorkingTT に depth-limited / path-dep disproof を挿入する．
     fn store_working_disproof(
         &mut self,

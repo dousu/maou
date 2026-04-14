@@ -422,6 +422,10 @@ pub struct DfPnSolver {
     /// 現在は solver.rs の warmup ループで true に設定されない．
     /// pns.rs の nested warmup でのみ true に設定される．
     pub(super) warmup_mode: bool,
+    /// PNS 探索中に true に設定し，`look_up_pn_dn` で refutable disproof を
+    /// スキップする (v0.24.75)．PNS の arena-limited false NM を防止．
+    /// MID 探索では false (refutable disproof を通常の NM として使用)．
+    pub(super) skip_refutable_disproof: bool,
     /// 施策 A-6 (v0.24.54, v0.24.71 で施策α に置き換え後 v0.24.72 で無効化):
     /// 境界層 PNS 責任転嫁の残り呼出予算．
     /// 施策 α 再有効化まで dead code．
@@ -639,6 +643,7 @@ impl DfPnSolver {
             diag_alpha_x_filter_applied: 0,
             alpha_x_filter_active: false,
             warmup_mode: false,
+            skip_refutable_disproof: false,
             a6_boundary_pns_calls_remaining: 0,
             #[cfg(feature = "tt_diag")]
             diag_deferred_not_ready: 0,
@@ -854,7 +859,16 @@ impl DfPnSolver {
             }
             return (INF, 0, 0);
         }
-        let result = self.table.look_up(pos_key, hand, remaining, neighbor_scan);
+        let mut result = self.table.look_up(pos_key, hand, remaining, neighbor_scan);
+        // (v0.24.75) PNS 探索中は refutable disproof を無視して arena-limited
+        // false NM を防止する．refutable disproof がヒットした場合は
+        // (PN_UNIT, PN_UNIT, 0) に差し替え，未探索ノードとして扱う．
+        if self.skip_refutable_disproof && result.1 == 0 && result.0 != 0 {
+            // dn=0, pn!=0 → disproof ヒット → refutable かチェック
+            if self.table.is_refutable_disproof_at(pos_key, hand) {
+                result = (PN_UNIT, PN_UNIT, 0);
+            }
+        }
         if result.0 == PN_UNIT && result.1 == PN_UNIT && result.2 == 0 {
             // TT ミス: Deep df-pn バイアスを適用(深い ply のみ)
             let ply = (self.depth as u32).saturating_sub(remaining as u32);
@@ -1434,8 +1448,8 @@ impl DfPnSolver {
         pos_key: u64,
         checks: &[Move],
     ) -> bool {
-        // Fast path: TT ベース判定
-        if self.all_checks_refutable_by_tt(board, checks) {
+        // Fast path: TT ベース判定 (confirmed + refutable disproof の両方を参照)
+        if self.all_checks_refutable_by_tt_or_refutable(board, checks) {
             #[cfg(feature = "verbose")]
             { self.dbg_refut_tt_hits += 1; }
             return true;
@@ -1481,10 +1495,10 @@ impl DfPnSolver {
         )
     }
 
-    /// TT ベースの NM 昇格判定(MID 内部用)．
+    /// TT ベースの NM 昇格判定(MID depth boundary 用)．
     ///
-    /// 各王手後の AND ノードが TT 上で REMAINING_INFINITE の
-    /// 不詰として記録されているかを確認する．
+    /// 各王手後の AND ノードが ProvenTT の **confirmed** disproof で
+    /// 不詰と確認されているかを確認する．refutable disproof は含まない．
     /// do_move + TT ルックアップのみで判定するため極めて高速
     /// (~2μs/王手)．TT にエントリがない場合は保守的に false を返す．
     pub(super) fn all_checks_refutable_by_tt(
@@ -1496,11 +1510,33 @@ impl DfPnSolver {
             let captured = board.do_move(*check);
             let pk = position_key(board);
             let att_hand = board.hand[self.attacker.index()];
-            // AND ノードが TT で REMAINING_INFINITE の不詰か確認
+            // confirmed disproof のみ (refutable disproof を含まない通常 lookup)
             let (_, dn, _) = self.table.look_up(pk, &att_hand, REMAINING_INFINITE, false);
             board.undo_move(*check, captured);
             if dn != 0 {
-                // この王手後の局面が TT で不詰確定していない → 昇格不可
+                return false;
+            }
+        }
+        true
+    }
+
+    /// TT ベースの NM 昇格判定(PNS refutable check fast path 用, v0.24.75)．
+    ///
+    /// `all_checks_refutable_by_tt` と同様だが，ProvenTT の refutable
+    /// disproof (再帰判定で格納されたもの) も含めて参照する．
+    /// PNS の `refutable_check_with_cache` の高速パスとして使用する．
+    fn all_checks_refutable_by_tt_or_refutable(
+        &mut self,
+        board: &mut Board,
+        checks: &[Move],
+    ) -> bool {
+        for check in checks {
+            let captured = board.do_move(*check);
+            let pk = position_key(board);
+            let att_hand = board.hand[self.attacker.index()];
+            let found = self.table.has_refutable_or_confirmed_disproof(pk, &att_hand);
+            board.undo_move(*check, captured);
+            if !found {
                 return false;
             }
         }
@@ -1518,11 +1554,11 @@ impl DfPnSolver {
     /// 王手→応手→次の王手 を確認し，最大 `depth` 段階まで追跡する．
     /// `calls` は呼び出し回数カウンタで，`limit` 超過時は false を返す．
     ///
-    /// 各王手の反証が成功した場合，最外層の AND ノードのみを TT に
-    /// REMAINING_INFINITE の NM として格納する (v0.24.74)．
-    /// 再帰内部の AND ノードは格納しない(主探索位置との hash 衝突リスク回避)．
-    /// これにより後続の `all_checks_refutable_by_tt` が TT ヒットし，
-    /// 高コストな再帰判定の再実行を回避する．
+    /// 各王手の反証が成功した場合，AND ノードを ProvenTT に refutable
+    /// disproof として格納する (v0.24.75)．refutable disproof は通常の
+    /// `look_up_proven` からは不可視で，`all_checks_refutable_by_tt` の
+    /// 高速パスからのみ参照される．これにより PNS の arena-limited false
+    /// NM を防止しつつ，再帰判定結果を TT に蓄積する．
     pub(super) fn all_checks_refutable_recursive(
         &mut self,
         board: &mut Board,
@@ -1564,8 +1600,7 @@ impl DfPnSolver {
                     break;
                 }
                 // 再帰: 次の王手もすべて反証可能か確認
-                // 再帰内部では store_nm=false — 深い NM エントリが PNS の
-                // 探索トポロジーを escape path に偏向させ false NM を誘発するため
+                // 再帰内部では store_nm=false — ProvenTT クラスタ圧迫を回避
                 if depth > 0
                     && self.all_checks_refutable_recursive_inner(
                         board, &next_checks, depth - 1, calls, limit, false,
@@ -1577,16 +1612,14 @@ impl DfPnSolver {
                 }
                 board.undo_move(*defense, cap_d);
             }
-            // (v0.24.74) 反証成功した最外層 AND ノードのみ ProvenTT に NM 格納．
-            // 再帰内部の AND ノードは格納しない — PNS の interior 探索に
-            // 影響を与え，探索を escape path に偏向させるため．
+            // (v0.24.75) 反証成功した AND ノードを refutable disproof として
+            // ProvenTT に格納．通常の look_up_proven からは不可視(PNS の
+            // arena-limited false NM を防止)．all_checks_refutable_by_tt の
+            // 高速パスからのみ参照される．
             if has_refuting_defense && store_nm {
                 let and_pk = position_key(board);
                 let and_hand = board.hand[self.attacker.index()];
-                self.store(
-                    and_pk, and_hand, INF, 0,
-                    REMAINING_INFINITE, and_pk as u32,
-                );
+                self.table.store_refutable_disproof(and_pk, and_hand);
             }
             board.undo_move(*check, captured);
             if !has_refuting_defense {
