@@ -150,15 +150,52 @@ struct DfPnEntry {
     best_move: u16,            // 最善手 (Move16 エンコーディング)
 }  // 24 bytes (v0.24.0 で 32→24 圧縮)
 
-// ProvenTT 用 (proof + confirmed disproof) — Plan D, v0.24.26
+// ProvenTT 用 (proof + confirmed/refutable disproof) — Plan D, v0.24.26
+// v0.24.75 で flags bit 7 を refutable disproof マークとして利用
 #[repr(C)]
 struct ProvenEntry {
     hand: [u8; HAND_KINDS],   // 7 bytes
-    flags: u8,                 // bit 0: is_proof, bit 7: distance_set, bits 1-6: mate_distance
+    // proof 時:  bit 0=1, bit 7=distance_set, bits 1-6=mate_distance
+    // disproof 時: bit 0=0, bits 1-6=ids_depth (0-63),
+    //              bit 7=refutable_disproof マーク (v0.24.75)
+    flags: u8,
     best_move: u16,            // 最善手
-    remaining: u16,            // proven は常に REMAINING_INFINITE
+    meta: u16,                 // v0.24.53 で remaining → meta にリネーム
+                               // proof 時: tag (bits 0-3) + tag_depth (bits 4-9)
+                               // disproof 時: 0
 }  // 12 bytes
 ```
+
+### Refutable disproof (v0.24.75)
+
+refutable check (`all_checks_refutable_recursive`) で NM と判定された AND
+ノードを ProvenTT に格納する新しいエントリ種別．PNS の arena-limited false NM
+を防ぎつつ，MID/boundary check で NM 情報を活用する．
+
+**設計上の区別**:
+
+| 種別 | flags bit 7 | PNS から | MID から | 格納パス |
+|:---|:---:|:---:|:---:|:---|
+| confirmed disproof | 0 | 可視 | 可視 | `store_proven()` |
+| refutable disproof | 1 | `skip_refutable_disproof` で不可視化 | 可視 | `store_refutable_disproof()` |
+
+**arena-limited disproof としての性質**:
+
+refutable disproof は IDS の depth-limited disproof と同様に provisional な
+性質を持つ．PNS の `AND.dn = min(child.dn)` は defender の 1 つの escape
+defense で dn=0 になり，cascade して root まで false NM が伝搬する．
+refutable disproof を PNS から不可視化することでこの cascade を防ぐ．
+
+一方 MID の threshold-based 探索は AND 子の dn=0 を発見しても他の子の
+探索を継続するため，refutable disproof を NM として利用しても問題ない．
+
+**hand\_gte 支配チェック** (v0.24.76):
+
+refutable disproof の格納時に `hand_gte_forward_chain` で支配関係を確認:
+- 既存 disproof (confirmed/refutable) が新 hand を支配 → 挿入スキップ
+- 新エントリが既存 refutable disproof を支配 → 既存を除去
+
+39手詰め depth=25 で挿入試行 767 万回のうち 83% (607 万) がスキップされる．
 
 **フラットテーブルラッパー:**
 

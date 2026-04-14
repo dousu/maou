@@ -3965,6 +3965,133 @@ local tracking では PNS 経由の proof を制御できない．
    発覚した．特に warmup + fc-normalized hash の組み合わせは non-ignored
    テストでは使用されないパスであり，ベンチマーク実行による検証が不可欠
 
+#### 10.2.5 v0.24.74〜v0.24.78 改善サマリ — refutable disproof + log-adaptive
+
+v0.24.73 の「PNS の refutable check で NM を検出しても TT に格納されず，
+後続の lookup で再計算される」という課題に対し，**refutable disproof** という
+新しい TT エントリ種別を導入した．
+
+##### H3: refutable disproof (v0.24.74〜v0.24.76)
+
+**背景**: v0.24.73 の診断で `refut_tt_hits = 0`（TT 高速パスが一度も発火しない）
+ことが判明．`depth_limit_all_checks_refutable` の再帰判定で NM 確認された
+AND ノードを TT に格納していないため，同じ局面で recursive check が繰り返し実行される．
+
+**最初の試み (v0.24.74) — 退行**:
+
+全ての再帰レベルで AND ノードを `ProvenEntry` の confirmed disproof として
+`REMAINING_INFINITE` で格納した．しかし gap diagnosis depth=17 で Mate(15) →
+Unknown に退行．
+
+**false NM の診断** (`[pns_false_nm]` ログ追加):
+
+PNS の Frontier サイクルで `root.dn=0` (root NM) が発生．root の check-child
+(5g6f) を含む 11 個全ての AND ノードが `dn=0` と判定されていた．一方で
+TT には child[4] の 1 個だけが NM エントリを持つ．残り 10 個は PNS の
+backpropagation が独自に `dn=0` と判定していた．
+
+**根本原因 = PNS の arena-limited 探索**:
+- PNS は best-first で limited arena (5M ノード) でしか展開しない
+- 深い NM エントリが PNS の `look_up_pn_dn` で hit
+- `AND.dn = min(child.dn)` により 1 つの escape defense で AND 全体が NM 化
+- cascade して root まで `dn=0` が伝搬 → false NM
+
+**NM 自体は論理的に正しい** (defender に escape があれば NM は事実)．
+問題は PNS の limited exploration が proof path よりも escape path を先に
+発見してしまうこと．これは **IDS における depth-limited disproof と同様の
+arena-limited disproof** と解釈できる．
+
+**v0.24.76 の解決策**:
+
+1. **ProvenEntry flags bit 7** を refutable disproof マークとして使用
+2. **通常の look_up_proven** では confirmed と同様に可視
+   (MID の TT lookup / boundary check から活用可能)
+3. **`skip_refutable_disproof` フラグ**で PNS 探索中のみ不可視化
+   (arena-limited false NM を防止)
+4. **`hand_gte` 支配チェック**を `store_refutable_disproof` に追加
+   (全レベル格納で 83% の冗長挿入をスキップ)
+
+##### 施策 B: log-adaptive refutable depth (v0.24.77)
+
+**背景**: depth=5 固定の refutable check は浅い問題 (depth=17) で NPS が
+重く，深い問題 (depth>21) で不足気味．しかし d を固定値 3/5/7 で切り替える
+adaptive は **IDS 中間 step で self.depth が変化**するため TT 状態の
+不整合を引き起こし，backward_10m ply 20 で Mate(19) → Unknown に退行．
+
+**解決策**: `outer_solve_depth` (IDS target) に基づく log-adaptive．
+
+```rust
+fn effective_refutable_depth(&self) -> u32 {
+    let target = if self.outer_solve_depth > 0 {
+        self.outer_solve_depth
+    } else {
+        self.depth
+    };
+    let log_val = (target as u32).ilog2() + 1;
+    log_val.min(7).max(3)
+}
+```
+
+- target=4-7:   d=3 (浅い問題, NPS 優先)
+- target=8-15:  d=4
+- target=16-31: d=5 (baseline と同値)
+- target=32-63: d=6 (深い問題)
+- target=64+:   d=7 (飽和)
+
+IDS 中間 step 全体で d が一貫し，TT 状態の不整合を回避．
+
+##### 施策 C: warmup のデフォルト無効化 (v0.24.78)
+
+v0.24.77 backward_10m_warmup で warmup=[17,21] 設定時に ply 22 が
+Mate(17) → Unknown に退行することを確認．refutable disproof 機構が
+NM 蓄積を提供するため，従来の warmup は冗長で budget を浪費する．
+
+`skip_warmup` フラグ (デフォルト true) を導入し，warmup_depths が
+設定されていても warmup を実行しないようにした．
+
+##### 効果測定 (backward\_10m, warmup なし)
+
+| Ply | Remain | v0.24.73 baseline | v0.24.78 (H3+log-adaptive+施策C) | 変化 |
+|:---:|:---:|:---|:---|:---|
+| 24 | 15 | 451K Mate(15), 61s | 379K Mate(15), **41s** | **-33%** |
+| 22 | 17 | 9.89M Mate(17), 199s | 7.44M Mate(17), **124s** | **-38%** |
+| 20 | 19 | **Unknown** | 9.87M Mate(19), **169s** | **新規解決** |
+| 18 | 21 | Unknown | Unknown | 境界 |
+
+**境界が ply 22 → ply 18 に 2 ply 前進** (backward_10m warmup なし)．
+
+##### 失敗した試行
+
+| 試行 | 結果 | 原因 |
+|:---|:---|:---|
+| 全レベル confirmed disproof 格納 (v0.24.74) | depth=17 退行 | PNS arena-limited false NM cascade |
+| 専用 cache (FxHashSet) | depth=21 非改善 | MID から活用できず |
+| Partial fast path (未カバー check のみ recursive, 施策 A) | depth=21 退行 | TT check のオーバーヘッドが recursive の節約を上回る |
+| MID boundary refutable_check 呼び出し (施策 H2) | depth=25 退行 | recursive check が MID ホットパスで支配的 |
+| adaptive 3/5/7 (self.depth ベース) | ply 20 退行 | IDS 中間 step で d が変化し TT 状態不整合 |
+| depth=7 増加 | 全体退行 | call_limit 到達増加で NM 検出率が低下 |
+
+##### 得られた教訓
+
+1. **PNS の arena-limited disproof**: PNS の `AND.dn = min(child.dn)` は
+   defender の 1 つの escape で dn=0 になる．これは IDS の
+   depth-limited disproof と同様に provisional な性質を持ち，
+   TT に confirmed として格納すると false NM cascade を引き起こす．
+   refutable disproof として分離することで，MID では利用可能，
+   PNS からは不可視にできる
+
+2. **IDS 中間 step との一貫性**: 適応的パラメータは `self.depth` ではなく
+   `outer_solve_depth` (IDS target) ベースにすべき．中間 step で変化する
+   パラメータは TT 状態の不整合を引き起こす
+
+3. **warmup は refutable disproof で代替される**: v0.24.65 で導入した
+   warmup 機構は refutable disproof が NM 蓄積機能を担うようになったため
+   冗長化．明示的に無効化すべき
+
+4. **NPS 改善と NM 検出のバランス**: refutable check の d を減らすと
+   NPS は向上するが NM 検出率が低下．backward_10m のような深い問題では
+   NM 検出率が優先されるため，target depth に応じた log-adaptive が最適
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |

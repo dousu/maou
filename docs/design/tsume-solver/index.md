@@ -133,3 +133,11 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 85 | Adaptive warmup depths: solve() 内で段階的 depth の warmup solve を実行 | maou 独自 | §10.2 | v0.24.65 |
 | 86 | edge\_cost\_or 駒打ちペナルティ: 駒打ち静かな王手に +PN\_UNIT/2 | maou 独自 | §5.2, §10.2 | v0.24.66 |
 | 87 | Warmup NM false NoMate 修正: outer\_solve\_depth ガード + clear\_working\_entry | maou 独自 | §10.2 | v0.24.66 |
+| 88 | PostCaptureSummary 容量 4x 拡大 (64K→256K) | maou 独自 | §8.4, §10.2 | v0.24.69 |
+| 89 | fc-normalized hand hash: Pawn/Lance/Rook 総和ベース WorkingTT クラスタ | maou 独自 | §6.6.4, §10.2 | v0.24.70 |
+| 90 | ProvenEntry proof\_tag infrastructure (tag-aware look\_up) | maou 独自 | §6.6.3 | v0.24.71 |
+| 91 | **refutable disproof** entry 種別 (ProvenEntry flags bit 7) | maou 独自 | §6.6.3, §10.2 | v0.24.75 |
+| 92 | `skip_refutable_disproof` フラグで PNS 探索中の refutable disproof 不可視化 | maou 独自 | §10.2 | v0.24.75 |
+| 93 | `store_refutable_disproof` の hand\_gte 支配チェック (83% 冗長挿入をスキップ) | maou 独自 | §6.6.3, §10.2 | v0.24.76 |
+| 94 | log-adaptive refutable check depth: `outer_solve_depth.ilog2()+1` で IDS 中間 step 一貫性 | maou 独自 | §10.2 | v0.24.77 |
+| 95 | `skip_warmup` デフォルト true: refutable disproof が NM 蓄積を代替 | maou 独自 | §10.2 | v0.24.78 |

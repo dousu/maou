@@ -50,6 +50,23 @@
 
 | 日付 | 版 | 内容 |
 |------|-----|------|
+| 2026-04-14 | v0.24.78 | §10.2.5 施策 C: `skip_warmup` デフォルト true で warmup 無効化．refutable disproof が NM 蓄積を代替するため warmup は冗長．backward_10m_warmup で ply 22 が Mate(17) → Unknown に退行する問題を解消 |
+| 2026-04-14 | v0.24.77 | §10.2.5 施策 B: refutable check 再帰深さの log-adaptive 化．`outer_solve_depth.ilog2()+1` で IDS target depth に基づく d を選択．IDS 中間 step 全体で d が一貫し TT 状態不整合を回避．backward_10m ply 24/22/20 が 33-38% 高速化．refutable check パラメータを `set_refutable_params(depth, call_limit)` で設定可能に |
+| 2026-04-14 | v0.24.76 | §10.2.5 H3 完成: refutable disproof の `hand_gte` 支配チェック追加．`store_refutable_disproof` で既存エントリ支配で 83% の冗長挿入をスキップ．全レベル格納 × hand_gte 圧縮で depth=21 Unknown → Mate(15), depth=25 は Mate(15) 維持．disproof 挿入内訳診断カウンタ追加 |
+| 2026-04-14 | v0.24.75 | §10.2.5 H3: **refutable disproof** entry 種別を導入．ProvenEntry flags bit 7 で refutable disproof をマーク．通常の look_up_proven では confirmed と同様に可視 (MID 活用可能)，`skip_refutable_disproof` フラグで PNS 探索中のみ不可視化 (arena-limited false NM 防止)．depth_limit_all_checks_refutable の NM 結果を TT に蓄積して再計算を回避 |
+| 2026-04-14 | v0.24.74 | §10.2.5 H3 最初の試み: refutable check の NM を confirmed disproof として全レベルで ProvenTT に格納．gap diagnosis depth=17 で Mate(15) → Unknown に退行．PNS の `[pns_false_nm]` 診断ログ追加で false NM 発生メカニズムを特定 (PNS の arena-limited exploration が escape path を先に発見) |
+| 2026-04-10 | v0.24.73 | §10.2.4 v0.24.68 の warmup 段間 intermediate 保持を revert．fc-normalized hash との相互作用で false proof (Mate(7) at ply 22) が発生 |
+| 2026-04-10 | v0.24.72 | §10.2.4 施策 α 無効化．Frontier variant PNS が filter context を認識せず ABSOLUTE tag で store するため false proof 発生．tag infrastructure は保持 |
+| 2026-04-10 | v0.24.71 | §10.2.4 proof_tag propagation infrastructure: tag-aware look_up_proven + IDS break guard + look_up_proven_tag |
+| 2026-04-10 | v0.24.70 | §6.6.4, §10.2 fc-normalized hand hash: Pawn/Lance/Rook 総和ベースの WorkingTT クラスタで forward-chain 等価な intermediate を共有．ply 22 warmup -7.4%，no-warmup で初めて Mate(17) 到達 |
+| 2026-04-10 | v0.24.69 | §8.4, §10.2 PostCaptureSummary 容量 4x 拡大 (64K → 256K)．hash collision 削減で ply 24 -14.6% (no-warmup) |
+| 2026-04-10 | v0.24.66 | §10.2.2 Warmup NM false NoMate 修正: outer_solve_depth ガード + clear_working_entry．edge_cost_or 駒打ちペナルティ (+PN_UNIT/2) |
+| 2026-04-10 | v0.24.65 | §10.2.2 Adaptive warmup depths: solve() 内で段階的 depth の warmup solve を実行．ply 22 が 10M + warmup で初解決 |
+| 2026-04-10 | v0.24.64 | §8.4 Post-Capture Proof Summary Cache: pos_key ベース O(1) proof/disproof lookup |
+| 2026-04-10 | v0.24.63 | §10.2 IDS NM 昇格判定の `ids_depth >= saved_depth` ガードで false NoMate 防止 |
+| 2026-04-10 | v0.24.62 | §8.5 Multi-step 逆方向不詰共有: 異マスの兄弟ドロップにも disproof 伝搬 |
+| 2026-04-10 | v0.24.61 | §8.5 逆方向不詰共有: disproven 合駒の post-capture disproof を兄弟に伝搬 |
+| 2026-04-10 | v0.24.60 | §2.3 IDS warmup mid_fallback: depth > 19 で full-depth 前に saved-4 で nested IDS + forced denom=3．IDS 直接ジャンプを depth ≤ 19 に制限 |
 | 2026-04-10 | v0.24.43 | §6.6 GC Phase 2 no-op バグ修正．`clear_proven_disproofs_below(0)` → `clear_proven_disproofs_below(u32::MAX)` (`u32 < 0` が常に false で no-op だった)．`effective_eps_denom()` インライン関数化と `EPSILON_DENOM_ADAPTIVE` 定数化のリファクタリング．120M backward 解析でリグレッションなし |
 | 2026-04-10 | v0.24.42 | PV visit 予算の動的スケーリング (10M〜50M)．ply 18 MateNoPV → Mate(21) 解消 |
 | 2026-04-10 | v0.24.41 | §3.1 depth-adaptive epsilon (saved\_depth ≥ 19 → eps\_denom=2)．パラメータグリッドサーチ(16構成)により depth 依存の最適値を発見．ply 20 -49% ノード削減，ply 22 が 10M 予算で初めて解ける．チューニング可能パラメータをDfPnSolver フィールドに追加 |

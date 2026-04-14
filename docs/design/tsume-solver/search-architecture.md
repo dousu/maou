@@ -77,6 +77,13 @@ PNS で未解決の場合に自動的に Phase 2 として呼び出される．
 
 - **solve() レベルの warmup** (v0.24.65, `set_warmup_depths()` で設定):
 
+  > **⚠️ v0.24.78 以降デフォルト無効化**: refutable disproof 機構
+  > (§6.6.3, v0.24.75+) が NM 蓄積を代替するため warmup は冗長．
+  > `skip_warmup` フィールド (デフォルト true) で warmup をスキップする．
+  > 明示的に再有効化するには `set_skip_warmup(false)` を呼ぶ．
+  > v0.24.77 の backward_10m_warmup 測定で warmup 使用時に ply 22 が
+  > no-warmup の Mate(17) → Unknown に退行することを確認．
+
   solve() の Phase 2 開始前に，指定された浅い depth で warmup solve を
   実行し ProvenTT に proof を蓄積する:
 
