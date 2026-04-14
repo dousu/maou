@@ -350,7 +350,9 @@ impl TranspositionTable {
         // Forward-chain components: pawn(0) + lance(1) + rook(6) → 総和を pawn slot で hash
         let fc_total = (hand[0] as usize) + (hand[1] as usize) + (hand[6] as usize);
         // fc_total は最大 18+4+2=24 だが，hand_hash table は MAX_HAND_STATES
-        // (= 19 for pawn) なので clamp する
+        // (= 19 for pawn) なので値域 [0, 18] にクランプする．
+        // fc_total 19〜24 は全て 18 と同一ハッシュ → 同一クラスタに集約される．
+        // Pawn 18枚 + Lance/Rook 1枚以上の局面は実戦的に稀であり影響は軽微．
         let fc_clamped = fc_total.min(18);
         let mut h = ZOBRIST.hand_hash(Color::Black, 0, fc_clamped);
         // Non-forward-chain components: knight(2), silver(3), gold(4), bishop(5) は個別

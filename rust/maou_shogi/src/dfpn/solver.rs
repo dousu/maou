@@ -406,12 +406,14 @@ pub struct DfPnSolver {
     #[cfg(feature = "tt_diag")]
     pub(super) diag_a4_inflations: u64,
     /// TT 診断: 施策 α (v0.24.54-v0.24.72) で境界層 filter が発火した MID 数．
-    /// v0.24.72 で filter 無効化後は更新されない．
+    /// 施策 α 再有効化まで dead code．
     #[cfg(feature = "tt_diag")]
+    #[allow(dead_code)]
     pub(super) diag_alpha_x_filter_applied: u64,
     /// 施策 α (v0.24.54-v0.24.72): chain drop filter フラグ．
     /// v0.24.72 で filter 無効化後は常に false．tag infrastructure の
     /// save/restore パターン保持のため field は残留．
+    /// 施策 α 再有効化まで dead code．
     pub(super) alpha_x_filter_active: bool,
     /// Warmup モード (v0.24.68-v0.24.73): true の場合，mid_fallback 入口で
     /// ProvenTT の非 proof のみ除去し WorkingTT intermediate を保持する．
@@ -422,7 +424,8 @@ pub struct DfPnSolver {
     pub(super) warmup_mode: bool,
     /// 施策 A-6 (v0.24.54, v0.24.71 で施策α に置き換え後 v0.24.72 で無効化):
     /// 境界層 PNS 責任転嫁の残り呼出予算．
-    /// 現在は `mid_via_pns_boundary` が呼ばれないため更新されない (dead code)．
+    /// 施策 α 再有効化まで dead code．
+    #[allow(dead_code)]
     pub(super) a6_boundary_pns_calls_remaining: u32,
     /// TT 診断: AND ノード MID ループで deferred_children あり & all_proved=false の回数．
     #[cfg(feature = "tt_diag")]
@@ -1738,6 +1741,8 @@ impl DfPnSolver {
         // 失敗の根本原因: PNS は filter context を認識せず，filter で除去した
         // defense を含まない局面を ABSOLUTE proof として格納する．MID 内の
         // filter_applied tracking では PNS 経由の proof を制御できない．
+        // 施策 α 再有効化まで常に false．以下の `if filter_applied { ... }` 分岐
+        // は dead code だが tag infrastructure 保持のため条件判定は残す．
         let filter_applied = false;
 
         // Dynamic Move Ordering: TT Best Move + Killer Moves
