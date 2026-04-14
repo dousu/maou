@@ -291,3 +291,123 @@ let bias = if let Some(ksq) = chain_king_sq {
 
 ---
 
+### 8.9 Refutable Disproof (v0.24.75+)
+
+**概要**: `depth_limit_all_checks_refutable` の再帰的 NM 判定 (depth 5 の
+check-defense exchanges) 結果を ProvenTT に格納する専用エントリ種別．
+PNS の arena-limited false NM を防ぎつつ，MID の boundary check で
+NM 情報を活用することで合駒探索全体を高速化する．
+
+#### 動機
+
+v0.24.73 時点で `refut_tt_hits = 0` (TT 高速パス不発火) が判明．再帰判定
+(`all_checks_refutable_recursive`) で NM と確認した AND ノードを
+TT に格納しないため，同じ局面で再帰判定が繰り返し実行されていた．
+
+単純に confirmed disproof として格納すると false NM cascade が発生
+(後述)．refutable disproof という PNS から不可視の新しいエントリ種別で
+この問題を解決した．
+
+#### エントリ構造
+
+`ProvenEntry.flags` の **bit 7** を refutable disproof マーカーとして使用
+(詳細は `transposition-table.md §6.6.3`):
+
+- bit 0 = 0 (is_proof=false)
+- bits 1-6: `ids_depth` (0-63)
+- **bit 7 = 1: refutable disproof** (0: confirmed disproof)
+
+同じ ProvenTT クラスタに共存し，メモリ構造は不変．
+
+#### 可視性制御
+
+| 参照元 | confirmed disproof | refutable disproof |
+|:---|:---:|:---:|
+| MID `look_up_pn_dn` | 可視 | 可視 |
+| MID boundary `all_checks_refutable_by_tt` | 可視 | **不可視** |
+| PNS `look_up_pn_dn` (`skip_refutable_disproof=true`) | 可視 | **不可視** |
+| refutable check 高速パス `all_checks_refutable_by_tt_or_refutable` | 可視 | 可視 |
+
+- **MID の通常 lookup**: refutable disproof を confirmed と同様に NM として扱う．
+  AND 子の dn=0 を発見しても threshold-based 探索は他の子を継続するため
+  false NM cascade は起きない．
+- **PNS の lookup**: `skip_refutable_disproof=true` で不可視化．arena-limited
+  best-first 探索が escape path を先に発見して root.dn=0 を引き起こす
+  cascade を防止．
+- **MID boundary check**: confirmed のみ参照．refutable disproof 経由で
+  NM を confirmed に昇格させないことで depth-limited NM の混入を防止．
+
+#### なぜ arena-limited disproof として扱うか
+
+PNS の `AND.dn = min(child.dn)` は defender の 1 つの escape defense で
+`dn=0` になる．PNS の limited arena (5M ノード) では:
+
+1. refutable disproof が interior 探索で hit → 子 AND ノードが dn=0
+2. cascade: AND 子 dn=0 → OR parent の check が refuted → 親 AND の
+   別の child via  (`dn = sum(child.dn)`) で最小 dn になる
+3. root まで伝搬 → `root.dn=0` (false NM, 実際は checkmate 可能)
+
+**NM 自体は論理的に正しい** (defender に escape があれば NM は事実)．
+問題は PNS の limited exploration が proof path よりも escape path を
+先に発見してしまうこと．これは **IDS における depth-limited disproof
+と同様の provisional disproof** と解釈できる:
+
+| 種別 | provisional の理由 | 解消方法 |
+|:---|:---|:---|
+| depth-limited disproof | IDS の depth 制限内で探索打ち切り | より深い IDS step で検証 |
+| **refutable disproof (PNS 文脈)** | **arena-limited 探索で escape path 優先発見** | **MID の threshold-based 探索で検証** |
+
+MID の threshold-based 探索は AND 子の `dn=0` を発見しても他の子の
+探索を継続するため，refutable disproof を NM として使用しても false NM
+にならない．したがって MID からは可視のまま活用する．
+
+#### hand_gte 支配チェック
+
+`store_refutable_disproof` は格納時に `hand_gte_forward_chain` で支配関係を確認:
+
+- 既存 disproof (confirmed/refutable) が新 hand を支配 → 挿入スキップ
+- 新エントリが既存 refutable disproof を支配 → 既存を除去
+
+39手詰め depth=25 で挿入試行 767 万回のうち **83% (607 万) がスキップ**され，
+ProvenTT クラスタの圧迫を防いでいる．
+
+#### 境界 NM 判定パイプライン
+
+3 つの判定機構が連携して boundary (remaining=0) で NM を検出する:
+
+```
+[MID が remaining=0 に到達]
+  ↓
+[look_up_pn_dn_impl: TT lookup]
+  ├─ refutable/confirmed disproof hit → (INF, 0, 0) で即 return
+  └─ miss → (INF, 0, 0) 仮反証 (main MID は早期 return)
+
+[PNS expand が remaining=0 OR ノードに到達]
+  ↓
+[refutable_check_with_cache]
+  ├─ Fast path (all_checks_refutable_by_tt_or_refutable)
+  │   └─ 全 AND 子が TT disproof → true
+  ├─ Memo (refutable_check_failed)
+  │   └─ pos_key in set → false
+  └─ Fallback (depth_limit_all_checks_refutable, depth=5)
+      ├─ true → AND 子を store_refutable_disproof で格納
+      └─ false → refutable_check_failed に pos_key 格納
+```
+
+- **PNS → MID の情報伝達**: PNS が refutable disproof を蓄積．
+  次の MID パスで同一局面に到達すると `look_up_pn_dn` で NM として
+  検出され，MID の threshold propagation で上位に伝搬．
+
+#### 効果 (backward_10m warmup なし)
+
+| Ply | Remain | v0.24.73 baseline | v0.24.78 (refutable disproof) |
+|:---:|:---:|:---|:---|
+| 24 | 15 | 451K Mate(15), 61s | 379K Mate(15), 41s |
+| 22 | 17 | 9.89M Mate(17), 199s | 7.44M Mate(17), 124s |
+| 20 | 19 | **Unknown** | 9.87M Mate(19), 169s |
+| 18 | 21 | Unknown | Unknown (境界) |
+
+詳細は `benchmarks.md §10.2` 参照．
+
+---
+

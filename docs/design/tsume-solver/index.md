@@ -9,7 +9,8 @@
 | [証明数・反証数の計算](proof-disproof-numbers.md) | WPN, CD-WPN, VPN, SNDA |
 | [初期値ヒューリスティック](initial-heuristics.md) | df-pn+, DFPN-E, Deep df-pn, インライン詰み検出 |
 | [転置表管理](transposition-table.md) | 持ち駒優越, Pareto frontier, TT GC, Dual TT, Zobrist hand_hash |
-| [ループ・GHI 対策と手順改善](loop-ghi-and-move-ordering.md) | 経路依存フラグ, NM Remaining, TT Best Move, Killer Move, PV 復元 |
+| [ループ・GHI 対策](loop-ghi.md) | 経路依存フラグ, NM Remaining 伝播 |
+| [手順改善・PV 復元](move-ordering-and-pv.md) | TT Best Move, Killer Move, 捨て駒ブースト, PV 復元 3-phase |
 | [合駒最適化](aigoma-optimization.md) | Futile/Chain 分類, 遅延展開, プレフィルタ, DN バイアス |
 | [既知の課題とベンチマーク](benchmarks.md) | 29手詰め, 39手詰め, ミクロコスモス |
 | [最適化案の評価](optimization-proposals.md) | History Heuristic, フラットハッシュテーブル, Frontier Variant 等 |
@@ -130,7 +131,7 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 82 | Multi-step 逆方向不詰共有: 異マスの兄弟ドロップにも disproof 伝搬 | maou 独自 | §8.5, §10.2 | v0.24.62 |
 | 83 | IDS NM 昇格判定: `ids_depth >= saved_depth` ガードで false NoMate 防止 | maou 独自 | §10.2 | v0.24.63 |
 | 84 | Post-Capture Proof Summary Cache: pos\_key ベース O(1) proof/disproof lookup | maou 独自 | §8.4, §10.2 | v0.24.64 |
-| 85 | Adaptive warmup depths: solve() 内で段階的 depth の warmup solve を実行 | maou 独自 | §10.2 | v0.24.65 |
+| 85 | ~~Adaptive warmup depths: solve() 内で段階的 depth の warmup solve を実行~~ **v0.24.78 で skip_warmup=true デフォルト化により廃止** | maou 独自 | §10.2 | v0.24.65 |
 | 86 | edge\_cost\_or 駒打ちペナルティ: 駒打ち静かな王手に +PN\_UNIT/2 | maou 独自 | §5.2, §10.2 | v0.24.66 |
 | 87 | Warmup NM false NoMate 修正: outer\_solve\_depth ガード + clear\_working\_entry | maou 独自 | §10.2 | v0.24.66 |
 | 88 | PostCaptureSummary 容量 4x 拡大 (64K→256K) | maou 独自 | §8.4, §10.2 | v0.24.69 |

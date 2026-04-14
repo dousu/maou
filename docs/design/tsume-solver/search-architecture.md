@@ -75,28 +75,14 @@ PNS で未解決の場合に自動的に Phase 2 として呼び出される．
   - `depth > 19`: 段階的 IDS + **warmup mid\_fallback** (後述)
   - `depth > 32`: +4 刻み
 
-- **solve() レベルの warmup** (v0.24.65, `set_warmup_depths()` で設定):
+- **solve() レベルの warmup** (v0.24.65〜v0.24.77, v0.24.78 でデフォルト無効):
 
-  > **⚠️ v0.24.78 以降デフォルト無効化**: refutable disproof 機構
-  > (§6.6.3, v0.24.75+) が NM 蓄積を代替するため warmup は冗長．
-  > `skip_warmup` フィールド (デフォルト true) で warmup をスキップする．
-  > 明示的に再有効化するには `set_skip_warmup(false)` を呼ぶ．
-  > v0.24.77 の backward_10m_warmup 測定で warmup 使用時に ply 22 が
-  > no-warmup の Mate(17) → Unknown に退行することを確認．
-
-  solve() の Phase 2 開始前に，指定された浅い depth で warmup solve を
-  実行し ProvenTT に proof を蓄積する:
-
-  ```
-  [Phase 1: PNS] → [Warmup: depth=17 (10% budget)] → [Warmup: depth=21 (10% budget)]
-                    → retain_proofs_only                → retain_proofs_only
-  → [Phase 2: IDS-dfpn at full depth (残り budget)]
-  ```
-
-  - 各 warmup 段の予算: 残り予算の 10%，上限 500K (浅い段) / 1M (深い段)
-  - warmup 段で proof が蓄積されなければ以降をスキップ (early exit)
-  - warmup ループ完了後に `retain_proofs_only()` で WorkingTT を clear し，
-    warmup の depth-limited NM が main solve に混入するのを防止 (v0.24.66)
+  ~~Phase 2 開始前に `set_warmup_depths()` 指定の浅い depth で warmup solve を
+  実行し ProvenTT に proof を蓄積~~．**v0.24.78 で `skip_warmup=true` をデフォルト化**
+  し機能的に廃止．refutable disproof 機構 (`aigoma-optimization.md §8.9`)
+  が NM 蓄積を代替するため冗長であり，backward_10m_warmup で ply 22 が
+  Mate(17) → Unknown に退行することを確認．
+  `set_skip_warmup(false)` で明示的に再有効化可能だが非推奨．
 
 - **Warmup mid\_fallback** (v0.24.60, depth > 19):
 
