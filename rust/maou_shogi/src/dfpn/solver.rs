@@ -1171,22 +1171,18 @@ impl DfPnSolver {
                         break;
                     }
 
-                    // warmup 段間の intermediate 保持 (v0.24.67):
+                    // warmup 段間の TT 管理:
                     //
-                    // 前段の MID が蓄積した intermediate エントリ (pn>0, dn>0) を
-                    // 次段に引き継ぐ．remaining に depth 差分を加算して安全に
-                    // 再利用する (旧 depth の pn/dn は新 depth での下限値)．
+                    // v0.24.68 で intermediate 保持を試みたが，浅い depth で探索
+                    // した中間値が深い depth で不正に使われ false proof を生成する
+                    // 問題が判明 (Mate(7) at ply 22, expected Mate(17))．
+                    // fc-normalized hand hash (v0.24.70) との相互作用で，異なる
+                    // hand variant の intermediate が同一クラスタに集約され，
+                    // remaining shift 後の pn/dn が不正確になる．
                     //
-                    // 初回 warmup は PNS 後であり，PNS intermediate は MID と
-                    // 互換性がないため retain_proofs_only で除去する (従来動作)．
-                    if let Some(prev_wd) = prev_warmup_depth {
-                        let delta = (wd.saturating_sub(prev_wd)) as u16;
-                        let kept = self.table.retain_working_intermediates(0, delta);
-                        self.table.clear_proven_non_proofs();
-                        verbose_eprintln!(
-                            "[solve] warmup {}/{}: retained {} intermediates (delta={})",
-                            i + 1, warmup_depths.len(), kept, delta,
-                        );
+                    // 安全のため従来の retain_proofs_only に戻す．
+                    if prev_warmup_depth.is_some() {
+                        self.table.retain_proofs_only();
                     }
 
                     let remaining_budget = saved_max_nodes - self.nodes_searched;
@@ -1202,12 +1198,7 @@ impl DfPnSolver {
                         self.nodes_searched / 1000,
                         self.start_time.elapsed().as_secs_f64(),
                     );
-                    // warmup_mode=true: mid_fallback 入口で WorkingTT intermediate
-                    // を保持する (retain_proofs_only の代わりに
-                    // clear_proven_non_proofs のみ実行)．
-                    self.warmup_mode = prev_warmup_depth.is_some();
                     self.mid_fallback(board);
-                    self.warmup_mode = false;
 
                     let (wp, _) = self.look_up_board(board);
                     let new_proven = self.table.proven_count();
@@ -1240,21 +1231,9 @@ impl DfPnSolver {
                 //
                 // warmup が 1 段も実行されなかった場合は PNS intermediate が
                 // 残っているため従来通り retain_proofs_only で除去する．
-                if let Some(prev_wd) = prev_warmup_depth {
-                    let delta = (final_depth.saturating_sub(prev_wd)) as u16;
-                    let kept = self.table.retain_working_intermediates(0, delta);
-                    self.table.clear_proven_non_proofs();
-                    verbose_eprintln!(
-                        "[solve] warmup→main: retained {} intermediates (delta={})",
-                        kept, delta,
-                    );
-                    // root 局面の depth-limited NM を個別に除去:
-                    // warmup の浅い depth で dn=0 が格納されていると
-                    // full-depth IDS の look_up で false NoCheckmate が発生する．
-                    self.table.clear_working_entry(pk, &att_hand);
-                } else {
-                    self.table.retain_proofs_only();
-                }
+                // warmup 完了後: WorkingTT を clear して depth-limited disproof を
+                // 除去する (v0.24.66 の retain_proofs_only に戻す)．
+                self.table.retain_proofs_only();
             }
 
             // 最終 MID フォールバック (full depth)
