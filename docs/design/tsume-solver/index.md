@@ -30,6 +30,12 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 2. **どんな詰将棋問題も解ける**: リソースパラメータ(`depth`, `nodes`, `timeout`)の増加で対応
 3. **高度な枝刈りによる効率化**: cshogi が取り入れていない手法を積極的に導入
 
+### 設計方針: 単一スレッド維持
+
+**性能改善は単一スレッドでのアルゴリズム改良で達成する方針とし，
+並列探索は今後も採用しない**．理由と詳細は
+[optimization-proposals.md §11.6](optimization-proposals.md) 参照．
+
 ### 実装ファイル
 
 `rust/maou_shogi/src/dfpn/` モジュールに全ての探索ロジックを実装(合計約 8,600 行，テスト除く)．
