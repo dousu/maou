@@ -378,6 +378,20 @@ pub struct DfPnSolver {
     /// (false を返した・memoize した) 数．
     #[cfg(feature = "verbose")]
     pub(super) dbg_refut_recursive_false: u64,
+    /// 診断 (M-1): fast path 試行回数 (TT lookup の総数)．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_fast_attempts: u64,
+    /// 診断 (M-1): fast path で 1 個以上の check が match した試行数．
+    /// (この値が 0 なら全く重複ヒットしていない)．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_fast_partial: u64,
+    /// 診断 (M-1): fast path 試行で見つかった disproof match 累計
+    /// (各 attempt で N checks 中 K 個が match した場合 K を加算)．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_fast_match_total: u64,
+    /// 診断 (M-1): fast path 試行で評価された check 数の累計．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_fast_check_total: u64,
     /// TT 診断: 監視対象の ply(0 = 無効)．
     ///
     /// 指定 ply で MID ループの再帰前後に TT サイズを出力し，
@@ -653,6 +667,14 @@ impl DfPnSolver {
             dbg_refut_recursive_true: 0,
             #[cfg(feature = "verbose")]
             dbg_refut_recursive_false: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_fast_attempts: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_fast_partial: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_fast_match_total: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_fast_check_total: 0,
             #[cfg(feature = "tt_diag")]
             diag_ply: 0,
             #[cfg(feature = "tt_diag")]
@@ -1739,6 +1761,13 @@ impl DfPnSolver {
         board: &mut Board,
         checks: &[Move],
     ) -> bool {
+        #[cfg(feature = "verbose")]
+        {
+            self.dbg_refut_fast_attempts += 1;
+            self.dbg_refut_fast_check_total += checks.len() as u64;
+        }
+        #[cfg(feature = "verbose")]
+        let mut matched_count: u64 = 0;
         for check in checks {
             let captured = board.do_move(*check);
             let pk = position_key(board);
@@ -1746,8 +1775,22 @@ impl DfPnSolver {
             let found = self.table.has_refutable_or_confirmed_disproof(pk, &att_hand);
             board.undo_move(*check, captured);
             if !found {
+                #[cfg(feature = "verbose")]
+                {
+                    self.dbg_refut_fast_match_total += matched_count;
+                    if matched_count > 0 {
+                        self.dbg_refut_fast_partial += 1;
+                    }
+                }
                 return false;
             }
+            #[cfg(feature = "verbose")]
+            { matched_count += 1; }
+        }
+        #[cfg(feature = "verbose")]
+        {
+            self.dbg_refut_fast_match_total += matched_count;
+            self.dbg_refut_fast_partial += 1; // full match also counts
         }
         true
     }

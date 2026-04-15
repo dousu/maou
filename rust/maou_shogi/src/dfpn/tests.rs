@@ -3680,6 +3680,123 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: /tmp/tsume_39te_backward_30m_threshold3.log");
     }
 
+    /// M-1 診断: refut_tt_hits=0 の根本原因解析 (v0.25.3)．
+    ///
+    /// fast path 試行内訳:
+    /// - dbg_refut_fast_attempts: 試行総数
+    /// - dbg_refut_fast_partial: 1 個以上の check が match した試行数
+    /// - dbg_refut_fast_match_total: match した check の累計数
+    /// - dbg_refut_fast_check_total: 評価された check の累計数
+    ///
+    /// 期待される観察:
+    /// - match 率 = match_total / check_total が極めて低いなら，TT lookup が
+    ///   そもそも当たっていない (pos_key/hand 不一致 or eviction)．
+    /// - partial >> 0 だが all-match (= refut_tt_hits) が 0 なら，「ほぼ全部
+    ///   だが 1 つ足りない」ケース．より良い coverage 戦略が必要．
+    /// - 両方 0 なら revisit 自体が起きていない可能性．
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   --features verbose,tt_diag \
+    ///   test_tsume_39te_ply18_refut_fast_path_diag -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply18_refut_fast_path_diag() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply18_refut_fast_path_diag.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                for usi in pv.iter().take(18) {
+                    let m = board.move_from_usi(usi).unwrap();
+                    board.do_move(m);
+                }
+
+                let remaining = 39 - 18;
+                let depth = (remaining + 2).min(41) as u32;
+                let node_limit: u64 = 30_000_000;
+                let timeout: u64 = 900;
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " M-1: ply 18 refut fast path 内訳診断 (depth={}, 30M/900s)", depth).unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+                let mut solver = DfPnSolver::with_timeout(depth, node_limit, 32767, timeout);
+                solver.set_find_shortest(false);
+
+                let start = Instant::now();
+                let result = solver.solve(&mut board);
+                let elapsed = start.elapsed();
+
+                let result_str = match &result {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+
+                writeln!(out, "  result   = {}", result_str).unwrap();
+                writeln!(out, "  time     = {:.2}s", elapsed.as_secs_f64()).unwrap();
+                writeln!(out, "  nodes    = {}", solver.nodes_searched).unwrap();
+                writeln!(out, "  max_ply  = {}", solver.max_ply).unwrap();
+
+                #[cfg(feature = "verbose")]
+                {
+                    writeln!(out, "\n--- refutable check 内訳 ---").unwrap();
+                    writeln!(out, "  fast_attempts      = {}", solver.dbg_refut_fast_attempts).unwrap();
+                    writeln!(out, "  fast_full_match (=tt_hits) = {}", solver.dbg_refut_tt_hits).unwrap();
+                    writeln!(out, "  fast_partial (≥1 match)    = {}", solver.dbg_refut_fast_partial).unwrap();
+                    writeln!(out, "  match_total        = {}", solver.dbg_refut_fast_match_total).unwrap();
+                    writeln!(out, "  check_total        = {}", solver.dbg_refut_fast_check_total).unwrap();
+                    if solver.dbg_refut_fast_check_total > 0 {
+                        let match_rate = solver.dbg_refut_fast_match_total as f64
+                            / solver.dbg_refut_fast_check_total as f64 * 100.0;
+                        writeln!(out, "  per-check match率   = {:.2}%", match_rate).unwrap();
+                    }
+                    if solver.dbg_refut_fast_attempts > 0 {
+                        let partial_rate = solver.dbg_refut_fast_partial as f64
+                            / solver.dbg_refut_fast_attempts as f64 * 100.0;
+                        writeln!(out, "  partial 試行率      = {:.2}%", partial_rate).unwrap();
+                    }
+                    writeln!(out, "\n  memo_hits          = {}", solver.dbg_refut_memo_hits).unwrap();
+                    writeln!(out, "  recursive_true     = {}", solver.dbg_refut_recursive_true).unwrap();
+                    writeln!(out, "  recursive_false    = {}", solver.dbg_refut_recursive_false).unwrap();
+                }
+
+                #[cfg(feature = "tt_diag")]
+                {
+                    writeln!(out, "\n--- TT 状態 ---").unwrap();
+                    writeln!(out, "  proven      = {}", solver.table.count_proven()).unwrap();
+                    writeln!(out, "  disproven   = {}", solver.table.count_disproven()).unwrap();
+                    writeln!(out, "  refutable disproof inserts = {}",
+                        solver.table.diag_disproof_refutable).unwrap();
+                    writeln!(out, "  refutable disproof skip    = {}",
+                        solver.table.diag_disproof_refutable_skip).unwrap();
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_ply18_refut_fast_path_diag.log");
+    }
+
     /// S-2 ply 24 退行の threshold 境界診断 (v0.25.2)．
     ///
     /// backward_30m_threshold3 で ply 24 (depth=17, remain=15) が
