@@ -135,6 +135,13 @@ const STAGNATION_LIMIT: u32 = 4;
 /// 自動決定される(depth ≥ 19 → 2，それ以外 → 3)．
 const EPSILON_DENOM_ADAPTIVE: u32 = 0;
 
+/// `param_disproof_remaining_threshold` の depth-adaptive モードを示すセンチネル値 (v0.25.1)．
+///
+/// この値が設定されている場合，depth-limited disproof 格納閾値は
+/// `outer_solve_depth` に基づいて自動決定される．
+/// 詳細は `DfPnSolver::effective_disproof_remaining_threshold` 参照．
+pub(super) const DISPROOF_THRESHOLD_ADAPTIVE: u16 = u16::MAX;
+
 /// 深さ制限なし(真の証明/反証)を示す定数．
 ///
 /// remaining_flags のビット 0-14 に格納されるため 15 ビットの最大値(0x7FFF)．

@@ -20,8 +20,9 @@ use super::{
     hand_gte_forward_chain,
     position_key, propagate_nm_remaining, push_move, snda_dedup,
     CheckCache,
-    DEEP_DFPN_R, EPSILON_DENOM_ADAPTIVE, INF, INTERPOSE_DN_BIAS, MAX_MOVES, PN_UNIT,
-    REMAINING_INFINITE, STAGNATION_LIMIT, TCA_EXTEND_DENOM, ZERO_PROGRESS_LIMIT,
+    DEEP_DFPN_R, DISPROOF_THRESHOLD_ADAPTIVE, EPSILON_DENOM_ADAPTIVE, INF, INTERPOSE_DN_BIAS,
+    MAX_MOVES, PN_UNIT, REMAINING_INFINITE, STAGNATION_LIMIT, TCA_EXTEND_DENOM,
+    ZERO_PROGRESS_LIMIT,
 };
 
 /// path 配列の容量．depth の最大値(41) + マージン．
@@ -291,12 +292,20 @@ pub struct DfPnSolver {
     /// 例: 10M で約 800〜1,200 MB．
     pub(super) param_pns_arena_max: usize,
     /// 深さ制限反証 (depth-limited disproof) を WorkingTT に格納する
-    /// 最小 `remaining` 閾値 (v0.25.0)．
+    /// 最小 `remaining` 閾値．
     ///
     /// `remaining < param_disproof_remaining_threshold` の depth-limited
     /// disproof は格納をスキップする (path_dependent と confirmed disproof は
-    /// 対象外)．デフォルト 0 (スキップなし = 従来動作)．
-    /// ply 18 ベンチマークでは WorkingTT churn (87% eviction) の削減を狙う．
+    /// 対象外)．
+    ///
+    /// - `DISPROOF_THRESHOLD_ADAPTIVE` (sentinel = `u16::MAX`) の場合，
+    ///   solve() 時に `outer_solve_depth` に基づいて自動決定する (v0.25.1)．
+    /// - 正の u16 値: 固定閾値として使用 (テスト・チューニング用)．
+    /// - 0: スキップなし (従来動作).
+    ///
+    /// デフォルトは `DISPROOF_THRESHOLD_ADAPTIVE` (depth-adaptive)．
+    /// ply 18 ベンチマークで WorkingTT churn (87% eviction) の削減を狙いつつ，
+    /// ply 24 などの shallow 問題での退行を回避する．
     pub(super) param_disproof_remaining_threshold: u16,
     /// 段階的予算拡大の warmup depth リスト (v0.24.65)．
     ///
@@ -600,6 +609,9 @@ impl DfPnSolver {
             param_dn_floor_mult: 100,
             param_deep_dfpn_r: DEEP_DFPN_R,
             param_pns_arena_max: PNS_MAX_ARENA_NODES,
+            // (v0.25.1) default: 0 (スキップなし / 従来動作 / no-mate 安全)．
+            // adaptive モードを使う場合は
+            // `enable_adaptive_disproof_remaining_threshold()` を明示的に呼ぶ．
             param_disproof_remaining_threshold: 0,
             saved_depth_for_epsilon: 0,
             warmup_depths: Vec::new(),
@@ -747,13 +759,67 @@ impl DfPnSolver {
         self.param_pns_arena_max = max_nodes.max(1024);
     }
 
-    /// depth-limited disproof の WorkingTT 格納閾値を設定する (v0.25.0)．
+    /// depth-limited disproof の WorkingTT 格納閾値を明示的に設定する (v0.25.0)．
     ///
     /// `remaining < threshold` の depth-limited disproof はスキップされる．
-    /// デフォルト 0 (スキップなし)．有効値の目安: 2〜6 程度．
+    /// `DISPROOF_THRESHOLD_ADAPTIVE` を渡すと adaptive モードに戻る．
+    /// 有効値の目安: 0 (無効) / 2〜3 (深い問題向け) / 6 以上 (過剰)．
+    ///
+    /// **注意**: threshold > 0 は no-mate 証明 (NoCheckmate) の予算要求を
+    /// 著しく増加させる場合がある．no-mate が期待される局面では default=0 を
+    /// 使うか予算を増やすこと．
     pub fn set_disproof_remaining_threshold(&mut self, threshold: u16) {
         self.param_disproof_remaining_threshold = threshold;
-        self.table.set_disproof_remaining_threshold(threshold);
+        // adaptive センチネル以外なら即座に TT へ反映．adaptive の場合は
+        // solve() 入口で outer_solve_depth に応じて計算・反映される．
+        if threshold != DISPROOF_THRESHOLD_ADAPTIVE {
+            self.table.set_disproof_remaining_threshold(threshold);
+        }
+    }
+
+    /// depth-adaptive disproof threshold を opt-in で有効化する (v0.25.1)．
+    ///
+    /// solve() 時に `outer_solve_depth` に基づいて閾値を自動決定する:
+    /// - depth ≤ 21: 0 (スキップなし)
+    /// - depth = 22:   2
+    /// - depth ≥ 23 (ply 18 等): 3
+    ///
+    /// **注意**: adaptive は depth ≥ 23 の深い問題向けに threshold=3 を適用
+    /// するため，no-mate 証明が期待される深い局面では退行しうる
+    /// (`test_no_checkmate_counter_check` 等．default OFF とした理由)．
+    /// 深い詰将棋だけを解く用途で明示的に有効化する．
+    pub fn enable_adaptive_disproof_remaining_threshold(&mut self) {
+        self.param_disproof_remaining_threshold = DISPROOF_THRESHOLD_ADAPTIVE;
+        // solve() 入口で outer_solve_depth を見て TT に反映される．
+    }
+
+    /// Depth-adaptive な実効 disproof 格納閾値を返す (v0.25.1)．
+    ///
+    /// `param_disproof_remaining_threshold` が `DISPROOF_THRESHOLD_ADAPTIVE` の
+    /// 場合，`outer_solve_depth` に基づいて閾値を自動決定する．
+    ///
+    /// ポリシー (保守的設定):
+    /// - depth ≤ 21 (ply 20 以降の浅い問題): 0 (スキップなし)
+    ///   → backward_30m で ply 24 退行が起きた領域を保護
+    /// - depth 22 (ply 19 等): 2 (remaining ∈ {0,1} スキップ)
+    /// - depth ≥ 23 (ply 18 以下の深い問題): 3 (remaining ∈ {0,1,2} スキップ)
+    ///
+    /// `param_` に非センチネル値が入っていればそれをそのまま使用 (テスト用)．
+    #[inline(always)]
+    pub(super) fn effective_disproof_remaining_threshold(&self) -> u16 {
+        if self.param_disproof_remaining_threshold != DISPROOF_THRESHOLD_ADAPTIVE {
+            return self.param_disproof_remaining_threshold;
+        }
+        let d = if self.outer_solve_depth > 0 {
+            self.outer_solve_depth
+        } else {
+            self.depth
+        };
+        match d {
+            0..=21 => 0,
+            22 => 2,
+            _ => 3,
+        }
     }
 
     /// 1+ε の実効 epsilon 除数を返す．
@@ -1229,6 +1295,12 @@ impl DfPnSolver {
         self.next_gc_check = 100_000;
         self.attacker = board.turn;
         self.outer_solve_depth = self.depth;
+        // (v0.25.1) adaptive disproof threshold: outer_solve_depth 決定後に
+        // effective 値を TT へ反映する．param が非センチネルなら no-op．
+        {
+            let eff = self.effective_disproof_remaining_threshold();
+            self.table.set_disproof_remaining_threshold(eff);
+        }
         self.alpha_x_filter_active = false;
         /// 施策 A-6 再評価: 境界層 PNS 責任転嫁の呼出数グローバル上限．
         /// 10 回 × 5K ノード/回 = 50K ノード相当の追加予算 (solve の小さな一部)．

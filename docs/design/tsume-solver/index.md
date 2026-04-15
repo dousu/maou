@@ -150,3 +150,4 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 95 | `skip_warmup` デフォルト true: refutable disproof が NM 蓄積を代替 | maou 独自 | §10.2 | v0.24.78 |
 | 96 | PNS arena 動的容量 (`param_pns_arena_max`) | maou 独自 | §10.2.7 | v0.25.0 |
 | 97 | depth-limited disproof 選択的格納 (`disproof_remaining_threshold`) | maou 独自 | §10.2.7 | v0.25.0 |
+| 98 | depth-adaptive disproof threshold (opt-in `enable_adaptive_disproof_remaining_threshold`) | maou 独自 | §10.2.8 | v0.25.1 |

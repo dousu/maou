@@ -240,6 +240,29 @@ use crate::types::{Color, PieceType};
         }
     }
 
+    /// S-1 correctness: adaptive disproof threshold を有効化しても
+    /// 9 手詰めが解けることを確認 (v0.25.1)．
+    ///
+    /// depth=15 は adaptive policy で threshold=0 (skip なし) となる領域．
+    /// opt-in API が既存テストを破壊しないことを確認する基本チェック．
+    #[test]
+    fn test_tsume_9te_with_adaptive_threshold() {
+        let sfen = "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s3n4l17p 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::new(15, 1_048_576, 32767);
+        solver.enable_adaptive_disproof_remaining_threshold();
+        let result = solver.solve(&mut board);
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                assert_eq!(moves.len(), 9, "adaptive threshold: 9-move mate must solve");
+            }
+            other => panic!("expected Checkmate with adaptive, got {:?}", other),
+        }
+    }
+
     /// A-1 correctness regression: PNS arena を大きく設定しても結果が変わらないこと
     /// (v0.25.0)．
     #[test]
@@ -3655,6 +3678,290 @@ use crate::types::{Color, PieceType};
             .join()
             .unwrap();
         verbose_eprintln!("結果: /tmp/tsume_39te_backward_30m_threshold3.log");
+    }
+
+    /// ply 20 false-NoMate 診断: verbose + tt_diag で内部状態をダンプ (v0.25.1)．
+    ///
+    /// 30M 予算で `NoCheckmate` が返る原因を特定するため，各 IDS depth の
+    /// TT 内容・root pn/dn の推移・confirmed disproof 挿入数を記録する．
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   --features verbose,tt_diag \
+    ///   test_tsume_39te_ply20_false_nomate_diag -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply20_false_nomate_diag() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply20_false_nomate_diag.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                for usi in pv.iter().take(20) {
+                    let m = board.move_from_usi(usi).unwrap();
+                    board.do_move(m);
+                }
+
+                let remaining = 39 - 20;
+                let depth = (remaining + 2).min(41) as u32;
+                let node_limit: u64 = 30_000_000;
+                let timeout: u64 = 600;
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " ply 20 false-NoMate 診断 (depth={}, 30M/600s)", depth).unwrap();
+                writeln!(out, " SFEN: {}", board.sfen()).unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+                let mut solver = DfPnSolver::with_timeout(depth, node_limit, 32767, timeout);
+                solver.set_find_shortest(false);
+
+                let start = Instant::now();
+                let result = solver.solve(&mut board);
+                let elapsed = start.elapsed();
+
+                let result_str = match &result {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+
+                writeln!(out, "\n--- result ---").unwrap();
+                writeln!(out, "  result  = {}", result_str).unwrap();
+                writeln!(out, "  time    = {:.2}s", elapsed.as_secs_f64()).unwrap();
+                writeln!(out, "  nodes   = {}", solver.nodes_searched).unwrap();
+                writeln!(out, "  max_ply = {}", solver.max_ply).unwrap();
+
+                // root の最終 pn/dn を取得
+                let (root_pn, root_dn, _) = solver.table.look_up(
+                    solver.diag_root_pk, &solver.diag_root_hand, REMAINING_INFINITE, true);
+                writeln!(out, "  root pn/dn (INF) = {}/{}", root_pn, root_dn).unwrap();
+
+                #[cfg(feature = "verbose")]
+                {
+                    writeln!(out, "\n--- PNS diag ---").unwrap();
+                    writeln!(out, "  pns_spin_iters    = {}", solver.dbg_pns_spin_iters).unwrap();
+                    writeln!(out, "  pns_changed_iters = {}", solver.dbg_pns_changed_iters).unwrap();
+                    writeln!(out, "  pns_proof_stores  = {}", solver.dbg_pns_proof_stores).unwrap();
+                    writeln!(out, "  pns_cycles        = {}", solver.dbg_pns_cycles).unwrap();
+                }
+
+                #[cfg(feature = "tt_diag")]
+                {
+                    writeln!(out, "\n--- TT composition (final) ---").unwrap();
+                    writeln!(out, "  proven       = {}", solver.table.count_proven()).unwrap();
+                    writeln!(out, "  disproven    = {}", solver.table.count_disproven()).unwrap();
+                    writeln!(out, "  intermediate = {}", solver.table.count_intermediate()).unwrap();
+                    writeln!(out, "\n--- disproof inserts ---").unwrap();
+                    writeln!(out, "  confirmed     = {}", solver.table.diag_disproof_confirmed).unwrap();
+                    writeln!(out, "  refutable     = {}", solver.table.diag_disproof_refutable).unwrap();
+                    writeln!(out, "  refutable_skip= {}", solver.table.diag_disproof_refutable_skip).unwrap();
+                    writeln!(out, "  working       = {}", solver.table.diag_disproof_working).unwrap();
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_ply20_false_nomate_diag.log");
+    }
+
+    /// ply 20 default=0 (baseline) 再現テスト: adaptive モード有無での結果を比較 (v0.25.1)．
+    ///
+    /// 目的: `test_tsume_39te_backward_30m_adaptive` で ply 20 が NoMate に
+    /// なった原因が adaptive モードか pre-existing な false-NoMate かを切り分ける．
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   test_tsume_39te_ply20_baseline_vs_adaptive -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply20_baseline_vs_adaptive() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply20_baseline_vs_adaptive.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                let node_limit: u64 = 30_000_000;
+                let timeout: u64 = 600;
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " ply 20 default vs adaptive 比較 (30M / 600s)").unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+                for mode in ["default", "adaptive"] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    for usi in pv.iter().take(20) {
+                        let m = board.move_from_usi(usi).unwrap();
+                        board.do_move(m);
+                    }
+
+                    let remaining = 39 - 20;
+                    let depth = (remaining + 2).min(41) as u32;
+
+                    let mut solver = DfPnSolver::with_timeout(depth, node_limit, 32767, timeout);
+                    solver.set_find_shortest(false);
+                    if mode == "adaptive" {
+                        solver.enable_adaptive_disproof_remaining_threshold();
+                    }
+
+                    let start = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed = start.elapsed();
+
+                    let result_str = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+
+                    writeln!(out, "\n--- mode: {} ---", mode).unwrap();
+                    writeln!(out, "  depth   = {} (effective_threshold = {})", depth,
+                        solver.effective_disproof_remaining_threshold()).unwrap();
+                    writeln!(out, "  result  = {}", result_str).unwrap();
+                    writeln!(out, "  time    = {:.2}s", elapsed.as_secs_f64()).unwrap();
+                    writeln!(out, "  nodes   = {}", solver.nodes_searched).unwrap();
+                    writeln!(out, "  max_ply = {}", solver.max_ply).unwrap();
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_ply20_baseline_vs_adaptive.log");
+    }
+
+    /// adaptive disproof threshold の backward regression 検証 (v0.25.1)．
+    ///
+    /// 各 ply で depth-adaptive policy が正しく動作することを確認:
+    /// - ply 24 (depth=17): threshold=0 で baseline 相当
+    /// - ply 18 (depth=23): threshold=3 で B-2 benefit
+    ///
+    /// 30M/300s per ply．baseline との比較は脚注参照．
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   test_tsume_39te_backward_30m_adaptive -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_backward_30m_adaptive() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_backward_30m_adaptive.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                let node_limit: u64 = 30_000_000;
+                let timeout: u64 = 300;
+
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                let mut positions: Vec<(usize, Board)> = Vec::new();
+                positions.push((0, board.clone()));
+                for ply_start in (0..38).step_by(2) {
+                    let m1 = board.move_from_usi(pv[ply_start]).unwrap();
+                    board.do_move(m1);
+                    let m2 = board.move_from_usi(pv[ply_start + 1]).unwrap();
+                    board.do_move(m2);
+                    positions.push((ply_start + 2, board.clone()));
+                }
+                positions.reverse();
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " 39手詰め backward 30M adaptive disproof threshold (v0.25.1)").unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, "{:<6} {:<8} {:<6} {:<14} {:<10} {:<10} {}",
+                    "Ply", "Remain", "Depth", "Nodes", "Time(s)", "MaxPly", "Result").unwrap();
+                writeln!(out, "{}", "-".repeat(90)).unwrap();
+
+                for (ply, pos) in &positions {
+                    let remaining = 39 - ply;
+                    let depth = (remaining + 2).min(41) as u32;
+
+                    let mut test_board = pos.clone();
+                    let mut solver = DfPnSolver::with_timeout(
+                        depth, node_limit, 32767, timeout,
+                    );
+                    solver.set_find_shortest(false);
+                    solver.enable_adaptive_disproof_remaining_threshold();
+
+                    let start = Instant::now();
+                    let result = solver.solve(&mut test_board);
+                    let elapsed = start.elapsed();
+
+                    let (result_str, solved) = match &result {
+                        TsumeResult::Checkmate { moves, .. } =>
+                            (format!("Mate({})", moves.len()), true),
+                        TsumeResult::CheckmateNoPv { .. } =>
+                            ("MateNoPV".to_string(), true),
+                        TsumeResult::NoCheckmate { .. } =>
+                            ("NoMate".to_string(), false),
+                        TsumeResult::Unknown { .. } =>
+                            ("Unknown".to_string(), false),
+                    };
+
+                    writeln!(out, "{:<6} {:<8} {:<6} {:<14} {:<10.2} {:<10} {}",
+                        ply, remaining, depth, solver.nodes_searched,
+                        elapsed.as_secs_f64(), solver.max_ply, result_str).unwrap();
+                    out.flush().unwrap();
+
+                    if !solved {
+                        writeln!(out, "\n境界: ply {} (depth={}) で 30M ノードでは解けない",
+                            ply, depth).unwrap();
+                        break;
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_backward_30m_adaptive.log");
     }
 
     /// 39手詰め ply 20 の NPS 時間依存性を診断する．

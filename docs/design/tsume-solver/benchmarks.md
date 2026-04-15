@@ -4270,6 +4270,106 @@ v0.24.78 時点のカテゴリ A (PNS arena 空回り) + カテゴリ B (Working
   (`test_tsume_39te_backward_*`, `test_tsume_6_29te`) での regression
   を確認する．
 
+#### 10.2.8 v0.25.0 施策の大規模予算検証と S-1 depth-adaptive 実装
+
+##### A-1 大規模予算検証 (30M / 900s): 不発を確認
+
+`test_tsume_39te_ply18_large_budget_sweep` 結果:
+
+| Config | time | NPS | spin% | arena_growth | pns_cycles | proof_stores |
+|:---|---:|---:|---:|---:|---:|---:|
+| baseline (5M, 0) | 384s | 78.0k | 83.9% | 4.55M | 31 | 3,908 |
+| A-1 only (10M, 0) | 376s | 79.7k | 83.9% | 4.55M | 31 | 3,908 |
+| B-2 only (5M, 3) | 251s | 119.7k | 81.8% | 5.11M | 29 | 4,547 |
+| A-1+B-2 (10M, 3) | 251s | 119.4k | 81.8% | 5.11M | 29 | 4,547 |
+
+- **A-1 の効果はゼロ** (baseline と完全一致): 30M 予算でも単一 PNS サイクル
+  arena は 5M 上限に届かず (growth_per_cycle = 147K = 上限の ~3%)．
+- 当初の仮説「spin 率 84.5% は arena 上限による空回り」は不正確．
+  実際は PNS 内部の既存ノード backprop 反復が主因．arena 容量拡大では
+  直接的改善にならない．A-1 は runtime tuning 基盤として残すが，
+  現状の ply 18 では効果なし．
+
+##### ply 18 500M threshold=3 検証
+
+`test_tsume_39te_ply18_500m_threshold3` 結果:
+
+| 指標 | v0.24.78 baseline | threshold=3 | 変化 |
+|:---|---:|---:|---:|
+| Result | Mate(21) | **Mate(21)** | ✓ |
+| Time | 2,384s | **1,302s** | **-45.4%** |
+| Nodes | 387M | 499M | +29% |
+| NPS | ~162k | **383.6k** | +137% |
+
+- wall time は **-45%** と大幅改善．
+- ノード数は +29% 増加するが，NPS が 2.4× になり相殺を超える効果．
+- `disproof_working` の書き込み削減で cache locality と TT lookup コストが改善．
+
+##### ply 18 solo 30M (arena=10M + threshold=3) 診断
+
+`test_tsume_39te_ply18_solo_a1b2` 結果:
+
+| 指標 | v0.24.78 baseline | A-1+B-2 | 変化 |
+|:---|---:|---:|---:|
+| spin 率 | 84.5% | 81.8% | **-2.7pt** |
+| NPS | ~57k | **119k** | **+109%** |
+| pns_cycles | 21 | 29 | +38% |
+| disproof_working | 10.25M | **5K** | **-99.95%** |
+| disproof_threshold_skip | 0 | **22.8M** | — |
+
+- spin 率は期待ほど下がらず (**-2.7pt**)．A-1 (arena 上限未到達) の限界．
+- NPS は **+109%**，WorkingTT churn 源 disproof_working は **-99.95%**．
+
+##### S-1: depth-adaptive threshold 実装 (v0.25.1)
+
+カテゴリ B-2 を安全に default 化するため，閾値を `outer_solve_depth` に基づく
+adaptive ポリシーで自動決定する機構を追加．
+
+**ポリシー**:
+- depth ≤ 21: 0 (スキップなし / 浅い問題保護)
+- depth = 22: 2
+- depth ≥ 23 (ply 18 等): 3
+
+**API**:
+- `DfPnSolver::enable_adaptive_disproof_remaining_threshold()`: opt-in で有効化．
+- 既存の `set_disproof_remaining_threshold(u16)` は明示値が優先．
+- `DISPROOF_THRESHOLD_ADAPTIVE` (sentinel `u16::MAX`) を渡すと adaptive へ戻る．
+
+**default 化判断**:
+実装後に `test_no_checkmate_counter_check` (no-mate, depth=31) が
+Mate(0) → **Unknown 退行** することが判明．no-mate 証明は depth-limited disproof
+の蓄積に依存するため，adaptive でも深い no-mate 問題では退行しうる．
+→ **default 化は不採用．opt-in 方式に確定**．
+
+**backward 30M adaptive 検証** (`test_tsume_39te_backward_30m_adaptive`):
+
+| Ply | Remain | Depth | Effective thr | Nodes | Time(s) | Result |
+|:---:|:---:|:---:|:---:|---:|---:|:---|
+| 24 | 15 | 17 | 0 | 392,489 | 50.3 | Mate(15) ✓ |
+| 22 | 17 | 19 | 0 | 8,948,289 | 136.5 | Mate(17) ✓ |
+| 20 | 19 | 21 | 0 | 7,562,295 | 104.1 | **NoMate** ⚠️ |
+
+ply 20 NoMate は default モード (threshold=0) でも完全一致するため，
+S-1 導入による退行ではなく **pre-existing な false-NoMate** と確認
+(`test_tsume_39te_ply20_baseline_vs_adaptive` で確証):
+
+| mode | Result | Nodes | max_ply |
+|:---|:---|---:|---:|
+| default | NoMate | 7,562,295 | 16 |
+| adaptive | NoMate | 7,562,295 | 16 |
+
+ply 20 false-NoMate は §10.2 の既知 issue．S-1 とは独立した課題．
+
+##### 結論 (v0.25.1 時点)
+
+1. **A-1 (PNS arena 動的容量)**: 効果なし．実装は runtime tuning 基盤として
+   保持するが，現状の ply 18 問題では arena 上限が律速要因ではない．
+2. **B-2 (depth-limited disproof 選択的格納)**: ply 18 で wall time -45%．
+   浅い問題および no-mate 問題で regression のため default 化 NG．
+3. **S-1 (depth-adaptive threshold)**: 実装完了．opt-in 方式で
+   `enable_adaptive_disproof_remaining_threshold()` による明示的有効化に変更．
+   default は 0 (従来動作) を維持．
+
 ---
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
