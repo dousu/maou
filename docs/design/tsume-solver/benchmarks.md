@@ -4370,6 +4370,104 @@ ply 20 false-NoMate は §10.2 の既知 issue．S-1 とは独立した課題．
    `enable_adaptive_disproof_remaining_threshold()` による明示的有効化に変更．
    default は 0 (従来動作) を維持．
 
+#### 10.2.9 ply 20 false-NoMate 根本原因の切り分け (v0.25.1)
+
+30M 予算で ply 20 (depth=21) が `NoMate` を返す pre-existing 問題の根本原因を
+`test_tsume_39te_ply20_warmup_refutable_diag` で特定した．
+
+##### 検証構成 (4 configs × 30M / 900s per ply 20)
+
+| Config | 設定 | Result | Time | Nodes | max_ply | root pn/dn |
+|:---|:---|:---|---:|---:|:---:|:---|
+| A | default | **NoMate ⚠️** | 107s | 7.56M | 16 | INF/0 |
+| B | warmup=[11,15] | **Mate(19) ✓** | 401s | 27.63M | 20 | 0/INF |
+| C | refutable=10 | Unknown | 387s | 30.0M | 20 | 16/16 |
+| D | B + refutable=10 | Unknown | 404s | 30.0M | 20 | 16/16 |
+
+##### 判明事項
+
+1. **Config B が正解を返す**: warmup で浅い IDS depth [11, 15] の proof/disproof
+   を事前蓄積するとその後の solve で root が正しく `pn=0` となり Mate(19) を
+   解答．
+2. **Config C は false-NoMate を解消 (Unknown へ)**: refutable check の最大深度を
+   デフォルト 5 (log-adaptive: `log2(21)+1`) から固定 10 に拡大すると
+   false-NoMate は消え，30M 予算では結論できない (Unknown)．
+3. **Config D は C と同等**: warmup 有無に関わらず refutable=10 のみで false NM
+   は解消．
+
+##### 根本原因
+
+- 現状の refutable check は `outer_solve_depth.ilog2() + 1` による log-adaptive
+  深度設定 (v0.24.77)．depth=21 ではわずか 5 まで探索する．
+- 深度 5 の recursive refutable check は，非 NM 局面を「refutable disproof」と
+  誤判定することがある．
+- 誤判定された refutable disproof は MID の `look_up` で confirmed 相当に扱われ，
+  NM_remaining propagation により leaf → root へ INF disproof として連鎖昇格．
+- 結果，**root の dn=0 (REMAINING_INFINITE) が成立**し `NoCheckmate` が返る．
+
+##### 解決方向 (提案)
+
+| 案 | 概要 | トレードオフ |
+|:---|:---|:---|
+| **M-A (採用候補)** | refutable depth に下限フロアを追加 (`max(log_adaptive, 8)` 等) | 全問題で NM check が深くなり NPS 低下．ただし false-NM を防止 |
+| M-B | root.dn=0 確定時に deeper refutable で再検証 | 再検証のオーバーヘッド．実装複雑 |
+| M-C | 深い問題でのみ `skip_warmup=false` を推奨 | ユーザ側での設定必要．root cause は未解決 |
+
+M-A は最小変更で soundness を改善できるため次の施策として実装．
+ベンチマークで ply 24 等の浅い問題との NPS トレードオフを計測する．
+
+#### 10.2.10 M-A: refutable depth フロア実装と効果検証 (v0.25.2)
+
+##### 変更
+
+`effective_refutable_depth` (`rust/maou_shogi/src/dfpn/solver.rs`) に
+`target ≥ 20` 向けの下限フロア 8 を追加．式を以下に変更:
+
+```
+d = max(target.ilog2() + 1, depth_floor(target)).min(10)
+depth_floor(target) = if target >= 20 { 8 } else { 3 }
+```
+
+| target | Before (v0.25.1) | After (v0.25.2) | 備考 |
+|:---:|:---:|:---:|:---|
+| 1-15 | 3-4 | 3-4 | 変更なし |
+| 16-19 | 5 | 5 | 変更なし (ply 22, 24 preserve) |
+| **20-31** | **5** | **8** | ply 20 false-NM 防止 |
+| 32-127 | 6-7 | 8 | 深い問題で soundness 優先 |
+| 128+ | 7 | 8-10 | min 10 で飽和 |
+
+##### 効果 (ply 20 solo 30M / 600s)
+
+| 指標 | Before M-A (v0.25.1) | After M-A (v0.25.2) |
+|:---|:---|:---|
+| Result | **NoMate ⚠️** | **Mate(19) ✓** |
+| Nodes | 7,562,295 | 29,368,267 |
+| Time | 107s | 455s |
+| max_ply | 16 | 20 |
+
+`max_ply` が 16 → 20 に延びたことから，深い IDS step まで到達できるように
+なったことを確認．
+
+##### backward 30M regression (`test_tsume_39te_backward_30m_adaptive`)
+
+| Ply | Depth | Before M-A | After M-A | 判定 |
+|:---:|:---:|:---|:---|:---|
+| 24 | 17 | Mate(15), 392,489 nodes | Mate(15), 392,489 nodes | ✓ 完全一致 |
+| 22 | 19 | Mate(17), 8,948,289 nodes | Mate(17), 8,948,289 nodes | ✓ 完全一致 |
+| 20 | 21 | NoMate ⚠️ 7,562,295 nodes | **Unknown** 20,763,261 nodes | ✓ soundness 回復 |
+
+- target < 20 では refutable depth 式が変わらないため，ply 24/22 は
+  nodes 完全一致で regression ゼロ．
+- ply 20 は budget 不足で Unknown に遷移．これは正しい挙動
+  (v0.24.78 baseline でも ply 20 = 163M が必要)．
+
+##### 結論
+
+- **M-A (v0.25.2)**: refutable depth フロア追加で **pre-existing false-NoMate を根絶**．
+- trade-off: target ≥ 20 の深い問題では refutable check が深くなり NPS が
+  低下する可能性があるが，false-NoMate 防止のほうが重要．
+- target < 20 は完全に不変．regression ゼロ．
+
 ---
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較

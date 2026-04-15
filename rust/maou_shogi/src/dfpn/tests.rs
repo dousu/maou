@@ -3680,6 +3680,118 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: /tmp/tsume_39te_backward_30m_threshold3.log");
     }
 
+    /// ply 20 false-NoMate 原因切り分け: warmup + refutable depth の影響検証 (v0.25.1)．
+    ///
+    /// 仮説: pre-existing false NoMate は refutable check depth (log2(21)+1=5)
+    /// が浅く false refutable disproof が混入し，NM_remaining propagation で
+    /// INF 昇格することで起きる．warmup 有効化 (set_skip_warmup(false)) または
+    /// refutable depth 増加で解消するなら仮説確定．
+    ///
+    /// 4 構成で比較:
+    /// - A: default (no warmup, default refutable)
+    /// - B: warmup=[11,15] enabled
+    /// - C: refutable depth=10 (log-adaptive より深い固定値)
+    /// - D: warmup + refutable depth=10
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   test_tsume_39te_ply20_warmup_refutable_diag -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply20_warmup_refutable_diag() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply20_warmup_refutable_diag.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                // (label, warmup_depths, refutable_depth)
+                // refutable_depth=0 は param デフォルト (DEFAULT_REFUTABLE_DEPTH=5) を使用
+                let configs: [(&str, &[u32], u32); 4] = [
+                    ("A: default", &[], 0),
+                    ("B: warmup=[11,15]", &[11, 15], 0),
+                    ("C: refutable depth=10", &[], 10),
+                    ("D: warmup + refutable=10", &[11, 15], 10),
+                ];
+
+                let remaining = 39 - 20;
+                let depth = (remaining + 2).min(41) as u32;
+                let node_limit: u64 = 30_000_000;
+                let timeout: u64 = 900;
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " ply 20 false-NoMate 切り分け (depth={}, 30M/900s per config)", depth).unwrap();
+                writeln!(out, " 仮説: refutable depth 浅すぎで false NM 混入").unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+                for (label, warmup_depths, refutable_depth) in configs.iter() {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    for usi in pv.iter().take(20) {
+                        let m = board.move_from_usi(usi).unwrap();
+                        board.do_move(m);
+                    }
+
+                    writeln!(out, "\n--- Config: {} ---", label).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(depth, node_limit, 32767, timeout);
+                    solver.set_find_shortest(false);
+
+                    if !warmup_depths.is_empty() {
+                        solver.set_warmup_depths(warmup_depths);
+                        solver.set_skip_warmup(false);
+                    }
+                    if *refutable_depth > 0 {
+                        solver.set_refutable_params(*refutable_depth, 10_000);
+                    }
+
+                    let start = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed = start.elapsed();
+
+                    let result_str = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate ⚠️".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    let nps_k = if elapsed.as_secs_f64() > 0.0 {
+                        (solver.nodes_searched as f64 / elapsed.as_secs_f64()) / 1000.0
+                    } else { 0.0 };
+
+                    writeln!(out, "  result  = {}", result_str).unwrap();
+                    writeln!(out, "  time    = {:.2}s", elapsed.as_secs_f64()).unwrap();
+                    writeln!(out, "  nodes   = {}", solver.nodes_searched).unwrap();
+                    writeln!(out, "  NPS     = {:.1}k", nps_k).unwrap();
+                    writeln!(out, "  max_ply = {}", solver.max_ply).unwrap();
+
+                    let (root_pn, root_dn, _) = solver.table.look_up(
+                        solver.diag_root_pk, &solver.diag_root_hand,
+                        REMAINING_INFINITE, true);
+                    writeln!(out, "  root pn/dn (INF) = {}/{}", root_pn, root_dn).unwrap();
+
+                    out.flush().unwrap();
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_ply20_warmup_refutable_diag.log");
+    }
+
     /// ply 20 false-NoMate 診断: verbose + tt_diag で内部状態をダンプ (v0.25.1)．
     ///
     /// 30M 予算で `NoCheckmate` が返る原因を特定するため，各 IDS depth の

@@ -1642,7 +1642,7 @@ impl DfPnSolver {
         )
     }
 
-    /// IDS target depth に応じた適応的 refutable check 再帰深さ (v0.24.77)．
+    /// IDS target depth に応じた適応的 refutable check 再帰深さ (v0.24.77, v0.25.2 updated)．
     ///
     /// `param_refutable_depth` が 0 (EFFECTIVE_DEPTH_ADAPTIVE) の場合，
     /// outer_solve_depth (IDS target) に基づく log ベースの値を返す．
@@ -1653,15 +1653,20 @@ impl DfPnSolver {
     /// - log ベースで徐々に増加して飽和
     ///   → 浅い問題では小さい d (NPS 優先)
     ///   → 深い問題では大きい d (NM 検出率優先)
-    ///   → 飽和点があるため無限に増えない
     ///
-    /// 式: d = min(target.ilog2() + 1, 7).max(3)
-    /// - target=4  (log2=2): d=3
-    /// - target=8  (log2=3): d=4
-    /// - target=16 (log2=4): d=5  ← backward_10m ply 20 (target=21) baseline と一致
-    /// - target=17-31:       d=5
-    /// - target=32+:         d=6
-    /// - target=64+:         d=7 (飽和)
+    /// **M-A (v0.25.2)**: target ≥ 20 に **下限フロア 8** を追加．
+    /// §10.2.9 ply 20 false-NoMate 診断で，target=21 の log-adaptive d=5 では
+    /// refutable check の判定が浅すぎて非 NM 局面を refutable disproof と誤判定
+    /// する現象を確認．warmup で代替できたため，固定 depth=10 相当の対策を
+    /// 組み込む．
+    ///
+    /// 式: d = max(target.ilog2() + 1, depth_floor(target)).min(10)
+    /// - target=1-15:  depth_floor=3 → d=3〜4 (変更なし)
+    /// - target=16-19: depth_floor=3 → d=5 (変更なし)
+    /// - target=20-31: depth_floor=**8** → d=**8** (ply 20 false-NM 防止)
+    /// - target=32-127: depth_floor=8 → d=8 (target.ilog2+1 が 6〜7 でも 8 に上げる)
+    /// - target=128-511: d=8〜9 (log_val が 8〜9)
+    /// - target=512+: d=10 (min で飽和)
     #[inline]
     fn effective_refutable_depth(&self) -> u32 {
         if self.param_refutable_depth != Self::EFFECTIVE_DEPTH_ADAPTIVE {
@@ -1676,7 +1681,10 @@ impl DfPnSolver {
             return 3;
         }
         let log_val = (target as u32).ilog2() + 1;
-        log_val.min(7).max(3)
+        // M-A: target ≥ 20 は深いリーフ NM が誤判定されうるため
+        // フロア 8 を強制．それ以外は従来通り．
+        let depth_floor: u32 = if target >= 20 { 8 } else { 3 };
+        log_val.max(depth_floor).min(10)
     }
 
     /// `param_refutable_depth = 0` は適応的 depth を意味する sentinel．
