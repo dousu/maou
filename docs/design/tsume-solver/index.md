@@ -152,3 +152,4 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 97 | depth-limited disproof 選択的格納 (`disproof_remaining_threshold`) | maou 独自 | §10.2.7 | v0.25.0 |
 | 98 | depth-adaptive disproof threshold (opt-in `enable_adaptive_disproof_remaining_threshold`) | maou 独自 | §10.2.8 | v0.25.1 |
 | 99 | M-A: refutable depth フロア (`target >= 20 → 8`) で ply 20 false-NoMate 根絶 | maou 独自 | §10.2.10 | v0.25.2 |
+| 100 | S-2: ply 24 退行境界診断で remaining=1 スキップの致命性を特定 | maou 独自 | §10.2.11 | v0.25.2 |

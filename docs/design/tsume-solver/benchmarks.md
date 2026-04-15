@@ -4468,6 +4468,68 @@ depth_floor(target) = if target >= 20 { 8 } else { 3 }
   低下する可能性があるが，false-NoMate 防止のほうが重要．
 - target < 20 は完全に不変．regression ゼロ．
 
+#### 10.2.11 S-2: ply 24 退行の根本原因診断 (v0.25.2)
+
+10.2.7 で発見した「threshold=3 は ply 24 (depth=17) で退行する」現象を
+より詳細に分析するため，threshold ∈ {0, 1, 2, 3} を順次試行した
+(`test_tsume_39te_ply24_threshold_boundary`)．
+
+##### 計測結果 (ply 24 solo, 30M / 600s, verbose+tt_diag)
+
+| threshold | Result | nodes | time | rem[2] 挿入数 | TT disproven |
+|:---:|:---|---:|---:|---:|---:|
+| 0 | Mate(15) | **392,489** | 65s | 180,443 | 142,222 |
+| 1 | Mate(15) | **392,489** | 65s | 180,443 | 142,222 |
+| **2** | **Unknown ⚠️** | **30,000,000** | 215s | **5,553,597** | 1,009,325 |
+| 3 | Unknown | 30,000,000 | 199s | 5,665,263 | 1,007,960 |
+
+##### 決定的発見
+
+1. **退行境界は threshold = 2**:
+   - threshold=0, 1 は完全一致 (nodes 392,489，remaining 分布も同一)．
+   - threshold=2 で **30M budget を使い切って Unknown**．
+
+2. **remaining=1 の disproof スキップが致命的**:
+   - threshold=1 (remaining=0 のみスキップ) は実質 no-op．
+     ply 24 では remaining=0 entry はほぼ存在せず．
+   - threshold=2 (remaining ∈ {0,1} スキップ) で rem[2] 挿入が
+     **180K → 5.55M (30×)** に爆発．
+   - remaining=1 の leaf-level depth-limited NM を TT に残せないと
+     同一局面が繰り返し再探索され，rem[2] の intermediate が
+     大量再生成されることを示す．
+
+3. **soundness は維持**:
+   - root pn/dn = 16/16 (Unknown) で false-NoMate ではない．
+   - 節約効果が得られず予算だけ消費する．
+
+##### 根本原因
+
+shallow 問題 (depth=17) では **remaining=1 の depth-limited NM キャッシュが
+leaf-level 枝刈りの要**．これを skip すると指数爆発に至る．
+深い問題 (depth=23, ply 18) では同じ skip が NPS 向上に寄与するのと対照的．
+
+##### S-1 policy への含意
+
+現状の S-1 adaptive policy (`0..=21 => 0, 22 => 2, _ => 3`) は結果的に
+正しいが，S-2 の知見から以下を追加で確認できた:
+- threshold **1 は全 depth で安全** (rem=0 は格納されないため実質 no-op)．
+- threshold **2 は shallow 問題 (depth ≤ 17) で致命的**．
+- threshold **3 は deep 問題 (depth ≥ 23) でのみ有効**．
+
+##### 次の改良案 (M-D)
+
+adaptive policy の 22 だけ threshold=2 は中途半端．以下に統一する:
+
+```
+depth ≤ 19: 0  (ply 20+ での M-A false-NM 保護と連動)
+depth 20-22: 1 (実質無害な margin)
+depth ≥ 23: 3 (B-2 full benefit)
+```
+
+trade-off: depth=22 で threshold=1 は実質変化なし．ただし将来の
+depth-dependent cache 実装 (M-E: remaining ≤ 2 の compact storage) への
+布石となる．
+
 ---
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
