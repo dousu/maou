@@ -1577,8 +1577,10 @@ impl DfPnSolver {
 
     /// TT ベースの NM 昇格判定(MID depth boundary 用)．
     ///
-    /// 各王手後の AND ノードが ProvenTT の **confirmed** disproof で
-    /// 不詰と確認されているかを確認する．refutable disproof は含まない．
+    /// 各王手後の AND ノードが ProvenTT に disproof として格納されているかを
+    /// 確認する．`look_up` は confirmed / refutable 両方の disproof を返す
+    /// (TT レベルではエントリ種別を区別しない)ため，MID 経路では
+    /// refutable disproof も含めて NM 昇格の根拠として使用される．
     /// do_move + TT ルックアップのみで判定するため極めて高速
     /// (~2μs/王手)．TT にエントリがない場合は保守的に false を返す．
     pub(super) fn all_checks_refutable_by_tt(
@@ -1590,7 +1592,9 @@ impl DfPnSolver {
             let captured = board.do_move(*check);
             let pk = position_key(board);
             let att_hand = board.hand[self.attacker.index()];
-            // confirmed disproof のみ (refutable disproof を含まない通常 lookup)
+            // look_up は confirmed/refutable disproof 両方を返す
+            // (TT レベルでは種別を区別しない; PNS 側のみ
+            // skip_refutable_disproof で refutable を除外する)
             let (_, dn, _) = self.table.look_up(pk, &att_hand, REMAINING_INFINITE, false);
             board.undo_move(*check, captured);
             if dn != 0 {

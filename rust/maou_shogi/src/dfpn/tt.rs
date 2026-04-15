@@ -1140,9 +1140,14 @@ impl TranspositionTable {
     /// refutable check で確認された NM を ProvenTT に格納する (v0.24.75)．
     ///
     /// confirmed disproof と同じ ProvenTT クラスタに格納するが，
-    /// `is_refutable_disproof()` = true のフラグを持つ．
-    /// 通常の `look_up_proven` からは不可視(PNS の arena-limited
-    /// false NM を防止)．`look_up_refutable_disproof` からのみ可視．
+    /// `is_refutable_disproof()` = true のフラグ (flags bit 7) を持つ．
+    ///
+    /// TT レベルでは confirmed / refutable を区別せず，`look_up_proven` も
+    /// `has_refutable_or_confirmed_disproof` も両方を可視として扱う．
+    /// PNS の arena-limited false NM 防止は TT 側ではなく，solver 側の
+    /// `skip_refutable_disproof` フラグ (PNS 実行中に有効化) を
+    /// `look_up_pn_dn_impl` が参照して refutable エントリを無視することで実現する．
+    /// 具体的なエントリ種別判定には `is_refutable_disproof_at` を使用する．
     pub(super) fn store_refutable_disproof(
         &mut self,
         pos_key: u64,
