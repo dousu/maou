@@ -1,7 +1,12 @@
 //! Dual フラットハッシュテーブル型転置表(Transposition Table)．
 //!
 //! v0.24.0: Dual TT 方式 — ProvenTT(永続エントリ)と WorkingTT(GC 対象)に分離．
-//! ProvenTT には proof(pn=0)と confirmed disproof(dn=0, !path_dep, remaining=INFINITE)を格納し，
+//! ProvenTT には以下 3 種のエントリを格納:
+//!   - proof (pn=0)
+//!   - confirmed disproof (dn=0, !path_dep, remaining=INFINITE, flags bit 7=0)
+//!   - refutable disproof (v0.24.75+, flags bit 7=1) —
+//!     PNS からは `skip_refutable_disproof` で不可視化，MID のみ参照
+//!     (aigoma-optimization.md §8.9)
 //! WorkingTT には intermediate と depth-limited/path-dependent disproof を格納する．
 //! これによりクラスタ飽和問題(§6.6.1)を構造的に解決する．
 
@@ -208,6 +213,15 @@ pub(super) struct TranspositionTable {
     pub(super) diag_dominated_skip: u64,
     #[cfg(feature = "verbose")]
     pub(super) diag_remaining_dist: [u64; 33],
+    /// (v0.24.76) disproof 挿入の内訳: confirmed (ProvenTT), refutable (ProvenTT), working (WorkingTT)
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_disproof_confirmed: u64,
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_disproof_refutable: u64,
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_disproof_refutable_skip: u64,
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_disproof_working: u64,
 }
 
 impl TranspositionTable {
@@ -259,6 +273,14 @@ impl TranspositionTable {
             diag_dominated_skip: 0,
             #[cfg(feature = "verbose")]
             diag_remaining_dist: [0; 33],
+            #[cfg(feature = "tt_diag")]
+            diag_disproof_confirmed: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_disproof_refutable: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_disproof_refutable_skip: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_disproof_working: 0,
         }
     }
 
@@ -478,6 +500,37 @@ impl TranspositionTable {
         remaining: u16,
         neighbor_scan: bool,
     ) -> (u32, u32, u32) {
+        self.look_up_proven_impl(pos_key, hand, remaining, neighbor_scan, false)
+    }
+
+    /// `look_up_proven` の refutable disproof スキップ版 (v0.24.79)．
+    ///
+    /// Pass 2 および歩+1 近傍の disproof 走査で `is_refutable_disproof()`
+    /// なエントリをスキップする．PNS の arena-limited false NM を防ぐため，
+    /// PNS 実行中の `look_up_pn_dn_impl` から呼ばれる．
+    ///
+    /// 以前は `look_up` + 事後 `is_refutable_disproof_at` の 2 段スキャン
+    /// (ProvenTT クラスタを 2 回走査) だったが，Pass 2 内にフィルタを
+    /// 統合することで disproof ヒット時のクラスタ走査を 1 回に削減．
+    pub(super) fn look_up_proven_skip_refutable(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+        neighbor_scan: bool,
+    ) -> (u32, u32, u32) {
+        self.look_up_proven_impl(pos_key, hand, remaining, neighbor_scan, true)
+    }
+
+    #[inline]
+    fn look_up_proven_impl(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+        neighbor_scan: bool,
+        skip_refutable: bool,
+    ) -> (u32, u32, u32) {
         let pos_key = Self::safe_key(pos_key);
         let home = self.proven_cluster(pos_key, hand);
         // Tag-aware proof lookup: non-ABSOLUTE proof は tag_depth <
@@ -538,6 +591,7 @@ impl TranspositionTable {
             if !e.is_proof()
                 && hand_gte_forward_chain(&e.hand, hand)
             {
+                if skip_refutable && e.is_refutable_disproof() { continue; }
                 return (e.pn(), 0, e.source());
             }
         }
@@ -554,6 +608,7 @@ impl TranspositionTable {
                 if !e.is_proof()
                     && hand_gte_forward_chain(&e.hand, hand)
                 {
+                    if skip_refutable && e.is_refutable_disproof() { continue; }
                     NEIGHBOR_DIAG[1].fetch_add(1, Ordering::Relaxed);
                     return (e.pn(), 0, e.source());
                 }
@@ -692,6 +747,32 @@ impl TranspositionTable {
         neighbor_scan: bool,
     ) -> (u32, u32, u32) {
         let proven = self.look_up_proven(pos_key, hand, remaining, neighbor_scan);
+        if proven.0 == 0 || proven.1 == 0 {
+            return proven;
+        }
+        self.look_up_working(pos_key, hand, remaining, neighbor_scan)
+    }
+
+    /// PNS 用 look_up: ProvenTT の refutable disproof をスキップ (v0.24.79)．
+    ///
+    /// `look_up` と同じ意味論だが，ProvenTT Pass 2 で
+    /// `is_refutable_disproof()` なエントリを読み飛ばす．PNS 実行中に
+    /// solver の `skip_refutable_disproof` フラグが立っているときに
+    /// 使用し，arena-limited false NM cascade を防止する．
+    ///
+    /// 以前は `look_up` + `is_refutable_disproof_at` の 2 段スキャンで
+    /// フィルタしていたが，`look_up_proven_skip_refutable` に統合して
+    /// disproof ヒット時のクラスタ走査を 1 回に削減した．
+    #[inline(always)]
+    pub(super) fn look_up_skip_refutable(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+        neighbor_scan: bool,
+    ) -> (u32, u32, u32) {
+        let proven =
+            self.look_up_proven_skip_refutable(pos_key, hand, remaining, neighbor_scan);
         if proven.0 == 0 || proven.1 == 0 {
             return proven;
         }
@@ -1097,6 +1178,8 @@ impl TranspositionTable {
                 else { self.diag_disproof_inserts += 1; }
                 self.diag_remaining_dist[rem_idx] += 1;
             }
+            #[cfg(feature = "tt_diag")]
+            if !is_proof { self.diag_disproof_confirmed += 1; }
             return;
         }
         // 満杯 → ProvenTT 専用の replace
@@ -1108,10 +1191,111 @@ impl TranspositionTable {
                 else { self.diag_disproof_inserts += 1; }
                 self.diag_remaining_dist[rem_idx] += 1;
             }
+            #[cfg(feature = "tt_diag")]
+            if !is_proof { self.diag_disproof_confirmed += 1; }
         }
     }
 
-    /// WorkingTT に depth-limited / path-dep disproof を挿入する．
+    /// refutable check で確認された NM を ProvenTT に格納する (v0.24.75)．
+    ///
+    /// confirmed disproof と同じ ProvenTT クラスタに格納するが，
+    /// `ProvenEntry::is_refutable_disproof()` = true のフラグ (flags bit 7) を
+    /// 持つ．
+    ///
+    /// TT レベルの標準 lookup (`look_up_proven` / `look_up` /
+    /// `has_refutable_or_confirmed_disproof`) は confirmed / refutable を
+    /// 区別せず両方を返す．PNS の arena-limited false NM 防止は
+    /// solver 側の `skip_refutable_disproof` フラグ (PNS 実行中に有効化)
+    /// 経由で `look_up_pn_dn_impl` が `look_up_skip_refutable` を呼び，
+    /// ProvenTT Pass 2 で bit 7 を読み飛ばすことで実現する．
+    pub(super) fn store_refutable_disproof(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+    ) {
+        let pos_key = Self::safe_key(pos_key);
+
+        let p_start = self.proven_cluster_start(pos_key, &hand);
+
+        // hand_gte 支配チェック: 既存エントリが新 hand を支配するなら挿入不要
+        {
+            let p_cluster = &self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
+            for fe in p_cluster {
+                if fe.pos_key != pos_key { continue; }
+                let e = &fe.entry;
+                // 既存 proof が支配 → 不詰ではないので挿入不要
+                if e.is_proof() && hand_gte_forward_chain(&hand, &e.hand) {
+                    return;
+                }
+                // 既存 disproof (confirmed/refutable) が支配 → 冗長なので挿入不要
+                if !e.is_proof() && hand_gte_forward_chain(&e.hand, &hand) {
+                    #[cfg(feature = "tt_diag")]
+                    { self.diag_disproof_refutable_skip += 1; }
+                    return;
+                }
+            }
+        }
+
+        let new_entry = ProvenEntry {
+            hand,
+            flags: ProvenEntry::encode_refutable_disproof_flags(self.current_ids_depth),
+            best_move: 0,
+            meta: 0,
+        };
+
+        // 新エントリに支配される既存 refutable disproof を除去
+        let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
+        for fe in p_cluster.iter_mut() {
+            if fe.pos_key != pos_key { continue; }
+            if fe.entry.is_refutable_disproof()
+                && hand_gte_forward_chain(&hand, &fe.entry.hand)
+            {
+                fe.pos_key = 0;
+            }
+        }
+
+        // 挿入
+        let p_cluster = &mut self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE];
+        if let Some(slot) = p_cluster.iter_mut().find(|fe| fe.is_empty()) {
+            slot.pos_key = pos_key;
+            slot.entry = new_entry;
+            #[cfg(feature = "tt_diag")]
+            { self.diag_disproof_refutable += 1; }
+            return;
+        }
+        // 満杯 → 最弱エントリを置換
+        #[cfg(feature = "profile")]
+        { self.proven_overflow_count += 1; }
+        if Self::replace_weakest_proven(p_cluster, pos_key, new_entry) {
+            #[cfg(feature = "tt_diag")]
+            { self.diag_disproof_refutable += 1; }
+        }
+    }
+
+    /// refutable disproof を lookup する (v0.24.75)．
+    ///
+    /// `all_checks_refutable_by_tt` 専用．通常の `look_up_proven` では
+    /// refutable disproof はスキップされるため，この関数で参照する．
+    /// ProvenTT クラスタ内の refutable disproof + confirmed disproof の
+    /// 両方にマッチする．
+    pub(super) fn has_refutable_or_confirmed_disproof(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> bool {
+        let pos_key = Self::safe_key(pos_key);
+        let home = self.proven_cluster(pos_key, hand);
+        for fe in home {
+            if fe.pos_key != pos_key { continue; }
+            let e = &fe.entry;
+            if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
+                return true;
+            }
+        }
+        false
+    }
+
+/// WorkingTT に depth-limited / path-dep disproof を挿入する．
     fn store_working_disproof(
         &mut self,
         pos_key: u64,
@@ -1152,6 +1336,7 @@ impl TranspositionTable {
             slot.pos_key = pos_key;
             slot.entry = new_entry;
             #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
+            #[cfg(feature = "tt_diag")] { self.diag_disproof_working += 1; }
             // ピーク充填数の追跡
             let fill = self.working[w_start..w_start + WORKING_CLUSTER_SIZE].iter()
                 .filter(|fe| fe.pos_key != 0).count();
@@ -1164,6 +1349,7 @@ impl TranspositionTable {
         self.working_overflow_since_gc += 1;
         if Self::replace_weakest_for_disproof_in(w_cluster, pos_key, new_entry) {
             #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
+            #[cfg(feature = "tt_diag")] { self.diag_disproof_working += 1; }
             return;
         }
         // NM 同士の置換
@@ -1176,6 +1362,7 @@ impl TranspositionTable {
             {
                 fe.entry = new_entry;
                 #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
+                #[cfg(feature = "tt_diag")] { self.diag_disproof_working += 1; }
                 return;
             }
         }

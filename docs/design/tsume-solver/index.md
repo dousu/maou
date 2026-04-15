@@ -9,7 +9,8 @@
 | [証明数・反証数の計算](proof-disproof-numbers.md) | WPN, CD-WPN, VPN, SNDA |
 | [初期値ヒューリスティック](initial-heuristics.md) | df-pn+, DFPN-E, Deep df-pn, インライン詰み検出 |
 | [転置表管理](transposition-table.md) | 持ち駒優越, Pareto frontier, TT GC, Dual TT, Zobrist hand_hash |
-| [ループ・GHI 対策と手順改善](loop-ghi-and-move-ordering.md) | 経路依存フラグ, NM Remaining, TT Best Move, Killer Move, PV 復元 |
+| [ループ・GHI 対策](loop-ghi.md) | 経路依存フラグ, NM Remaining 伝播 |
+| [手順改善・PV 復元](move-ordering-and-pv.md) | TT Best Move, Killer Move, 捨て駒ブースト, PV 復元 3-phase |
 | [合駒最適化](aigoma-optimization.md) | Futile/Chain 分類, 遅延展開, プレフィルタ, DN バイアス |
 | [既知の課題とベンチマーク](benchmarks.md) | 29手詰め, 39手詰め, ミクロコスモス |
 | [最適化案の評価](optimization-proposals.md) | History Heuristic, フラットハッシュテーブル, Frontier Variant 等 |
@@ -28,6 +29,12 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 1. **cshogi が解けない問題をカバーする**: 片玉局面，合駒(中合い)の正確な探索，最短手順保証
 2. **どんな詰将棋問題も解ける**: リソースパラメータ(`depth`, `nodes`, `timeout`)の増加で対応
 3. **高度な枝刈りによる効率化**: cshogi が取り入れていない手法を積極的に導入
+
+### 設計方針: 単一スレッド維持
+
+**性能改善は単一スレッドでのアルゴリズム改良で達成する方針とし，
+並列探索は今後も採用しない**．理由と詳細は
+[optimization-proposals.md §11.6](optimization-proposals.md) 参照．
 
 ### 実装ファイル
 
@@ -130,6 +137,14 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 82 | Multi-step 逆方向不詰共有: 異マスの兄弟ドロップにも disproof 伝搬 | maou 独自 | §8.5, §10.2 | v0.24.62 |
 | 83 | IDS NM 昇格判定: `ids_depth >= saved_depth` ガードで false NoMate 防止 | maou 独自 | §10.2 | v0.24.63 |
 | 84 | Post-Capture Proof Summary Cache: pos\_key ベース O(1) proof/disproof lookup | maou 独自 | §8.4, §10.2 | v0.24.64 |
-| 85 | Adaptive warmup depths: solve() 内で段階的 depth の warmup solve を実行 | maou 独自 | §10.2 | v0.24.65 |
+| 85 | ~~Adaptive warmup depths: solve() 内で段階的 depth の warmup solve を実行~~ **v0.24.78 で skip_warmup=true デフォルト化により廃止** | maou 独自 | §10.2 | v0.24.65 |
 | 86 | edge\_cost\_or 駒打ちペナルティ: 駒打ち静かな王手に +PN\_UNIT/2 | maou 独自 | §5.2, §10.2 | v0.24.66 |
 | 87 | Warmup NM false NoMate 修正: outer\_solve\_depth ガード + clear\_working\_entry | maou 独自 | §10.2 | v0.24.66 |
+| 88 | PostCaptureSummary 容量 4x 拡大 (64K→256K) | maou 独自 | §8.4, §10.2 | v0.24.69 |
+| 89 | fc-normalized hand hash: Pawn/Lance/Rook 総和ベース WorkingTT クラスタ | maou 独自 | §6.6.4, §10.2 | v0.24.70 |
+| 90 | ProvenEntry proof\_tag infrastructure (tag-aware look\_up) | maou 独自 | §6.6.3 | v0.24.71 |
+| 91 | **refutable disproof** entry 種別 (ProvenEntry flags bit 7) | maou 独自 | §6.6.3, §10.2 | v0.24.75 |
+| 92 | `skip_refutable_disproof` フラグで PNS 探索中の refutable disproof 不可視化 | maou 独自 | §10.2 | v0.24.75 |
+| 93 | `store_refutable_disproof` の hand\_gte 支配チェック (83% 冗長挿入をスキップ) | maou 独自 | §6.6.3, §10.2 | v0.24.76 |
+| 94 | log-adaptive refutable check depth: `outer_solve_depth.ilog2()+1` で IDS 中間 step 一貫性 | maou 独自 | §10.2 | v0.24.77 |
+| 95 | `skip_warmup` デフォルト true: refutable disproof が NM 蓄積を代替 | maou 独自 | §10.2 | v0.24.78 |

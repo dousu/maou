@@ -1389,7 +1389,10 @@ impl DfPnSolver {
         //   WorkingTT intermediate を保持する．
         //   v0.24.68 で solver.rs の warmup ループからも設定されていたが，
         //   v0.24.73 で fc-normalized hash との soundness 問題のため revert．
-        //   現在は pns.rs の nested warmup (IDS 内 warmup mid_fallback) でのみ設定．
+        //   v0.24.78 で `skip_warmup=true` デフォルト化によりさらに solver.rs
+        //   の warmup ループ自体が無効化されており，現在は本関数の nested
+        //   warmup (IDS 内 warmup mid_fallback) でのみ `warmup_mode=true` に
+        //   設定される．
         if self.warmup_mode {
             self.table.clear_proven_non_proofs();
         } else {
@@ -1733,9 +1736,10 @@ impl DfPnSolver {
                 // (v0.24.71) tag-aware IDS break guard: FILTER_DEPENDENT proof で
                 // IDS を終了すると false Checkmate が返る．root の proof が
                 // ABSOLUTE の場合のみ break する．
-                // v0.24.72 で施策α filter 無効化後は FILTER_DEPENDENT proof が
-                // 生成されないため本 guard は実質 no-op だが，tag infrastructure
-                // として保持する．
+                // v0.24.72 で施策α 不採用後は FILTER_DEPENDENT proof が生成
+                // されないため本 guard は常に ABSOLUTE 経路．実質 no-op で
+                // 効果を持たないが，tag infrastructure が残存する限り保持．
+                // (削除候補: proof_tag インフラ一括除去時に同時に削除可能)
                 let root_tag = self.table.get_proof_tag(pk, &att_hand);
                 if root_tag == super::entry::PROOF_TAG_ABSOLUTE {
                     verbose_eprintln!("[ids] proved (ABSOLUTE) at depth={}, break", ids_depth);
@@ -1966,7 +1970,9 @@ impl DfPnSolver {
                     self.dbg_pns_spin_iters,
                     self.dbg_pns_changed_iters,
                 );
+                self.skip_refutable_disproof = true;
                 let _pv = self.pns_main_with_arena(board, &mut arena);
+                self.skip_refutable_disproof = false;
 
                 // Zero-proof 判定: 直前の PNS サイクルの proof store 数を確認
                 if self.last_pns_proof_stores == 0 {
@@ -2063,7 +2069,10 @@ impl DfPnSolver {
         let mut arena: Vec<PnsNode> = Vec::with_capacity(
             PNS_MAX_ARENA_NODES.min(1024 * 1024),
         );
-        self.pns_main_with_arena(board, &mut arena)
+        self.skip_refutable_disproof = true;
+        let result = self.pns_main_with_arena(board, &mut arena);
+        self.skip_refutable_disproof = false;
+        result
     }
 
     /// Best-First PNS メインループ(アリーナ再利用版)．
@@ -2427,6 +2436,31 @@ impl DfPnSolver {
             verbose_eprintln!("[pns_diag] arena={}/{} iters={} nodes_used={} root_pn={} root_dn={} TT_pos={} time={:.2}s",
                 arena.len(), PNS_MAX_ARENA_NODES, pns_iters, pns_nodes_used, root_pn, root_dn,
                 self.table.len(), pns_elapsed);
+
+            // (v0.24.74 診断) root.dn==0 (false NM 疑い) のとき子ノードの状態をダンプ
+            if root_dn == 0 && root_pn != 0 && arena[0].expanded {
+                verbose_eprintln!("[pns_false_nm] root.dn=0 detected! children:");
+                for &ci in &arena[0].children {
+                    let child = &arena[ci as usize];
+                    let src = if child.expanded { "expanded" } else { "leaf" };
+                    verbose_eprintln!(
+                        "  child[{}] move={} or={} pn={} dn={} expanded={} remaining={} pk={:#x} hand={:?} src={}",
+                        ci, child.move_from_parent.to_usi(), child.or_node,
+                        child.pn, child.dn, child.expanded, child.remaining,
+                        child.pos_key, child.hand, src,
+                    );
+                    // dn=0 の子: TT にどのような NM エントリがあるか確認
+                    if child.dn == 0 {
+                        let has_proof = self.table.has_proof(child.pos_key, &child.hand);
+                        let (tt_pn, tt_dn, _) = self.table.look_up(
+                            child.pos_key, &child.hand, REMAINING_INFINITE, true);
+                        verbose_eprintln!(
+                            "    TT lookup: pn={} dn={} has_proof={}", tt_pn, tt_dn, has_proof);
+                        // ProvenTT のエントリを直接ダンプ
+                        self.table.dump_entries(child.pos_key, &child.hand);
+                    }
+                }
+            }
         }
 
         // 証明/反証結果を TT に格納(PV 抽出用)
@@ -2498,8 +2532,9 @@ impl DfPnSolver {
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key as u32);
                 } else if self.refutable_check_with_cache(board, pos_key, &checks) {
-                    self.store(pos_key, att_hand, INF, 0,
-                        REMAINING_INFINITE, pos_key as u32);
+                    // (v0.24.75) refutable disproof として格納．通常 lookup からは
+                    // 不可視とし PNS の arena-limited false NM を防止する．
+                    self.table.store_refutable_disproof(pos_key, att_hand);
                 } else {
                     self.store(pos_key, att_hand, INF, 0, 0, pos_key as u32);
                 }
@@ -2683,10 +2718,12 @@ impl DfPnSolver {
             // REMAINING_INFINITE 昇格: ハイブリッド判定 (上述と同じ経路)．
             if prop_rem != REMAINING_INFINITE {
                 let checks = self.generate_check_moves_cached(board);
-                if checks.is_empty()
-                    || self.refutable_check_with_cache(board, pos_key, &checks)
-                {
+                if checks.is_empty() {
                     prop_rem = REMAINING_INFINITE;
+                } else if self.refutable_check_with_cache(board, pos_key, &checks) {
+                    // (v0.24.75) refutable disproof として格納
+                    self.table.store_refutable_disproof(pos_key, att_hand);
+                    return;
                 }
             }
             self.store(pos_key, att_hand, INF, 0, prop_rem, pos_key as u32);
@@ -3056,6 +3093,17 @@ impl DfPnSolver {
         #[cfg(feature = "verbose")]
         {
             self.dbg_pns_proof_stores += proof_store_count;
+        }
+        #[cfg(feature = "tt_diag")]
+        {
+            for node in arena {
+                if node.pn == 0 && node.expanded && !node.children.is_empty() {
+                    let ply = self.depth.saturating_sub(node.remaining as u32) as usize;
+                    if ply < 64 {
+                        self.diag_pns_proof_ply[ply] += 1;
+                    }
+                }
+            }
         }
         proof_store_count
     }

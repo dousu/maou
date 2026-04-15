@@ -2932,6 +2932,133 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: /tmp/tsume_39te_backward_500m.log");
     }
 
+    /// 39手詰め ply 18 (残り21手) を単独で解いて挙動を診断する．
+    ///
+    /// v0.24.78 backward_500m で ply 18 は Mate(21) を 387M nodes / 2384s
+    /// で解決．ply 20 (Mate(19), 163M nodes / 910s) と比較して
+    /// **2.4× nodes / 2.6× time** で異常に重い．
+    ///
+    /// 本テストは ply 18 のみを解き，verbose+tt_diag+profile で
+    /// 詳細な内部状態を出力する．特に:
+    /// - PNS iter / cycle 数の推移
+    /// - refut_rec_true/false の比率
+    /// - disproof inserts の内訳 (confirmed/refutable/working)
+    /// - TT 構成 (proven/disproven/intermediate)
+    /// - max_ply (探索深さ)
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   --features verbose,tt_diag,profile \
+    ///   test_tsume_39te_ply18_solo -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply18_solo() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply18_solo.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        // PV を 0..18 ply まで進めて ply 18 局面 (攻め番=OR ノード) を構築
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in pv.iter().take(18) {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        let remaining = 39 - 18;
+        let depth = (remaining + 2).min(41) as u32;
+        let node_limit: u64 = 30_000_000;
+        let timeout: u64 = 480;
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 39手詰め ply 18 単独 (残り21手, depth={}, 30M / 480s)", depth).unwrap();
+        writeln!(out, " SFEN: {}", board.sfen()).unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+        let mut solver = DfPnSolver::with_timeout(depth, node_limit, 32767, timeout);
+        solver.set_find_shortest(false);
+
+        let start = Instant::now();
+        let result = solver.solve(&mut board);
+        let elapsed = start.elapsed();
+
+        let result_str = match &result {
+            TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+            TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+            TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+            TsumeResult::Unknown { .. } => "Unknown".to_string(),
+        };
+        let nps_k = if elapsed.as_secs_f64() > 0.0 {
+            (solver.nodes_searched as f64 / elapsed.as_secs_f64()) / 1000.0
+        } else { 0.0 };
+
+        writeln!(out, "  result   = {}", result_str).unwrap();
+        writeln!(out, "  time     = {:.2}s", elapsed.as_secs_f64()).unwrap();
+        writeln!(out, "  nodes    = {}", solver.nodes_searched).unwrap();
+        writeln!(out, "  NPS      = {:.1}k", nps_k).unwrap();
+        writeln!(out, "  max_ply  = {}", solver.max_ply).unwrap();
+        writeln!(out, "  TT_pos   = {}", solver.table.len()).unwrap();
+
+        #[cfg(feature = "verbose")]
+        {
+            writeln!(out, "\n--- PNS diagnostics ---").unwrap();
+            writeln!(out, "  pns_spin_iters    = {}", solver.dbg_pns_spin_iters).unwrap();
+            writeln!(out, "  pns_changed_iters = {}", solver.dbg_pns_changed_iters).unwrap();
+            writeln!(out, "  pns_proof_stores  = {}", solver.dbg_pns_proof_stores).unwrap();
+            writeln!(out, "  pns_arena_growth  = {}", solver.dbg_pns_arena_growth).unwrap();
+            writeln!(out, "  pns_cycles        = {}", solver.dbg_pns_cycles).unwrap();
+            writeln!(out, "\n--- refutable check ---").unwrap();
+            writeln!(out, "  refut_tt_hits     = {}", solver.dbg_refut_tt_hits).unwrap();
+            writeln!(out, "  refut_memo_hits   = {}", solver.dbg_refut_memo_hits).unwrap();
+            writeln!(out, "  refut_rec_true    = {}", solver.dbg_refut_recursive_true).unwrap();
+            writeln!(out, "  refut_rec_false   = {}", solver.dbg_refut_recursive_false).unwrap();
+        }
+
+        #[cfg(feature = "tt_diag")]
+        {
+            let tt_proven = solver.table.count_proven();
+            let tt_disproven = solver.table.count_disproven();
+            let tt_intermediate = solver.table.count_intermediate();
+            writeln!(out, "\n--- TT composition ---").unwrap();
+            writeln!(out, "  proven       = {}", tt_proven).unwrap();
+            writeln!(out, "  disproven    = {}", tt_disproven).unwrap();
+            writeln!(out, "  intermediate = {}", tt_intermediate).unwrap();
+            writeln!(out, "\n--- disproof inserts ---").unwrap();
+            writeln!(out, "  confirmed     = {}", solver.table.diag_disproof_confirmed).unwrap();
+            writeln!(out, "  refutable     = {}", solver.table.diag_disproof_refutable).unwrap();
+            writeln!(out, "  refutable_skip= {}", solver.table.diag_disproof_refutable_skip).unwrap();
+            writeln!(out, "  working       = {}", solver.table.diag_disproof_working).unwrap();
+        }
+
+        #[cfg(feature = "profile")]
+        {
+            solver.sync_tt_profile();
+            writeln!(out, "\n--- profile stats ---").unwrap();
+            writeln!(out, "{}", solver.profile_stats).unwrap();
+        }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_ply18_solo.log");
+    }
+
     /// 39手詰め ply 20 の NPS 時間依存性を診断する．
     ///
     /// `test_tsume_39te_backward_120m` では ply 20 の NPS が 6 kn/s と異常に
@@ -7102,6 +7229,42 @@ use crate::types::{Color, PieceType};
                 writeln!(out, "    init_and_disp_exits = {}", solver.diag_init_and_disproof_exits).unwrap();
                 writeln!(out, "    single_child_exits = {}", solver.diag_single_child_exits).unwrap();
                 writeln!(out, "    node_limit_exits   = {}", solver.diag_node_limit_exits).unwrap();
+                writeln!(out, "    --- depth boundary diagnostics ---").unwrap();
+                writeln!(out, "    rem0_proof               = {}", solver.diag_rem0_proof).unwrap();
+                writeln!(out, "    rem0_provisional         = {}", solver.diag_rem0_provisional).unwrap();
+                let rem0_total = solver.diag_rem0_proof + solver.diag_rem0_provisional;
+                if rem0_total > 0 {
+                    let proof_rate = solver.diag_rem0_proof as f64
+                        / rem0_total as f64 * 100.0;
+                    writeln!(out, "    rem0_proof_rate          = {:.1}%", proof_rate).unwrap();
+                }
+                writeln!(out, "    boundary_or_no_checks    = {}", solver.diag_boundary_or_no_checks).unwrap();
+                writeln!(out, "    boundary_or_refutable    = {}", solver.diag_boundary_or_refutable).unwrap();
+                writeln!(out, "    boundary_or_not_refutable= {}", solver.diag_boundary_or_not_refutable).unwrap();
+                writeln!(out, "    boundary_and_total       = {}", solver.diag_boundary_and_total).unwrap();
+                let boundary_or_total = solver.diag_boundary_or_no_checks
+                    + solver.diag_boundary_or_refutable
+                    + solver.diag_boundary_or_not_refutable;
+                writeln!(out, "    boundary_or_total        = {}", boundary_or_total).unwrap();
+                if boundary_or_total > 0 {
+                    let thrash_pct = solver.diag_boundary_or_not_refutable as f64
+                        / boundary_or_total as f64 * 100.0;
+                    writeln!(out, "    boundary_thrash_rate     = {:.1}%", thrash_pct).unwrap();
+                    let refutable_with_checks = solver.diag_boundary_or_refutable
+                        + solver.diag_boundary_or_not_refutable;
+                    if refutable_with_checks > 0 {
+                        let avg_checks = solver.diag_boundary_or_checks_sum as f64
+                            / refutable_with_checks as f64;
+                        writeln!(out, "    boundary_avg_checks      = {:.1}", avg_checks).unwrap();
+                    }
+                }
+                writeln!(out, "    pns_proof_ply (non-zero):").unwrap();
+                for (i, v) in solver.diag_pns_proof_ply.iter().enumerate() {
+                    if *v > 0 {
+                        writeln!(out, "      ply {:2}: pns_proofs={}", i, v).unwrap();
+                    }
+                }
+                writeln!(out, "    --- ply visits ---").unwrap();
                 writeln!(out, "    ply_visits (non-zero):").unwrap();
                 for (i, v) in solver.diag_ply_visits.iter().enumerate() {
                     if *v > 0 {
@@ -7114,6 +7277,11 @@ use crate::types::{Color, PieceType};
                 let tt_intermediate = solver.table.count_intermediate();
                 writeln!(out, "    TT composition: proven={} disproven={} intermediate={}",
                     tt_proven, tt_disproven, tt_intermediate).unwrap();
+                writeln!(out, "    disproof inserts: confirmed={} refutable={} (skip={}) working={}",
+                    solver.table.diag_disproof_confirmed,
+                    solver.table.diag_disproof_refutable,
+                    solver.table.diag_disproof_refutable_skip,
+                    solver.table.diag_disproof_working).unwrap();
             }
             #[cfg(feature = "profile")]
             {
@@ -7209,6 +7377,13 @@ use crate::types::{Color, PieceType};
             let mut test_board = board24.clone();
             let mut solver = DfPnSolver::with_timeout(depth, max_nodes, 32767, timeout_s);
             solver.set_find_shortest(false);
+            // 環境変数でパラメータチューニング (施策 B)
+            if let Ok(v) = std::env::var("REFUT_DEPTH") {
+                let d: u32 = v.parse().unwrap_or(5);
+                let l: u32 = std::env::var("REFUT_LIMIT")
+                    .ok().and_then(|s| s.parse().ok()).unwrap_or(10_000);
+                solver.set_refutable_params(d, l);
+            }
             let start = Instant::now();
             let result = solver.solve(&mut test_board);
             let elapsed = start.elapsed();

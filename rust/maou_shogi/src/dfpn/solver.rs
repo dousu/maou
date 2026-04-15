@@ -155,8 +155,8 @@ impl PostCaptureSummary {
     /// disproof hand を lookup する．
     /// `max_disproof_hand ≥_fc hand` なら disproven と判定可能．
     ///
-    /// 現在は reverse\_disproof\_sharing が TT を直接参照するため未使用．
-    /// 将来の Disproof-Aware Prefilter (施策 A1-3) で使用予定．
+    /// 現在は reverse\_disproof\_sharing (v0.24.61+) が TT を直接参照するため未使用．
+    /// dead code (削除候補)．
     #[inline]
     #[allow(dead_code)]
     fn lookup_disproof(&self, pos_key: u64) -> Option<&[u8; HAND_KINDS]> {
@@ -252,7 +252,7 @@ pub struct DfPnSolver {
     #[cfg(feature = "tt_diag")]
     pub(super) diag_pc_summary_proof_hits: u64,
     /// サマリキャッシュの disproof ヒット回数 (tt_diag 診断用)．
-    /// 現在は未使用 (Disproof-Aware Prefilter 施策 A1-3 で使用予定)．
+    /// 現在は未使用．dead code (削除候補)．
     #[cfg(feature = "tt_diag")]
     #[allow(dead_code)]
     pub(super) diag_pc_summary_disproof_hits: u64,
@@ -406,25 +406,39 @@ pub struct DfPnSolver {
     #[cfg(feature = "tt_diag")]
     pub(super) diag_a4_inflations: u64,
     /// TT 診断: 施策 α (v0.24.54-v0.24.72) で境界層 filter が発火した MID 数．
-    /// 施策 α 再有効化まで dead code．
+    /// 施策 α は v0.24.72 で不採用確定．dead code (削除候補)．
     #[cfg(feature = "tt_diag")]
     #[allow(dead_code)]
     pub(super) diag_alpha_x_filter_applied: u64,
     /// 施策 α (v0.24.54-v0.24.72): chain drop filter フラグ．
-    /// v0.24.72 で filter 無効化後は常に false．tag infrastructure の
-    /// save/restore パターン保持のため field は残留．
-    /// 施策 α 再有効化まで dead code．
+    /// v0.24.72 で filter 無効化後は常に false．施策 α は refutable disproof
+    /// 機構 (v0.24.75+, aigoma-optimization.md §8.9) で代替されており，
+    /// 再有効化の予定なし．dead code (削除候補)．
     pub(super) alpha_x_filter_active: bool,
     /// Warmup モード (v0.24.68-v0.24.73): true の場合，mid_fallback 入口で
     /// ProvenTT の非 proof のみ除去し WorkingTT intermediate を保持する．
     ///
-    /// v0.24.73 で warmup 段間 intermediate 保持を revert したため，
-    /// 現在は solver.rs の warmup ループで true に設定されない．
-    /// pns.rs の nested warmup でのみ true に設定される．
+    /// v0.24.73 で warmup 段間 intermediate 保持を revert．さらに
+    /// v0.24.78 で `skip_warmup=true` デフォルト化により solver.rs の warmup
+    /// ループ自体が実行されない (§11.6 単一スレッド方針下で warmup 不要)．
+    /// 現在 `true` に設定されるのは `pns.rs` の nested warmup
+    /// (IDS 内 warmup mid_fallback) のみ．
     pub(super) warmup_mode: bool,
+    /// PNS 探索中に true に設定し，`look_up_pn_dn` で refutable disproof を
+    /// スキップする (v0.24.75)．PNS の arena-limited false NM を防止．
+    /// MID 探索では false (refutable disproof を通常の NM として使用)．
+    pub(super) skip_refutable_disproof: bool,
+    /// 施策 C (v0.24.77): warmup を無効化するフラグ．
+    /// refutable disproof 機構が NM 蓄積を提供するため warmup は冗長．
+    /// デフォルト true = warmup 無効．set_skip_warmup(false) で再有効化可能．
+    pub(super) skip_warmup: bool,
+    /// refutable check の再帰深さ (デフォルト 5)．
+    pub(super) param_refutable_depth: u32,
+    /// refutable check の呼び出し回数上限 (デフォルト 10,000)．
+    pub(super) param_refutable_call_limit: u32,
     /// 施策 A-6 (v0.24.54, v0.24.71 で施策α に置き換え後 v0.24.72 で無効化):
-    /// 境界層 PNS 責任転嫁の残り呼出予算．
-    /// 施策 α 再有効化まで dead code．
+    /// 境界層 PNS 責任転嫁の残り呼出予算．施策 α が refutable disproof
+    /// 機構で代替されたため再有効化の予定なし．dead code (削除候補)．
     #[allow(dead_code)]
     pub(super) a6_boundary_pns_calls_remaining: u32,
     /// TT 診断: AND ノード MID ループで deferred_children あり & all_proved=false の回数．
@@ -503,6 +517,30 @@ pub struct DfPnSolver {
     /// TT 診断: ノード制限によるリターン回数．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_node_limit_exits: u64,
+    /// TT 診断: depth 境界 OR ノードで王手なし(NM store)の回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_boundary_or_no_checks: u64,
+    /// TT 診断: depth 境界 OR ノードで全王手 refutable(NM store)の回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_boundary_or_refutable: u64,
+    /// TT 診断: depth 境界 OR ノードで王手 not all refutable(仮反証，store なし)の回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_boundary_or_not_refutable: u64,
+    /// TT 診断: depth 境界 AND ノードのヒット回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_boundary_and_total: u64,
+    /// TT 診断: depth 境界 OR ノードでの王手手数の合計(平均算出用)．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_boundary_or_checks_sum: u64,
+    /// TT 診断: PNS proof store の ply 分布(最大 64 手)．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_pns_proof_ply: [u64; 64],
+    /// TT 診断: remaining=0 で proof 発見(仮反証回避)の回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_rem0_proof: u64,
+    /// TT 診断: remaining=0 で仮反証(provisional disproof)を返した回数．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_rem0_provisional: u64,
 }
 
 impl DfPnSolver {
@@ -615,6 +653,10 @@ impl DfPnSolver {
             diag_alpha_x_filter_applied: 0,
             alpha_x_filter_active: false,
             warmup_mode: false,
+            skip_refutable_disproof: false,
+            skip_warmup: true,
+            param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
+            param_refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
             a6_boundary_pns_calls_remaining: 0,
             #[cfg(feature = "tt_diag")]
             diag_deferred_not_ready: 0,
@@ -662,6 +704,22 @@ impl DfPnSolver {
             diag_single_child_exits: 0,
             #[cfg(feature = "tt_diag")]
             diag_node_limit_exits: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_boundary_or_no_checks: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_boundary_or_refutable: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_boundary_or_not_refutable: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_boundary_and_total: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_boundary_or_checks_sum: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_pns_proof_ply: [0u64; 64],
+            #[cfg(feature = "tt_diag")]
+            diag_rem0_proof: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_rem0_provisional: 0,
         }
     }
 
@@ -717,6 +775,24 @@ impl DfPnSolver {
     /// 残りを最終 solve に使用する．
     pub fn set_warmup_depths(&mut self, depths: &[u32]) -> &mut Self {
         self.warmup_depths = depths.to_vec();
+        self
+    }
+
+    /// refutable check のパラメータを設定する (v0.24.76)．
+    pub fn set_refutable_params(&mut self, depth: u32, call_limit: u32) -> &mut Self {
+        self.param_refutable_depth = depth;
+        self.param_refutable_call_limit = call_limit;
+        self
+    }
+
+    /// warmup の有効/無効を設定する (v0.24.77 施策 C)．
+    ///
+    /// デフォルト skip=true (warmup 無効)．refutable disproof 機構が
+    /// NM 蓄積を提供するため warmup は冗長で budget を無駄にする．
+    /// v0.24.77 の backward_10m_warmup で ply 22 が no-warmup の Mate(17) →
+    /// warmup 使用時 Unknown に退行することを確認．
+    pub fn set_skip_warmup(&mut self, skip: bool) -> &mut Self {
+        self.skip_warmup = skip;
         self
     }
 
@@ -814,7 +890,18 @@ impl DfPnSolver {
             }
             return (INF, 0, 0);
         }
-        let result = self.table.look_up(pos_key, hand, remaining, neighbor_scan);
+        // (v0.24.79) PNS 探索中 (skip_refutable_disproof=true) は ProvenTT
+        // Pass 2 内で refutable disproof を直接スキップする版を使い，
+        // disproof ヒット時のクラスタ走査を 1 回に削減する．以前は
+        // look_up → is_refutable_disproof_at の 2 段スキャンだった．
+        // ヒットしなかった場合は自然に (PN_UNIT, PN_UNIT, 0) が返る
+        // (= 未探索ノード扱い) ため，arena-limited false NM を防止する．
+        let result = if self.skip_refutable_disproof {
+            self.table
+                .look_up_skip_refutable(pos_key, hand, remaining, neighbor_scan)
+        } else {
+            self.table.look_up(pos_key, hand, remaining, neighbor_scan)
+        };
         if result.0 == PN_UNIT && result.1 == PN_UNIT && result.2 == 0 {
             // TT ミス: Deep df-pn バイアスを適用(深い ply のみ)
             let ply = (self.depth as u32).saturating_sub(remaining as u32);
@@ -875,8 +962,10 @@ impl DfPnSolver {
     /// ルーティングするため，ProvenTT のみが影響を受け WorkingTT への
     /// 副作用はない．
     ///
-    /// 施策 α (v0.24.54-v0.24.72): filter 無効化後は tag routing は
-    /// 行われない．Tag 付き proof の格納は `store_proof_with_tag` で行う．
+    /// v0.24.72 の施策 α 不採用により，本関数は常に ABSOLUTE tag で proof を
+    /// 格納する．`store_proof_with_tag` は dead code．disproof は通常の
+    /// confirmed disproof として格納され，refutable disproof は
+    /// `store_refutable_disproof` (v0.24.75) で別経路から格納される．
     #[inline]
     pub(super) fn store(
         &mut self,
@@ -938,9 +1027,11 @@ impl DfPnSolver {
 
     /// Tag 付き proof を転置表に格納する (v0.24.71)．
     ///
-    /// v0.24.72 で施策α filter 無効化後は tag propagation infrastructure
-    /// の一部として保持．filter_applied が常に false のため現在は
-    /// AND proof store の条件分岐から到達しない．
+    /// **注意**: 施策 α が v0.24.72 で不採用確定したため，本関数の呼び出し
+    /// 経路はすべて実行されない (filter_applied=false または
+    /// child_tag!=ABSOLUTE の条件が満たされない)．dead code．
+    /// refutable disproof 機構 (v0.24.75+) は別経路 (`store_refutable_disproof`)
+    /// を使用するため本関数に依存しない．
     #[inline]
     pub(super) fn store_proof_with_tag(
         &mut self,
@@ -1155,7 +1246,11 @@ impl DfPnSolver {
             // 早期終了:
             // - warmup で proved (pn=0) → main solve 不要
             // - warmup が proof を 1 件も蓄積しなかった → 以降スキップ
-            if !self.warmup_depths.is_empty() {
+            // (v0.24.77 施策 C) refutable disproof 機構が NM 蓄積を提供するため，
+            // 従来の warmup は budget を消費するだけで効果が限定的．
+            // backward_10m_warmup で ply 22 が no-warmup の Mate(17) → Unknown に退行することを確認．
+            // skip_warmup フラグで明示的に無効化可能 (デフォルト true = warmup 無効)．
+            if !self.warmup_depths.is_empty() && !self.skip_warmup {
                 let warmup_depths = self.warmup_depths.clone();
                 let final_depth = self.depth;
                 let mut prev_proven_count = self.table.proven_count();
@@ -1394,8 +1489,8 @@ impl DfPnSolver {
         pos_key: u64,
         checks: &[Move],
     ) -> bool {
-        // Fast path: TT ベース判定
-        if self.all_checks_refutable_by_tt(board, checks) {
+        // Fast path: TT ベース判定 (confirmed + refutable disproof の両方を参照)
+        if self.all_checks_refutable_by_tt_or_refutable(board, checks) {
             #[cfg(feature = "verbose")]
             { self.dbg_refut_tt_hits += 1; }
             return true;
@@ -1407,6 +1502,9 @@ impl DfPnSolver {
             return false;
         }
         // Fallback: 再帰判定 (高コスト). false ならキャッシュ．
+        // true の場合は AND ノードが再帰内で ProvenTT に NM 格納済み (v0.24.74)．
+        // OR ノードは ProvenTT に格納しない — PNS の backprop で
+        // root_dn=0 の false NM を引き起こすため (v0.24.74 診断結果)．
         let result = self.depth_limit_all_checks_refutable(board, checks);
         if !result {
             self.refutable_check_failed.insert(pos_key);
@@ -1434,14 +1532,57 @@ impl DfPnSolver {
     ) -> bool {
         let mut calls: u32 = 0;
         self.all_checks_refutable_recursive(
-            board, checks, 5, &mut calls, Self::REFUTABLE_CALL_LIMIT,
+            board, checks, self.effective_refutable_depth(), &mut calls,
+            self.param_refutable_call_limit,
         )
     }
 
-    /// TT ベースの NM 昇格判定(MID 内部用)．
+    /// IDS target depth に応じた適応的 refutable check 再帰深さ (v0.24.77)．
     ///
-    /// 各王手後の AND ノードが TT 上で REMAINING_INFINITE の
-    /// 不詰として記録されているかを確認する．
+    /// `param_refutable_depth` が 0 (EFFECTIVE_DEPTH_ADAPTIVE) の場合，
+    /// outer_solve_depth (IDS target) に基づく log ベースの値を返す．
+    ///
+    /// 設計意図 (ユーザー提案):
+    /// - self.depth (現 IDS step) ではなく outer_solve_depth (target) を使用
+    ///   → IDS 中間 step 全体で d が一貫し，TT 状態の不整合を回避
+    /// - log ベースで徐々に増加して飽和
+    ///   → 浅い問題では小さい d (NPS 優先)
+    ///   → 深い問題では大きい d (NM 検出率優先)
+    ///   → 飽和点があるため無限に増えない
+    ///
+    /// 式: d = min(target.ilog2() + 1, 7).max(3)
+    /// - target=4  (log2=2): d=3
+    /// - target=8  (log2=3): d=4
+    /// - target=16 (log2=4): d=5  ← backward_10m ply 20 (target=21) baseline と一致
+    /// - target=17-31:       d=5
+    /// - target=32+:         d=6
+    /// - target=64+:         d=7 (飽和)
+    #[inline]
+    fn effective_refutable_depth(&self) -> u32 {
+        if self.param_refutable_depth != Self::EFFECTIVE_DEPTH_ADAPTIVE {
+            return self.param_refutable_depth;
+        }
+        let target = if self.outer_solve_depth > 0 {
+            self.outer_solve_depth
+        } else {
+            self.depth
+        };
+        if target == 0 {
+            return 3;
+        }
+        let log_val = (target as u32).ilog2() + 1;
+        log_val.min(7).max(3)
+    }
+
+    /// `param_refutable_depth = 0` は適応的 depth を意味する sentinel．
+    const EFFECTIVE_DEPTH_ADAPTIVE: u32 = 0;
+
+    /// TT ベースの NM 昇格判定(MID depth boundary 用)．
+    ///
+    /// 各王手後の AND ノードが ProvenTT に disproof として格納されているかを
+    /// 確認する．`look_up` は confirmed / refutable 両方の disproof を返す
+    /// (TT レベルではエントリ種別を区別しない)ため，MID 経路では
+    /// refutable disproof も含めて NM 昇格の根拠として使用される．
     /// do_move + TT ルックアップのみで判定するため極めて高速
     /// (~2μs/王手)．TT にエントリがない場合は保守的に false を返す．
     pub(super) fn all_checks_refutable_by_tt(
@@ -1453,27 +1594,58 @@ impl DfPnSolver {
             let captured = board.do_move(*check);
             let pk = position_key(board);
             let att_hand = board.hand[self.attacker.index()];
-            // AND ノードが TT で REMAINING_INFINITE の不詰か確認
+            // look_up は confirmed/refutable disproof 両方を返す
+            // (TT レベルでは種別を区別しない; PNS 側のみ
+            // skip_refutable_disproof で refutable を除外する)
             let (_, dn, _) = self.table.look_up(pk, &att_hand, REMAINING_INFINITE, false);
             board.undo_move(*check, captured);
             if dn != 0 {
-                // この王手後の局面が TT で不詰確定していない → 昇格不可
                 return false;
             }
         }
         true
     }
 
-    /// 呼び出し回数上限．組合せ爆発を防止する．
-    /// 各呼び出しで generate_defense_moves + generate_check_moves を実行するため，
-    /// デバッグビルドでの実行時間を考慮して小さめに設定する．
-    const REFUTABLE_CALL_LIMIT: u32 = 10_000;
+    /// TT ベースの NM 昇格判定(PNS refutable check fast path 用, v0.24.75)．
+    ///
+    /// `all_checks_refutable_by_tt` と同様だが，ProvenTT の refutable
+    /// disproof (再帰判定で格納されたもの) も含めて参照する．
+    /// PNS の `refutable_check_with_cache` の高速パスとして使用する．
+    fn all_checks_refutable_by_tt_or_refutable(
+        &mut self,
+        board: &mut Board,
+        checks: &[Move],
+    ) -> bool {
+        for check in checks {
+            let captured = board.do_move(*check);
+            let pk = position_key(board);
+            let att_hand = board.hand[self.attacker.index()];
+            let found = self.table.has_refutable_or_confirmed_disproof(pk, &att_hand);
+            board.undo_move(*check, captured);
+            if !found {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// デフォルトの refutable check 呼び出し回数上限．
+    const DEFAULT_REFUTABLE_CALL_LIMIT: u32 = 10_000;
+    /// デフォルトの refutable check 再帰深さ (0 = 適応的，self.depth に基づく)．
+    const DEFAULT_REFUTABLE_DEPTH: u32 = 0;
 
     /// `depth_limit_all_checks_refutable` の再帰本体．
     ///
     /// `depth` は残りの再帰深さ(0 で打ち切り)．各再帰レベルで
     /// 王手→応手→次の王手 を確認し，最大 `depth` 段階まで追跡する．
     /// `calls` は呼び出し回数カウンタで，`limit` 超過時は false を返す．
+    ///
+    /// 各王手の反証が成功した場合，AND ノードを ProvenTT に refutable
+    /// disproof として格納する (v0.24.75)．TT レベルでは confirmed と
+    /// 区別せず，`look_up_proven` / `all_checks_refutable_by_tt` から
+    /// 可視．PNS 経路のみ `look_up_proven_skip_refutable` が bit 7 を
+    /// 見て読み飛ばすことで arena-limited false NM を防止しつつ，
+    /// 再帰判定結果を TT に蓄積する．
     pub(super) fn all_checks_refutable_recursive(
         &mut self,
         board: &mut Board,
@@ -1481,6 +1653,18 @@ impl DfPnSolver {
         depth: u32,
         calls: &mut u32,
         limit: u32,
+    ) -> bool {
+        self.all_checks_refutable_recursive_inner(board, checks, depth, calls, limit, true)
+    }
+
+    fn all_checks_refutable_recursive_inner(
+        &mut self,
+        board: &mut Board,
+        checks: &[Move],
+        depth: u32,
+        calls: &mut u32,
+        limit: u32,
+        store_nm: bool,
     ) -> bool {
         for check in checks {
             *calls += 1;
@@ -1503,9 +1687,11 @@ impl DfPnSolver {
                     break;
                 }
                 // 再帰: 次の王手もすべて反証可能か確認
+                // 全レベルで store_nm を伝搬 — refutable disproof として格納し
+                // hand_gte 支配チェックで冗長エントリを圧縮する (v0.24.76)
                 if depth > 0
-                    && self.all_checks_refutable_recursive(
-                        board, &next_checks, depth - 1, calls, limit,
+                    && self.all_checks_refutable_recursive_inner(
+                        board, &next_checks, depth - 1, calls, limit, store_nm,
                     )
                 {
                     board.undo_move(*defense, cap_d);
@@ -1513,6 +1699,16 @@ impl DfPnSolver {
                     break;
                 }
                 board.undo_move(*defense, cap_d);
+            }
+            // (v0.24.75) 反証成功した AND ノードを refutable disproof として
+            // ProvenTT に格納．TT レベルでは通常の disproof と区別されないため
+            // look_up_proven / all_checks_refutable_by_tt からは可視．
+            // PNS 経路のみ look_up_proven_skip_refutable が bit 7 を見て
+            // 読み飛ばすことで arena-limited false NM を防止する．
+            if has_refuting_defense && store_nm {
+                let and_pk = position_key(board);
+                let and_hand = board.hand[self.attacker.index()];
+                self.table.store_refutable_disproof(and_pk, and_hand);
             }
             board.undo_move(*check, captured);
             if !has_refuting_defense {
@@ -1661,6 +1857,13 @@ impl DfPnSolver {
             #[cfg(feature = "tt_diag")]
             {
                 self.diag_terminal_exits += 1;
+                if remaining == 0 {
+                    if tt_pn == 0 {
+                        self.diag_rem0_proof += 1;
+                    } else {
+                        self.diag_rem0_provisional += 1;
+                    }
+                }
                 if ply == self.diag_ply && self.diag_terminal_exits <= 3 {
                     verbose_eprintln!("[tt_diag] ply={} terminal exit: tt_pn={} tt_dn={} remaining={}",
                         ply, tt_pn, tt_dn, remaining);
@@ -1703,16 +1906,32 @@ impl DfPnSolver {
             if or_node {
                 let checks = self.generate_check_moves_cached(board);
                 if checks.is_empty() {
+                    #[cfg(feature = "tt_diag")]
+                    { self.diag_boundary_or_no_checks += 1; }
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key as u32);
                 } else if self.all_checks_refutable_by_tt(board, &checks) {
+                    #[cfg(feature = "tt_diag")]
+                    {
+                        self.diag_boundary_or_refutable += 1;
+                        self.diag_boundary_or_checks_sum += checks.len() as u64;
+                    }
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key as u32);
+                } else {
+                    // rem=0 の仮反証は TT に store しない
+                    // (クラスタの 64.7% を占め overflow の主因)
+                    #[cfg(feature = "tt_diag")]
+                    {
+                        self.diag_boundary_or_not_refutable += 1;
+                        self.diag_boundary_or_checks_sum += checks.len() as u64;
+                    }
                 }
-                // else: rem=0 の仮反証は TT に store しない
-                // (クラスタの 64.7% を占め overflow の主因)
+            } else {
+                // AND ノードの深さ制限: rem=0 は TT に store しない
+                #[cfg(feature = "tt_diag")]
+                { self.diag_boundary_and_total += 1; }
             }
-            // AND ノードの深さ制限: rem=0 は TT に store しない
             #[cfg(feature = "profile")]
             {
                 self.profile_stats.depth_limit_terminal_ns += _depth_limit_start.elapsed().as_nanos() as u64;
@@ -1732,17 +1951,15 @@ impl DfPnSolver {
 
         let save_alpha_x = self.alpha_x_filter_active;
 
-        // 施策 α (v0.24.71): boundary chain drop filter は Frontier variant
-        // の PNS→MID サイクルとの相互作用で false proof が ABSOLUTE tag で
-        // 格納される問題があり，現時点では無効化．
-        // tag-aware look_up / tag propagation の infrastructure は保持する
-        // (将来の施策で活用可能)．
+        // 施策 α (boundary chain drop filter, v0.24.47-72): PNS→MID サイクル
+        // の filter context 非伝達問題で false proof を生成するため v0.24.72
+        // で不採用確定．refutable disproof 機構 (v0.24.75+) で代替済み．
         //
-        // 失敗の根本原因: PNS は filter context を認識せず，filter で除去した
-        // defense を含まない局面を ABSOLUTE proof として格納する．MID 内の
-        // filter_applied tracking では PNS 経由の proof を制御できない．
-        // 施策 α 再有効化まで常に false．以下の `if filter_applied { ... }` 分岐
-        // は dead code だが tag infrastructure 保持のため条件判定は残す．
+        // proof_tag propagation infrastructure (get_proof_tag / store_proof_with_tag
+        // 等) も連動して dead code 化．以下の `if filter_applied { ... }` 分岐および
+        // `if child_tag != ABSOLUTE { ... }` 分岐は条件判定のみ残るが，
+        // filter_applied=false により実行経路に到達しない．
+        // (削除候補: 将来のクリーンアップで一括除去可能)
         let filter_applied = false;
 
         // Dynamic Move Ordering: TT Best Move + Killer Moves
@@ -3754,6 +3971,10 @@ impl DfPnSolver {
     }
 
     /// 施策 A-6 再評価 (v0.24.54): 境界層 PNS 責任転嫁．
+    ///
+    /// **注意**: v0.24.72 の施策 α 不採用および refutable disproof 機構
+    /// (v0.24.75+) の導入により，本関数は現在の solve() 経路から呼び出されない．
+    /// dead code (削除候補)．以下の記述は履歴としての参考．
     ///
     /// MID の AND 境界層 (`remaining <= 2 && chain_bb_cache 非空`) で呼び出され，
     /// 通常の MID 再帰の代わりに **小規模 arena での PNS** を起動する．
