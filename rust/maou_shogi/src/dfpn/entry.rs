@@ -472,8 +472,17 @@ pub(super) struct PnsNode {
     pub(super) deferred_drops: VecDeque<Move>,
 }
 
-/// PNS アリーナの最大ノード数(メモリ上限)．
+/// PNS アリーナの**デフォルト**最大ノード数(メモリ上限)．
 ///
 /// 1ノード ≈ 80〜120 bytes(children Vec 含む)．
 /// 5M ノードで約 400〜600 MB を使用する．
+///
+/// v0.25.0 以降は `DfPnSolver::param_pns_arena_max` で実行時に変更可能．
+/// この定数はデフォルト値および初期 `Vec::with_capacity` の上限として使用する．
 pub(super) const PNS_MAX_ARENA_NODES: usize = 5_000_000;
+
+/// PNS アリーナの初期確保容量上限 (1M ノード)．
+///
+/// `param_pns_arena_max` を大きく設定しても起動時の物理メモリ確保は
+/// この値で抑えて成長は Vec 自動拡張に任せる．
+pub(super) const PNS_INIT_CAPACITY_CAP: usize = 1024 * 1024;

@@ -14,7 +14,7 @@ use crate::movegen;
 use crate::moves::Move;
 use crate::types::{Color, Piece, PieceType, Square, HAND_KINDS};
 
-use super::entry::{PnsNode, PNS_MAX_ARENA_NODES};
+use super::entry::{PnsNode, PNS_INIT_CAPACITY_CAP};
 use super::solver::{DfPnSolver, TsumeResult};
 use super::{
     adjust_hand_for_move, edge_cost_and, edge_cost_or,
@@ -1922,8 +1922,9 @@ impl DfPnSolver {
         // アリーナを1回確保し，サイクル間で再利用する(方針C)．
         // arena.clear() は内部の PnsNode を drop するが，外側 Vec の
         // capacity は保持されるため再確保コストを回避できる．
+        // 初期確保は INIT_CAPACITY_CAP で抑え，必要に応じて Vec 自動拡張に任せる．
         let mut arena: Vec<PnsNode> = Vec::with_capacity(
-            PNS_MAX_ARENA_NODES.min(1024 * 1024),
+            self.param_pns_arena_max.min(PNS_INIT_CAPACITY_CAP),
         );
 
         let mut frontier_iters = 0u32;
@@ -2063,11 +2064,11 @@ impl DfPnSolver {
     /// pn/dn をルートまでバックアップする．df-pn の閾値制御を必要とせず，
     /// グローバルに最適なノード選択を行う．
     ///
-    /// アリーナが `PNS_MAX_ARENA_NODES` に達した場合は探索を打ち切り，
-    /// 呼び出し元で MID ベースの探索にフォールバックする．
+    /// アリーナが `param_pns_arena_max` (デフォルト 5M) に達した場合は探索を
+    /// 打ち切り，呼び出し元で MID ベースの探索にフォールバックする．
     pub(super) fn pns_main(&mut self, board: &mut Board) -> Option<Vec<Move>> {
         let mut arena: Vec<PnsNode> = Vec::with_capacity(
-            PNS_MAX_ARENA_NODES.min(1024 * 1024),
+            self.param_pns_arena_max.min(PNS_INIT_CAPACITY_CAP),
         );
         self.skip_refutable_disproof = true;
         let result = self.pns_main_with_arena(board, &mut arena);
@@ -2150,7 +2151,7 @@ impl DfPnSolver {
                 break;
             }
             // 終了条件: アリーナ満杯
-            if arena.len() >= PNS_MAX_ARENA_NODES {
+            if arena.len() >= self.param_pns_arena_max {
                 break;
             }
             // 終了条件: PNS 収束停滞(root_pn ベース)
@@ -2434,7 +2435,7 @@ impl DfPnSolver {
             let root_dn = arena[0].dn;
             let pns_elapsed = self.start_time.elapsed().as_secs_f64();
             verbose_eprintln!("[pns_diag] arena={}/{} iters={} nodes_used={} root_pn={} root_dn={} TT_pos={} time={:.2}s",
-                arena.len(), PNS_MAX_ARENA_NODES, pns_iters, pns_nodes_used, root_pn, root_dn,
+                arena.len(), self.param_pns_arena_max, pns_iters, pns_nodes_used, root_pn, root_dn,
                 self.table.len(), pns_elapsed);
 
             // (v0.24.74 診断) root.dn==0 (false NM 疑い) のとき子ノードの状態をダンプ

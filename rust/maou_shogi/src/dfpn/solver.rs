@@ -11,7 +11,7 @@ use crate::movegen;
 use crate::moves::Move;
 use crate::types::{Color, Piece, PieceType, Square, HAND_KINDS};
 
-use super::entry::PnsNode;
+use super::entry::{PnsNode, PNS_MAX_ARENA_NODES};
 use super::tt::TranspositionTable;
 #[cfg(feature = "profile")]
 use super::profile::ProfileStats;
@@ -284,6 +284,20 @@ pub struct DfPnSolver {
     pub(super) param_dn_floor_mult: u32,
     /// Deep df-pn の深さ係数 R(デフォルト 4)．
     pub(super) param_deep_dfpn_r: u32,
+    /// PNS アリーナの最大ノード数 (v0.25.0)．
+    ///
+    /// デフォルトは `PNS_MAX_ARENA_NODES` (5M)．大きくすると spin 率が下がる
+    /// 代わりにメモリ消費が増える (1 ノード ≈ 80〜120 bytes)．
+    /// 例: 10M で約 800〜1,200 MB．
+    pub(super) param_pns_arena_max: usize,
+    /// 深さ制限反証 (depth-limited disproof) を WorkingTT に格納する
+    /// 最小 `remaining` 閾値 (v0.25.0)．
+    ///
+    /// `remaining < param_disproof_remaining_threshold` の depth-limited
+    /// disproof は格納をスキップする (path_dependent と confirmed disproof は
+    /// 対象外)．デフォルト 0 (スキップなし = 従来動作)．
+    /// ply 18 ベンチマークでは WorkingTT churn (87% eviction) の削減を狙う．
+    pub(super) param_disproof_remaining_threshold: u16,
     /// 段階的予算拡大の warmup depth リスト (v0.24.65)．
     ///
     /// 空ならば warmup なし．非空の場合，solve() 内で各 depth の
@@ -585,6 +599,8 @@ impl DfPnSolver {
             param_pn_floor_denom: 3,
             param_dn_floor_mult: 100,
             param_deep_dfpn_r: DEEP_DFPN_R,
+            param_pns_arena_max: PNS_MAX_ARENA_NODES,
+            param_disproof_remaining_threshold: 0,
             saved_depth_for_epsilon: 0,
             warmup_depths: Vec::new(),
             outer_solve_depth: 0,
@@ -721,6 +737,23 @@ impl DfPnSolver {
             #[cfg(feature = "tt_diag")]
             diag_rem0_provisional: 0,
         }
+    }
+
+    /// PNS アリーナの最大ノード数を設定する (v0.25.0)．
+    ///
+    /// デフォルトは `PNS_MAX_ARENA_NODES` (5M)．大きくすると arena spin 率が
+    /// 下がる代わりにメモリ消費が増える．`min_value` (1024) 未満は丸められる．
+    pub fn set_pns_arena_max(&mut self, max_nodes: usize) {
+        self.param_pns_arena_max = max_nodes.max(1024);
+    }
+
+    /// depth-limited disproof の WorkingTT 格納閾値を設定する (v0.25.0)．
+    ///
+    /// `remaining < threshold` の depth-limited disproof はスキップされる．
+    /// デフォルト 0 (スキップなし)．有効値の目安: 2〜6 程度．
+    pub fn set_disproof_remaining_threshold(&mut self, threshold: u16) {
+        self.param_disproof_remaining_threshold = threshold;
+        self.table.set_disproof_remaining_threshold(threshold);
     }
 
     /// 1+ε の実効 epsilon 除数を返す．

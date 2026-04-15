@@ -148,3 +148,5 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 93 | `store_refutable_disproof` の hand\_gte 支配チェック (83% 冗長挿入をスキップ) | maou 独自 | §6.6.3, §10.2 | v0.24.76 |
 | 94 | log-adaptive refutable check depth: `outer_solve_depth.ilog2()+1` で IDS 中間 step 一貫性 | maou 独自 | §10.2 | v0.24.77 |
 | 95 | `skip_warmup` デフォルト true: refutable disproof が NM 蓄積を代替 | maou 独自 | §10.2 | v0.24.78 |
+| 96 | PNS arena 動的容量 (`param_pns_arena_max`) | maou 独自 | §10.2.7 | v0.25.0 |
+| 97 | depth-limited disproof 選択的格納 (`disproof_remaining_threshold`) | maou 独自 | §10.2.7 | v0.25.0 |

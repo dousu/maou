@@ -217,6 +217,49 @@ use crate::types::{Color, PieceType};
         }
     }
 
+    /// B-2 correctness regression: 9手詰めが disproof 閾値を設定しても
+    /// 正しく解けることを確認 (v0.25.0)．
+    ///
+    /// `set_disproof_remaining_threshold(3)` で remaining < 3 の
+    /// depth-limited disproof を格納しないようにしても結果が変わらないこと．
+    #[test]
+    fn test_tsume_9te_with_disproof_threshold() {
+        let sfen = "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::new(15, 1_048_576, 32767);
+        solver.set_disproof_remaining_threshold(3);
+        let result = solver.solve(&mut board);
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                assert_eq!(moves.len(), 9, "9-move mate must still solve with threshold=3");
+            }
+            other => panic!("expected Checkmate with threshold=3, got {:?}", other),
+        }
+    }
+
+    /// A-1 correctness regression: PNS arena を大きく設定しても結果が変わらないこと
+    /// (v0.25.0)．
+    #[test]
+    fn test_tsume_9te_with_large_arena() {
+        let sfen = "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::new(15, 1_048_576, 32767);
+        solver.set_pns_arena_max(20_000_000);
+        let result = solver.solve(&mut board);
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                assert_eq!(moves.len(), 9, "9-move mate must still solve with arena=20M");
+            }
+            other => panic!("expected Checkmate with arena=20M, got {:?}", other),
+        }
+    }
+
     /// 簡単な1手詰め．
     #[test]
     fn test_tsume_1te() {
@@ -3057,6 +3100,135 @@ use crate::types::{Color, PieceType};
             .join()
             .unwrap();
         verbose_eprintln!("結果: /tmp/tsume_39te_ply18_solo.log");
+    }
+
+    /// ply 18 での A-1 (PNS arena 動的容量) + B-2 (depth-limited disproof
+    /// 選択的格納) の効果を A/B 比較するテスト (v0.25.0)．
+    ///
+    /// 3 構成を順次実行し，spin 率・arena 使用量・WorkingTT churn を比較する．
+    /// 10M nodes / 180s per config．
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   --features verbose,tt_diag \
+    ///   test_tsume_39te_ply18_arena_disproof_sweep -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply18_arena_disproof_sweep() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply18_arena_disproof_sweep.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                // (arena_max, disproof_threshold, label)
+                let configs: [(usize, u16, &str); 5] = [
+                    (5_000_000, 0, "baseline (arena=5M, threshold=0)"),
+                    (10_000_000, 0, "A-1 only (arena=10M, threshold=0)"),
+                    (10_000_000, 2, "A-1+B-2 (arena=10M, threshold=2)"),
+                    (10_000_000, 3, "A-1+B-2 (arena=10M, threshold=3)"),
+                    (10_000_000, 4, "A-1+B-2 (arena=10M, threshold=4)"),
+                ];
+
+                let remaining = 39 - 18;
+                let depth = (remaining + 2).min(41) as u32;
+                let node_limit: u64 = 10_000_000;
+                let timeout: u64 = 180;
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " 39手詰め ply 18 A-1+B-2 効果検証 ({}M / {}s per config)",
+                    node_limit / 1_000_000, timeout).unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+                for (arena_max, threshold, label) in configs.iter() {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    for usi in pv.iter().take(18) {
+                        let m = board.move_from_usi(usi).unwrap();
+                        board.do_move(m);
+                    }
+
+                    writeln!(out, "\n--- Config: {} ---", label).unwrap();
+
+                    let mut solver = DfPnSolver::with_timeout(depth, node_limit, 32767, timeout);
+                    solver.set_find_shortest(false);
+                    solver.set_pns_arena_max(*arena_max);
+                    solver.set_disproof_remaining_threshold(*threshold);
+
+                    let start = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed = start.elapsed();
+
+                    let result_str = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    let nps_k = if elapsed.as_secs_f64() > 0.0 {
+                        (solver.nodes_searched as f64 / elapsed.as_secs_f64()) / 1000.0
+                    } else { 0.0 };
+
+                    writeln!(out, "  result   = {}", result_str).unwrap();
+                    writeln!(out, "  time     = {:.2}s", elapsed.as_secs_f64()).unwrap();
+                    writeln!(out, "  nodes    = {}", solver.nodes_searched).unwrap();
+                    writeln!(out, "  NPS      = {:.1}k", nps_k).unwrap();
+                    writeln!(out, "  max_ply  = {}", solver.max_ply).unwrap();
+                    writeln!(out, "  TT_pos   = {}", solver.table.len()).unwrap();
+
+                    #[cfg(feature = "verbose")]
+                    {
+                        let total_iters = solver.dbg_pns_spin_iters + solver.dbg_pns_changed_iters;
+                        let spin_pct = if total_iters > 0 {
+                            (solver.dbg_pns_spin_iters as f64 / total_iters as f64) * 100.0
+                        } else { 0.0 };
+                        writeln!(out, "  pns_spin_iters    = {}", solver.dbg_pns_spin_iters).unwrap();
+                        writeln!(out, "  pns_changed_iters = {}", solver.dbg_pns_changed_iters).unwrap();
+                        writeln!(out, "  pns_spin_pct      = {:.1}%", spin_pct).unwrap();
+                        writeln!(out, "  pns_proof_stores  = {}", solver.dbg_pns_proof_stores).unwrap();
+                        writeln!(out, "  pns_arena_growth  = {}", solver.dbg_pns_arena_growth).unwrap();
+                        writeln!(out, "  pns_cycles        = {}", solver.dbg_pns_cycles).unwrap();
+                    }
+
+                    #[cfg(feature = "tt_diag")]
+                    {
+                        let tt_proven = solver.table.count_proven();
+                        let tt_disproven = solver.table.count_disproven();
+                        let tt_intermediate = solver.table.count_intermediate();
+                        writeln!(out, "  TT proven      = {}", tt_proven).unwrap();
+                        writeln!(out, "  TT disproven   = {}", tt_disproven).unwrap();
+                        writeln!(out, "  TT intermediate= {}", tt_intermediate).unwrap();
+                        writeln!(out, "  disproof_working     = {}",
+                            solver.table.diag_disproof_working).unwrap();
+                        writeln!(out, "  disproof_threshold_skip = {}",
+                            solver.table.diag_disproof_threshold_skip).unwrap();
+                        writeln!(out, "  disproof_refutable_skip = {}",
+                            solver.table.diag_disproof_refutable_skip).unwrap();
+                    }
+                }
+
+                writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+                writeln!(out, " End of sweep").unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_ply18_arena_disproof_sweep.log");
     }
 
     /// 39手詰め ply 20 の NPS 時間依存性を診断する．

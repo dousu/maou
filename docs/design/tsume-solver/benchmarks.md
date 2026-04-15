@@ -4196,6 +4196,80 @@ chain aigoma **手前** の一般的な OR-AND 探索では効かない．
 3. **長期**: カテゴリ D (shallow ply 爆発)
    → 新規単一スレッドヒューリスティックが必要 (並列化は不採用)
 
+#### 10.2.7 v0.25.0 A-1 + B-2 施策の着手と効果検証
+
+v0.24.78 時点のカテゴリ A (PNS arena 空回り) + カテゴリ B (WorkingTT churn)
+に対する最初の施策として，以下 2 つを同時に実装・評価した．
+
+##### 施策 A-1: PNS arena 動的容量 (ランタイムパラメータ化)
+
+- 従来: `PNS_MAX_ARENA_NODES = 5_000_000` 固定 (`rust/maou_shogi/src/dfpn/entry.rs`)．
+- 変更: `DfPnSolver::param_pns_arena_max: usize` を追加し，
+  `set_pns_arena_max(usize)` で実行時に変更可能とした．
+  初期 Vec 確保は `PNS_INIT_CAPACITY_CAP` (1M) で抑え，必要時のみ自動拡張．
+- 目的: arena 5M 上限到達時の spin 率 84.5% を容量拡大で緩和する．
+
+##### 施策 B-2: depth-limited disproof の選択的格納
+
+- 従来: `dn == 0` の depth-limited disproof はすべて WorkingTT に格納
+  (`rust/maou_shogi/src/dfpn/tt.rs` の `store_impl`)．
+- 変更: `TranspositionTable::disproof_remaining_threshold: u16` を追加し，
+  `remaining < threshold` かつ `!path_dependent` の場合は格納をスキップ．
+  `DfPnSolver::set_disproof_remaining_threshold(u16)` で設定可能．
+  `REMAINING_INFINITE` (confirmed disproof) は `is_proven_entry` 経路で先に
+  ProvenTT へ分岐するため対象外．
+- 目的: diag で観測された disproof 挿入 10.25M → 最終 1.27M (**87% eviction**)
+  の書き込み増幅を根本的に削減．
+
+##### 効果計測 (`test_tsume_39te_ply18_arena_disproof_sweep`, 10M / 180s per config)
+
+| Config | time | nodes | NPS | spin% | pns_cycles | proof_stores | arena_growth | disproof_working | threshold_skip |
+|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline (arena=5M, threshold=0) | 180.8s | 8.62M | 47.7k | 81.0% | 11 | 3,566 | 2.10M | 3.34M | 0 |
+| A-1 only (arena=10M, threshold=0) | 180.8s | 8.63M | 47.7k | 81.1% | 11 | 3,582 | 2.12M | 3.34M | 0 |
+| A-1+B-2 (arena=10M, threshold=2) | 174.6s | **10.0M** | **57.3k** | 81.5% | **23** | **4,126** | **3.81M** | **2,382** | **7.14M** |
+| A-1+B-2 (arena=10M, threshold=3) | 180.9s | **10.0M** | 55.3k | 81.7% | **23** | **4,208** | **3.80M** | **1,983** | **7.14M** |
+| A-1+B-2 (arena=10M, threshold=4) | 176.8s | **10.0M** | 56.6k | 81.6% | **23** | **4,127** | **3.80M** | **1,748** | **7.14M** |
+
+##### 所見
+
+1. **B-2 の効果 (明確に positive)**:
+   - NPS **+15〜22%**: WorkingTT への書き込み削減で 1 node あたりのオーバーヘッドが低下．
+   - PNS cycles **2.1×** (11 → 23): 同一予算内でより多くの frontier cycle を実行．
+   - PNS proof_stores **+16〜18%**: 生産的な探索量が増加．
+   - arena_growth **+80%** (2.1M → 3.8M): frontier の展開が 2 倍近く進む．
+   - disproof_working **-99.9%** (3.34M → 2K 程度): churn 源を根本的に除去．
+   - threshold=2〜4 で大差なし → threshold=3 (remaining ∈ {1,2} スキップ)
+     を安全な既定値候補とする．
+
+2. **A-1 の効果 (10M 予算では不発)**:
+   - 10M ノード予算では arena 成長が 2.1M に留まり，5M 上限に届かない．
+   - 大予算 (30M+) で初めて spin 率改善が期待される (30M 診断時の
+     arena_growth=3.18M が上限直前に達していた点を踏まえると，
+     10M+ 規模の arena が必要なのは 100M 超の予算)．
+   - ランタイムパラメータ化自体は完了しており，ベンチマーク目的の
+     runtime チューニングは可能．
+
+3. **TT proven 最終値の減少 (regression ではない)**:
+   - baseline: proven=103K，B-2 各構成: proven=6.8K．
+   - 調査の結果，baseline は MID 時間が長いため MID 生成の proof が蓄積し，
+     B-2 では PNS 時間が長く PNS 生成 proof が中心となった位相差と判断．
+   - PNS proof_stores は B-2 で増加 (3566 → 4127)，arena_growth も増加のため
+     探索の生産性自体は向上している．correctness 回帰は
+     `test_tsume_9te_with_disproof_threshold` (threshold=3) と
+     `test_tsume_9te_with_large_arena` (arena=20M) で確認済．
+
+##### 次アクション
+
+- ply 18 の **500M 予算** (旧 387M / 2,384s で Mate(21)) に対し threshold=3 で
+  再実行してノード削減率を計測する (目安: -20%〜-30%)．
+- A-1 の実効性検証には 100M+ 予算のテストが必要．ply 18 単独の
+  30M / 480s 診断を threshold=3 + arena=10M で再実行し，
+  spin 率が 84.5% → どこまで下がるかを確認する．
+- B-2 の threshold=3 を既定値化する前に，他の主要テスト
+  (`test_tsume_39te_backward_*`, `test_tsume_6_29te`) での regression
+  を確認する．
+
 ---
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
