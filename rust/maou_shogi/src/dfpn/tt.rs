@@ -1,7 +1,12 @@
 //! Dual フラットハッシュテーブル型転置表(Transposition Table)．
 //!
 //! v0.24.0: Dual TT 方式 — ProvenTT(永続エントリ)と WorkingTT(GC 対象)に分離．
-//! ProvenTT には proof(pn=0)と confirmed disproof(dn=0, !path_dep, remaining=INFINITE)を格納し，
+//! ProvenTT には以下 3 種のエントリを格納:
+//!   - proof (pn=0)
+//!   - confirmed disproof (dn=0, !path_dep, remaining=INFINITE, flags bit 7=0)
+//!   - refutable disproof (v0.24.75+, flags bit 7=1) —
+//!     PNS からは `skip_refutable_disproof` で不可視化，MID のみ参照
+//!     (aigoma-optimization.md §8.9)
 //! WorkingTT には intermediate と depth-limited/path-dependent disproof を格納する．
 //! これによりクラスタ飽和問題(§6.6.1)を構造的に解決する．
 

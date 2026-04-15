@@ -1389,7 +1389,10 @@ impl DfPnSolver {
         //   WorkingTT intermediate を保持する．
         //   v0.24.68 で solver.rs の warmup ループからも設定されていたが，
         //   v0.24.73 で fc-normalized hash との soundness 問題のため revert．
-        //   現在は pns.rs の nested warmup (IDS 内 warmup mid_fallback) でのみ設定．
+        //   v0.24.78 で `skip_warmup=true` デフォルト化によりさらに solver.rs
+        //   の warmup ループ自体が無効化されており，現在は本関数の nested
+        //   warmup (IDS 内 warmup mid_fallback) でのみ `warmup_mode=true` に
+        //   設定される．
         if self.warmup_mode {
             self.table.clear_proven_non_proofs();
         } else {
@@ -1733,9 +1736,10 @@ impl DfPnSolver {
                 // (v0.24.71) tag-aware IDS break guard: FILTER_DEPENDENT proof で
                 // IDS を終了すると false Checkmate が返る．root の proof が
                 // ABSOLUTE の場合のみ break する．
-                // v0.24.72 で施策α filter 無効化後は FILTER_DEPENDENT proof が
-                // 生成されないため本 guard は実質 no-op だが，tag infrastructure
-                // として保持する．
+                // v0.24.72 で施策α 不採用後は FILTER_DEPENDENT proof が生成
+                // されないため本 guard は常に ABSOLUTE 経路．実質 no-op で
+                // 効果を持たないが，tag infrastructure が残存する限り保持．
+                // (削除候補: proof_tag インフラ一括除去時に同時に削除可能)
                 let root_tag = self.table.get_proof_tag(pk, &att_hand);
                 if root_tag == super::entry::PROOF_TAG_ABSOLUTE {
                     verbose_eprintln!("[ids] proved (ABSOLUTE) at depth={}, break", ids_depth);

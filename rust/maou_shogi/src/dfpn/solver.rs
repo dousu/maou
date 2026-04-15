@@ -155,8 +155,8 @@ impl PostCaptureSummary {
     /// disproof hand を lookup する．
     /// `max_disproof_hand ≥_fc hand` なら disproven と判定可能．
     ///
-    /// 現在は reverse\_disproof\_sharing が TT を直接参照するため未使用．
-    /// 将来の Disproof-Aware Prefilter (施策 A1-3) で使用予定．
+    /// 現在は reverse\_disproof\_sharing (v0.24.61+) が TT を直接参照するため未使用．
+    /// dead code (削除候補)．
     #[inline]
     #[allow(dead_code)]
     fn lookup_disproof(&self, pos_key: u64) -> Option<&[u8; HAND_KINDS]> {
@@ -252,7 +252,7 @@ pub struct DfPnSolver {
     #[cfg(feature = "tt_diag")]
     pub(super) diag_pc_summary_proof_hits: u64,
     /// サマリキャッシュの disproof ヒット回数 (tt_diag 診断用)．
-    /// 現在は未使用 (Disproof-Aware Prefilter 施策 A1-3 で使用予定)．
+    /// 現在は未使用．dead code (削除候補)．
     #[cfg(feature = "tt_diag")]
     #[allow(dead_code)]
     pub(super) diag_pc_summary_disproof_hits: u64,
@@ -406,21 +406,23 @@ pub struct DfPnSolver {
     #[cfg(feature = "tt_diag")]
     pub(super) diag_a4_inflations: u64,
     /// TT 診断: 施策 α (v0.24.54-v0.24.72) で境界層 filter が発火した MID 数．
-    /// 施策 α 再有効化まで dead code．
+    /// 施策 α は v0.24.72 で不採用確定．dead code (削除候補)．
     #[cfg(feature = "tt_diag")]
     #[allow(dead_code)]
     pub(super) diag_alpha_x_filter_applied: u64,
     /// 施策 α (v0.24.54-v0.24.72): chain drop filter フラグ．
-    /// v0.24.72 で filter 無効化後は常に false．tag infrastructure の
-    /// save/restore パターン保持のため field は残留．
-    /// 施策 α 再有効化まで dead code．
+    /// v0.24.72 で filter 無効化後は常に false．施策 α は refutable disproof
+    /// 機構 (v0.24.75+, aigoma-optimization.md §8.9) で代替されており，
+    /// 再有効化の予定なし．dead code (削除候補)．
     pub(super) alpha_x_filter_active: bool,
     /// Warmup モード (v0.24.68-v0.24.73): true の場合，mid_fallback 入口で
     /// ProvenTT の非 proof のみ除去し WorkingTT intermediate を保持する．
     ///
-    /// v0.24.73 で warmup 段間 intermediate 保持を revert したため，
-    /// 現在は solver.rs の warmup ループで true に設定されない．
-    /// pns.rs の nested warmup でのみ true に設定される．
+    /// v0.24.73 で warmup 段間 intermediate 保持を revert．さらに
+    /// v0.24.78 で `skip_warmup=true` デフォルト化により solver.rs の warmup
+    /// ループ自体が実行されない (§11.6 単一スレッド方針下で warmup 不要)．
+    /// 現在 `true` に設定されるのは `pns.rs` の nested warmup
+    /// (IDS 内 warmup mid_fallback) のみ．
     pub(super) warmup_mode: bool,
     /// PNS 探索中に true に設定し，`look_up_pn_dn` で refutable disproof を
     /// スキップする (v0.24.75)．PNS の arena-limited false NM を防止．
@@ -435,8 +437,8 @@ pub struct DfPnSolver {
     /// refutable check の呼び出し回数上限 (デフォルト 10,000)．
     pub(super) param_refutable_call_limit: u32,
     /// 施策 A-6 (v0.24.54, v0.24.71 で施策α に置き換え後 v0.24.72 で無効化):
-    /// 境界層 PNS 責任転嫁の残り呼出予算．
-    /// 施策 α 再有効化まで dead code．
+    /// 境界層 PNS 責任転嫁の残り呼出予算．施策 α が refutable disproof
+    /// 機構で代替されたため再有効化の予定なし．dead code (削除候補)．
     #[allow(dead_code)]
     pub(super) a6_boundary_pns_calls_remaining: u32,
     /// TT 診断: AND ノード MID ループで deferred_children あり & all_proved=false の回数．
@@ -958,8 +960,10 @@ impl DfPnSolver {
     /// ルーティングするため，ProvenTT のみが影響を受け WorkingTT への
     /// 副作用はない．
     ///
-    /// 施策 α (v0.24.54-v0.24.72): filter 無効化後は tag routing は
-    /// 行われない．Tag 付き proof の格納は `store_proof_with_tag` で行う．
+    /// v0.24.72 の施策 α 不採用により，本関数は常に ABSOLUTE tag で proof を
+    /// 格納する．`store_proof_with_tag` は dead code．disproof は通常の
+    /// confirmed disproof として格納され，refutable disproof は
+    /// `store_refutable_disproof` (v0.24.75) で別経路から格納される．
     #[inline]
     pub(super) fn store(
         &mut self,
@@ -1021,9 +1025,11 @@ impl DfPnSolver {
 
     /// Tag 付き proof を転置表に格納する (v0.24.71)．
     ///
-    /// v0.24.72 で施策α filter 無効化後は tag propagation infrastructure
-    /// の一部として保持．filter_applied が常に false のため現在は
-    /// AND proof store の条件分岐から到達しない．
+    /// **注意**: 施策 α が v0.24.72 で不採用確定したため，本関数の呼び出し
+    /// 経路はすべて実行されない (filter_applied=false または
+    /// child_tag!=ABSOLUTE の条件が満たされない)．dead code．
+    /// refutable disproof 機構 (v0.24.75+) は別経路 (`store_refutable_disproof`)
+    /// を使用するため本関数に依存しない．
     #[inline]
     pub(super) fn store_proof_with_tag(
         &mut self,
@@ -1937,17 +1943,15 @@ impl DfPnSolver {
 
         let save_alpha_x = self.alpha_x_filter_active;
 
-        // 施策 α (v0.24.71): boundary chain drop filter は Frontier variant
-        // の PNS→MID サイクルとの相互作用で false proof が ABSOLUTE tag で
-        // 格納される問題があり，現時点では無効化．
-        // tag-aware look_up / tag propagation の infrastructure は保持する
-        // (将来の施策で活用可能)．
+        // 施策 α (boundary chain drop filter, v0.24.47-72): PNS→MID サイクル
+        // の filter context 非伝達問題で false proof を生成するため v0.24.72
+        // で不採用確定．refutable disproof 機構 (v0.24.75+) で代替済み．
         //
-        // 失敗の根本原因: PNS は filter context を認識せず，filter で除去した
-        // defense を含まない局面を ABSOLUTE proof として格納する．MID 内の
-        // filter_applied tracking では PNS 経由の proof を制御できない．
-        // 施策 α 再有効化まで常に false．以下の `if filter_applied { ... }` 分岐
-        // は dead code だが tag infrastructure 保持のため条件判定は残す．
+        // proof_tag propagation infrastructure (get_proof_tag / store_proof_with_tag
+        // 等) も連動して dead code 化．以下の `if filter_applied { ... }` 分岐および
+        // `if child_tag != ABSOLUTE { ... }` 分岐は条件判定のみ残るが，
+        // filter_applied=false により実行経路に到達しない．
+        // (削除候補: 将来のクリーンアップで一括除去可能)
         let filter_applied = false;
 
         // Dynamic Move Ordering: TT Best Move + Killer Moves
@@ -3959,6 +3963,10 @@ impl DfPnSolver {
     }
 
     /// 施策 A-6 再評価 (v0.24.54): 境界層 PNS 責任転嫁．
+    ///
+    /// **注意**: v0.24.72 の施策 α 不採用および refutable disproof 機構
+    /// (v0.24.75+) の導入により，本関数は現在の solve() 経路から呼び出されない．
+    /// dead code (削除候補)．以下の記述は履歴としての参考．
     ///
     /// MID の AND 境界層 (`remaining <= 2 && chain_bb_cache 非空`) で呼び出され，
     /// 通常の MID 再帰の代わりに **小規模 arena での PNS** を起動する．
