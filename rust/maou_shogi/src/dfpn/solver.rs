@@ -793,16 +793,26 @@ impl DfPnSolver {
         // solve() 入口で outer_solve_depth を見て TT に反映される．
     }
 
-    /// Depth-adaptive な実効 disproof 格納閾値を返す (v0.25.1)．
+    /// Depth-adaptive な実効 disproof 格納閾値を返す (v0.25.1, refined v0.25.3 M-D)．
     ///
     /// `param_disproof_remaining_threshold` が `DISPROOF_THRESHOLD_ADAPTIVE` の
     /// 場合，`outer_solve_depth` に基づいて閾値を自動決定する．
     ///
-    /// ポリシー (保守的設定):
-    /// - depth ≤ 21 (ply 20 以降の浅い問題): 0 (スキップなし)
-    ///   → backward_30m で ply 24 退行が起きた領域を保護
-    /// - depth 22 (ply 19 等): 2 (remaining ∈ {0,1} スキップ)
-    /// - depth ≥ 23 (ply 18 以下の深い問題): 3 (remaining ∈ {0,1,2} スキップ)
+    /// **ポリシー (M-D refinement)**:
+    /// - depth ≤ 19 (ply 20+ の浅い問題, target<20): **0** (スキップなし)
+    ///   → backward_30m で ply 24 退行が起きた領域を保護．M-A の
+    ///   refutable depth=5 適用範囲とも整合．
+    /// - depth 20-22 (ply 17-19): **1** (remaining=0 のみスキップ)
+    ///   → S-2 で実証: threshold=1 は ply 24 で完全に no-op (rem=0 entry
+    ///   はほぼ存在しない)．safety margin 確保しつつ将来の M-E
+    ///   (compact storage) への布石．
+    /// - depth ≥ 23 (ply 18 以下の深い問題): **3** (remaining ∈ {0,1,2} スキップ)
+    ///   → B-2 full benefit (ply 18 500M で wall time -45%)．
+    ///
+    /// **S-2 (§10.2.11) の知見**:
+    /// - threshold=1 は実質 no-op だが API/test の対称性のため適用．
+    /// - threshold=2 は depth ≤ 17 で致命的 (rem[2] 挿入 30× 爆発)．
+    /// - threshold=3 は depth ≥ 23 でのみ有効．
     ///
     /// `param_` に非センチネル値が入っていればそれをそのまま使用 (テスト用)．
     #[inline(always)]
@@ -816,8 +826,8 @@ impl DfPnSolver {
             self.depth
         };
         match d {
-            0..=21 => 0,
-            22 => 2,
+            0..=19 => 0,
+            20..=22 => 1,
             _ => 3,
         }
     }
