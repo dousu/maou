@@ -328,8 +328,9 @@ impl ProvenEntry {
     ///
     /// confirmed disproof と同じ bits 1-6 に ids_depth を格納し，
     /// bit 7 = 1 で refutable disproof マークを付加する．
-    /// 通常の `look_up_proven` からは不可視だが，
-    /// `all_checks_refutable_by_tt` の専用 lookup では可視．
+    /// TT レベルでは confirmed と区別せず，`look_up_proven` は両方を
+    /// 返す．PNS 側で arena-limited false NM を防ぐ場合のみ
+    /// `look_up_proven_skip_refutable` を使い本フラグで読み飛ばす．
     #[inline(always)]
     pub(super) fn encode_refutable_disproof_flags(ids_depth: u32) -> u8 {
         Self::encode_disproof_flags(ids_depth) | 0x80
@@ -339,7 +340,9 @@ impl ProvenEntry {
     ///
     /// true: `all_checks_refutable_recursive` で格納された NM エントリ．
     /// PNS の interior 探索で使用すると arena-limited false NM を
-    /// 誘発するため，通常の `look_up_proven` からはスキップする．
+    /// 誘発するため，PNS 経路では `look_up_proven_skip_refutable` が
+    /// 本フラグをチェックしてスキップする．MID 経路からは通常の
+    /// disproof と同様に可視．
     #[inline(always)]
     pub(super) fn is_refutable_disproof(&self) -> bool {
         !self.is_proof() && (self.flags & 0x80) != 0

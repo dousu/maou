@@ -890,16 +890,18 @@ impl DfPnSolver {
             }
             return (INF, 0, 0);
         }
-        let mut result = self.table.look_up(pos_key, hand, remaining, neighbor_scan);
-        // (v0.24.75) PNS 探索中は refutable disproof を無視して arena-limited
-        // false NM を防止する．refutable disproof がヒットした場合は
-        // (PN_UNIT, PN_UNIT, 0) に差し替え，未探索ノードとして扱う．
-        if self.skip_refutable_disproof && result.1 == 0 && result.0 != 0 {
-            // dn=0, pn!=0 → disproof ヒット → refutable かチェック
-            if self.table.is_refutable_disproof_at(pos_key, hand) {
-                result = (PN_UNIT, PN_UNIT, 0);
-            }
-        }
+        // (v0.24.79) PNS 探索中 (skip_refutable_disproof=true) は ProvenTT
+        // Pass 2 内で refutable disproof を直接スキップする版を使い，
+        // disproof ヒット時のクラスタ走査を 1 回に削減する．以前は
+        // look_up → is_refutable_disproof_at の 2 段スキャンだった．
+        // ヒットしなかった場合は自然に (PN_UNIT, PN_UNIT, 0) が返る
+        // (= 未探索ノード扱い) ため，arena-limited false NM を防止する．
+        let result = if self.skip_refutable_disproof {
+            self.table
+                .look_up_skip_refutable(pos_key, hand, remaining, neighbor_scan)
+        } else {
+            self.table.look_up(pos_key, hand, remaining, neighbor_scan)
+        };
         if result.0 == PN_UNIT && result.1 == PN_UNIT && result.2 == 0 {
             // TT ミス: Deep df-pn バイアスを適用(深い ply のみ)
             let ply = (self.depth as u32).saturating_sub(remaining as u32);
@@ -1639,10 +1641,11 @@ impl DfPnSolver {
     /// `calls` は呼び出し回数カウンタで，`limit` 超過時は false を返す．
     ///
     /// 各王手の反証が成功した場合，AND ノードを ProvenTT に refutable
-    /// disproof として格納する (v0.24.75)．refutable disproof は通常の
-    /// `look_up_proven` からは不可視で，`all_checks_refutable_by_tt` の
-    /// 高速パスからのみ参照される．これにより PNS の arena-limited false
-    /// NM を防止しつつ，再帰判定結果を TT に蓄積する．
+    /// disproof として格納する (v0.24.75)．TT レベルでは confirmed と
+    /// 区別せず，`look_up_proven` / `all_checks_refutable_by_tt` から
+    /// 可視．PNS 経路のみ `look_up_proven_skip_refutable` が bit 7 を
+    /// 見て読み飛ばすことで arena-limited false NM を防止しつつ，
+    /// 再帰判定結果を TT に蓄積する．
     pub(super) fn all_checks_refutable_recursive(
         &mut self,
         board: &mut Board,
@@ -1698,9 +1701,10 @@ impl DfPnSolver {
                 board.undo_move(*defense, cap_d);
             }
             // (v0.24.75) 反証成功した AND ノードを refutable disproof として
-            // ProvenTT に格納．通常の look_up_proven からは不可視(PNS の
-            // arena-limited false NM を防止)．all_checks_refutable_by_tt の
-            // 高速パスからのみ参照される．
+            // ProvenTT に格納．TT レベルでは通常の disproof と区別されないため
+            // look_up_proven / all_checks_refutable_by_tt からは可視．
+            // PNS 経路のみ look_up_proven_skip_refutable が bit 7 を見て
+            // 読み飛ばすことで arena-limited false NM を防止する．
             if has_refuting_defense && store_nm {
                 let and_pk = position_key(board);
                 let and_hand = board.hand[self.attacker.index()];

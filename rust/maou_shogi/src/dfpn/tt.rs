@@ -500,6 +500,37 @@ impl TranspositionTable {
         remaining: u16,
         neighbor_scan: bool,
     ) -> (u32, u32, u32) {
+        self.look_up_proven_impl(pos_key, hand, remaining, neighbor_scan, false)
+    }
+
+    /// `look_up_proven` の refutable disproof スキップ版 (v0.24.79)．
+    ///
+    /// Pass 2 および歩+1 近傍の disproof 走査で `is_refutable_disproof()`
+    /// なエントリをスキップする．PNS の arena-limited false NM を防ぐため，
+    /// PNS 実行中の `look_up_pn_dn_impl` から呼ばれる．
+    ///
+    /// 以前は `look_up` + 事後 `is_refutable_disproof_at` の 2 段スキャン
+    /// (ProvenTT クラスタを 2 回走査) だったが，Pass 2 内にフィルタを
+    /// 統合することで disproof ヒット時のクラスタ走査を 1 回に削減．
+    pub(super) fn look_up_proven_skip_refutable(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+        neighbor_scan: bool,
+    ) -> (u32, u32, u32) {
+        self.look_up_proven_impl(pos_key, hand, remaining, neighbor_scan, true)
+    }
+
+    #[inline]
+    fn look_up_proven_impl(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+        neighbor_scan: bool,
+        skip_refutable: bool,
+    ) -> (u32, u32, u32) {
         let pos_key = Self::safe_key(pos_key);
         let home = self.proven_cluster(pos_key, hand);
         // Tag-aware proof lookup: non-ABSOLUTE proof は tag_depth <
@@ -560,6 +591,7 @@ impl TranspositionTable {
             if !e.is_proof()
                 && hand_gte_forward_chain(&e.hand, hand)
             {
+                if skip_refutable && e.is_refutable_disproof() { continue; }
                 return (e.pn(), 0, e.source());
             }
         }
@@ -576,6 +608,7 @@ impl TranspositionTable {
                 if !e.is_proof()
                     && hand_gte_forward_chain(&e.hand, hand)
                 {
+                    if skip_refutable && e.is_refutable_disproof() { continue; }
                     NEIGHBOR_DIAG[1].fetch_add(1, Ordering::Relaxed);
                     return (e.pn(), 0, e.source());
                 }
@@ -714,6 +747,32 @@ impl TranspositionTable {
         neighbor_scan: bool,
     ) -> (u32, u32, u32) {
         let proven = self.look_up_proven(pos_key, hand, remaining, neighbor_scan);
+        if proven.0 == 0 || proven.1 == 0 {
+            return proven;
+        }
+        self.look_up_working(pos_key, hand, remaining, neighbor_scan)
+    }
+
+    /// PNS 用 look_up: ProvenTT の refutable disproof をスキップ (v0.24.79)．
+    ///
+    /// `look_up` と同じ意味論だが，ProvenTT Pass 2 で
+    /// `is_refutable_disproof()` なエントリを読み飛ばす．PNS 実行中に
+    /// solver の `skip_refutable_disproof` フラグが立っているときに
+    /// 使用し，arena-limited false NM cascade を防止する．
+    ///
+    /// 以前は `look_up` + `is_refutable_disproof_at` の 2 段スキャンで
+    /// フィルタしていたが，`look_up_proven_skip_refutable` に統合して
+    /// disproof ヒット時のクラスタ走査を 1 回に削減した．
+    #[inline(always)]
+    pub(super) fn look_up_skip_refutable(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+        neighbor_scan: bool,
+    ) -> (u32, u32, u32) {
+        let proven =
+            self.look_up_proven_skip_refutable(pos_key, hand, remaining, neighbor_scan);
         if proven.0 == 0 || proven.1 == 0 {
             return proven;
         }
@@ -1140,14 +1199,15 @@ impl TranspositionTable {
     /// refutable check で確認された NM を ProvenTT に格納する (v0.24.75)．
     ///
     /// confirmed disproof と同じ ProvenTT クラスタに格納するが，
-    /// `is_refutable_disproof()` = true のフラグ (flags bit 7) を持つ．
+    /// `ProvenEntry::is_refutable_disproof()` = true のフラグ (flags bit 7) を
+    /// 持つ．
     ///
-    /// TT レベルでは confirmed / refutable を区別せず，`look_up_proven` も
-    /// `has_refutable_or_confirmed_disproof` も両方を可視として扱う．
-    /// PNS の arena-limited false NM 防止は TT 側ではなく，solver 側の
-    /// `skip_refutable_disproof` フラグ (PNS 実行中に有効化) を
-    /// `look_up_pn_dn_impl` が参照して refutable エントリを無視することで実現する．
-    /// 具体的なエントリ種別判定には `is_refutable_disproof_at` を使用する．
+    /// TT レベルの標準 lookup (`look_up_proven` / `look_up` /
+    /// `has_refutable_or_confirmed_disproof`) は confirmed / refutable を
+    /// 区別せず両方を返す．PNS の arena-limited false NM 防止は
+    /// solver 側の `skip_refutable_disproof` フラグ (PNS 実行中に有効化)
+    /// 経由で `look_up_pn_dn_impl` が `look_up_skip_refutable` を呼び，
+    /// ProvenTT Pass 2 で bit 7 を読み飛ばすことで実現する．
     pub(super) fn store_refutable_disproof(
         &mut self,
         pos_key: u64,
@@ -1235,25 +1295,7 @@ impl TranspositionTable {
         false
     }
 
-    /// 指定位置の ProvenTT エントリが refutable disproof かどうかを返す (v0.24.75)．
-    pub(super) fn is_refutable_disproof_at(
-        &self,
-        pos_key: u64,
-        hand: &[u8; HAND_KINDS],
-    ) -> bool {
-        let pos_key = Self::safe_key(pos_key);
-        let home = self.proven_cluster(pos_key, hand);
-        for fe in home {
-            if fe.pos_key != pos_key { continue; }
-            let e = &fe.entry;
-            if e.is_refutable_disproof() && hand_gte_forward_chain(&e.hand, hand) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// WorkingTT に depth-limited / path-dep disproof を挿入する．
+/// WorkingTT に depth-limited / path-dep disproof を挿入する．
     fn store_working_disproof(
         &mut self,
         pos_key: u64,
