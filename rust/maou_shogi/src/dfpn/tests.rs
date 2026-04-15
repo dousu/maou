@@ -3680,6 +3680,202 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: /tmp/tsume_39te_backward_30m_threshold3.log");
     }
 
+    /// M-1 soundness 検証: 各 strategy で no-mate test が pass するか (v0.25.4)．
+    ///
+    /// 各 strategy (F1, F2, F3, F4 + 全組合せ) に対し，no-mate を期待する
+    /// 局面 `test_no_checkmate_counter_check` と同じ SFEN を 2M 予算で解き，
+    /// `NoMate` が返ることを確認．Unknown は budget 不足だが OK．
+    /// `Mate` (false-Checkmate) または false-NM が出たら soundness 違反．
+    #[test]
+    #[ignore]
+    fn test_m1_strategies_soundness() {
+        use std::io::Write;
+        let out_path = "/tmp/m1_strategies_soundness.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                // counter_check と同じ SFEN: 不詰
+                let sfen = "7l1/5n1k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s3n2l17p 1";
+
+                let strategies: &[(&str, fn(&mut DfPnSolver))] = &[
+                    ("baseline (none)", |_s| {}),
+                    ("F1 (full_eval)", |s| { s.set_refut_full_eval(true); }),
+                    ("F2 (partial_recursion)", |s| { s.set_refut_partial_recursion(true); }),
+                    ("F3 (or_success_cache)", |s| { s.set_refut_or_success_cache(true); }),
+                    ("F4 (extended_lookup)", |s| { s.set_refut_extended_lookup(true); }),
+                    ("F1+F4", |s| {
+                        s.set_refut_full_eval(true);
+                        s.set_refut_extended_lookup(true);
+                    }),
+                    ("F1+F3", |s| {
+                        s.set_refut_full_eval(true);
+                        s.set_refut_or_success_cache(true);
+                    }),
+                    ("F1+F2+F3+F4", |s| {
+                        s.set_refut_full_eval(true);
+                        s.set_refut_partial_recursion(true);
+                        s.set_refut_or_success_cache(true);
+                        s.set_refut_extended_lookup(true);
+                    }),
+                ];
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " M-1 soundness check: counter_check no-mate test").unwrap();
+                writeln!(out, " 期待: NoMate (or Unknown if budget short)．Mate なら soundness 違反．").unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+                for (label, configure) in strategies.iter() {
+                    let mut board = Board::empty();
+                    board.set_sfen(sfen).unwrap();
+
+                    let mut solver = DfPnSolver::with_timeout(31, 2_000_000, 32767, 60);
+                    configure(&mut solver);
+
+                    let start = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed = start.elapsed();
+
+                    let (result_str, ok) = match &result {
+                        TsumeResult::Checkmate { moves, .. } =>
+                            (format!("Mate({}) ❌ FALSE-MATE", moves.len()), false),
+                        TsumeResult::CheckmateNoPv { .. } =>
+                            ("MateNoPV ❌ FALSE-MATE".to_string(), false),
+                        TsumeResult::NoCheckmate { .. } =>
+                            ("NoMate ✓".to_string(), true),
+                        TsumeResult::Unknown { .. } =>
+                            ("Unknown (budget?)".to_string(), true),
+                    };
+
+                    writeln!(out, "\n--- {} ---", label).unwrap();
+                    writeln!(out, "  result = {}", result_str).unwrap();
+                    writeln!(out, "  time   = {:.2}s", elapsed.as_secs_f64()).unwrap();
+                    writeln!(out, "  nodes  = {}", solver.nodes_searched).unwrap();
+                    writeln!(out, "  ok     = {}", ok).unwrap();
+                    out.flush().unwrap();
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/m1_strategies_soundness.log");
+    }
+
+    /// M-1 効果検証: ply 18 30M で各 strategy の refut_tt_hits, NPS, nodes を比較 (v0.25.4)．
+    #[test]
+    #[ignore]
+    fn test_m1_strategies_ply18_sweep() {
+        use std::io::Write;
+        let out_path = "/tmp/m1_strategies_ply18_sweep.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                let strategies: &[(&str, fn(&mut DfPnSolver))] = &[
+                    ("baseline (none)", |_s| {}),
+                    ("F1 (full_eval)", |s| { s.set_refut_full_eval(true); }),
+                    ("F2 (partial_recursion)", |s| { s.set_refut_partial_recursion(true); }),
+                    ("F3 (or_success_cache)", |s| { s.set_refut_or_success_cache(true); }),
+                    ("F4 (extended_lookup)", |s| { s.set_refut_extended_lookup(true); }),
+                    ("F1+F4", |s| {
+                        s.set_refut_full_eval(true);
+                        s.set_refut_extended_lookup(true);
+                    }),
+                    ("F1+F3", |s| {
+                        s.set_refut_full_eval(true);
+                        s.set_refut_or_success_cache(true);
+                    }),
+                    ("F1+F2+F3+F4", |s| {
+                        s.set_refut_full_eval(true);
+                        s.set_refut_partial_recursion(true);
+                        s.set_refut_or_success_cache(true);
+                        s.set_refut_extended_lookup(true);
+                    }),
+                ];
+
+                let remaining = 39 - 18;
+                let depth = (remaining + 2).min(41) as u32;
+                let node_limit: u64 = 30_000_000;
+                let timeout: u64 = 600;
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " M-1 strategies sweep: ply 18 (depth={}, 30M/600s)", depth).unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+                for (label, configure) in strategies.iter() {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    for usi in pv.iter().take(18) {
+                        let m = board.move_from_usi(usi).unwrap();
+                        board.do_move(m);
+                    }
+
+                    let mut solver = DfPnSolver::with_timeout(depth, node_limit, 32767, timeout);
+                    solver.set_find_shortest(false);
+                    configure(&mut solver);
+
+                    let start = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed = start.elapsed();
+
+                    let result_str = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate ⚠️".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    let nps_k = if elapsed.as_secs_f64() > 0.0 {
+                        (solver.nodes_searched as f64 / elapsed.as_secs_f64()) / 1000.0
+                    } else { 0.0 };
+
+                    writeln!(out, "\n--- {} ---", label).unwrap();
+                    writeln!(out, "  result   = {}", result_str).unwrap();
+                    writeln!(out, "  time     = {:.2}s", elapsed.as_secs_f64()).unwrap();
+                    writeln!(out, "  nodes    = {}", solver.nodes_searched).unwrap();
+                    writeln!(out, "  NPS      = {:.1}k", nps_k).unwrap();
+                    writeln!(out, "  max_ply  = {}", solver.max_ply).unwrap();
+
+                    #[cfg(feature = "verbose")]
+                    {
+                        let total_iters = solver.dbg_pns_spin_iters + solver.dbg_pns_changed_iters;
+                        let spin_pct = if total_iters > 0 {
+                            (solver.dbg_pns_spin_iters as f64 / total_iters as f64) * 100.0
+                        } else { 0.0 };
+                        writeln!(out, "  spin%    = {:.1}%", spin_pct).unwrap();
+                        writeln!(out, "  refut_tt_hits      = {}", solver.dbg_refut_tt_hits).unwrap();
+                        writeln!(out, "  refut_memo_hits    = {}", solver.dbg_refut_memo_hits).unwrap();
+                        writeln!(out, "  refut_rec_true     = {}", solver.dbg_refut_recursive_true).unwrap();
+                        writeln!(out, "  refut_rec_false    = {}", solver.dbg_refut_recursive_false).unwrap();
+                        writeln!(out, "  fast_attempts      = {}", solver.dbg_refut_fast_attempts).unwrap();
+                        writeln!(out, "  fast_partial       = {}", solver.dbg_refut_fast_partial).unwrap();
+                        if solver.dbg_refut_fast_check_total > 0 {
+                            let match_rate = solver.dbg_refut_fast_match_total as f64
+                                / solver.dbg_refut_fast_check_total as f64 * 100.0;
+                            writeln!(out, "  per-check match率   = {:.2}%", match_rate).unwrap();
+                        }
+                    }
+                    out.flush().unwrap();
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/m1_strategies_ply18_sweep.log");
+    }
+
     /// M-1 診断: refut_tt_hits=0 の根本原因解析 (v0.25.3)．
     ///
     /// fast path 試行内訳:
