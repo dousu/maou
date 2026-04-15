@@ -3231,6 +3231,432 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: /tmp/tsume_39te_ply18_arena_disproof_sweep.log");
     }
 
+    /// A-1 効果測定のための大規模予算スイープ (30M nodes / 900s per config)．
+    ///
+    /// 10M 予算では arena が 5M 上限に届かない (arena_growth 2〜4M) ため
+    /// A-1 単独の効果が観測できなかった．30M 予算では元の ply 18 診断と
+    /// 同条件 (v0.24.78 で arena_growth=3.18M) になり，arena 上限近傍での
+    /// spin 率変化を観測可能．
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   --features verbose,tt_diag \
+    ///   test_tsume_39te_ply18_large_budget_sweep -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply18_large_budget_sweep() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply18_large_budget_sweep.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                // (arena_max, disproof_threshold, label)
+                let configs: [(usize, u16, &str); 4] = [
+                    (5_000_000,  0, "baseline    (arena=5M,  threshold=0)"),
+                    (10_000_000, 0, "A-1 only    (arena=10M, threshold=0)"),
+                    (5_000_000,  3, "B-2 only    (arena=5M,  threshold=3)"),
+                    (10_000_000, 3, "A-1+B-2     (arena=10M, threshold=3)"),
+                ];
+
+                let remaining = 39 - 18;
+                let depth = (remaining + 2).min(41) as u32;
+                let node_limit: u64 = 30_000_000;
+                let timeout: u64 = 900;
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " 39手詰め ply 18 A-1 大規模予算スイープ ({}M / {}s per config)",
+                    node_limit / 1_000_000, timeout).unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+                for (arena_max, threshold, label) in configs.iter() {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    for usi in pv.iter().take(18) {
+                        let m = board.move_from_usi(usi).unwrap();
+                        board.do_move(m);
+                    }
+
+                    writeln!(out, "\n--- Config: {} ---", label).unwrap();
+
+                    let mut solver = DfPnSolver::with_timeout(depth, node_limit, 32767, timeout);
+                    solver.set_find_shortest(false);
+                    solver.set_pns_arena_max(*arena_max);
+                    solver.set_disproof_remaining_threshold(*threshold);
+
+                    let start = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed = start.elapsed();
+
+                    let result_str = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    let nps_k = if elapsed.as_secs_f64() > 0.0 {
+                        (solver.nodes_searched as f64 / elapsed.as_secs_f64()) / 1000.0
+                    } else { 0.0 };
+
+                    writeln!(out, "  result   = {}", result_str).unwrap();
+                    writeln!(out, "  time     = {:.2}s", elapsed.as_secs_f64()).unwrap();
+                    writeln!(out, "  nodes    = {}", solver.nodes_searched).unwrap();
+                    writeln!(out, "  NPS      = {:.1}k", nps_k).unwrap();
+                    writeln!(out, "  max_ply  = {}", solver.max_ply).unwrap();
+
+                    #[cfg(feature = "verbose")]
+                    {
+                        let total_iters = solver.dbg_pns_spin_iters + solver.dbg_pns_changed_iters;
+                        let spin_pct = if total_iters > 0 {
+                            (solver.dbg_pns_spin_iters as f64 / total_iters as f64) * 100.0
+                        } else { 0.0 };
+                        let growth_per_cycle = if solver.dbg_pns_cycles > 0 {
+                            solver.dbg_pns_arena_growth / solver.dbg_pns_cycles
+                        } else { 0 };
+                        writeln!(out, "  pns_spin_iters    = {}", solver.dbg_pns_spin_iters).unwrap();
+                        writeln!(out, "  pns_changed_iters = {}", solver.dbg_pns_changed_iters).unwrap();
+                        writeln!(out, "  pns_spin_pct      = {:.1}%", spin_pct).unwrap();
+                        writeln!(out, "  pns_proof_stores  = {}", solver.dbg_pns_proof_stores).unwrap();
+                        writeln!(out, "  pns_arena_growth  = {}", solver.dbg_pns_arena_growth).unwrap();
+                        writeln!(out, "  pns_cycles        = {}", solver.dbg_pns_cycles).unwrap();
+                        writeln!(out, "  growth_per_cycle  = {} ({}% of arena_max)",
+                            growth_per_cycle,
+                            (growth_per_cycle * 100 / *arena_max as u64).min(100)).unwrap();
+                    }
+
+                    #[cfg(feature = "tt_diag")]
+                    {
+                        let tt_proven = solver.table.count_proven();
+                        let tt_disproven = solver.table.count_disproven();
+                        let tt_intermediate = solver.table.count_intermediate();
+                        writeln!(out, "  TT proven      = {}", tt_proven).unwrap();
+                        writeln!(out, "  TT disproven   = {}", tt_disproven).unwrap();
+                        writeln!(out, "  TT intermediate= {}", tt_intermediate).unwrap();
+                        writeln!(out, "  disproof_working     = {}",
+                            solver.table.diag_disproof_working).unwrap();
+                        writeln!(out, "  disproof_threshold_skip = {}",
+                            solver.table.diag_disproof_threshold_skip).unwrap();
+                        writeln!(out, "  disproof_refutable_skip = {}",
+                            solver.table.diag_disproof_refutable_skip).unwrap();
+                    }
+                }
+
+                writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+                writeln!(out, " End of sweep").unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_ply18_large_budget_sweep.log");
+    }
+
+    /// ply 18 単独 500M 予算 threshold=3 検証 (v0.25.0)．
+    ///
+    /// v0.24.78 baseline: ply 18 = 387M nodes / 2,384s で Mate(21)．
+    /// threshold=3 で再測してノード削減率を計測する．
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   test_tsume_39te_ply18_500m_threshold3 -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply18_500m_threshold3() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply18_500m_threshold3.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                for usi in pv.iter().take(18) {
+                    let m = board.move_from_usi(usi).unwrap();
+                    board.do_move(m);
+                }
+
+                let remaining = 39 - 18;
+                let depth = (remaining + 2).min(41) as u32;
+                let node_limit: u64 = 500_000_000;
+                let timeout: u64 = 3600;
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " 39手詰め ply 18 500M threshold=3 (vs v0.24.78 baseline 387M/2384s)").unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+                let mut solver = DfPnSolver::with_timeout(depth, node_limit, 32767, timeout);
+                solver.set_find_shortest(false);
+                solver.set_disproof_remaining_threshold(3);
+
+                let start = Instant::now();
+                let result = solver.solve(&mut board);
+                let elapsed = start.elapsed();
+
+                let result_str = match &result {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+                let nps_k = if elapsed.as_secs_f64() > 0.0 {
+                    (solver.nodes_searched as f64 / elapsed.as_secs_f64()) / 1000.0
+                } else { 0.0 };
+
+                writeln!(out, "\n--- Result ---").unwrap();
+                writeln!(out, "  result   = {}", result_str).unwrap();
+                writeln!(out, "  time     = {:.2}s  (baseline: 2,384s)", elapsed.as_secs_f64()).unwrap();
+                writeln!(out, "  nodes    = {}  (baseline: 387,635,808)", solver.nodes_searched).unwrap();
+                writeln!(out, "  NPS      = {:.1}k", nps_k).unwrap();
+                writeln!(out, "  max_ply  = {}", solver.max_ply).unwrap();
+
+                let node_reduction_pct = if solver.nodes_searched < 387_635_808 {
+                    ((387_635_808 - solver.nodes_searched) as f64 / 387_635_808.0) * 100.0
+                } else { 0.0 };
+                let time_reduction_pct = if elapsed.as_secs_f64() < 2384.0 {
+                    ((2384.0 - elapsed.as_secs_f64()) / 2384.0) * 100.0
+                } else { 0.0 };
+                writeln!(out, "\n--- vs baseline ---").unwrap();
+                writeln!(out, "  node reduction: {:.1}%", node_reduction_pct).unwrap();
+                writeln!(out, "  time reduction: {:.1}%", time_reduction_pct).unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_ply18_500m_threshold3.log");
+    }
+
+    /// ply 18 solo 30M 診断 arena=10M + threshold=3 版 (v0.25.0)．
+    ///
+    /// v0.24.78 baseline (test_tsume_39te_ply18_solo): spin 率 84.5%．
+    /// A-1 (arena=10M) + B-2 (threshold=3) で spin 率がどこまで下がるか検証．
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   --features verbose,tt_diag \
+    ///   test_tsume_39te_ply18_solo_a1b2 -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply18_solo_a1b2() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply18_solo_a1b2.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                for usi in pv.iter().take(18) {
+                    let m = board.move_from_usi(usi).unwrap();
+                    board.do_move(m);
+                }
+
+                let remaining = 39 - 18;
+                let depth = (remaining + 2).min(41) as u32;
+                let node_limit: u64 = 30_000_000;
+                let timeout: u64 = 900;
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " ply 18 solo (arena=10M, threshold=3, 30M/900s)").unwrap();
+                writeln!(out, " vs v0.24.78 baseline spin率 84.5%").unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+                let mut solver = DfPnSolver::with_timeout(depth, node_limit, 32767, timeout);
+                solver.set_find_shortest(false);
+                solver.set_pns_arena_max(10_000_000);
+                solver.set_disproof_remaining_threshold(3);
+
+                let start = Instant::now();
+                let result = solver.solve(&mut board);
+                let elapsed = start.elapsed();
+
+                let result_str = match &result {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+                let nps_k = if elapsed.as_secs_f64() > 0.0 {
+                    (solver.nodes_searched as f64 / elapsed.as_secs_f64()) / 1000.0
+                } else { 0.0 };
+
+                writeln!(out, "  result   = {}", result_str).unwrap();
+                writeln!(out, "  time     = {:.2}s", elapsed.as_secs_f64()).unwrap();
+                writeln!(out, "  nodes    = {}", solver.nodes_searched).unwrap();
+                writeln!(out, "  NPS      = {:.1}k", nps_k).unwrap();
+                writeln!(out, "  max_ply  = {}", solver.max_ply).unwrap();
+
+                #[cfg(feature = "verbose")]
+                {
+                    let total_iters = solver.dbg_pns_spin_iters + solver.dbg_pns_changed_iters;
+                    let spin_pct = if total_iters > 0 {
+                        (solver.dbg_pns_spin_iters as f64 / total_iters as f64) * 100.0
+                    } else { 0.0 };
+                    writeln!(out, "  pns_spin_iters    = {}", solver.dbg_pns_spin_iters).unwrap();
+                    writeln!(out, "  pns_changed_iters = {}", solver.dbg_pns_changed_iters).unwrap();
+                    writeln!(out, "  pns_spin_pct      = {:.1}% (vs baseline 84.5%)", spin_pct).unwrap();
+                    writeln!(out, "  pns_proof_stores  = {}", solver.dbg_pns_proof_stores).unwrap();
+                    writeln!(out, "  pns_arena_growth  = {}", solver.dbg_pns_arena_growth).unwrap();
+                    writeln!(out, "  pns_cycles        = {}", solver.dbg_pns_cycles).unwrap();
+                }
+
+                #[cfg(feature = "tt_diag")]
+                {
+                    writeln!(out, "  TT proven      = {}", solver.table.count_proven()).unwrap();
+                    writeln!(out, "  TT disproven   = {}", solver.table.count_disproven()).unwrap();
+                    writeln!(out, "  disproof_working        = {}",
+                        solver.table.diag_disproof_working).unwrap();
+                    writeln!(out, "  disproof_threshold_skip = {}",
+                        solver.table.diag_disproof_threshold_skip).unwrap();
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_ply18_solo_a1b2.log");
+    }
+
+    /// backward 全 ply threshold=3 regression チェック (v0.25.0)．
+    ///
+    /// 各 ply を 30M 予算で threshold=3 にて解き，baseline からの
+    /// 退行 (Unknown への遷移) が無いことを確認する．
+    /// default 化の判断材料．
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   test_tsume_39te_backward_30m_threshold3 -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_backward_30m_threshold3() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_backward_30m_threshold3.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                let node_limit: u64 = 30_000_000;
+                let timeout: u64 = 300;
+
+                // 事前に全 ply 局面を構築
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                let mut positions: Vec<(usize, Board)> = Vec::new();
+                positions.push((0, board.clone()));
+                for ply_start in (0..38).step_by(2) {
+                    let m1 = board.move_from_usi(pv[ply_start]).unwrap();
+                    board.do_move(m1);
+                    let m2 = board.move_from_usi(pv[ply_start + 1]).unwrap();
+                    board.do_move(m2);
+                    positions.push((ply_start + 2, board.clone()));
+                }
+                positions.reverse();
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " 39手詰め backward 30M threshold=3 regression check").unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, "{:<6} {:<8} {:<14} {:<10} {:<10} {}",
+                    "Ply", "Remain", "Nodes", "Time(s)", "MaxPly", "Result").unwrap();
+                writeln!(out, "{}", "-".repeat(90)).unwrap();
+
+                for (ply, pos) in &positions {
+                    let remaining = 39 - ply;
+                    let depth = (remaining + 2).min(41) as u32;
+
+                    let mut test_board = pos.clone();
+                    let mut solver = DfPnSolver::with_timeout(
+                        depth, node_limit, 32767, timeout,
+                    );
+                    solver.set_find_shortest(false);
+                    solver.set_disproof_remaining_threshold(3);
+
+                    let start = Instant::now();
+                    let result = solver.solve(&mut test_board);
+                    let elapsed = start.elapsed();
+
+                    let (result_str, solved) = match &result {
+                        TsumeResult::Checkmate { moves, .. } =>
+                            (format!("Mate({})", moves.len()), true),
+                        TsumeResult::CheckmateNoPv { .. } =>
+                            ("MateNoPV".to_string(), true),
+                        TsumeResult::NoCheckmate { .. } =>
+                            ("NoMate".to_string(), false),
+                        TsumeResult::Unknown { .. } =>
+                            ("Unknown".to_string(), false),
+                    };
+
+                    writeln!(out, "{:<6} {:<8} {:<14} {:<10.2} {:<10} {}",
+                        ply, remaining, solver.nodes_searched, elapsed.as_secs_f64(),
+                        solver.max_ply, result_str).unwrap();
+                    out.flush().unwrap();
+
+                    // 最初の未解決 ply で停止 (深い ply は解けない想定)
+                    if !solved {
+                        writeln!(out, "\n境界: ply {} で 30M ノードでは解けない", ply).unwrap();
+                        break;
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_backward_30m_threshold3.log");
+    }
+
     /// 39手詰め ply 20 の NPS 時間依存性を診断する．
     ///
     /// `test_tsume_39te_backward_120m` では ply 20 の NPS が 6 kn/s と異常に
