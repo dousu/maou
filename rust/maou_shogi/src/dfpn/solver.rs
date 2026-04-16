@@ -639,7 +639,11 @@ impl DfPnSolver {
             refutable_check_succeeded: FxHashSet::default(),
             param_refut_full_eval: false,
             param_refut_partial_recursion: false,
-            param_refut_or_success_cache: false,
+            // F3 (or_success_cache): default ON (v0.25.5)．
+            // ply 22 で nodes -59% / time -53% の大幅改善．
+            // ply 24 (shallow) では完全 no-op (safe)．
+            // full_hash keying で false positive を防止済み．
+            param_refut_or_success_cache: true,
             param_refut_extended_lookup: false,
             tt_gc_threshold: 0,
             next_gc_check: 0,
