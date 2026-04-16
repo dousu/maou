@@ -654,10 +654,10 @@ impl DfPnSolver {
             param_dn_floor_mult: 100,
             param_deep_dfpn_r: DEEP_DFPN_R,
             param_pns_arena_max: PNS_MAX_ARENA_NODES,
-            // (v0.25.1) default: 0 (スキップなし / 従来動作 / no-mate 安全)．
-            // adaptive モードを使う場合は
-            // `enable_adaptive_disproof_remaining_threshold()` を明示的に呼ぶ．
-            param_disproof_remaining_threshold: 0,
+            // (v0.25.6) default: ADAPTIVE．M-A refutable depth floor (v0.25.2)
+            // の導入で false-NoMate が根絶されたため，adaptive を安全に default 化．
+            // depth ≤ 19: 0, depth 20-22: 1, depth ≥ 23: 3 (§3.6, M-D)．
+            param_disproof_remaining_threshold: DISPROOF_THRESHOLD_ADAPTIVE,
             saved_depth_for_epsilon: 0,
             warmup_depths: Vec::new(),
             outer_solve_depth: 0,
@@ -846,26 +846,18 @@ impl DfPnSolver {
         // solve() 入口で outer_solve_depth を見て TT に反映される．
     }
 
-    /// Depth-adaptive な実効 disproof 格納閾値を返す (v0.25.1, refined v0.25.3 M-D)．
+    /// Depth-adaptive な実効 disproof 格納閾値を返す (v0.25.1〜v0.25.6)．
     ///
     /// `param_disproof_remaining_threshold` が `DISPROOF_THRESHOLD_ADAPTIVE` の
     /// 場合，`outer_solve_depth` に基づいて閾値を自動決定する．
     ///
-    /// **ポリシー (M-D refinement)**:
-    /// - depth ≤ 19 (ply 20+ の浅い問題, target<20): **0** (スキップなし)
-    ///   → backward_30m で ply 24 退行が起きた領域を保護．M-A の
-    ///   refutable depth=5 適用範囲とも整合．
-    /// - depth 20-22 (ply 17-19): **1** (remaining=0 のみスキップ)
-    ///   → S-2 で実証: threshold=1 は ply 24 で完全に no-op (rem=0 entry
-    ///   はほぼ存在しない)．safety margin 確保しつつ将来の M-E
-    ///   (compact storage) への布石．
-    /// - depth ≥ 23 (ply 18 以下の深い問題): **3** (remaining ∈ {0,1,2} スキップ)
-    ///   → B-2 full benefit (ply 18 500M で wall time -45%)．
-    ///
-    /// **S-2 (§10.2.11) の知見**:
-    /// - threshold=1 は実質 no-op だが API/test の対称性のため適用．
-    /// - threshold=2 は depth ≤ 17 で致命的 (rem[2] 挿入 30× 爆発)．
-    /// - threshold=3 は depth ≥ 23 でのみ有効．
+    /// **ポリシー (N-1, v0.25.6)**:
+    /// - depth ≤ 19: **0** (shallow 保護．S-2 で remaining=1 が致命的と実証)
+    /// - depth 20-22: **1** (実質 no-op．rem=0 entry はほぼ存在しない)
+    /// - depth 23-27: **3** (chain aigoma sweet spot．ply 14-18 で -75% 実証)
+    /// - depth ≥ 28: **1** (very deep．no-mate 証明の予算要求を保護．
+    ///   `test_no_checkmate_counter_check` depth=31 で threshold=3 は
+    ///   2M 予算不足 Unknown を引き起こすため，保守的に 1 に抑える)
     ///
     /// `param_` に非センチネル値が入っていればそれをそのまま使用 (テスト用)．
     #[inline(always)]
@@ -881,7 +873,8 @@ impl DfPnSolver {
         match d {
             0..=19 => 0,
             20..=22 => 1,
-            _ => 3,
+            23..=27 => 3,
+            _ => 1,
         }
     }
 
