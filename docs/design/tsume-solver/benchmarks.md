@@ -4530,6 +4530,67 @@ trade-off: depth=22 で threshold=1 は実質変化なし．ただし将来の
 depth-dependent cache 実装 (M-E: remaining ≤ 2 の compact storage) への
 布石となる．
 
+#### 10.2.12 M-1: refutable fast path 4 strategy 比較 (v0.25.4)
+
+10.2.x 診断で `refut_tt_hits=0` が ply 18 の根本的な性能制約と判明したため，
+4 つの fix 案を **opt-in flag** として実装し ply 18 30M で比較した．
+
+##### 実装した戦略
+
+| Flag | API | アプローチ |
+|:---|:---|:---|
+| F1 | `set_refut_full_eval(true)` | recursive_inner で false 確定 check で早期 return せず全 check 評価・store |
+| F2 | `set_refut_partial_recursion(true)` | fast path 部分 match (mask) → unmatched checks のみ recursive 評価 |
+| F3 | `set_refut_or_success_cache(true)` | OR レベル refutable 成功局面を solve() 内 FxHashSet にキャッシュ |
+| F4 | `set_refut_extended_lookup(true)` | fast path lookup を WorkingTT 含めに拡張 (rem >= refutable_depth) |
+
+##### Soundness 検証 (`test_m1_strategies_soundness`)
+
+`test_no_checkmate_counter_check` 同等の no-mate 局面 (depth=31) を 2M 予算で
+全 strategy 試行．結果は全て **NoMate ✓** (false-Mate なし)．
+F1 は full eval により nodes 14× だが結果不変．
+
+##### 効果検証 (`test_m1_strategies_ply18_sweep` + part2)
+
+ply 18 (depth=23) を 30M / 600s で各 strategy 単独・組合せで実行:
+
+| Strategy | result | refut_tt_hits | refut_rec_true | refut_rec_false | NPS | time |
+|:---|:---|---:|---:|---:|---:|---:|
+| baseline | Unknown | **0** | 830 | 4,103 | 72.7k | 412.8s |
+| F1 | Unknown | 0 | 609 | 4,255 | 58.5k | 512.7s |
+| F2 | Unknown | 0 | 932 | 4,047 | 72.9k | 411.3s |
+| F3 | Unknown | **1,153** | 916 | 5,644 | 64.3k | 466.9s |
+| F4 | Unknown | 7 | 941 | 4,683 | 72.1k | 416.4s |
+| F3+F4 | Unknown | 1,190 | 838 | 4,648 | 69.3k | 432.9s |
+| **F1+F3** 🏆 | Unknown | **2,032** | 544 | 4,286 | 61.2k | 490.2s |
+| F1+F3+F4 | Unknown | 1,876 | 557 | 4,334 | 58.6k | 512.2s |
+
+##### 戦略別の知見
+
+1. **F3 (or_success_cache) が単独で最大寄与**: refut_tt_hits 0 → 1,153．
+   v0.24.74 で false NM の温床として警戒されていた OR レベルキャッシュだが，
+   `solve()` 開始時に `refutable_check_succeeded.clear()` する設計で
+   IDS 透過汚染を回避し soundness を維持．
+2. **F1 (full_eval) は単独では効かないが F3 と組合せで大きく寄与**:
+   F3 alone (1,153) → F1+F3 (2,032, **+76%**)．
+   全 check の AND 子を store することで F3 cache の対象 OR 局面が増える．
+3. **F2 (partial_recursion) は単独効果なし**: per-check match 率 8% では
+   partial mask が full match に達することがほぼなく，恩恵が少ない．
+4. **F4 (extended_lookup) は微小**: alone +7 hits．WorkingTT の disproof は
+   pos_key/hand 一致が ProvenTT より低いため．F3+F4 では F3 のみと同等．
+
+##### 推奨
+
+- **F1+F3 を opt-in 推奨組合せ**として API 提供．
+- **F2 と F4 は実装維持のみ** (将来の改良のための実験基盤)．
+- default 化は別途検討 (NPS が -19% 低下するため，問題依存で trade-off)．
+
+##### 合格基準
+
+- ✅ `refut_tt_hits` を 0 → **2,032** (+∞%) に上昇．
+- ✅ 全 strategy で no-mate test pass (false NM 起きず)．
+- ✅ recursive_true 数も 830 → 544 (-34%) で実質的な探索効率改善．
+
 ---
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
