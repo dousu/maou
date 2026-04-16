@@ -1722,8 +1722,12 @@ impl DfPnSolver {
         checks: &[Move],
     ) -> bool {
         // F3: OR レベル success cache (有効時)
+        // board.hash は pos_key + hand を含む full hash．
+        // pos_key のみだと同一盤面・異 hand で false positive が起きるため
+        // full_hash を使う (v0.25.5 ply 22 退行の root cause fix)．
+        let full_hash = board.hash;
         if self.param_refut_or_success_cache
-            && self.refutable_check_succeeded.contains(&pos_key)
+            && self.refutable_check_succeeded.contains(&full_hash)
         {
             #[cfg(feature = "verbose")]
             { self.dbg_refut_tt_hits += 1; }
@@ -1735,12 +1739,12 @@ impl DfPnSolver {
             { self.dbg_refut_tt_hits += 1; }
             // F3: 成功時に OR success cache へ記録
             if self.param_refut_or_success_cache {
-                self.refutable_check_succeeded.insert(pos_key);
+                self.refutable_check_succeeded.insert(full_hash);
             }
             return true;
         }
         // Memoize: 既に false 確定の局面ならスキップ
-        if self.refutable_check_failed.contains(&pos_key) {
+        if self.refutable_check_failed.contains(&full_hash) {
             #[cfg(feature = "verbose")]
             { self.dbg_refut_memo_hits += 1; }
             return false;
@@ -1761,7 +1765,7 @@ impl DfPnSolver {
                 #[cfg(feature = "verbose")]
                 { self.dbg_refut_tt_hits += 1; }
                 if self.param_refut_or_success_cache {
-                    self.refutable_check_succeeded.insert(pos_key);
+                    self.refutable_check_succeeded.insert(full_hash);
                 }
                 return true;
             }
@@ -1780,11 +1784,11 @@ impl DfPnSolver {
                     #[cfg(feature = "verbose")]
                     { self.dbg_refut_recursive_true += 1; }
                     if self.param_refut_or_success_cache {
-                        self.refutable_check_succeeded.insert(pos_key);
+                        self.refutable_check_succeeded.insert(full_hash);
                     }
                     return true;
                 } else {
-                    self.refutable_check_failed.insert(pos_key);
+                    self.refutable_check_failed.insert(full_hash);
                     #[cfg(feature = "verbose")]
                     { self.dbg_refut_recursive_false += 1; }
                     return false;
@@ -1798,7 +1802,7 @@ impl DfPnSolver {
         // root_dn=0 の false NM を引き起こすため (v0.24.74 診断結果)．
         let result = self.depth_limit_all_checks_refutable(board, checks);
         if !result {
-            self.refutable_check_failed.insert(pos_key);
+            self.refutable_check_failed.insert(full_hash);
             #[cfg(feature = "verbose")]
             { self.dbg_refut_recursive_false += 1; }
         } else {
@@ -1806,7 +1810,7 @@ impl DfPnSolver {
             { self.dbg_refut_recursive_true += 1; }
             // F3: recursive 成功時にも OR success cache へ記録
             if self.param_refut_or_success_cache {
-                self.refutable_check_succeeded.insert(pos_key);
+                self.refutable_check_succeeded.insert(full_hash);
             }
         }
         result

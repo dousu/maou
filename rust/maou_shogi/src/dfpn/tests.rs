@@ -3680,6 +3680,236 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: /tmp/tsume_39te_backward_30m_threshold3.log");
     }
 
+    /// F1+F3 default 化: 39手詰め ply 24+22 A/B (v0.25.4)．
+    /// 短時間で完了する浅い ply のみ．ply 20 は別テスト．
+    #[test]
+    #[ignore]
+    fn test_f1f3_39te_ply24_22() {
+        use std::io::Write;
+        let out_path = "/tmp/f1f3_39te_ply24_22.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                let modes: [(&str, fn(&mut DfPnSolver)); 3] = [
+                    ("baseline", |_s| {}),
+                    ("F3 only", |s| { s.set_refut_or_success_cache(true); }),
+                    ("F1+F3", |s| {
+                        s.set_refut_full_eval(true);
+                        s.set_refut_or_success_cache(true);
+                    }),
+                ];
+
+                let test_plies = [24, 22];
+
+                writeln!(out, "{}", "=".repeat(70)).unwrap();
+                writeln!(out, " F3 vs F1+F3 39手詰め ply 24+22 (30M/300s)").unwrap();
+                writeln!(out, "{}", "=".repeat(70)).unwrap();
+
+                for ply in test_plies.iter() {
+                    let remaining = 39 - ply;
+                    let depth = (remaining + 2).min(41) as u32;
+                    writeln!(out, "\nply {} (depth={})", ply, depth).unwrap();
+
+                    for (label, configure) in modes.iter() {
+                        let mut board = Board::new();
+                        board.set_sfen(sfen).unwrap();
+                        for usi in pv.iter().take(*ply) {
+                            let m = board.move_from_usi(usi).unwrap();
+                            board.do_move(m);
+                        }
+
+                        let mut solver = DfPnSolver::with_timeout(
+                            depth, 30_000_000, 32767, 300);
+                        solver.set_find_shortest(false);
+                        configure(&mut solver);
+
+                        let start = Instant::now();
+                        let result = solver.solve(&mut board);
+                        let elapsed = start.elapsed();
+
+                        let result_str = match &result {
+                            TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                            TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                            TsumeResult::NoCheckmate { .. } => "NoMate ⚠️".to_string(),
+                            TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                        };
+
+                        writeln!(out, "  [{}] {} nodes={} time={:.1}s NPS={:.1}k",
+                            label, result_str, solver.nodes_searched,
+                            elapsed.as_secs_f64(),
+                            solver.nodes_searched as f64 / elapsed.as_secs_f64() / 1000.0).unwrap();
+                        #[cfg(feature = "verbose")]
+                        writeln!(out, "    tt_hits={} rec_true={} rec_false={}",
+                            solver.dbg_refut_tt_hits,
+                            solver.dbg_refut_recursive_true,
+                            solver.dbg_refut_recursive_false).unwrap();
+                        out.flush().unwrap();
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/f1f3_39te_ply24_22.log");
+    }
+
+    /// F1+F3 default 化判断: 29手詰め + 39手詰め backward で baseline vs F1+F3 A/B 比較 (v0.25.4)．
+    ///
+    /// 合格基準:
+    /// - 29手詰めが正しく Mate(29) を返す (regression なし)
+    /// - 39手詰め backward (ply 24/22/20) の nodes/time が同等以上
+    /// - false NM / NoMate が発生しない
+    ///
+    /// 実行例:
+    /// ```
+    /// cargo test -p maou_shogi --release \
+    ///   --features verbose \
+    ///   test_f1f3_default_evaluation -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_f1f3_default_evaluation() {
+        use std::io::Write;
+        let out_path = "/tmp/f1f3_default_evaluation.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " F1+F3 default 化判断: 29手詰め + 39手詰め backward A/B").unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+                let modes: [(&str, fn(&mut DfPnSolver)); 2] = [
+                    ("baseline", |_s| {}),
+                    ("F1+F3", |s| {
+                        s.set_refut_full_eval(true);
+                        s.set_refut_or_success_cache(true);
+                    }),
+                ];
+
+                // === Part 1: 29手詰め ===
+                writeln!(out, "\n### Part 1: 29手詰め (depth=31, 50M/300s)").unwrap();
+                let sfen_29 = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+                for (label, configure) in modes.iter() {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen_29).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 300);
+                    configure(&mut solver);
+
+                    let start = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed = start.elapsed();
+
+                    let result_str = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate ⚠️".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    let nps_k = if elapsed.as_secs_f64() > 0.0 {
+                        (solver.nodes_searched as f64 / elapsed.as_secs_f64()) / 1000.0
+                    } else { 0.0 };
+
+                    writeln!(out, "\n  [{}]", label).unwrap();
+                    writeln!(out, "  result = {}", result_str).unwrap();
+                    writeln!(out, "  nodes  = {}", solver.nodes_searched).unwrap();
+                    writeln!(out, "  time   = {:.2}s", elapsed.as_secs_f64()).unwrap();
+                    writeln!(out, "  NPS    = {:.1}k", nps_k).unwrap();
+
+                    #[cfg(feature = "verbose")]
+                    {
+                        writeln!(out, "  refut_tt_hits  = {}", solver.dbg_refut_tt_hits).unwrap();
+                        writeln!(out, "  refut_rec_true = {}", solver.dbg_refut_recursive_true).unwrap();
+                    }
+                    out.flush().unwrap();
+                }
+
+                // === Part 2: 39手詰め backward ===
+                writeln!(out, "\n### Part 2: 39手詰め backward (30M/300s per ply)").unwrap();
+                let sfen_39 = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                // ply 24, 22, 20 (解ける範囲の深い 3 つ)
+                let test_plies = [24, 22, 20];
+                let node_limit: u64 = 30_000_000;
+                let timeout: u64 = 600;
+
+                for ply in test_plies.iter() {
+                    let remaining = 39 - ply;
+                    let depth = (remaining + 2).min(41) as u32;
+                    writeln!(out, "\n  ply {} (remain={}, depth={})", ply, remaining, depth).unwrap();
+
+                    for (label, configure) in modes.iter() {
+                        let mut board = Board::new();
+                        board.set_sfen(sfen_39).unwrap();
+                        for usi in pv.iter().take(*ply) {
+                            let m = board.move_from_usi(usi).unwrap();
+                            board.do_move(m);
+                        }
+
+                        let mut solver = DfPnSolver::with_timeout(
+                            depth, node_limit, 32767, timeout);
+                        solver.set_find_shortest(false);
+                        configure(&mut solver);
+
+                        let start = Instant::now();
+                        let result = solver.solve(&mut board);
+                        let elapsed = start.elapsed();
+
+                        let result_str = match &result {
+                            TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                            TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                            TsumeResult::NoCheckmate { .. } => "NoMate ⚠️".to_string(),
+                            TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                        };
+                        let nps_k = if elapsed.as_secs_f64() > 0.0 {
+                            (solver.nodes_searched as f64 / elapsed.as_secs_f64()) / 1000.0
+                        } else { 0.0 };
+
+                        writeln!(out, "    [{}] {} | nodes={} | time={:.1}s | NPS={:.1}k",
+                            label, result_str, solver.nodes_searched,
+                            elapsed.as_secs_f64(), nps_k).unwrap();
+
+                        #[cfg(feature = "verbose")]
+                        {
+                            writeln!(out, "      refut_tt_hits={} rec_true={} rec_false={}",
+                                solver.dbg_refut_tt_hits,
+                                solver.dbg_refut_recursive_true,
+                                solver.dbg_refut_recursive_false).unwrap();
+                        }
+                        out.flush().unwrap();
+                    }
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/f1f3_default_evaluation.log");
+    }
+
     /// M-1 soundness 検証: 各 strategy で no-mate test が pass するか (v0.25.4)．
     ///
     /// 各 strategy (F1, F2, F3, F4 + 全組合せ) に対し，no-mate を期待する
