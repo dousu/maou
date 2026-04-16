@@ -3680,6 +3680,77 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: /tmp/tsume_39te_backward_30m_threshold3.log");
     }
 
+    /// N-3b: ply 14 (depth=27) boundary probe (v0.25.6)．
+    ///
+    /// ply 16 が 198M で解けた (v0.25.5)．v0.25.6 (N-1 B-2 adaptive) では
+    /// NPS +121% のため，ply 14 の 50M probe で傾向を確認．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply14_probe() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply14_probe.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut out = std::fs::File::create(out_path).unwrap();
+
+                let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+                let pv = [
+                    "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+                    "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+                    "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+                    "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+                    "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+                    "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+                    "2g2h", "3i4i", "2h4h",
+                ];
+
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                for usi in pv.iter().take(14) {
+                    let m = board.move_from_usi(usi).unwrap();
+                    board.do_move(m);
+                }
+
+                let remaining = 39 - 14;
+                let depth = (remaining + 2).min(41) as u32;
+                let node_limit: u64 = 200_000_000;
+                let timeout: u64 = 600;
+
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+                writeln!(out, " ply 14 probe (depth={}, 200M/600s, v0.25.6)", depth).unwrap();
+                writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+                let mut solver = DfPnSolver::with_timeout(depth, node_limit, 32767, timeout);
+                solver.set_find_shortest(false);
+
+                let start = Instant::now();
+                let result = solver.solve(&mut board);
+                let elapsed = start.elapsed();
+
+                let result_str = match &result {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoMate ⚠️".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+                let nps_k = if elapsed.as_secs_f64() > 0.0 {
+                    (solver.nodes_searched as f64 / elapsed.as_secs_f64()) / 1000.0
+                } else { 0.0 };
+
+                writeln!(out, "\n--- Result ---").unwrap();
+                writeln!(out, "  result   = {}", result_str).unwrap();
+                writeln!(out, "  time     = {:.2}s", elapsed.as_secs_f64()).unwrap();
+                writeln!(out, "  nodes    = {}", solver.nodes_searched).unwrap();
+                writeln!(out, "  NPS      = {:.1}k", nps_k).unwrap();
+                writeln!(out, "  max_ply  = {}", solver.max_ply).unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_ply14_probe.log");
+    }
+
     /// N-3: ply 16 (depth=25) boundary probe (v0.25.5)．
     ///
     /// v0.24.78 baseline: 500M/3600s timeout (ply 16 未到達)．
