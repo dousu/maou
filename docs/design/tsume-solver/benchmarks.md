@@ -4591,6 +4591,50 @@ ply 18 (depth=23) を 30M / 600s で各 strategy 単独・組合せで実行:
 - ✅ 全 strategy で no-mate test pass (false NM 起きず)．
 - ✅ recursive_true 数も 830 → 544 (-34%) で実質的な探索効率改善．
 
+#### 10.2.13 F3 default 化と full_hash keying (v0.25.5)
+
+M-1 F3 (or_success_cache) を **default ON** に変更し，
+cache key を `pos_key` → `board.hash` (full hash = pos_key + hand) に修正．
+
+##### cache key 修正の経緯
+
+ply 22 (depth=19) で F3 enabled 時に MateNoPV 退行が発生．
+原因: `refutable_check_succeeded` が pos_key のみでキーイングしており，
+同一 pos_key・異 hand 局面 (合駒チェーン等) で false positive cache hit．
+full_hash への修正で解消．同時に `refutable_check_failed` も full_hash に統一．
+
+##### 効果 (ply 別 A/B 比較，v0.25.5 F3 default vs v0.24.78 baseline)
+
+| Ply | Depth | v0.24.78 nodes | v0.25.5 nodes | 削減率 | v0.24.78 time | v0.25.5 time |
+|:---:|:---:|---:|---:|---:|---:|---:|
+| 24 | 17 | 392,489 | 392,652 | 0% (同等) | 50s | 52s |
+| 22 | 19 | 8,948,289 | 9,685,512 | 同等 (*) | 141s | 109s |
+| **18** | **23** | **387,635,808** | **95,681,427** | **-75.3%** | **2,384s** | **819s** |
+
+(*) ply 22 の nodes は verbose mode での計測のため multi-run で若干変動．
+    F3 default 前後の直接比較 (同環境) では baseline 23.8M → F3 9.7M (**-59%**)．
+
+##### ply 18 100M 検証 (v0.25.5 最終実測)
+
+| 指標 | v0.24.78 baseline | v0.25.5 F3 default | 変化 |
+|:---|---:|---:|---:|
+| Result | Mate(21) | **Mate(21) ✓** | — |
+| Nodes | 387,635,808 | **95,681,427** | **-75.3%** |
+| Time | 2,384s | **819s** | **-65.7%** |
+| NPS | ~162k | 116.8k | -28% (M-A floor) |
+| 予算 | 500M 必要 | **100M で十分** | 5x 効率化 |
+
+##### v0.25.x 全体の累積効果
+
+| 施策 | 版 | 主要効果 | default |
+|:---|:---|:---|:---|
+| B-2 (disproof threshold) | v0.25.0 | ply 18 NPS +54% (opt-in) | 手動 |
+| S-1 (depth-adaptive) | v0.25.1 | threshold 自動選択 | opt-in |
+| **M-A (refutable floor)** | **v0.25.2** | **ply 20 false-NoMate 根絶** | **default** |
+| M-D (policy 精緻化) | v0.25.3 | S-2 知見反映 | opt-in |
+| M-1 F1-F4 (fast path) | v0.25.4 | refut_tt_hits 0→2032 | opt-in |
+| **F3 default + full_hash** | **v0.25.5** | **ply 18 nodes -75%** | **default** |
+
 ---
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較

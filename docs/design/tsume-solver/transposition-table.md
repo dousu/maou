@@ -1044,5 +1044,37 @@ overflow-limited な WorkingTT へ** シフトした．
 「メモリを増やせば衝突が減る」という仮定は片方の TT には正しく，
 もう片方には間違いだった．特性を見極めた上で最適化対象を選ぶ必要がある．
 
+#### 6.6.6 WorkingTT Churn 削減 + OR Success Cache (v0.25.0〜v0.25.5)
+
+##### B-2: Depth-Limited Disproof 選択的格納 (v0.25.0)
+
+ply 18 診断 (§10.2.6) で WorkingTT の depth-limited disproof 挿入 10.25M に
+対し最終 1.27M (87% eviction) の書き込み増幅が観測された．
+
+`TranspositionTable::disproof_remaining_threshold` パラメータを追加し，
+`remaining < threshold` の depth-limited disproof は `store_impl` で
+格納をスキップする．
+
+- `path_dependent` と `REMAINING_INFINITE` (confirmed disproof) は対象外
+- 診断カウンタ `diag_disproof_threshold_skip` で追跡
+
+Adaptive ポリシー (§3.6 参照) により depth ≤ 19 では無効，depth ≥ 23 で
+threshold=3 を適用し，ply 18 の disproof_working を 3.34M → 2K に削減．
+
+##### F3: OR Success Cache (v0.25.4〜v0.25.5)
+
+`refutable_check_with_cache` の OR レベル成功結果を `FxHashSet<u64>` で
+cache する．v0.24.74 で false NM の根源として警戒されていたが，
+以下の安全策で soundness を維持:
+
+1. **full_hash keying**: `board.hash` (pos_key + hand) をキーに使用．
+   pos_key のみでは同一盤面・異 hand で false positive が発生する
+   (v0.25.5 ply 22 退行の root cause)．
+2. **solve() 開始時 clear**: IDS depth 間の汚染を防止．
+3. **`refutable_check_failed` も full_hash に統一**: 一貫性確保．
+
+効果: ply 18 で nodes -75% (387M → 96M)，ply 22 で nodes -59%．
+v0.25.5 で **default ON** に変更．
+
 ---
 

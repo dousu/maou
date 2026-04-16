@@ -155,3 +155,4 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 100 | S-2: ply 24 退行境界診断で remaining=1 スキップの致命性を特定 | maou 独自 | §10.2.11 | v0.25.2 |
 | 101 | M-D: adaptive disproof threshold policy 精緻化 (depth 20-22 → 1) | maou 独自 | §10.2.11 | v0.25.3 |
 | 102 | M-1 F1+F3: full_eval + or_success_cache で refut_tt_hits 0 → 2032 | maou 独自 | §10.2.12 | v0.25.4 |
+| 103 | F3 (or_success_cache) default ON + full_hash keying: ply 18 nodes **-75%** | maou 独自 | §10.2.13 | v0.25.5 |
