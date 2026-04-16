@@ -62,6 +62,12 @@
 | 2026-04-10 | v0.24.69 | §8.4, §10.2 PostCaptureSummary 容量 4x 拡大 (64K → 256K)．hash collision 削減で ply 24 -14.6% (no-warmup) |
 | 2026-04-10 | v0.24.66 | §10.2.2 Warmup NM false NoMate 修正: outer_solve_depth ガード + clear_working_entry．edge_cost_or 駒打ちペナルティ (+PN_UNIT/2) |
 | 2026-04-10 | v0.24.65 | §10.2.2 Adaptive warmup depths: solve() 内で段階的 depth の warmup solve を実行．ply 22 が 10M + warmup で初解決 |
+| 2026-04-16 | v0.25.5 | §10.2.13, §6.6.6 F3 (or_success_cache) default ON + full_hash keying．ply 18 nodes **-75%** (387M→96M)，ply 22 nodes **-59%**．100M 予算で Mate(21) 到達 |
+| 2026-04-16 | v0.25.4 | §10.2.12 M-1 refutable fast path 4 strategy (F1-F4) 比較．F1+F3 勝者 (refut_tt_hits 0→2032)．F3 単独で default 候補に |
+| 2026-04-16 | v0.25.3 | §10.2.11, §3.6 M-D: adaptive disproof threshold policy 精緻化 (depth 20-22→1, ≥23→3)．S-2 ply 24 退行境界診断 (remaining=1 致命性の実証) |
+| 2026-04-16 | v0.25.2 | §10.2.10, §10.2.9 M-A: refutable depth フロア (target≥20→8) で ply 20 false-NoMate 根絶．warmup + refutable depth 組合せ検証で仮説確定 |
+| 2026-04-16 | v0.25.1 | §10.2.8 S-1: depth-adaptive disproof threshold (opt-in)．no-mate test で default 化 NG と判定 |
+| 2026-04-16 | v0.25.0 | §10.2.7, §3.6, §6.6.6 A-1: PNS arena 動的容量化 (効果なし，基盤のみ)．B-2: depth-limited disproof 選択的格納 (ply 18 NPS +54%，opt-in) |
 | 2026-04-10 | v0.24.64 | §8.4 Post-Capture Proof Summary Cache: pos_key ベース O(1) proof/disproof lookup |
 | 2026-04-10 | v0.24.63 | §10.2 IDS NM 昇格判定の `ids_depth >= saved_depth` ガードで false NoMate 防止 |
 | 2026-04-10 | v0.24.62 | §8.5 Multi-step 逆方向不詰共有: 異マスの兄弟ドロップにも disproof 伝搬 |

@@ -329,5 +329,33 @@ TT クラスタ衝突パターンのみ．
 | depth 制限超過時の初期 pn=1u32 | ply 24 以降で探索パターン乖離 | backward 解析の diff |
 | 除算の丸め精度差 | P\*4g で 1.5%のノード数差 | 4M クラスタ TT での比較 |
 
+### 3.6 Depth-Limited Disproof 格納閾値 (v0.25.0〜v0.25.3, B-2/S-1/M-D)
+
+depth-limited disproof (dn=0, remaining < INFINITE) の WorkingTT 格納を
+`remaining < threshold` で選択的にスキップする機構．
+
+**背景**: ply 18 診断 (§10.2.6) で WorkingTT の disproof 挿入 10.25M に対し
+最終 1.27M (87% eviction) の書き込み増幅が観測され，NPS 低下の主因と判明．
+
+**パラメータ**: `DfPnSolver::param_disproof_remaining_threshold`
+- 0: スキップなし (従来動作)
+- 1〜3: `remaining < threshold` の disproof はスキップ
+- `DISPROOF_THRESHOLD_ADAPTIVE` (u16::MAX): depth-adaptive ポリシー
+
+**Depth-Adaptive ポリシー (M-D, v0.25.3)**:
+
+```
+depth ≤ 19: 0  (shallow 問題: remaining=1 スキップが致命的 — S-2 で実証)
+depth 20-22: 1 (実質 no-op: remaining=0 entry はほぼ存在しない)
+depth ≥ 23:  3 (B-2 full benefit: ply 18 NPS +54%)
+```
+
+**S-2 の知見 (§10.2.11)**: threshold=2 で ply 24 (depth=17) の rem[2] 挿入が
+180K → 5.55M (30×) に爆発．remaining=1 の leaf-level depth-limited NM は
+枝刈りの要であり，スキップすると指数爆発する．
+
+**効果**: ply 18 500M で wall time -45% (threshold=3 明示指定時)．
+adaptive default (v0.25.5) では F3 との相乗で nodes -75%．
+
 ---
 

@@ -11,7 +11,7 @@ use crate::movegen;
 use crate::moves::Move;
 use crate::types::{Color, Piece, PieceType, Square, HAND_KINDS};
 
-use super::entry::PnsNode;
+use super::entry::{PnsNode, PNS_MAX_ARENA_NODES};
 use super::tt::TranspositionTable;
 #[cfg(feature = "profile")]
 use super::profile::ProfileStats;
@@ -20,8 +20,9 @@ use super::{
     hand_gte_forward_chain,
     position_key, propagate_nm_remaining, push_move, snda_dedup,
     CheckCache,
-    DEEP_DFPN_R, EPSILON_DENOM_ADAPTIVE, INF, INTERPOSE_DN_BIAS, MAX_MOVES, PN_UNIT,
-    REMAINING_INFINITE, STAGNATION_LIMIT, TCA_EXTEND_DENOM, ZERO_PROGRESS_LIMIT,
+    DEEP_DFPN_R, DISPROOF_THRESHOLD_ADAPTIVE, EPSILON_DENOM_ADAPTIVE, INF, INTERPOSE_DN_BIAS,
+    MAX_MOVES, PN_UNIT, REMAINING_INFINITE, STAGNATION_LIMIT, TCA_EXTEND_DENOM,
+    ZERO_PROGRESS_LIMIT,
 };
 
 /// path 配列の容量．depth の最大値(41) + マージン．
@@ -263,6 +264,10 @@ pub struct DfPnSolver {
     /// 一度 false と判定された局面を再判定する必要はない．
     /// MID 内部で同一局面の重複判定を回避し，パフォーマンスを改善する．
     pub(super) refutable_check_failed: FxHashSet<u64>,
+    /// **F3**: OR レベル refutable 成功局面のキャッシュ (v0.25.4)．
+    /// `(pos_key, outer_solve_depth)` でタグ付けし solve() 内のみで有効．
+    /// `param_refut_or_success_cache=true` のときに使用．
+    pub(super) refutable_check_succeeded: FxHashSet<u64>,
     /// OR ノードの子ポジション別 stale effort 追跡．
     ///
     /// 次に TT GC チェックを行うノード数．
@@ -284,6 +289,46 @@ pub struct DfPnSolver {
     pub(super) param_dn_floor_mult: u32,
     /// Deep df-pn の深さ係数 R(デフォルト 4)．
     pub(super) param_deep_dfpn_r: u32,
+    /// PNS アリーナの最大ノード数 (v0.25.0)．
+    ///
+    /// デフォルトは `PNS_MAX_ARENA_NODES` (5M)．大きくすると spin 率が下がる
+    /// 代わりにメモリ消費が増える (1 ノード ≈ 80〜120 bytes)．
+    /// 例: 10M で約 800〜1,200 MB．
+    pub(super) param_pns_arena_max: usize,
+    /// 深さ制限反証 (depth-limited disproof) を WorkingTT に格納する
+    /// 最小 `remaining` 閾値．
+    ///
+    /// `remaining < param_disproof_remaining_threshold` の depth-limited
+    /// disproof は格納をスキップする (path_dependent と confirmed disproof は
+    /// 対象外)．
+    ///
+    /// - `DISPROOF_THRESHOLD_ADAPTIVE` (sentinel = `u16::MAX`) の場合，
+    ///   solve() 時に `outer_solve_depth` に基づいて自動決定する (v0.25.1)．
+    /// - 正の u16 値: 固定閾値として使用 (テスト・チューニング用)．
+    /// - 0: スキップなし (従来動作).
+    ///
+    /// デフォルトは `DISPROOF_THRESHOLD_ADAPTIVE` (depth-adaptive)．
+    /// ply 18 ベンチマークで WorkingTT churn (87% eviction) の削減を狙いつつ，
+    /// ply 24 などの shallow 問題での退行を回避する．
+    pub(super) param_disproof_remaining_threshold: u16,
+
+    // === M-1 refutable check fast path 改善フラグ (v0.25.4) ===
+    /// **F1**: `all_checks_refutable_recursive_inner` で false 確定 check
+    /// で早期 return せず，全 check を評価して store する．
+    /// partial coverage の積み上げで fast path 発火率向上を狙う．
+    /// trade-off: recursive cost +50%〜100% の見込み．
+    pub(super) param_refut_full_eval: bool,
+    /// **F2**: fast path で部分 match した場合，残り missing check のみを
+    /// recursive で評価し，全 check 完成度を効率的に達成する．
+    pub(super) param_refut_partial_recursion: bool,
+    /// **F3**: OR レベル refutable 成功も `refutable_check_succeeded` cache
+    /// に格納する．v0.24.74 で false NM の根源だったため，
+    /// `(pos_key, outer_solve_depth)` でタグ付けし IDS depth ごとに分離．
+    pub(super) param_refut_or_success_cache: bool,
+    /// **F4**: fast path lookup を ProvenTT のみから WorkingTT も含む
+    /// `look_up` に拡張．depth-limited disproof (rem>=floor) も match
+    /// として count し，coverage を向上．
+    pub(super) param_refut_extended_lookup: bool,
     /// 段階的予算拡大の warmup depth リスト (v0.24.65)．
     ///
     /// 空ならば warmup なし．非空の場合，solve() 内で各 depth の
@@ -355,6 +400,20 @@ pub struct DfPnSolver {
     /// (false を返した・memoize した) 数．
     #[cfg(feature = "verbose")]
     pub(super) dbg_refut_recursive_false: u64,
+    /// 診断 (M-1): fast path 試行回数 (TT lookup の総数)．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_fast_attempts: u64,
+    /// 診断 (M-1): fast path で 1 個以上の check が match した試行数．
+    /// (この値が 0 なら全く重複ヒットしていない)．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_fast_partial: u64,
+    /// 診断 (M-1): fast path 試行で見つかった disproof match 累計
+    /// (各 attempt で N checks 中 K 個が match した場合 K を加算)．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_fast_match_total: u64,
+    /// 診断 (M-1): fast path 試行で評価された check 数の累計．
+    #[cfg(feature = "verbose")]
+    pub(super) dbg_refut_fast_check_total: u64,
     /// TT 診断: 監視対象の ply(0 = 無効)．
     ///
     /// 指定 ply で MID ループの再帰前後に TT サイズを出力し，
@@ -577,6 +636,15 @@ impl DfPnSolver {
             #[cfg(feature = "tt_diag")]
             diag_pc_summary_disproof_hits: 0,
             refutable_check_failed: FxHashSet::default(),
+            refutable_check_succeeded: FxHashSet::default(),
+            param_refut_full_eval: false,
+            param_refut_partial_recursion: false,
+            // F3 (or_success_cache): default ON (v0.25.5)．
+            // ply 22 で nodes -59% / time -53% の大幅改善．
+            // ply 24 (shallow) では完全 no-op (safe)．
+            // full_hash keying で false positive を防止済み．
+            param_refut_or_success_cache: true,
+            param_refut_extended_lookup: false,
             tt_gc_threshold: 0,
             next_gc_check: 0,
             next_overflow_gc: 0,
@@ -585,6 +653,11 @@ impl DfPnSolver {
             param_pn_floor_denom: 3,
             param_dn_floor_mult: 100,
             param_deep_dfpn_r: DEEP_DFPN_R,
+            param_pns_arena_max: PNS_MAX_ARENA_NODES,
+            // (v0.25.6) default: ADAPTIVE．M-A refutable depth floor (v0.25.2)
+            // の導入で false-NoMate が根絶されたため，adaptive を安全に default 化．
+            // depth ≤ 19: 0, depth 20-22: 1, depth ≥ 23: 3 (§3.6, M-D)．
+            param_disproof_remaining_threshold: DISPROOF_THRESHOLD_ADAPTIVE,
             saved_depth_for_epsilon: 0,
             warmup_depths: Vec::new(),
             outer_solve_depth: 0,
@@ -625,6 +698,14 @@ impl DfPnSolver {
             dbg_refut_recursive_true: 0,
             #[cfg(feature = "verbose")]
             dbg_refut_recursive_false: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_fast_attempts: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_fast_partial: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_fast_match_total: 0,
+            #[cfg(feature = "verbose")]
+            dbg_refut_fast_check_total: 0,
             #[cfg(feature = "tt_diag")]
             diag_ply: 0,
             #[cfg(feature = "tt_diag")]
@@ -723,6 +804,80 @@ impl DfPnSolver {
         }
     }
 
+    /// PNS アリーナの最大ノード数を設定する (v0.25.0)．
+    ///
+    /// デフォルトは `PNS_MAX_ARENA_NODES` (5M)．大きくすると arena spin 率が
+    /// 下がる代わりにメモリ消費が増える．`min_value` (1024) 未満は丸められる．
+    pub fn set_pns_arena_max(&mut self, max_nodes: usize) {
+        self.param_pns_arena_max = max_nodes.max(1024);
+    }
+
+    /// depth-limited disproof の WorkingTT 格納閾値を明示的に設定する (v0.25.0)．
+    ///
+    /// `remaining < threshold` の depth-limited disproof はスキップされる．
+    /// `DISPROOF_THRESHOLD_ADAPTIVE` を渡すと adaptive モードに戻る．
+    /// 有効値の目安: 0 (無効) / 2〜3 (深い問題向け) / 6 以上 (過剰)．
+    ///
+    /// **注意**: threshold > 0 は no-mate 証明 (NoCheckmate) の予算要求を
+    /// 著しく増加させる場合がある．no-mate が期待される局面では default=0 を
+    /// 使うか予算を増やすこと．
+    pub fn set_disproof_remaining_threshold(&mut self, threshold: u16) {
+        self.param_disproof_remaining_threshold = threshold;
+        // adaptive センチネル以外なら即座に TT へ反映．adaptive の場合は
+        // solve() 入口で outer_solve_depth に応じて計算・反映される．
+        if threshold != DISPROOF_THRESHOLD_ADAPTIVE {
+            self.table.set_disproof_remaining_threshold(threshold);
+        }
+    }
+
+    /// depth-adaptive disproof threshold を opt-in で有効化する (v0.25.1)．
+    ///
+    /// solve() 時に `outer_solve_depth` に基づいて閾値を自動決定する:
+    /// - depth ≤ 21: 0 (スキップなし)
+    /// - depth = 22:   2
+    /// - depth ≥ 23 (ply 18 等): 3
+    ///
+    /// **注意**: adaptive は depth ≥ 23 の深い問題向けに threshold=3 を適用
+    /// するため，no-mate 証明が期待される深い局面では退行しうる
+    /// (`test_no_checkmate_counter_check` 等．default OFF とした理由)．
+    /// 深い詰将棋だけを解く用途で明示的に有効化する．
+    pub fn enable_adaptive_disproof_remaining_threshold(&mut self) {
+        self.param_disproof_remaining_threshold = DISPROOF_THRESHOLD_ADAPTIVE;
+        // solve() 入口で outer_solve_depth を見て TT に反映される．
+    }
+
+    /// Depth-adaptive な実効 disproof 格納閾値を返す (v0.25.1〜v0.25.6)．
+    ///
+    /// `param_disproof_remaining_threshold` が `DISPROOF_THRESHOLD_ADAPTIVE` の
+    /// 場合，`outer_solve_depth` に基づいて閾値を自動決定する．
+    ///
+    /// **ポリシー (N-1, v0.25.6)**:
+    /// - depth ≤ 19: **0** (shallow 保護．S-2 で remaining=1 が致命的と実証)
+    /// - depth 20-22: **1** (実質 no-op．rem=0 entry はほぼ存在しない)
+    /// - depth 23-27: **3** (chain aigoma sweet spot．ply 14-18 で -75% 実証)
+    /// - depth ≥ 28: **1** (very deep．no-mate 証明の予算要求を保護．
+    ///   `test_no_checkmate_counter_check` depth=31 で threshold=3 は
+    ///   2M 予算不足 Unknown を引き起こすため，保守的に 1 に抑える)
+    ///
+    /// `param_` に非センチネル値が入っていればそれをそのまま使用 (テスト用)．
+    #[inline(always)]
+    pub(super) fn effective_disproof_remaining_threshold(&self) -> u16 {
+        if self.param_disproof_remaining_threshold != DISPROOF_THRESHOLD_ADAPTIVE {
+            return self.param_disproof_remaining_threshold;
+        }
+        let d = if self.outer_solve_depth > 0 {
+            self.outer_solve_depth
+        } else {
+            self.depth
+        };
+        match d {
+            0..=19 => 0,
+            20..=22 => 1,
+            23..=27 => 3,
+            _ => 1,
+        }
+    }
+
     /// 1+ε の実効 epsilon 除数を返す．
     ///
     /// `param_epsilon_denom` が `EPSILON_DENOM_ADAPTIVE` (0) の場合は
@@ -793,6 +948,34 @@ impl DfPnSolver {
     /// warmup 使用時 Unknown に退行することを確認．
     pub fn set_skip_warmup(&mut self, skip: bool) -> &mut Self {
         self.skip_warmup = skip;
+        self
+    }
+
+    /// **M-1 F1**: refutable check で全 check を必ず評価する (v0.25.4)．
+    /// false 確定 check で早期 return せず，全 AND 子の disproof を store．
+    pub fn set_refut_full_eval(&mut self, enable: bool) -> &mut Self {
+        self.param_refut_full_eval = enable;
+        self
+    }
+
+    /// **M-1 F2**: refutable check で fast path 部分 match を活用 (v0.25.4)．
+    /// missing check のみを recursive で評価する．
+    pub fn set_refut_partial_recursion(&mut self, enable: bool) -> &mut Self {
+        self.param_refut_partial_recursion = enable;
+        self
+    }
+
+    /// **M-1 F3**: OR レベル refutable 成功局面をキャッシュ (v0.25.4)．
+    /// solve() 内のみで有効．clear() で IDS 透過汚染を防ぐ．
+    pub fn set_refut_or_success_cache(&mut self, enable: bool) -> &mut Self {
+        self.param_refut_or_success_cache = enable;
+        self
+    }
+
+    /// **M-1 F4**: refutable fast path lookup を WorkingTT 含めに拡張 (v0.25.4)．
+    /// depth-limited disproof (rem >= floor) も match として count．
+    pub fn set_refut_extended_lookup(&mut self, enable: bool) -> &mut Self {
+        self.param_refut_extended_lookup = enable;
         self
     }
 
@@ -1190,12 +1373,20 @@ impl DfPnSolver {
         self.killer_table.clear();
         self.check_cache.clear();
         self.refutable_check_failed.clear();
+        // F3: OR success cache を solve() 開始時にクリア (prev solve() の汚染回避)．
+        self.refutable_check_succeeded.clear();
         self.pc_summary.clear();
         self.start_time = Instant::now();
         self.timed_out = false;
         self.next_gc_check = 100_000;
         self.attacker = board.turn;
         self.outer_solve_depth = self.depth;
+        // (v0.25.1) adaptive disproof threshold: outer_solve_depth 決定後に
+        // effective 値を TT へ反映する．param が非センチネルなら no-op．
+        {
+            let eff = self.effective_disproof_remaining_threshold();
+            self.table.set_disproof_remaining_threshold(eff);
+        }
         self.alpha_x_filter_active = false;
         /// 施策 A-6 再評価: 境界層 PNS 責任転嫁の呼出数グローバル上限．
         /// 10 回 × 5K ノード/回 = 50K ノード相当の追加予算 (solve の小さな一部)．
@@ -1483,23 +1674,124 @@ impl DfPnSolver {
     ///   - 再帰が必要な局面は初回のみ ~66ms まで支払い，memoize で再評価回避
     ///   - 29 手詰めなど浅い問題の NM 昇格率を維持
     #[inline]
+    /// **F2**: fast path 部分 match 用 helper (v0.25.4)．
+    ///
+    /// 全 check に対して TT lookup し，どの check が disproof として存在
+    /// するかをビットマスクで返す．`checks.len() <= 64` を仮定
+    /// (typical 5-15)．N 個全 match で `(1<<N)-1`．
+    fn refutable_partial_match_mask(
+        &mut self,
+        board: &mut Board,
+        checks: &[Move],
+    ) -> u64 {
+        let extended = self.param_refut_extended_lookup;
+        let min_remaining: u16 = if extended {
+            self.effective_refutable_depth() as u16
+        } else { 0 };
+        let mut mask: u64 = 0;
+        for (i, check) in checks.iter().enumerate().take(64) {
+            let captured = board.do_move(*check);
+            let pk = position_key(board);
+            let att_hand = board.hand[self.attacker.index()];
+            let found = if extended {
+                if self.table.has_refutable_or_confirmed_disproof(pk, &att_hand) {
+                    true
+                } else {
+                    let (pn, dn, _) = self.table.look_up_working(
+                        pk, &att_hand, min_remaining, false);
+                    pn != 0 && dn == 0
+                }
+            } else {
+                self.table.has_refutable_or_confirmed_disproof(pk, &att_hand)
+            };
+            board.undo_move(*check, captured);
+            if found {
+                mask |= 1u64 << i;
+            }
+        }
+        mask
+    }
+
     pub(super) fn refutable_check_with_cache(
         &mut self,
         board: &mut Board,
         pos_key: u64,
         checks: &[Move],
     ) -> bool {
-        // Fast path: TT ベース判定 (confirmed + refutable disproof の両方を参照)
-        if self.all_checks_refutable_by_tt_or_refutable(board, checks) {
+        // F3: OR レベル success cache (有効時)
+        // board.hash は pos_key + hand を含む full hash．
+        // pos_key のみだと同一盤面・異 hand で false positive が起きるため
+        // full_hash を使う (v0.25.5 ply 22 退行の root cause fix)．
+        let full_hash = board.hash;
+        if self.param_refut_or_success_cache
+            && self.refutable_check_succeeded.contains(&full_hash)
+        {
             #[cfg(feature = "verbose")]
             { self.dbg_refut_tt_hits += 1; }
             return true;
         }
+        // Fast path: TT ベース判定 (confirmed + refutable disproof の両方を参照)
+        if self.all_checks_refutable_by_tt_or_refutable(board, checks) {
+            #[cfg(feature = "verbose")]
+            { self.dbg_refut_tt_hits += 1; }
+            // F3: 成功時に OR success cache へ記録
+            if self.param_refut_or_success_cache {
+                self.refutable_check_succeeded.insert(full_hash);
+            }
+            return true;
+        }
         // Memoize: 既に false 確定の局面ならスキップ
-        if self.refutable_check_failed.contains(&pos_key) {
+        if self.refutable_check_failed.contains(&full_hash) {
             #[cfg(feature = "verbose")]
             { self.dbg_refut_memo_hits += 1; }
             return false;
+        }
+        // F2: partial fast path → missing checks のみ recursive で評価
+        // matched 個数が 0 なら通常 recursive と同じ．matched > 0 のとき
+        // unmatched checks のみで recursive_inner を走らせる．
+        if self.param_refut_partial_recursion && checks.len() <= 64 && !checks.is_empty() {
+            let mask = self.refutable_partial_match_mask(board, checks);
+            let full_mask = if checks.len() == 64 {
+                u64::MAX
+            } else {
+                (1u64 << checks.len()) - 1
+            };
+            if mask == full_mask {
+                // 通常 fast path で既に取れているはず．万一の race condition で
+                // ここに来た場合も成功扱い．
+                #[cfg(feature = "verbose")]
+                { self.dbg_refut_tt_hits += 1; }
+                if self.param_refut_or_success_cache {
+                    self.refutable_check_succeeded.insert(full_hash);
+                }
+                return true;
+            }
+            if mask != 0 {
+                // 部分 match: unmatched のみ集める (typical N <= 16)
+                let mut unmatched: ArrayVec<Move, 64> = ArrayVec::new();
+                for (i, &c) in checks.iter().enumerate().take(64) {
+                    if (mask >> i) & 1 == 0 {
+                        unmatched.push(c);
+                    }
+                }
+                // 残りの check が全て recursive で refute 可能か判定
+                // (matched 部分は TT で確認済み)
+                let result = self.depth_limit_all_checks_refutable(board, &unmatched);
+                if result {
+                    #[cfg(feature = "verbose")]
+                    { self.dbg_refut_recursive_true += 1; }
+                    if self.param_refut_or_success_cache {
+                        self.refutable_check_succeeded.insert(full_hash);
+                    }
+                    return true;
+                } else {
+                    self.refutable_check_failed.insert(full_hash);
+                    #[cfg(feature = "verbose")]
+                    { self.dbg_refut_recursive_false += 1; }
+                    return false;
+                }
+            }
+            // mask == 0 なら通常 recursive へフォールスルー
         }
         // Fallback: 再帰判定 (高コスト). false ならキャッシュ．
         // true の場合は AND ノードが再帰内で ProvenTT に NM 格納済み (v0.24.74)．
@@ -1507,12 +1799,16 @@ impl DfPnSolver {
         // root_dn=0 の false NM を引き起こすため (v0.24.74 診断結果)．
         let result = self.depth_limit_all_checks_refutable(board, checks);
         if !result {
-            self.refutable_check_failed.insert(pos_key);
+            self.refutable_check_failed.insert(full_hash);
             #[cfg(feature = "verbose")]
             { self.dbg_refut_recursive_false += 1; }
         } else {
             #[cfg(feature = "verbose")]
             { self.dbg_refut_recursive_true += 1; }
+            // F3: recursive 成功時にも OR success cache へ記録
+            if self.param_refut_or_success_cache {
+                self.refutable_check_succeeded.insert(full_hash);
+            }
         }
         result
     }
@@ -1537,7 +1833,7 @@ impl DfPnSolver {
         )
     }
 
-    /// IDS target depth に応じた適応的 refutable check 再帰深さ (v0.24.77)．
+    /// IDS target depth に応じた適応的 refutable check 再帰深さ (v0.24.77, v0.25.2 updated)．
     ///
     /// `param_refutable_depth` が 0 (EFFECTIVE_DEPTH_ADAPTIVE) の場合，
     /// outer_solve_depth (IDS target) に基づく log ベースの値を返す．
@@ -1548,15 +1844,20 @@ impl DfPnSolver {
     /// - log ベースで徐々に増加して飽和
     ///   → 浅い問題では小さい d (NPS 優先)
     ///   → 深い問題では大きい d (NM 検出率優先)
-    ///   → 飽和点があるため無限に増えない
     ///
-    /// 式: d = min(target.ilog2() + 1, 7).max(3)
-    /// - target=4  (log2=2): d=3
-    /// - target=8  (log2=3): d=4
-    /// - target=16 (log2=4): d=5  ← backward_10m ply 20 (target=21) baseline と一致
-    /// - target=17-31:       d=5
-    /// - target=32+:         d=6
-    /// - target=64+:         d=7 (飽和)
+    /// **M-A (v0.25.2)**: target ≥ 20 に **下限フロア 8** を追加．
+    /// §10.2.9 ply 20 false-NoMate 診断で，target=21 の log-adaptive d=5 では
+    /// refutable check の判定が浅すぎて非 NM 局面を refutable disproof と誤判定
+    /// する現象を確認．warmup で代替できたため，固定 depth=10 相当の対策を
+    /// 組み込む．
+    ///
+    /// 式: d = max(target.ilog2() + 1, depth_floor(target)).min(10)
+    /// - target=1-15:  depth_floor=3 → d=3〜4 (変更なし)
+    /// - target=16-19: depth_floor=3 → d=5 (変更なし)
+    /// - target=20-31: depth_floor=**8** → d=**8** (ply 20 false-NM 防止)
+    /// - target=32-127: depth_floor=8 → d=8 (target.ilog2+1 が 6〜7 でも 8 に上げる)
+    /// - target=128-511: d=8〜9 (log_val が 8〜9)
+    /// - target=512+: d=10 (min で飽和)
     #[inline]
     fn effective_refutable_depth(&self) -> u32 {
         if self.param_refutable_depth != Self::EFFECTIVE_DEPTH_ADAPTIVE {
@@ -1571,7 +1872,10 @@ impl DfPnSolver {
             return 3;
         }
         let log_val = (target as u32).ilog2() + 1;
-        log_val.min(7).max(3)
+        // M-A: target ≥ 20 は深いリーフ NM が誤判定されうるため
+        // フロア 8 を強制．それ以外は従来通り．
+        let depth_floor: u32 = if target >= 20 { 8 } else { 3 };
+        log_val.max(depth_floor).min(10)
     }
 
     /// `param_refutable_depth = 0` は適応的 depth を意味する sentinel．
@@ -1616,15 +1920,56 @@ impl DfPnSolver {
         board: &mut Board,
         checks: &[Move],
     ) -> bool {
+        #[cfg(feature = "verbose")]
+        {
+            self.dbg_refut_fast_attempts += 1;
+            self.dbg_refut_fast_check_total += checks.len() as u64;
+        }
+        #[cfg(feature = "verbose")]
+        let mut matched_count: u64 = 0;
+        // F4: extended lookup を有効化すると WorkingTT も含めて lookup する．
+        // depth-limited disproof は remaining が refutable depth 以上のものだけ
+        // 安全 (refutable check が要求する深さを満たす)．
+        let extended = self.param_refut_extended_lookup;
+        let min_remaining: u16 = if extended {
+            // refutable check 自体が探索する深さと同等以上の disproof のみ
+            // を信頼．M-A の effective_refutable_depth と整合させる．
+            self.effective_refutable_depth() as u16
+        } else { 0 };
         for check in checks {
             let captured = board.do_move(*check);
             let pk = position_key(board);
             let att_hand = board.hand[self.attacker.index()];
-            let found = self.table.has_refutable_or_confirmed_disproof(pk, &att_hand);
+            let found = if extended {
+                // F4: ProvenTT (refutable+confirmed) + WorkingTT (rem>=floor)
+                if self.table.has_refutable_or_confirmed_disproof(pk, &att_hand) {
+                    true
+                } else {
+                    let (pn, dn, _) = self.table.look_up_working(
+                        pk, &att_hand, min_remaining, false);
+                    pn != 0 && dn == 0
+                }
+            } else {
+                self.table.has_refutable_or_confirmed_disproof(pk, &att_hand)
+            };
             board.undo_move(*check, captured);
             if !found {
+                #[cfg(feature = "verbose")]
+                {
+                    self.dbg_refut_fast_match_total += matched_count;
+                    if matched_count > 0 {
+                        self.dbg_refut_fast_partial += 1;
+                    }
+                }
                 return false;
             }
+            #[cfg(feature = "verbose")]
+            { matched_count += 1; }
+        }
+        #[cfg(feature = "verbose")]
+        {
+            self.dbg_refut_fast_match_total += matched_count;
+            self.dbg_refut_fast_partial += 1; // full match also counts
         }
         true
     }
@@ -1666,6 +2011,11 @@ impl DfPnSolver {
         limit: u32,
         store_nm: bool,
     ) -> bool {
+        // F1: param_refut_full_eval=true なら false 確定 check で早期 return
+        // せず，全 check を評価して残りの AND 子も store する．
+        // partial coverage を完成させて将来の fast path を発火させる．
+        let full_eval = self.param_refut_full_eval;
+        let mut all_refuted = true;
         for check in checks {
             *calls += 1;
             if *calls > limit {
@@ -1675,7 +2025,11 @@ impl DfPnSolver {
             let defenses = self.generate_defense_moves(board);
             if defenses.is_empty() {
                 board.undo_move(*check, captured);
-                return false;
+                if !full_eval {
+                    return false;
+                }
+                all_refuted = false;
+                continue;
             }
             let mut has_refuting_defense = false;
             for defense in &defenses {
@@ -1712,10 +2066,14 @@ impl DfPnSolver {
             }
             board.undo_move(*check, captured);
             if !has_refuting_defense {
-                return false;
+                if !full_eval {
+                    return false;
+                }
+                all_refuted = false;
+                // 次の check 評価へ続行 (F1)
             }
         }
-        true
+        all_refuted
     }
 
     /// Df-Pn 探索の中核関数(文献での MID: Multiple-Iterative-Deepening に相当)．

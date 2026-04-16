@@ -222,6 +222,13 @@ pub(super) struct TranspositionTable {
     pub(super) diag_disproof_refutable_skip: u64,
     #[cfg(feature = "tt_diag")]
     pub(super) diag_disproof_working: u64,
+    /// (v0.25.0) `remaining < threshold` の depth-limited disproof は WorkingTT
+    /// への格納をスキップする．デフォルト 0 (スキップなし)．
+    /// `path_dependent` と `remaining == REMAINING_INFINITE` は対象外．
+    /// ply 18 ベンチマークで WorkingTT churn (87% eviction) の削減を狙う．
+    pub(super) disproof_remaining_threshold: u16,
+    /// (v0.25.0) 閾値スキップにより格納を省略した depth-limited disproof の累計数．
+    pub(super) diag_disproof_threshold_skip: u64,
 }
 
 impl TranspositionTable {
@@ -281,7 +288,17 @@ impl TranspositionTable {
             diag_disproof_refutable_skip: 0,
             #[cfg(feature = "tt_diag")]
             diag_disproof_working: 0,
+            disproof_remaining_threshold: 0,
+            diag_disproof_threshold_skip: 0,
         }
+    }
+
+    /// depth-limited disproof の格納閾値を設定する (v0.25.0)．
+    ///
+    /// `remaining < threshold` の depth-limited disproof (path_dependent でなく
+    /// confirmed でないもの) は WorkingTT への格納をスキップする．
+    pub(super) fn set_disproof_remaining_threshold(&mut self, threshold: u16) {
+        self.disproof_remaining_threshold = threshold;
     }
 
     // ---- ヘルパー ----
@@ -1071,6 +1088,16 @@ impl TranspositionTable {
         );
 
         if dn == 0 {
+            // === B-2 (v0.25.0): 浅い remaining の depth-limited disproof をスキップ ===
+            // path_dependent は GHI 情報を含むため対象外．REMAINING_INFINITE は
+            // ProvenTT 経路 (is_proven_entry) で先に処理されるためここには来ない．
+            if !path_dependent
+                && self.disproof_remaining_threshold > 0
+                && remaining < self.disproof_remaining_threshold
+            {
+                self.diag_disproof_threshold_skip += 1;
+                return;
+            }
             // === WorkingTT への depth-limited / path-dep disproof 挿入 ===
             self.store_working_disproof(pos_key, hand, remaining, new_entry,
                 #[cfg(feature = "verbose")] rem_idx);

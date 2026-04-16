@@ -148,3 +148,11 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 93 | `store_refutable_disproof` の hand\_gte 支配チェック (83% 冗長挿入をスキップ) | maou 独自 | §6.6.3, §10.2 | v0.24.76 |
 | 94 | log-adaptive refutable check depth: `outer_solve_depth.ilog2()+1` で IDS 中間 step 一貫性 | maou 独自 | §10.2 | v0.24.77 |
 | 95 | `skip_warmup` デフォルト true: refutable disproof が NM 蓄積を代替 | maou 独自 | §10.2 | v0.24.78 |
+| 96 | PNS arena 動的容量 (`param_pns_arena_max`) | maou 独自 | §10.2.7 | v0.25.0 |
+| 97 | depth-limited disproof 選択的格納 (`disproof_remaining_threshold`) | maou 独自 | §10.2.7 | v0.25.0 |
+| 98 | depth-adaptive disproof threshold (opt-in `enable_adaptive_disproof_remaining_threshold`) | maou 独自 | §10.2.8 | v0.25.1 |
+| 99 | M-A: refutable depth フロア (`target >= 20 → 8`) で ply 20 false-NoMate 根絶 | maou 独自 | §10.2.10 | v0.25.2 |
+| 100 | S-2: ply 24 退行境界診断で remaining=1 スキップの致命性を特定 | maou 独自 | §10.2.11 | v0.25.2 |
+| 101 | M-D: adaptive disproof threshold policy 精緻化 (depth 20-22 → 1) | maou 独自 | §10.2.11 | v0.25.3 |
+| 102 | M-1 F1+F3: full_eval + or_success_cache で refut_tt_hits 0 → 2032 | maou 独自 | §10.2.12 | v0.25.4 |
+| 103 | F3 (or_success_cache) default ON + full_hash keying: ply 18 nodes **-75%** | maou 独自 | §10.2.13 | v0.25.5 |
