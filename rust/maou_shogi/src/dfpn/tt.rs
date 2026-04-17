@@ -27,6 +27,14 @@ pub(super) static NEIGHBOR_DIAG: [AtomicU64; 4] = [
     AtomicU64::new(0), AtomicU64::new(0),
 ];
 
+/// WorkingTT 中間エントリヒット診断カウンタ (verbose feature)．
+/// [0]: exact_match ヒット回数 (hand 完全一致)
+/// [1]: fc_match ヒット回数 (forward-chain dominance)
+#[cfg(feature = "verbose")]
+pub(super) static WORKING_DIAG: [AtomicU64; 2] = [
+    AtomicU64::new(0), AtomicU64::new(0),
+];
+
 /// ProvenTT の 1 クラスタあたりのエントリ数．
 ///
 /// 持ち駒の種類数(7) + 1 = 8 エントリとすることで，同一盤面・異なる
@@ -222,6 +230,25 @@ pub(super) struct TranspositionTable {
     pub(super) diag_disproof_refutable_skip: u64,
     #[cfg(feature = "tt_diag")]
     pub(super) diag_disproof_working: u64,
+    /// (v0.25.7) WorkingTT 中間エントリヒット回数: exact_match / fc_match 別カウント．
+    /// retain_working_intermediates で保持されたエントリが再利用されているかを確認する．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_working_intermediate_hits: [std::sync::atomic::AtomicU64; 2],
+    /// (v0.25.7) 直近の retain_working_intermediates で保持されたエントリ数．
+    /// IDS 遷移後の保持エントリ数を診断するために使用する．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_last_retained_count: u64,
+    /// (v0.25.7) 保持エントリの pn 分布 (累積): [1, 2-7, 8-63, 64-511, 512-4095, 4096+]．
+    /// Hypothesis 1C (pn/dn キャップ値選定) のための診断用．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_retained_pn_dist: [u64; 6],
+    /// (v0.25.7) 保持エントリの dn 分布 (累積): [1, 2-7, 8-63, 64-511, 512-4095, 4096+]．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_retained_dn_dist: [u64; 6],
+    /// (v0.25.7, Hypothesis 1C) retain_working_intermediates で保持するエントリの
+    /// pn/dn 上限値．u32::MAX はキャップなし(デフォルト)．
+    /// 浅い IDS depth での過大評価 pn/dn が深い depth での探索優先度を歪めるのを防ぐ．
+    pub(super) retain_pn_dn_cap: u32,
     /// (v0.25.0) `remaining < threshold` の depth-limited disproof は WorkingTT
     /// への格納をスキップする．デフォルト 0 (スキップなし)．
     /// `path_dependent` と `remaining == REMAINING_INFINITE` は対象外．
@@ -288,9 +315,30 @@ impl TranspositionTable {
             diag_disproof_refutable_skip: 0,
             #[cfg(feature = "tt_diag")]
             diag_disproof_working: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_working_intermediate_hits: [
+                std::sync::atomic::AtomicU64::new(0),
+                std::sync::atomic::AtomicU64::new(0),
+            ],
+            #[cfg(feature = "tt_diag")]
+            diag_last_retained_count: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_retained_pn_dist: [0; 6],
+            #[cfg(feature = "tt_diag")]
+            diag_retained_dn_dist: [0; 6],
+            retain_pn_dn_cap: u32::MAX,
             disproof_remaining_threshold: 0,
             diag_disproof_threshold_skip: 0,
         }
+    }
+
+    /// retain_working_intermediates で保持するエントリの pn/dn 上限を設定する (v0.25.7)．
+    ///
+    /// `u32::MAX` はキャップなし (デフォルト)．
+    /// Hypothesis 1C: 浅い IDS depth での過大評価が深い depth の探索効率を下げる場合，
+    /// 適切な上限でクリップすることで探索優先度の歪みを軽減できる．
+    pub(super) fn set_retain_pn_dn_cap(&mut self, cap: u32) {
+        self.retain_pn_dn_cap = cap;
     }
 
     /// depth-limited disproof の格納閾値を設定する (v0.25.0)．
@@ -477,9 +525,17 @@ impl TranspositionTable {
             }
         }
         if let Some(m) = exact_match {
+            #[cfg(feature = "verbose")]
+            { WORKING_DIAG[0].fetch_add(1, Ordering::Relaxed); }
+            #[cfg(feature = "tt_diag")]
+            { self.diag_working_intermediate_hits[0].fetch_add(1, Ordering::Relaxed); }
             return m;
         }
         if let Some(m) = fc_match {
+            #[cfg(feature = "verbose")]
+            { WORKING_DIAG[1].fetch_add(1, Ordering::Relaxed); }
+            #[cfg(feature = "tt_diag")]
+            { self.diag_working_intermediate_hits[1].fetch_add(1, Ordering::Relaxed); }
             return m;
         }
 
@@ -1932,6 +1988,9 @@ impl TranspositionTable {
         delta_remaining: u16,
     ) -> usize {
         let mut kept = 0usize;
+        // [0]:0-1, [1]:2-3, [2]:4-7, [3]:8-15, [4]:16-31, [5]:32+
+        #[cfg(feature = "verbose")]
+        let mut rem_dist = [0usize; 6];
         for fe in self.working.iter_mut() {
             if fe.pos_key == 0 { continue; }
             let entry = &mut fe.entry;
@@ -1947,12 +2006,46 @@ impl TranspositionTable {
                 && new_rem < REMAINING_INFINITE;
             if keep {
                 entry.set_remaining(new_rem);
+                if self.retain_pn_dn_cap < u32::MAX {
+                    entry.pn = entry.pn.min(self.retain_pn_dn_cap);
+                    entry.dn = entry.dn.min(self.retain_pn_dn_cap);
+                }
                 kept += 1;
+                #[cfg(feature = "tt_diag")]
+                {
+                    let pb = match entry.pn as usize {
+                        1 => 0, 2..=7 => 1, 8..=63 => 2,
+                        64..=511 => 3, 512..=4095 => 4, _ => 5,
+                    };
+                    self.diag_retained_pn_dist[pb] += 1;
+                    let db = match entry.dn as usize {
+                        1 => 0, 2..=7 => 1, 8..=63 => 2,
+                        64..=511 => 3, 512..=4095 => 4, _ => 5,
+                    };
+                    self.diag_retained_dn_dist[db] += 1;
+                }
+                #[cfg(feature = "verbose")]
+                {
+                    let b = match new_rem as usize {
+                        0..=1 => 0, 2..=3 => 1, 4..=7 => 2,
+                        8..=15 => 3, 16..=31 => 4, _ => 5,
+                    };
+                    rem_dist[b] += 1;
+                }
             } else {
                 fe.pos_key = 0;
             }
         }
         self.working_overflow_since_gc = 0;
+        #[cfg(feature = "tt_diag")]
+        { self.diag_last_retained_count = kept as u64; }
+        #[cfg(feature = "verbose")]
+        eprintln!(
+            "[retain_intermediates] delta={} kept={} rem_dist(post-shift): \
+             0-1:{} 2-3:{} 4-7:{} 8-15:{} 16-31:{} 32+:{}",
+            delta_remaining, kept,
+            rem_dist[0], rem_dist[1], rem_dist[2], rem_dist[3], rem_dist[4], rem_dist[5],
+        );
         kept
     }
 

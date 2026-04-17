@@ -2740,6 +2740,17 @@ use crate::types::{Color, PieceType};
             }
         }
 
+        // WorkingTT 中間エントリヒット診断
+        #[cfg(feature = "verbose")]
+        {
+            use super::tt::WORKING_DIAG;
+            use std::sync::atomic::Ordering;
+            let exact_hits = WORKING_DIAG[0].load(Ordering::Relaxed);
+            let fc_hits = WORKING_DIAG[1].load(Ordering::Relaxed);
+            writeln!(out, "Working intermediate hits: exact={} fc={} total={}",
+                exact_hits, fc_hits, exact_hits + fc_hits).unwrap();
+        }
+
         writeln!(out, "\n{}", "=".repeat(80)).unwrap();
         if let Some(ply) = first_unsolved_ply {
             writeln!(out, "境界: ply {} (残り{}手) で 1M ノードでは解けない",
@@ -9321,6 +9332,25 @@ use crate::types::{Color, PieceType};
                     solver.table.diag_disproof_refutable,
                     solver.table.diag_disproof_refutable_skip,
                     solver.table.diag_disproof_working).unwrap();
+                // WorkingTT 中間エントリヒット診断 (v0.25.7)
+                #[cfg(feature = "tt_diag")]
+                {
+                    use std::sync::atomic::Ordering;
+                    let exact_hits = solver.table.diag_working_intermediate_hits[0]
+                        .load(Ordering::Relaxed);
+                    let fc_hits = solver.table.diag_working_intermediate_hits[1]
+                        .load(Ordering::Relaxed);
+                    writeln!(out, "    working_intermediate_hits: exact={} fc={} total={}",
+                        exact_hits, fc_hits, exact_hits + fc_hits).unwrap();
+                    writeln!(out, "    last_retained_count: {}",
+                        solver.table.diag_last_retained_count).unwrap();
+                    let pd = &solver.table.diag_retained_pn_dist;
+                    writeln!(out, "    retained_pn_dist: 1={} 2-7={} 8-63={} 64-511={} 512-4095={} 4096+={}",
+                        pd[0], pd[1], pd[2], pd[3], pd[4], pd[5]).unwrap();
+                    let dd = &solver.table.diag_retained_dn_dist;
+                    writeln!(out, "    retained_dn_dist: 1={} 2-7={} 8-63={} 64-511={} 512-4095={} 4096+={}",
+                        dd[0], dd[1], dd[2], dd[3], dd[4], dd[5]).unwrap();
+                }
             }
             #[cfg(feature = "profile")]
             {
@@ -9422,6 +9452,12 @@ use crate::types::{Color, PieceType};
                 let l: u32 = std::env::var("REFUT_LIMIT")
                     .ok().and_then(|s| s.parse().ok()).unwrap_or(10_000);
                 solver.set_refutable_params(d, l);
+            }
+            // Hypothesis 1C: retain pn/dn cap (RETAIN_CAP=512 等で実験)
+            if let Ok(v) = std::env::var("RETAIN_CAP") {
+                let cap: u32 = v.parse().unwrap_or(u32::MAX);
+                solver.set_retain_pn_dn_cap(cap);
+                writeln!(out, "  [retain_pn_dn_cap={}]", cap).unwrap();
             }
             let start = Instant::now();
             let result = solver.solve(&mut test_board);

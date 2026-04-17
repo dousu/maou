@@ -830,6 +830,15 @@ impl DfPnSolver {
         }
     }
 
+    /// retain_working_intermediates での pn/dn 上限を設定する (v0.25.7, Hypothesis 1C)．
+    ///
+    /// `u32::MAX` はキャップなし(デフォルト)．
+    /// IDS 遷移後に保持された中間エントリの pn/dn を上限値でクリップし，
+    /// 浅い探索での過大評価が深い探索の優先度を歪めるのを防ぐ．
+    pub fn set_retain_pn_dn_cap(&mut self, cap: u32) {
+        self.table.set_retain_pn_dn_cap(cap);
+    }
+
     /// depth-adaptive disproof threshold を opt-in で有効化する (v0.25.1)．
     ///
     /// solve() 時に `outer_solve_depth` に基づいて閾値を自動決定する:

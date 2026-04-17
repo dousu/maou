@@ -1880,7 +1880,10 @@ impl DfPnSolver {
             if ids_depth > prev_ids_depth {
                 let delta = (ids_depth - prev_ids_depth) as u16;
                 // min_remaining=0: 全ての非 path-dep intermediate を保持
-                self.table.retain_working_intermediates(0, delta);
+                #[allow(unused_variables)]
+                let retained = self.table.retain_working_intermediates(0, delta);
+                verbose_eprintln!("[ids] retain_intermediates: prev={} new={} delta={} kept={}",
+                    prev_ids_depth, ids_depth, delta, retained);
             } else {
                 // depth が進まない (stagnated で prev == saved_depth) or
                 // depth が減る (起きえないが防御的に) → 従来通り全クリア
