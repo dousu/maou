@@ -1946,6 +1946,19 @@ impl TranspositionTable {
         }
     }
 
+    /// WorkingTT の confirmed disproof (dn=0, !path_dep, remaining=INF) の数を返す．
+    ///
+    /// warmup 診断用: IDS depth 切り替え後に WorkingTT に残っている
+    /// confirmed disproof 数を確認する．
+    pub(super) fn count_working_confirmed_disproofs(&self) -> usize {
+        self.working.iter().filter(|fe| {
+            fe.pos_key != 0
+                && fe.entry.dn == 0
+                && !fe.entry.path_dependent()
+                && fe.entry.remaining() == REMAINING_INFINITE
+        }).count()
+    }
+
     /// WorkingTT を全クリアする（IDS depth 切り替え時の強制クリア用）．
     pub(super) fn clear_working(&mut self) {
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
