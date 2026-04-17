@@ -4662,6 +4662,90 @@ ply 間の探索負荷推移 (v0.25.5):
 | M-1 F1-F4 (fast path) | v0.25.4 | refut_tt_hits 0→2032 | opt-in |
 | **F3 default + full_hash** | **v0.25.5** | **ply 18 nodes -75%** | **default** |
 
+#### 10.2.14 v0.25.6〜v0.25.9: N-1 default 化 + Hypothesis 1 warmup 修正
+
+##### N-1: B-2 adaptive disproof threshold default 化 (v0.25.6)
+
+M-A (refutable depth floor, v0.25.2) で false-NoMate が根絶されたため，
+B-2 (adaptive threshold) を depth ≥ 23 限定で default ON に変更．
+
+Policy (v0.25.6 確定値):
+
+| depth 範囲 | threshold |
+|:---:|:---:|
+| ≤ 19 | 0 (shallow 保護) |
+| 20–22 | 1 (実質 no-op) |
+| 23–27 | 3 (chain aigoma sweet spot) |
+| ≥ 28 | 1 (very deep / no-mate 安全性確保) |
+
+depth ≥ 28 を 1 に抑える理由: `test_no_checkmate_counter_check` (depth=31) で
+threshold=3 だと 2M budget 不足で Unknown 退行するため．
+
+regression: 59 tests + 全 no-mate tests pass．
+
+##### ply 14 大予算検証 (v0.25.7)
+
+N-1 (v0.25.6) 適用後に ply 14 (depth=25, 200M budget) を計測:
+- 200M budget で Mate(25) 解決確認 (N-1 効果を含む)
+- ply 12 は依然 Unknown (境界変化なし)
+
+##### Hypothesis 1 シリーズ: warmup 機能不全の原因分析と修正 (v0.25.7〜v0.25.9)
+
+`test_tsume_39te_ply25_gap_diagnosis` Phase 1 が
+**depth=17: Mate(15) ✓** (492K nodes) なのに
+**depth=21/25: Unknown** (timeout) という gap の原因を調査した．
+
+warmup_mode (IDS 内で depth=saved-4 を先行実行するサブサイクル) の
+以下の問題を特定し修正した:
+
+| 仮説 | 問題 | 修正 | 版 |
+|:---|:---|:---|:---|
+| 1C | IDS 遷移後に保持される intermediate の pn/dn 過大評価 | `retain_pn_dn_cap` によるクリップ | v0.25.8 |
+| 1D | 前 IDS ステップの ~61K intermediate が warmup を妨害 | warmup 前に `clear_working()` 追加 | v0.25.8/9 |
+| 1E | warmup 最終ステップで outer_solve_depth guard が confirmed NM 昇格を阻止 → 2.7× ノード増加 | warmup_mode=true 時は guard を saved_depth のみに緩和 | v0.25.9 |
+| 1F | warmup の MID が全予算を消費し Frontier が未実行 | warmup 時 MID 予算を 1/4 に削減 | v0.25.9 |
+| 1G | warmup 前に ProvenTT disproof が消去され再探索が発生 | warmup_mode=true 時は `clear_proven_non_proofs()` を省略 | v0.25.9 |
+| IDS-17 | depth=16→21 スキップで depth=17 の sweet spot を通過しない | depth=16 の次が 17 を飛び越す場合に 17 を明示的に経由 | v0.25.8/9 |
+
+##### Hypothesis 1 シリーズ効果検証 (v0.25.9 vs v0.25.8 baseline)
+
+`test_tsume_39te_ply25_gap_diagnosis` Phase 1 で v0.25.9 と v0.25.8 を比較:
+
+| 指標 | v0.25.8 (before) | v0.25.9 (after) | 変化 |
+|:---|---:|---:|---:|
+| **depth=17 result** | Mate(15) | Mate(15) | — |
+| depth=17 nodes | 492,342 | **417,412** | **-15%** |
+| depth=17 TT entries | 283,136 | 212,691 | -25% |
+| depth=17 intermediate | 100,966 | 76,060 | -25% |
+| depth=17 last_retained | 120 | 0 | — |
+| **depth=21 result** | Unknown (timeout 120s) | Unknown (timeout 121s) | — |
+| depth=21 nodes | 1,636,766 | 1,630,622 | -0.4% |
+| **depth=25 result** | Unknown (timeout 150s) | Unknown (timeout 150s) | — |
+| depth=25 nodes | 7,313,408 | **12,519,365** | **+71%** |
+| depth=25 NPS | 48.5k | **83.1k** | **+71%** |
+| depth=25 max_ply | 20 | **24** | **+4 ply** |
+| depth=25 working_intermediate_hits | 13.6M | **32.4M** | **+138%** |
+| depth=25 confirmed_disproofs | 12,901 | 18,863 | +46% |
+
+**評価:**
+
+- depth=17 は nodes -15%，intermediate エントリ -25% と改善 (1D/1E/1G の効果)．
+- depth=25 は NPS +71%，max_ply 20→24 と深化 (warmup が deeper position に到達)．
+  working_intermediate_hits +138% は warmup が蓄積した TT を後続 IDS が有効活用
+  していることを示す．
+- **depth=21/25 は依然 Unknown**: 15M/10M budget + 150s/120s 制限の中では
+  Mate(15) 証明に至らない．gap の根本原因 (4 守備手 L*6g・B*6g・B*7g が
+  500K budget で Unknown のまま) は未解消．
+
+**残存課題:**
+
+Phase 0b で 500K budget・Unknown となる 3 守備手 (L*6g・B*6g・B*7g) は
+depth=21/25 でも未解決で，これらへの反証コストが gap の実体である．
+warmup が deeper に到達 (max_ply 24) しても proven/disproven の蓄積が
+これら 3 手を覆すには不十分である．
+
+次の改善候補: §11.11「残存課題 N-7〜N-9 (長期)」参照．
+
 ---
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
