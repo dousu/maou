@@ -72,6 +72,43 @@ const DEFAULT_NUM_CLUSTERS: usize = 1 << 21; // 2M
 /// 1 = WorkingTT と同数(2M)．
 const PROVEN_CLUSTER_MULTIPLIER: usize = 1;
 
+/// LeafDisproofTT のクラスタサイズ (4 エントリ × 16B = 64B / クラスタ = 1 cache line)．
+const LEAF_CLUSTER_SIZE: usize = 4;
+
+/// LeafDisproofTT のクラスタ数 (2^19 = 512K クラスタ)．
+/// 512K × 4 entries × 16B = 32MB．WorkingTT overflow の remaining≤2 専用バッファ．
+const LEAF_NUM_CLUSTERS: usize = 1 << 19;
+
+/// LeafDisproofTT のコンパクトエントリ (16B)．
+///
+/// N-8 (v0.26.0): remaining ≤ 2 の depth-limited disproof を WorkingTT の
+/// overflow として格納する compact entry．
+/// WorkingTT の TTFlatEntry (32B) の半分のサイズで，同一メモリに 2× のエントリを保持．
+///
+/// - pos_key: 空スロット判定 (0 = 空)
+/// - hand: hand_gte_forward_chain 比較用
+/// - remaining: 格納時の remaining 値 (1 or 2)
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct TTLeafEntry {
+    pos_key: u64,           // 8B
+    hand: [u8; HAND_KINDS], // 7B
+    remaining: u8,          // 1B (remaining 値: 1 or 2)
+}
+
+const _: () = assert!(
+    std::mem::size_of::<TTLeafEntry>() == 16,
+    "TTLeafEntry must be 16 bytes"
+);
+
+impl TTLeafEntry {
+    const EMPTY: Self = TTLeafEntry {
+        pos_key: 0,
+        hand: [0; HAND_KINDS],
+        remaining: 0,
+    };
+}
+
 /// WorkingTT のフラットエントリ (intermediate + depth-limited/path-dep disproof)．
 ///
 /// pos_key を含むことでクラスタ内の異なる局面を区別する．
@@ -162,10 +199,16 @@ pub(super) struct TranspositionTable {
     proven: Vec<TTFlatProvenEntry>,
     /// WorkingTT: GC 対象エントリ(intermediate + depth-limited disproof)．
     working: Vec<TTFlatEntry>,
+    /// LeafDisproofTT: remaining ≤ 2 の overflow 専用 compact テーブル (N-8, v0.26.0)．
+    /// WorkingTT クラスタが飽和した際の remaining ≤ 2 エントリのフォールバック先．
+    /// 16B/entry で WorkingTT (32B) の半サイズ．512K clusters × 4 = 2M entries = 32MB．
+    leaf_disproofs: Vec<TTLeafEntry>,
     /// ProvenTT の `num_clusters - 1`(高速 modulo 用ビットマスク)．
     proven_mask: usize,
     /// WorkingTT の `num_clusters - 1`．
     working_mask: usize,
+    /// LeafDisproofTT の `num_clusters - 1`．
+    leaf_mask: usize,
     /// store_proven での amount 計算に使用する現在の ply．
     /// mid() が TT store 前にセットする．ply が小さい(ルートに近い)ほど
     /// amount が高くなり，eviction 耐性が上がる．
@@ -256,6 +299,10 @@ pub(super) struct TranspositionTable {
     pub(super) disproof_remaining_threshold: u16,
     /// (v0.25.0) 閾値スキップにより格納を省略した depth-limited disproof の累計数．
     pub(super) diag_disproof_threshold_skip: u64,
+    /// (N-8, v0.26.0) LeafDisproofTT への挿入数 (overflow fallback 含む)．
+    pub(super) diag_leaf_inserts: u64,
+    /// (N-8, v0.26.0) LeafDisproofTT からのヒット数 (look_up_working からの atomic カウント)．
+    pub(super) diag_leaf_hits: std::sync::atomic::AtomicU64,
 }
 
 impl TranspositionTable {
@@ -270,11 +317,14 @@ impl TranspositionTable {
         let proven_clusters = (num_clusters * PROVEN_CLUSTER_MULTIPLIER).next_power_of_two();
         let proven_total = proven_clusters * PROVEN_CLUSTER_SIZE;
         let working_total = working_clusters * WORKING_CLUSTER_SIZE;
+        let leaf_total = LEAF_NUM_CLUSTERS * LEAF_CLUSTER_SIZE;
         TranspositionTable {
             proven: vec![TTFlatProvenEntry::EMPTY; proven_total],
             working: vec![TTFlatEntry::EMPTY; working_total],
+            leaf_disproofs: vec![TTLeafEntry::EMPTY; leaf_total],
             proven_mask: proven_clusters - 1,
             working_mask: working_clusters - 1,
+            leaf_mask: LEAF_NUM_CLUSTERS - 1,
             hint_ply: 0,
             current_ids_depth: 0,
             working_overflow_since_gc: 0,
@@ -329,6 +379,8 @@ impl TranspositionTable {
             retain_pn_dn_cap: u32::MAX,
             disproof_remaining_threshold: 0,
             diag_disproof_threshold_skip: 0,
+            diag_leaf_inserts: 0,
+            diag_leaf_hits: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -405,6 +457,15 @@ impl TranspositionTable {
     fn proven_cluster_start(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> usize {
         let mixed = pos_key ^ Self::hand_hash(hand);
         ((mixed as usize) & self.proven_mask) * PROVEN_CLUSTER_SIZE
+    }
+
+    /// LeafDisproofTT のクラスタ開始インデックス (N-8)．
+    ///
+    /// WorkingTT と同じ fc_hand_hash を使用し，leaf_mask でクラスタを選択する．
+    #[inline(always)]
+    fn leaf_cluster_start(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> usize {
+        let mixed = pos_key ^ Self::fc_hand_hash(hand);
+        ((mixed as usize) & self.leaf_mask) * LEAF_CLUSTER_SIZE
     }
 
     /// WorkingTT のクラスタ開始インデックス．
@@ -556,6 +617,22 @@ impl TranspositionTable {
                 {
                     NEIGHBOR_DIAG[2].fetch_add(1, Ordering::Relaxed);
                     return (e.pn, 0, e.source);
+                }
+            }
+        }
+
+        // N-8 (v0.26.0): LeafDisproofTT を検索 (remaining ≤ 2 の overflow エントリ)．
+        // WorkingTT で見つからなかった場合のみチェックし，ヒット時は (PN_UNIT, 0, 0) を返す．
+        if remaining <= 2 {
+            let l_start = self.leaf_cluster_start(pos_key, hand);
+            let l_cluster = &self.leaf_disproofs[l_start..l_start + LEAF_CLUSTER_SIZE];
+            for le in l_cluster {
+                if le.pos_key != pos_key { continue; }
+                if hand_gte_forward_chain(&le.hand, hand)
+                    && (le.remaining as u16) >= remaining
+                {
+                    self.diag_leaf_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return (PN_UNIT, 0, 0);
                 }
             }
         }
@@ -1449,6 +1526,37 @@ impl TranspositionTable {
                 return;
             }
         }
+        // N-8 (v0.26.0): remaining ≤ 2 かつ WorkingTT に入れなかった場合，
+        // LeafDisproofTT に格納し中間エントリを圧迫しない．
+        // always-replace policy でクラスタ最初の空きか，先頭スロットを上書き．
+        if !new_entry.path_dependent() && remaining <= 2 {
+            let l_start = self.leaf_cluster_start(pos_key, &hand);
+            let l_cluster = &mut self.leaf_disproofs[l_start..l_start + LEAF_CLUSTER_SIZE];
+            // 既存の同 pos_key 被支配エントリを置換，なければ空きか先頭に格納
+            let leaf_entry = TTLeafEntry { pos_key, hand, remaining: remaining as u8 };
+            let mut stored = false;
+            for le in l_cluster.iter_mut() {
+                if le.pos_key == pos_key
+                    && hand_gte_forward_chain(&hand, &le.hand)
+                    && remaining >= le.remaining as u16
+                {
+                    *le = leaf_entry;
+                    stored = true;
+                    break;
+                }
+            }
+            if !stored {
+                if let Some(slot) = l_cluster.iter_mut().find(|le| le.pos_key == 0) {
+                    *slot = leaf_entry;
+                    stored = true;
+                }
+            }
+            if !stored {
+                l_cluster[0] = leaf_entry;
+            }
+            self.diag_leaf_inserts += 1;
+            return;
+        }
         // フォールバック
         let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
         if Self::replace_weakest_in(w_cluster, pos_key, new_entry) {
@@ -1962,6 +2070,8 @@ impl TranspositionTable {
     /// WorkingTT を全クリアする（IDS depth 切り替え時の強制クリア用）．
     pub(super) fn clear_working(&mut self) {
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
+        // N-8: LeafDisproofTT も同時にクリア
+        for le in self.leaf_disproofs.iter_mut() { le.pos_key = 0; }
         self.working_overflow_since_gc = 0;
     }
 
