@@ -4980,6 +4980,69 @@ v0.26.0 (N-2: adaptive effective_refutable_depth) 以降に導入された変更
 
 ---
 
+### 10.2.18 Hypothesis 1D selective clear — warmup 干渉排除と deep intermediate 保持 (v0.27.3)
+
+#### 背景: a4_inflations 急増と 1D の影響調査
+
+v0.27.2 の 500M テストで `a4_inflations = 76.3M` (16.8%) が観測された．
+調査の結果，a4_inflations は N-2 (v0.26.0) による A-4 発火頻度増加の結果であり，
+直接的な退行原因ではなく探索コスト増加の症状であると判明．
+
+本当の原因: **Hypothesis 1D (v0.25.9) の clear_working() 全削除**が，
+IDS depth=21 で `retain_working_intermediates` が保持した intermediate エントリを
+全て破棄し，depth=23 main search が warmup 後に empty WorkingTT から
+再スタートすることで 5x のノード退行を引き起こしていた．
+
+#### 調査結果: 1D 全削除 vs selective clear
+
+1D を単純に除去するとは別の問題が発生:
+
+| 変更 | ply 20 backward | ply 18 backward | ply 18 standalone |
+|:----:|:---:|:---:|:---:|
+| v0.27.2 (1D 全削除 = 旧動作) | 87M Mate(19) ✓ | 172M Unknown | 453M Unknown |
+| v0.27.3 (1D なし — 全保持) | **96M Unknown ✗** | — | 196M Unknown |
+| **v0.27.3 (selective clear)** | **45M Mate(19) ✓** | 96.8M Unknown | 174M Unknown |
+
+1D 全削除は ply 20 を破壊 (Mate→Unknown)．
+`remaining <= warmup_depth` のみ削除する **selective clear** が正解:
+- ply 20: 87M → **45M** (-48%) ✓
+- ply 18: 172M → 96.8M (backward, timeout 1200s) / 453M → 174M (standalone 1800s)
+
+#### 修正内容 (v0.27.3)
+
+tt.rs に `clear_working_shallow(threshold: u16)` を追加:
+
+```rust
+pub(super) fn clear_working_shallow(&mut self, threshold: u16) {
+    for fe in self.working.iter_mut() {
+        if fe.pos_key != 0 && fe.entry.remaining() <= threshold {
+            fe.pos_key = 0;
+        }
+    }
+    for le in self.leaf_disproofs.iter_mut() { le.pos_key = 0; }
+    self.working_overflow_since_gc = 0;
+}
+```
+
+pns.rs: `self.table.clear_working()` → `self.table.clear_working_shallow(warmup_depth as u16)`
+
+#### ply 18 の残存退行
+
+v0.27.3 でも ply 18 は 96.8M/1200s で Unknown (NPS=80K):
+
+| バージョン | backward nodes | NPS | 結果 |
+|:---:|---:|----:|:---:|
+| v0.25.5 | 96M | ~117K | **Mate(21) ✓** |
+| v0.27.2 | 172M | 143K | Unknown |
+| **v0.27.3** | **96.8M** | **80K** | **Unknown** |
+
+同ノード数 (96M) で v0.25.5 は解けるが v0.27.3 は解けない．
+NPS 差 (117K vs 80K) は TT サイズ差によるもので，探索品質の差が残存．
+
+次期調査候補: 1E/1F/1G (v0.25.9 warmup 動作変更)，1C (pn/dn cap, v0.25.8)
+
+---
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
