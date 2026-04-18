@@ -2869,6 +2869,98 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: /tmp/tsume_39te_backward_120m.log");
     }
 
+    /// 39手詰め逆順サブ問題 (100M nodes 予算版，全 ply 継続)．
+    ///
+    /// 統一予算 100M で全 ply を計測し，異なる予算の結果が混在しない
+    /// 一貫したバックワード解析テーブルを取得する．
+    /// 未解決 ply で停止せず全 ply を実行する (フォワードポーリング)．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_backward_100m_nonstop() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_backward_100m_nonstop.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        let node_limit: u64 = 100_000_000;
+        let timeout_per_ply: u64 = 600;
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 39手詰め逆順サブ問題 (100M nodes / 600s per ply, 全 ply 継続)").unwrap();
+        writeln!(out, " v0.27.0 — 統一予算での一貫比較").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, "{:<6} {:<10} {:<14} {:<10} {:<10} {:<10} {}",
+            "Ply", "Remain", "Nodes", "Time(s)", "MaxPly", "NPS", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(90)).unwrap();
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        let mut positions: Vec<(usize, Board)> = Vec::new();
+        positions.push((0, board.clone()));
+        for ply_start in (0..38).step_by(2) {
+            let m1 = board.move_from_usi(pv[ply_start]).unwrap();
+            board.do_move(m1);
+            let m2 = board.move_from_usi(pv[ply_start + 1]).unwrap();
+            board.do_move(m2);
+            positions.push((ply_start + 2, board.clone()));
+        }
+
+        // 終盤(簡単)→序盤(困難)の逆順
+        positions.reverse();
+
+        for (ply, pos) in &positions {
+            let remaining = 39 - ply;
+            let depth = (remaining + 2).min(41) as u32;
+
+            let mut test_board = pos.clone();
+            let mut solver = DfPnSolver::with_timeout(
+                depth, node_limit, 32767, timeout_per_ply,
+            );
+            solver.set_find_shortest(false);
+
+            let start = std::time::Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let nps = if elapsed.as_secs_f64() > 0.0 {
+                (solver.nodes_searched as f64 / elapsed.as_secs_f64()) as u64
+            } else { 0 };
+
+            let result_str = match &result {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+
+            writeln!(out, "{:<6} {:<10} {:<14} {:<10.2} {:<10} {:<10} {}",
+                ply, remaining, solver.nodes_searched, elapsed.as_secs_f64(),
+                solver.max_ply, nps, result_str).unwrap();
+            out.flush().unwrap();
+        }
+
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 完了: /tmp/tsume_39te_backward_100m_nonstop.log").unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_backward_100m_nonstop.log");
+    }
+
     /// 39手詰め逆順サブ問題 (500M nodes 予算版)．
     ///
     /// v0.24.33 で境界が ply 20 → ply 14 に前進した後，更に深い ply
