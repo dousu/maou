@@ -503,6 +503,10 @@ pub struct DfPnSolver {
     /// true にすると warmup_mode=true でも retain_proofs_only() を呼ぶ (1G 導入前の挙動)．
     /// デフォルト false = 1G 有効 (clear_proven_non_proofs をスキップ)．
     pub(super) param_warmup_clear_proven: bool,
+    /// Hypothesis 1E 検証用フラグ (v0.27.4)．
+    /// true にすると warmup_mode=true でも outer_solve_depth を NM guard に加える (1E 導入前の挙動)．
+    /// デフォルト false = 1E 有効 (warmup 内は saved_depth のみで guard)．
+    pub(super) param_warmup_nm_guard_outer: bool,
     /// refutable check の再帰深さ (デフォルト 5)．
     pub(super) param_refutable_depth: u32,
     /// refutable check の呼び出し回数上限 (デフォルト 10,000)．
@@ -752,6 +756,7 @@ impl DfPnSolver {
             skip_warmup: true,
             param_warmup_mid_denom: 4,
             param_warmup_clear_proven: false,
+            param_warmup_nm_guard_outer: false,
             param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
             param_refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
             a6_boundary_pns_calls_remaining: 0,
@@ -987,6 +992,14 @@ impl DfPnSolver {
     /// デフォルト false = 1G 有効 (スキップ)．
     pub fn set_warmup_clear_proven(&mut self, enable: bool) -> &mut Self {
         self.param_warmup_clear_proven = enable;
+        self
+    }
+
+    /// Hypothesis 1E 検証用: warmup_mode=true で outer_solve_depth を NM guard に含めるか設定する．
+    /// true にすると 1E 導入前の挙動 (nm_guard_depth = saved_depth.max(outer_solve_depth))．
+    /// デフォルト false = 1E 有効 (nm_guard_depth = saved_depth のみ)．
+    pub fn set_warmup_nm_guard_outer(&mut self, enable: bool) -> &mut Self {
+        self.param_warmup_nm_guard_outer = enable;
         self
     }
 

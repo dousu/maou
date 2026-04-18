@@ -5043,6 +5043,59 @@ NPS 差 (117K vs 80K) は TT サイズ差によるもので，探索品質の差
 
 ---
 
+### 10.2.19 Hypothesis 1F / 1G 検証 (v0.27.4)
+
+#### Hypothesis 1F: warmup MID 予算 1/4 → 1/2
+
+v0.25.9 で warmup_mode=true の MID 予算が残余 budget の 1/2 → 1/4 に変更された (1F)．
+1/4 が ply 18 の退行原因かどうかを `param_warmup_mid_denom=2` (1/2 に戻す) で検証．
+
+**テスト:** `test_tsume_39te_backward_200m_mid2` (warmup_mid_denom=2, 200M/1200s)
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | 45.1M | 54K | Mate(19) ✓ |
+| **18** | **21** | **100.9M** | **84K** | **Unknown** |
+
+**結論: 1F は ply 18 退行の原因でない**．denom=2 (1/2) は denom=4 (1/4) より若干悪い
+(100.9M vs 96.8M)．1F 変更を revert しても退行は解消しない．
+
+#### Hypothesis 1G: warmup_mode=true でも retain_proofs_only() を呼ぶ
+
+v0.25.9 で warmup_mode=true の場合 `retain_proofs_only()` をスキップするようになった (1G)．
+1G 導入前の挙動 (warmup 前に ProvenTT 非 proof をクリア) を `param_warmup_clear_proven=true` で復元し検証．
+
+**テスト:** `test_tsume_39te_backward_200m_warmup_clear_proven` (warmup_clear_proven=true, 200M/1200s)
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | 82.3M | 70K | Mate(19) ✓ |
+| **18** | **21** | **OOM/SIGKILL** | **—** | **—** |
+
+ply 18 は OOM で強制終了 (出力なし)．1G 無効時の ProvenTT disproof クリアが
+大量の再探索を引き起こしメモリ不足になった．1G 有効が明らかに優位．
+
+**結論: 1G は ply 18 退行の原因でない**．1G は維持すべき最適化．
+
+---
+
+### 10.2.20 N-1 adaptive threshold=0 検証 (v0.27.4)
+
+v0.25.5 は `param_disproof_remaining_threshold=0` (threshold=0，N-1 未適用)．
+v0.27.3 (depth=23) は threshold=1．この差が退行原因かを threshold=0 で検証．
+
+**テスト:** `test_tsume_39te_backward_200m_threshold0` (threshold=0, 200M/1200s)
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | 45.1M | **102K** | Mate(19) ✓ |
+| **18** | **21** | **TBD** | **TBD** | **TBD** |
+
+注目: threshold=0 での ply 20 NPS=102K，ply 22 NPS=98K が非常に高い (default: ~54K)．
+v0.27.3 default (threshold=1) よりも大幅に速い．
+
+---
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |

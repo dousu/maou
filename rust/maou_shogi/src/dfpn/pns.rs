@@ -1830,7 +1830,11 @@ impl DfPnSolver {
                 // 発生し 2.7× のノード増加を招く (実測: 1.32M vs 492K nodes)．
                 // warmup で昇格した REMAINING_INFINITE NM は outer IDS でも安全に
                 // 再利用可能 (depth-independent 証明のため soundness に影響しない)．
-                let nm_guard_depth = if self.warmup_mode {
+                let nm_guard_depth = if self.warmup_mode && !self.param_warmup_nm_guard_outer {
+                    // Hypothesis 1E (v0.25.8): warmup_mode=true の場合，outer_solve_depth
+                    // による guard を外し saved_depth のみで判定する．
+                    // param_warmup_nm_guard_outer=true (1E 無効) の場合は outer_solve_depth
+                    // も加算し 1E 導入前の挙動に戻す．
                     saved_depth
                 } else {
                     saved_depth.max(self.outer_solve_depth)

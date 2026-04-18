@@ -3184,6 +3184,222 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: /tmp/tsume_39te_backward_200m_warmup_clear_proven.log");
     }
 
+    /// 39手詰め逆順サブ問題 (200M nodes / 1200s per ply, Hypothesis N-1 threshold=0 検証)．
+    ///
+    /// `set_disproof_remaining_threshold(0)` で N-1 adaptive threshold を完全無効化し，
+    /// v0.25.5 と同一の threshold=0 挙動を再現する．
+    /// ply 18 の退行が N-1 (threshold=1 for depth=23) に起因するかを確認する．
+    ///
+    /// ```
+    /// cargo test -p maou_shogi --release -- \
+    ///   test_tsume_39te_backward_200m_threshold0 -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_backward_200m_threshold0() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_backward_200m_threshold0.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        let node_limit: u64 = 200_000_000;
+        let timeout_per_ply: u64 = 1200;
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 39手詰め逆順サブ問題 (200M nodes / 1200s per ply, 初回 Unknown で停止)").unwrap();
+        writeln!(out, " v0.27.4 N-1 threshold=0 検証: adaptive 完全無効 (v0.25.5 相当)").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, "{:<6} {:<10} {:<14} {:<10} {:<10} {:<10} {}",
+            "Ply", "Remain", "Nodes", "Time(s)", "MaxPly", "NPS", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(90)).unwrap();
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        let mut positions: Vec<(usize, Board)> = Vec::new();
+        positions.push((0, board.clone()));
+        for ply_start in (0..38).step_by(2) {
+            let m1 = board.move_from_usi(pv[ply_start]).unwrap();
+            board.do_move(m1);
+            let m2 = board.move_from_usi(pv[ply_start + 1]).unwrap();
+            board.do_move(m2);
+            positions.push((ply_start + 2, board.clone()));
+        }
+        positions.reverse();
+
+        let mut first_unsolved_ply: Option<usize> = None;
+
+        for (ply, pos) in &positions {
+            let remaining = 39 - ply;
+            let depth = (remaining + 2).min(41) as u32;
+
+            let mut test_board = pos.clone();
+            let mut solver = DfPnSolver::with_timeout(
+                depth, node_limit, 32767, timeout_per_ply,
+            );
+            solver.set_find_shortest(false);
+            solver.set_disproof_remaining_threshold(0);  // N-1 完全無効: v0.25.5 相当
+
+            let start = std::time::Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let nps = if elapsed.as_secs_f64() > 0.0 {
+                (solver.nodes_searched as f64 / elapsed.as_secs_f64()) as u64
+            } else { 0 };
+
+            let (result_str, solved) = match &result {
+                TsumeResult::Checkmate { moves, .. } => (format!("Mate({})", moves.len()), true),
+                TsumeResult::CheckmateNoPv { .. } => ("MateNoPV".to_string(), true),
+                TsumeResult::NoCheckmate { .. } => ("NoMate".to_string(), false),
+                TsumeResult::Unknown { .. } => ("Unknown".to_string(), false),
+            };
+
+            writeln!(out, "{:<6} {:<10} {:<14} {:<10.2} {:<10} {:<10} {}",
+                ply, remaining, solver.nodes_searched, elapsed.as_secs_f64(),
+                solver.max_ply, nps, result_str).unwrap();
+            out.flush().unwrap();
+
+            if !solved {
+                first_unsolved_ply = Some(*ply);
+                break;
+            }
+        }
+
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        if let Some(ply) = first_unsolved_ply {
+            writeln!(out, "境界: ply {} (残り{}手) で 200M ノードでは解けない",
+                ply, 39 - ply).unwrap();
+        } else {
+            writeln!(out, "全局面 200M ノード以内で解決").unwrap();
+        }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_backward_200m_threshold0.log");
+    }
+
+    /// 39手詰め逆順サブ問題 (200M nodes / 1200s per ply, Hypothesis 1E 検証)．
+    ///
+    /// `param_warmup_nm_guard_outer=true` で 1E を無効化 (warmup でも outer_solve_depth
+    /// を NM guard に含める，1E 導入前の挙動) して backward_200m を実行する．
+    /// ply 18 の退行が 1E に起因するかを確認する．
+    ///
+    /// ```
+    /// cargo test -p maou_shogi --release -- \
+    ///   test_tsume_39te_backward_200m_no1e -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_backward_200m_no1e() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_backward_200m_no1e.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        let node_limit: u64 = 200_000_000;
+        let timeout_per_ply: u64 = 1200;
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 39手詰め逆順サブ問題 (200M nodes / 1200s per ply, 初回 Unknown で停止)").unwrap();
+        writeln!(out, " v0.27.4 1E検証: warmup_nm_guard_outer=true (1E 無効，1E 導入前の挙動)").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, "{:<6} {:<10} {:<14} {:<10} {:<10} {:<10} {}",
+            "Ply", "Remain", "Nodes", "Time(s)", "MaxPly", "NPS", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(90)).unwrap();
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        let mut positions: Vec<(usize, Board)> = Vec::new();
+        positions.push((0, board.clone()));
+        for ply_start in (0..38).step_by(2) {
+            let m1 = board.move_from_usi(pv[ply_start]).unwrap();
+            board.do_move(m1);
+            let m2 = board.move_from_usi(pv[ply_start + 1]).unwrap();
+            board.do_move(m2);
+            positions.push((ply_start + 2, board.clone()));
+        }
+        positions.reverse();
+
+        let mut first_unsolved_ply: Option<usize> = None;
+
+        for (ply, pos) in &positions {
+            let remaining = 39 - ply;
+            let depth = (remaining + 2).min(41) as u32;
+
+            let mut test_board = pos.clone();
+            let mut solver = DfPnSolver::with_timeout(
+                depth, node_limit, 32767, timeout_per_ply,
+            );
+            solver.set_find_shortest(false);
+            solver.set_warmup_nm_guard_outer(true);  // 1E 検証: outer_solve_depth を guard に加算
+
+            let start = std::time::Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let nps = if elapsed.as_secs_f64() > 0.0 {
+                (solver.nodes_searched as f64 / elapsed.as_secs_f64()) as u64
+            } else { 0 };
+
+            let (result_str, solved) = match &result {
+                TsumeResult::Checkmate { moves, .. } => (format!("Mate({})", moves.len()), true),
+                TsumeResult::CheckmateNoPv { .. } => ("MateNoPV".to_string(), true),
+                TsumeResult::NoCheckmate { .. } => ("NoMate".to_string(), false),
+                TsumeResult::Unknown { .. } => ("Unknown".to_string(), false),
+            };
+
+            writeln!(out, "{:<6} {:<10} {:<14} {:<10.2} {:<10} {:<10} {}",
+                ply, remaining, solver.nodes_searched, elapsed.as_secs_f64(),
+                solver.max_ply, nps, result_str).unwrap();
+            out.flush().unwrap();
+
+            if !solved {
+                first_unsolved_ply = Some(*ply);
+                break;
+            }
+        }
+
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        if let Some(ply) = first_unsolved_ply {
+            writeln!(out, "境界: ply {} (残り{}手) で 200M ノードでは解けない",
+                ply, 39 - ply).unwrap();
+        } else {
+            writeln!(out, "全局面 200M ノード以内で解決").unwrap();
+        }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_backward_200m_no1e.log");
+    }
+
     /// 39手詰め逆順サブ問題 (100M nodes 予算版，全 ply 継続)．
     ///
     /// 統一予算 100M で全 ply を計測し，異なる予算の結果が混在しない
