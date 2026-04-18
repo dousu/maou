@@ -4945,25 +4945,36 @@ TT proven は回復 (threshold=3 の 14K → threshold=1 の ~1M 相当) ✓．
 
 | 指標 | 値 |
 |:----|----|
-| result | Unknown |
-| nodes | [TBD] |
-| time | [TBD] |
-| NPS | [TBD] |
-| TT proven | [TBD] |
-| disproof_working | [TBD] |
+| result | **Unknown** |
+| nodes | 453,179,392 (~453M) |
+| time | 1800.75s |
+| NPS | 251,662 (~252K) |
+| TT proven | 1,463,592 |
+| TT disproven | 3,531,591 |
+| disproof_working | 77,662,798 |
+| a4_inflations | **76,255,224** (16.8% of nodes) |
 
 #### 残存課題: v0.26.0 (N-2) 以降の secondary regression
 
 v0.27.2 で N-1 の threshold 設定を修正したが，ply 18 は依然として解けない:
 
-- **v0.25.5**: 96M nodes / ~819s で Mate(21) ✓
-- **v0.27.2**: 200M ノードで Unknown (推定 170〜200M ノード / 1200s で限界)
+| バージョン | nodes | time | NPS | 結果 |
+|:---:|---:|---:|----:|:---:|
+| v0.25.5 | 96M | ~819s | ~117K | **Mate(21) ✓** |
+| v0.27.2 (500M test) | 453M | 1800s | 252K | Unknown |
 
-約 2 倍のノード退行が残存する．v0.26.0 (N-2: adaptive effective_refutable_depth) 以降に
-導入されたウォームアップ変更 (Hypothesis 1 系) が候補:
+**約 5 倍のノード退行**が残存する．NPS が 117K → 252K に増加しているため，
+単位時間あたりの探索量は増えているが，探索の「品質」が低下している可能性がある．
+
+注目指標: `a4_inflations = 76,255,224` (453M nodes の **16.8%**)．
+A-4 (TT key rotation / arena 再割当) の頻度が高いことは TT の断片化や
+GC 圧力を示唆しており，これが探索品質低下の原因の一つである可能性がある．
+
+v0.26.0 (N-2: adaptive effective_refutable_depth) 以降に導入された変更が候補:
 
 - **1D**: `clear_working` before warmup — WorkingTT の再利用を妨げる?
 - **1F**: warmup MID budget = 1/4 — warmup 中の探索深さ不足?
+- **a4_inflations 急増**: v0.25.5 との比較が必要
 
 これらの調査は §11 以降の課題とする．
 
