@@ -233,17 +233,6 @@ fn edge_cost_and(m: Move) -> u32 {
 
 /// N-7 (v0.27.0): 打ち駒がスライダー(香・角・飛)か判定する．
 ///
-/// chain aigoma AND ノードで，香・角・飛の合駒は連続合駒が発生しやすく
-/// 探索コストが高い．これらを同距離の非スライダー合駒より後回しにするために
-/// 使用する．
-#[inline]
-pub(super) fn is_slider_drop(m: Move) -> bool {
-    use crate::types::PieceType;
-    matches!(
-        m.drop_piece_type(),
-        Some(PieceType::Lance | PieceType::Bishop | PieceType::Rook)
-    )
-}
 
 /// 捨て駒のみ王手ブースト(人間的枝刈り)．
 ///

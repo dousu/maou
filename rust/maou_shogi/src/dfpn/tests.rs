@@ -3000,7 +3000,7 @@ use crate::types::{Color, PieceType};
 
         writeln!(out, "{}", "=".repeat(80)).unwrap();
         writeln!(out, " 39手詰め逆順サブ問題 (100M nodes / 600s per ply, 全 ply 継続)").unwrap();
-        writeln!(out, " v0.27.0 — 統一予算での一貫比較").unwrap();
+        writeln!(out, " v0.27.1 — 統一予算での一貫比較").unwrap();
         writeln!(out, "{}", "=".repeat(80)).unwrap();
         writeln!(out, "{:<6} {:<10} {:<14} {:<10} {:<10} {:<10} {}",
             "Ply", "Remain", "Nodes", "Time(s)", "MaxPly", "NPS", "Result").unwrap();
