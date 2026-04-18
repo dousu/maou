@@ -1393,7 +1393,7 @@ impl DfPnSolver {
         //   の warmup ループ自体が無効化されており，現在は本関数の nested
         //   warmup (IDS 内 warmup mid_fallback) でのみ `warmup_mode=true` に
         //   設定される．
-        if self.warmup_mode {
+        if self.warmup_mode && !self.param_warmup_clear_proven {
             // Hypothesis 1G (v0.25.9): warmup_mode=true の場合，ProvenTT を
             // クリアしない．outer IDS の confirmed/refutable disproofs は
             // depth-independent であり warmup depth でも安全に再利用可能．
@@ -1403,6 +1403,7 @@ impl DfPnSolver {
             // WorkingTT は Hypothesis 1D (outer IDS 側) で既にクリア済み．
             // ProvenTT の選択的 disproof 除去は IDS 各ステップ後の
             // clear_proven_disproofs_below() に委ねる．
+            // param_warmup_clear_proven=true (1G 無効) の場合は retain_proofs_only() を呼ぶ．
         } else {
             self.table.retain_proofs_only();
         }
@@ -1633,7 +1634,7 @@ impl DfPnSolver {
                 // /4 にすることで MID は ~820K nodes 後に Frontier に遷移し，
                 // Frontier が ~60s の実行時間を得られる．
                 let mid_max_budget = if self.warmup_mode {
-                    remaining_budget / 4
+                    remaining_budget / self.param_warmup_mid_denom as u64
                 } else {
                     remaining_budget / 2
                 };

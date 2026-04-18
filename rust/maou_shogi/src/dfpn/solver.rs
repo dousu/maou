@@ -496,6 +496,13 @@ pub struct DfPnSolver {
     /// refutable disproof 機構が NM 蓄積を提供するため warmup は冗長．
     /// デフォルト true = warmup 無効．set_skip_warmup(false) で再有効化可能．
     pub(super) skip_warmup: bool,
+    /// warmup_mode=true の IDS 最終ステップで MID に割り当てる予算の分母 (デフォルト 4 = 1/4)．
+    /// 2 にすると 1/2 (1F 導入前の挙動) に戻る．テスト用．
+    pub(super) param_warmup_mid_denom: u32,
+    /// Hypothesis 1G 検証用フラグ (v0.27.4)．
+    /// true にすると warmup_mode=true でも retain_proofs_only() を呼ぶ (1G 導入前の挙動)．
+    /// デフォルト false = 1G 有効 (clear_proven_non_proofs をスキップ)．
+    pub(super) param_warmup_clear_proven: bool,
     /// refutable check の再帰深さ (デフォルト 5)．
     pub(super) param_refutable_depth: u32,
     /// refutable check の呼び出し回数上限 (デフォルト 10,000)．
@@ -743,6 +750,8 @@ impl DfPnSolver {
             warmup_mode: false,
             skip_refutable_disproof: false,
             skip_warmup: true,
+            param_warmup_mid_denom: 4,
+            param_warmup_clear_proven: false,
             param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
             param_refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
             a6_boundary_pns_calls_remaining: 0,
@@ -963,6 +972,21 @@ impl DfPnSolver {
     /// warmup 使用時 Unknown に退行することを確認．
     pub fn set_skip_warmup(&mut self, skip: bool) -> &mut Self {
         self.skip_warmup = skip;
+        self
+    }
+
+    /// warmup_mode=true の IDS 最終ステップで MID に割り当てる予算の分母を設定する．
+    /// デフォルト 4 (= 1/4，Hypothesis 1F)．2 にすると 1/2 (1F 導入前) になる．
+    pub fn set_warmup_mid_denom(&mut self, denom: u32) -> &mut Self {
+        self.param_warmup_mid_denom = denom.max(1);
+        self
+    }
+
+    /// Hypothesis 1G 検証用: warmup_mode=true でも retain_proofs_only() を呼ぶかどうかを設定する．
+    /// true にすると 1G 導入前の挙動 (ProvenTT 非 proof を warmup 前にクリア)．
+    /// デフォルト false = 1G 有効 (スキップ)．
+    pub fn set_warmup_clear_proven(&mut self, enable: bool) -> &mut Self {
+        self.param_warmup_clear_proven = enable;
         self
     }
 
