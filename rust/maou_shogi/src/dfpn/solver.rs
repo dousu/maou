@@ -862,15 +862,15 @@ impl DfPnSolver {
         // solve() 入口で outer_solve_depth を見て TT に反映される．
     }
 
-    /// Depth-adaptive な実効 disproof 格納閾値を返す (v0.25.1〜v0.25.6)．
+    /// Depth-adaptive な実効 disproof 格納閾値を返す (v0.25.1〜v0.27.2)．
     ///
     /// `param_disproof_remaining_threshold` が `DISPROOF_THRESHOLD_ADAPTIVE` の
     /// 場合，`outer_solve_depth` に基づいて閾値を自動決定する．
     ///
-    /// **ポリシー (N-1, v0.25.6)**:
-    /// - depth ≤ 19: **0** (shallow 保護．S-2 で remaining=1 が致命的と実証)
-    /// - depth 20-22: **1** (実質 no-op．rem=0 entry はほぼ存在しない)
-    /// - depth 23-27: **3** (chain aigoma sweet spot．ply 14-18 で -75% 実証)
+    /// **ポリシー (N-1 修正, v0.27.2)**:
+    /// - depth ≤ 23: **1** (shallow〜中深度保護．depth=23 は chain aigoma 前の
+    ///   ply 18 に対応し，threshold=3 は proven TT を 70x 破壊するため除外)
+    /// - depth 24-27: **3** (chain aigoma sweet spot．ply 14 (depth=27) で実証)
     /// - depth ≥ 28: **1** (very deep．no-mate 証明の予算要求を保護．
     ///   `test_no_checkmate_counter_check` depth=31 で threshold=3 は
     ///   2M 予算不足 Unknown を引き起こすため，保守的に 1 に抑える)
@@ -887,9 +887,8 @@ impl DfPnSolver {
             self.depth
         };
         match d {
-            0..=19 => 0,
-            20..=22 => 1,
-            23..=27 => 3,
+            0..=23 => 1,
+            24..=27 => 3,
             _ => 1,
         }
     }
