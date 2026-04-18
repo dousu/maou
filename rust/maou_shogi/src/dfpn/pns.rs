@@ -1551,18 +1551,20 @@ impl DfPnSolver {
                         // warmup_mode=true: mid_fallback 入口で WorkingTT
                         // intermediate を保持し ProvenTT 非 proof のみ除去．
                         //
-                        // v0.27.3: Hypothesis 1D (v0.25.9) を除去．
-                        // 1D は warmup 前に clear_working() を呼び，IDS depth=21
-                        // で retain_working_intermediates が保持した ~61K 程度の
-                        // intermediate エントリを破棄していた．これにより，depth=23
-                        // の main search が warmup 後に empty WorkingTT から再スタートし，
-                        // 5x のノード退行を引き起こしていた (v0.27.2 での測定:
-                        // 96M→453M+)．
+                        // v0.27.3: Hypothesis 1D (v0.25.9) を selective clear に置換．
                         //
-                        // 1D の前提が誤り: 保持エントリは全て pn>0/dn>0 の
-                        // intermediate (confirmed disproof ゼロ) であり，remaining
-                        // が depth=21 用の大きな値 (≥20) のため depth=19 warmup の
-                        // lookup に当たらない → 妨害なし，破棄する必要がない．
+                        // 旧 1D (clear_working 全削除) は IDS depth=21 で
+                        // retain_working_intermediates が保持した ~61K の intermediate
+                        // を全て破棄し，depth=23 main search が empty WorkingTT から
+                        // 再スタートすることで 5x 退行を引き起こした
+                        // (v0.27.2: standalone 96M→453M+)．
+                        //
+                        // 新方針 clear_working_shallow(warmup_depth):
+                        // - remaining <= warmup_depth のエントリのみ削除
+                        //   (warmup での lookup 範囲に入るため干渉しうる)
+                        // - remaining > warmup_depth の deep intermediate は保持
+                        //   (warmup には当たらず，main search で再利用可能)
+                        self.table.clear_working_shallow(warmup_depth as u16);
                         self.depth = warmup_depth;
                         let save_warmup_mode = self.warmup_mode;
                         self.warmup_mode = true;

@@ -2075,6 +2075,22 @@ impl TranspositionTable {
         self.working_overflow_since_gc = 0;
     }
 
+    /// warmup 前の selective クリア (v0.27.3): remaining <= threshold のエントリのみ削除し，
+    /// remaining > threshold のエントリ (より深い intermediate) を保持する．
+    ///
+    /// 1D (v0.25.9) の全消去を置き換える．warmup_depth を threshold として渡すことで:
+    /// - warmup に干渉しうる shallow intermediate (remaining <= warmup_depth) を除去 ✓
+    /// - main search で再利用可能な deep intermediate (remaining > warmup_depth) を保持 ✓
+    pub(super) fn clear_working_shallow(&mut self, threshold: u16) {
+        for fe in self.working.iter_mut() {
+            if fe.pos_key != 0 && fe.entry.remaining() <= threshold {
+                fe.pos_key = 0;
+            }
+        }
+        for le in self.leaf_disproofs.iter_mut() { le.pos_key = 0; }
+        self.working_overflow_since_gc = 0;
+    }
+
     /// IDS depth 切替時に WorkingTT から intermediate エントリを選択的に保持する (v0.24.45)．
     ///
     /// 施策 I: `test_tsume_39te_ply25_gap_diagnosis` (v0.24.44) で特定された
