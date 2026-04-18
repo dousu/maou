@@ -3421,8 +3421,91 @@ use crate::types::{Color, PieceType};
         verbose_eprintln!("結果: /tmp/tsume_39te_ply18_threshold_sweep.log");
     }
 
-    /// ply 18 での A-1 (PNS arena 動的容量) + B-2 (depth-limited disproof
-    /// 選択的格納) の効果を A/B 比較するテスト (v0.25.0)．
+    /// ply 18 単独 500M/1800s テスト (v0.27.2 退行調査)．
+    ///
+    /// v0.25.5 では 96M で Mate(21)，v0.27.2 では 200M Unknown のため，
+    /// 500M まで増やして解けるかを確認する．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_ply18_500m() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_ply18_500m.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in pv.iter().take(18) {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        let depth = 23u32;
+        let node_limit: u64 = 500_000_000;
+        let timeout: u64 = 1800;
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " ply 18 単独 500M/1800s (v0.27.2, threshold=adaptive)").unwrap();
+        writeln!(out, " depth={}, SFEN: {}", depth, board.sfen()).unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+        let mut solver = DfPnSolver::with_timeout(depth, node_limit, 32767, timeout);
+        solver.set_find_shortest(false);
+
+        let start = std::time::Instant::now();
+        let result = solver.solve(&mut board);
+        let elapsed = start.elapsed();
+
+        let nps = if elapsed.as_secs_f64() > 0.0 {
+            (solver.nodes_searched as f64 / elapsed.as_secs_f64()) as u64
+        } else { 0 };
+
+        let result_str = match &result {
+            TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+            TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+            TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+            TsumeResult::Unknown { .. } => "Unknown".to_string(),
+        };
+
+        writeln!(out, "  result = {}", result_str).unwrap();
+        writeln!(out, "  nodes  = {}", solver.nodes_searched).unwrap();
+        writeln!(out, "  time   = {:.2}s", elapsed.as_secs_f64()).unwrap();
+        writeln!(out, "  NPS    = {}", nps).unwrap();
+        writeln!(out, "  maxply = {}", solver.max_ply).unwrap();
+        #[cfg(feature = "tt_diag")]
+        {
+            writeln!(out, "  TT proven       = {}", solver.table.count_proven()).unwrap();
+            writeln!(out, "  TT disproven    = {}", solver.table.count_disproven()).unwrap();
+            writeln!(out, "  TT intermediate = {}", solver.table.count_intermediate()).unwrap();
+            writeln!(out, "  disproof_working= {}", solver.table.diag_disproof_working).unwrap();
+            writeln!(out, "  disproof_refutable = {}", solver.table.diag_disproof_refutable).unwrap();
+            writeln!(out, "  disproof_refutable_skip = {}", solver.table.diag_disproof_refutable_skip).unwrap();
+            writeln!(out, "  a4_inflations   = {}", solver.diag_a4_inflations).unwrap();
+            writeln!(out, "  n7_slider_bonus = {}", solver.diag_n7_slider_bonus).unwrap();
+        }
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, " 完了: {}", out_path).unwrap();
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        verbose_eprintln!("結果: /tmp/tsume_39te_ply18_500m.log");
+    }
+
+    /// ply 18 単独 500M/1800s テスト (v0.27.2 退行調査)．
     ///
     /// 3 構成を順次実行し，spin 率・arena 使用量・WorkingTT churn を比較する．
     /// 10M nodes / 180s per config．
