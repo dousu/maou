@@ -9266,6 +9266,7 @@ use crate::types::{Color, PieceType};
                 writeln!(out, "    cd_no_siblings     = {}", solver.diag_cd_no_siblings).unwrap();
                 writeln!(out, "    cd_entered_main    = {}", solver.diag_cd_entered_main).unwrap();
                 writeln!(out, "    a4_inflations      = {}", solver.diag_a4_inflations).unwrap();
+                writeln!(out, "    n7_slider_bonus    = {}", solver.diag_n7_slider_bonus).unwrap();
                 writeln!(out, "    deferred_ready     = {}", solver.diag_deferred_ready).unwrap();
                 writeln!(out, "    deferred_not_ready = {}", solver.diag_deferred_not_ready).unwrap();
                 writeln!(out, "    deferred_enqueued  = {}", solver.diag_deferred_enqueued).unwrap();

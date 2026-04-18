@@ -16,7 +16,7 @@ use super::tt::TranspositionTable;
 #[cfg(feature = "profile")]
 use super::profile::ProfileStats;
 use super::{
-    adjust_hand_for_move, edge_cost_and, edge_cost_or,
+    adjust_hand_for_move, edge_cost_and, edge_cost_or, is_slider_drop,
     hand_gte_forward_chain,
     position_key, propagate_nm_remaining, push_move, snda_dedup,
     CheckCache,
@@ -464,6 +464,11 @@ pub struct DfPnSolver {
     /// AND ノード訪問で複数 child に inflation が発火するとその分加算される．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_a4_inflations: u64,
+    /// TT 診断 (N-7, v0.27.0): slider drop (香・角・飛) に距離比例追加ペナルティを
+    /// 適用した回数．chain_king_sq / mixed_chain_king_sq / 非 chain AND の
+    /// 全 AND ノードで集計する．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_n7_slider_bonus: u64,
     /// TT 診断: 施策 α (v0.24.54-v0.24.72) で境界層 filter が発火した MID 数．
     /// 施策 α は v0.24.72 で不採用確定．dead code (削除候補)．
     #[cfg(feature = "tt_diag")]
@@ -730,6 +735,8 @@ impl DfPnSolver {
             diag_cd_entered_main: 0,
             #[cfg(feature = "tt_diag")]
             diag_a4_inflations: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_n7_slider_bonus: 0,
             #[cfg(feature = "tt_diag")]
             diag_alpha_x_filter_applied: 0,
             alpha_x_filter_active: false,
@@ -2932,6 +2939,16 @@ impl DfPnSolver {
                 None
             };
 
+        // N-7 (v0.27.0): slider drop (香・角・飛) の AND ノード DN ペナルティ用玉位置．
+        // chain_king_sq / mixed_chain_king_sq がない非 chain AND でも距離ベースの
+        // slider ペナルティを適用するため，非 chain AND 時のみ追加コンピュート．
+        let n7_and_king_sq: Option<crate::types::Square> =
+            if !or_node && chain_king_sq.is_none() && mixed_chain_king_sq.is_none() {
+                board.king_square(board.turn)
+            } else {
+                None  // chain/mixed-chain AND は各ブランチで ksq を保持
+            };
+
         // プレフィルタで全合駒が証明済み(children が空になった場合)
         if !or_node && init_prefiltered_count > 0 && children.is_empty() {
             let mut p = init_and_proof;
@@ -3528,9 +3545,16 @@ impl DfPnSolver {
                                 .unsigned_abs() as u32;
                             let dc = (to.col() as i8 - ksq.col() as i8)
                                 .unsigned_abs() as u32;
+                            let dist = dr.max(dc);
                             // 内側(d=1)はバイアス0，外側は距離に比例
-                            let base_bias =
-                                dr.max(dc).saturating_sub(1) * PN_UNIT;
+                            // N-7: slider drop は距離ペナルティを2倍に
+                            let dist_bias = dist.saturating_sub(1) * PN_UNIT;
+                            let n7_extra = if is_slider_drop(*m) {
+                                #[cfg(feature = "tt_diag")]
+                                { self.diag_n7_slider_bonus += 1; }
+                                dist_bias
+                            } else { 0 };
+                            let base_bias = dist_bias + n7_extra;
                             let bias = if boundary_inflate {
                                 // 施策 A-4: chain drop に追加ペナルティ
                                 #[cfg(feature = "tt_diag")]
@@ -3558,10 +3582,16 @@ impl DfPnSolver {
                                 .unsigned_abs() as u32;
                             let dc = (to.col() as i8 - ksq.col() as i8)
                                 .unsigned_abs() as u32;
+                            let dist = dr.max(dc);
                             // chain drop: INTERPOSE_DN_BIAS + 距離比例加算．
-                            // 外側(d=5)は INTERPOSE_DN_BIAS + 4*PN_UNIT
-                            let base_bias = INTERPOSE_DN_BIAS
-                                + dr.max(dc).saturating_sub(1) * PN_UNIT;
+                            // N-7: slider drop は距離ペナルティを2倍に
+                            let dist_bias = dist.saturating_sub(1) * PN_UNIT;
+                            let n7_extra = if is_slider_drop(*m) {
+                                #[cfg(feature = "tt_diag")]
+                                { self.diag_n7_slider_bonus += 1; }
+                                dist_bias
+                            } else { 0 };
+                            let base_bias = INTERPOSE_DN_BIAS + dist_bias + n7_extra;
                             let bias = if boundary_inflate {
                                 // 施策 A-4: 境界層で mixed chain drop も
                                 // 8 倍 inflate
@@ -3580,7 +3610,22 @@ impl DfPnSolver {
                             cdn
                         }
                     } else if m.is_drop() {
-                        cdn.saturating_add(INTERPOSE_DN_BIAS)
+                        // 非 chain AND での drop:
+                        // N-7: slider drop に距離比例ペナルティを追加
+                        let slider_extra = if is_slider_drop(*m) {
+                            if let Some(ksq) = n7_and_king_sq {
+                                let to = m.to_sq();
+                                let dc = (to.col() as i8 - ksq.col() as i8)
+                                    .unsigned_abs() as u32;
+                                let dr = (to.row() as i8 - ksq.row() as i8)
+                                    .unsigned_abs() as u32;
+                                let extra = dr.max(dc).saturating_sub(1) * PN_UNIT;
+                                #[cfg(feature = "tt_diag")]
+                                if extra > 0 { self.diag_n7_slider_bonus += 1; }
+                                extra
+                            } else { 0 }
+                        } else { 0 };
+                        cdn.saturating_add(INTERPOSE_DN_BIAS + slider_extra)
                     } else {
                         cdn
                     };
