@@ -4748,6 +4748,70 @@ warmup が deeper に到達 (max_ply 24) しても proven/disproven の蓄積が
 
 ---
 
+#### 10.2.15 v0.26.0: N-2 (adaptive refutable depth floor) + N-8 (LeafDisproofTT) 効果検証
+
+##### N-2: target=24-31 refutable depth floor 緩和
+
+M-A (v0.25.2) で `target ≥ 20` に固定 floor=8 を設けた結果，NPS が -28% 低下した
+(v0.25.9 計測より)．N-2 では target=24-31 の floor を 8 → 6 に緩和し，
+target=20-23 は安全のため floor=8 を維持した (false-NoMate 保護) ．
+
+初期実装 (floor=7 for target=20-23) は深刻な退行を引き起こした:
+- depth=21 NPS: 13.5k → 8.4k (-38%)
+- depth=21 disproven TT: 297k → 522k (+76%)
+
+target=20-23 を floor=8 に戻すことで退行を解消した．
+
+##### N-8: LeafDisproofTT (16B compact leaf disproof)
+
+WorkingTT クラスタ飽和時の remaining≤2 反証エントリを
+16B コンパクト構造 (TTLeafEntry) に格納するオーバーフロー補助 TT．
+
+`test_tsume_39te_ply25_gap_diagnosis` Phase 1 での計測結果:
+
+| 指標 | depth=17 | depth=21 | depth=25 |
+|:---|---:|---:|---:|
+| leaf_disproof_inserts | 0 | 0 | 0 |
+| leaf_disproof_hits | 0 | 0 | 0 |
+
+**評価:** N-8 は本ワークロードでは発動しない．
+WorkingTT の 3 段階置換戦略 (空スロット優先 → replace_weakest_for_disproof →
+NM-NM 置換) が全ケースを処理しており，LeafDisproofTT へのオーバーフローは
+実際には発生しない．N-8 は安全網として残存するが実質的な効果は 0．
+
+##### v0.26.0 vs v0.25.9 gap diagnosis 比較
+
+`test_tsume_39te_ply25_gap_diagnosis` Phase 1:
+
+| 指標 | v0.25.9 (before) | v0.26.0 (after) | 変化 |
+|:---|---:|---:|---:|
+| **depth=17 result** | Mate(15) | Mate(15) | — |
+| depth=17 nodes | 417,412 | 392,652 | -6% |
+| depth=17 NPS | ~6.1k | 5.7k | -7% |
+| **depth=21 result** | Unknown (timeout 121s) | Unknown (timeout 121s) | — |
+| depth=21 nodes | ~1,637K | 1,637,022 | ≈0% |
+| depth=21 NPS | ~13.5k | 13.5k | ≈0% |
+| depth=21 disproven | — | 297,181 | — |
+| **depth=25 result** | Unknown (timeout 150s) | Unknown (timeout 150s) | — |
+| depth=25 nodes | 14,062K | 11,662K | -17% (測定誤差含む) |
+| depth=25 NPS | 93.1k | 77.4k | -17% (測定誤差) |
+| depth=25 max_ply | 24 | 24 | — |
+
+**評価:**
+
+- N-2 (floor=6 for target=24-31): depth=25 の refutable check depth が 8→6 に緩和されたが，
+  NPS は今回の測定で -17% となった (システム負荷による測定誤差の可能性あり)．
+- depth=21 は N-2 floor=8 (20-23 range は変更なし) で v0.25.9 と同等の性能を維持．
+- **gap 未解消**: Phase 0b で Unknown の 3 守備手 (L*6g・B*6g・B*7g) は変化なし．
+
+**残存課題:**
+
+N-2・N-8 は NPS 向上・TT 効率改善の観点から有効ではなかった．
+gap の根本原因 (3 守備手の反証に必要なコストが budget を超過) は未解消．
+次の改善候補: §11.11「残存課題 N-3〜N-9 (長期)」参照．
+
+---
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |

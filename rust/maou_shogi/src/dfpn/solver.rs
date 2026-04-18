@@ -1860,10 +1860,10 @@ impl DfPnSolver {
     /// する現象を確認．warmup で代替できたため，固定 depth=10 相当の対策を
     /// 組み込む．
     ///
-    /// **N-2 (v0.26.0)**: target 20-31 の固定フロア 8 を adaptive に緩和し
+    /// **N-2 (v0.26.0)**: target 24-31 の固定フロア 8 を 6 に緩和し
     /// NPS -28% (M-A による) の一部を回収する．
     /// - target=1-19:  depth_floor=3 → d=3〜5 (変更なし)
-    /// - target=20-23: depth_floor=**7** (was 8) → d=7 (ply 20-23 false-NM を保護)
+    /// - target=20-23: depth_floor=**8** (M-A 維持) → d=8 (ply 20-23 false-NM を保護)
     /// - target=24-31: depth_floor=**6** (was 8) → d=6 (より深い問題では緩和安全)
     /// - target=32+:   depth_floor=3 → log_val(≥6) が dominates (元の formula に復帰)
     ///
@@ -1882,11 +1882,9 @@ impl DfPnSolver {
             return 3;
         }
         let log_val = (target as u32).ilog2() + 1;
-        // N-2 (v0.26.0): target 別に floor を段階的に緩和．
-        // target ≥ 32 では log_val ≥ 6 のため floor=3 でも同一結果．
+        // N-2 (v0.26.0): target 24-31 のみ floor を緩和．target ≥ 32 では log_val ≥ 6．
         let depth_floor: u32 = match target {
-            0..=19 => 3,
-            20..=23 => 7,
+            0..=23 => if target >= 20 { 8 } else { 3 },
             24..=31 => 6,
             _ => 3,
         };

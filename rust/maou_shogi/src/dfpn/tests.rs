@@ -9350,6 +9350,9 @@ use crate::types::{Color, PieceType};
                     let dd = &solver.table.diag_retained_dn_dist;
                     writeln!(out, "    retained_dn_dist: 1={} 2-7={} 8-63={} 64-511={} 512-4095={} 4096+={}",
                         dd[0], dd[1], dd[2], dd[3], dd[4], dd[5]).unwrap();
+                    // N-8 (v0.26.0): LeafDisproofTT 直接計測
+                    writeln!(out, "    leaf_disproof_inserts = {}", solver.table.diag_leaf_inserts).unwrap();
+                    writeln!(out, "    leaf_disproof_hits    = {}", solver.table.diag_leaf_hits.load(Ordering::Relaxed)).unwrap();
                 }
             }
             #[cfg(feature = "profile")]
