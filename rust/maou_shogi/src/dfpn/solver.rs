@@ -499,10 +499,14 @@ pub struct DfPnSolver {
     /// warmup_mode=true の IDS 最終ステップで MID に割り当てる予算の分母 (デフォルト 4 = 1/4)．
     /// 2 にすると 1/2 (1F 導入前の挙動) に戻る．テスト用．
     pub(super) param_warmup_mid_denom: u32,
-    /// Hypothesis 1G 検証用フラグ (v0.27.4)．
-    /// true にすると warmup_mode=true でも retain_proofs_only() を呼ぶ (1G 導入前の挙動)．
-    /// デフォルト false = 1G 有効 (clear_proven_non_proofs をスキップ)．
+    /// warmup 入口で clear_proven_non_proofs() を呼ぶかどうか (v0.27.6 デフォルト true)．
+    /// true (v0.27.6 デフォルト, v0.25.5 相当): ProvenTT 非 proof を除去，WorkingTT 維持．
+    /// false (v0.25.9〜v0.27.5 の旧デフォルト, 1G 有効): ProvenTT もクリアしない．
     pub(super) param_warmup_clear_proven: bool,
+    /// warmup 前に clear_working_shallow(warmup_depth) を呼ぶかどうか (v0.27.6 デフォルト false)．
+    /// false (v0.27.6 デフォルト, v0.25.5 相当): 前処理なし，warmup が中間エントリを活用可能．
+    /// true (v0.27.3〜v0.27.5 の旧挙動): remaining ≤ warmup_depth の WorkingTT を削除．退行の原因．
+    pub(super) param_use_warmup_shallow_clear: bool,
     /// Hypothesis 1E 検証用フラグ (v0.27.4)．
     /// true にすると warmup_mode=true でも outer_solve_depth を NM guard に加える (1E 導入前の挙動)．
     /// デフォルト false = 1E 有効 (warmup 内は saved_depth のみで guard)．
@@ -764,10 +768,11 @@ impl DfPnSolver {
             skip_refutable_disproof: false,
             skip_warmup: true,
             param_warmup_mid_denom: 4,
-            param_warmup_clear_proven: false,
+            param_warmup_clear_proven: true,   // v0.27.6: v0.25.5 相当をデフォルト化
             param_warmup_nm_guard_outer: false,
             param_no_ids17: false,
-            param_no_warmup_shallow_clear: false,
+            param_no_warmup_shallow_clear: false, // 後方互換テスト用 (実運用では param_use_warmup_shallow_clear を使用)
+            param_use_warmup_shallow_clear: false, // v0.27.6: shallow clear 無効がデフォルト
             param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
             param_refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
             a6_boundary_pns_calls_remaining: 0,
@@ -1024,9 +1029,17 @@ impl DfPnSolver {
 
     /// Hypothesis 1H 検証用: warmup 前の clear_working_shallow() をスキップするか設定する．
     /// true にすると v0.25.5 相当 (warmup 前に WorkingTT 浅いエントリを削除しない)．
-    /// デフォルト false = v0.27.3 以降の現行挙動．
+    /// デフォルト false = v0.27.6 以降の現行挙動 (もともとデフォルトで skip)．
     pub fn set_no_warmup_shallow_clear(&mut self, enable: bool) -> &mut Self {
         self.param_no_warmup_shallow_clear = enable;
+        self
+    }
+
+    /// 旧挙動復元用: warmup 前に clear_working_shallow() を呼ぶかどうかを設定する．
+    /// true にすると v0.27.3〜v0.27.5 の旧挙動 (退行の原因)．
+    /// デフォルト false = v0.27.6 以降のデフォルト (clear しない = v0.25.5 相当)．
+    pub fn set_use_warmup_shallow_clear(&mut self, enable: bool) -> &mut Self {
+        self.param_use_warmup_shallow_clear = enable;
         self
     }
 

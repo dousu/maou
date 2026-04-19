@@ -1393,24 +1393,17 @@ impl DfPnSolver {
         //   の warmup ループ自体が無効化されており，現在は本関数の nested
         //   warmup (IDS 内 warmup mid_fallback) でのみ `warmup_mode=true` に
         //   設定される．
-        if self.warmup_mode && !self.param_warmup_clear_proven {
-            // Hypothesis 1G (v0.25.9): warmup_mode=true の場合，ProvenTT を
-            // クリアしない．outer IDS の confirmed/refutable disproofs は
-            // depth-independent であり warmup depth でも安全に再利用可能．
-            // clear_proven_non_proofs() を呼ぶと有用な disproof を廃棄し，
-            // warmup が confirmed NoMate 局面の再探索に膨大なノードを消費する
-            // 問題を引き起こす (実測: 1.85M vs 488K nodes の差の主因)．
-            // WorkingTT は Hypothesis 1D (outer IDS 側) で既にクリア済み．
-            // ProvenTT の選択的 disproof 除去は IDS 各ステップ後の
-            // clear_proven_disproofs_below() に委ねる．
-            // param_warmup_clear_proven=true (1G 無効) の場合は v0.25.5 挙動:
-            // clear_proven_non_proofs() のみ (WorkingTT は維持)．
-        } else if self.warmup_mode {
-            // param_warmup_clear_proven=true (1G 無効, v0.25.5 相当):
+        if self.warmup_mode && self.param_warmup_clear_proven {
+            // v0.27.6 デフォルト (v0.25.5 相当，Hypothesis 1H):
             // ProvenTT の非 proof のみ除去し WorkingTT intermediate を保持する．
-            // v0.25.5 は warmup_mode=true で clear_proven_non_proofs() を呼んでいた．
-            // retain_proofs_only() は WorkingTT も消去するため v0.25.5 と異なる．
+            // clear_working_shallow の除去と組み合わせることで warmup が
+            // 前 IDS step の中間エントリを活用できる (§10.2.22)．
             self.table.clear_proven_non_proofs();
+        } else if self.warmup_mode {
+            // param_warmup_clear_proven=false (1G 有効, v0.25.9〜v0.27.5 挙動):
+            // ProvenTT をクリアしない (outer IDS の disproof を warmup でも再利用)．
+            // v0.27.3 の clear_working_shallow と組み合わせた旧デフォルト．
+            // 退行の一因となっていたため v0.27.6 でデフォルトを変更．
         } else {
             self.table.retain_proofs_only();
         }
@@ -1559,23 +1552,27 @@ impl DfPnSolver {
                         // warmup_mode=true: mid_fallback 入口で WorkingTT
                         // intermediate を保持し ProvenTT 非 proof のみ除去．
                         //
-                        // v0.27.3: Hypothesis 1D (v0.25.9) を selective clear に置換．
+                        // v0.27.6 修正 (Hypothesis 1H): clear_working_shallow を除去．
                         //
-                        // 旧 1D (clear_working 全削除) は IDS depth=21 で
-                        // retain_working_intermediates が保持した ~61K の intermediate
-                        // を全て破棄し，depth=23 main search が empty WorkingTT から
-                        // 再スタートすることで 5x 退行を引き起こした
-                        // (v0.27.2: standalone 96M→453M+)．
+                        // v0.27.3 で導入した clear_working_shallow(warmup_depth) は
+                        // warmup 前に remaining ≤ warmup_depth の WorkingTT エントリを削除し，
+                        // warmup が前の IDS step (depth=16/17) で構築した中間エントリを
+                        // 活用できなくする問題があった (§10.2.22)．
                         //
-                        // 新方針 clear_working_shallow(warmup_depth):
-                        // - remaining <= warmup_depth のエントリのみ削除
-                        //   (warmup での lookup 範囲に入るため干渉しうる)
-                        // - remaining > warmup_depth の deep intermediate は保持
-                        //   (warmup には当たらず，main search で再利用可能)
-                        if !self.param_no_warmup_shallow_clear {
-                            // v0.27.3: shallow clear で warmup 干渉を防ぐ．
-                            // param_no_warmup_shallow_clear=true (1H) は v0.25.5 相当:
-                            // warmup が既存の中間エントリを活用できるよう clear をスキップ．
+                        // v0.25.5 では前処理なしで warmup を起動し，既存の中間エントリを
+                        // warmup の lower bound として活用することで 96M nodes で Mate(21) を
+                        // 発見していた．clear_working_shallow 導入後は同局面が 200M+ でも
+                        // 解けない退行が発生していた (v0.27.3–v0.27.5)．
+                        //
+                        // param_use_warmup_shallow_clear=true で旧挙動 (v0.27.3–v0.27.5)
+                        // に戻せる (後退検証・比較用)．
+                        // param_no_warmup_shallow_clear は後方互換テスト用
+                        // (true = skip clear = v0.25.5 相当)．
+                        // param_use_warmup_shallow_clear は旧挙動復元用
+                        // (true = clear する = v0.27.3〜v0.27.5 挙動)．
+                        if self.param_use_warmup_shallow_clear
+                            && !self.param_no_warmup_shallow_clear
+                        {
                             self.table.clear_working_shallow(warmup_depth as u16);
                         }
                         self.depth = warmup_depth;
