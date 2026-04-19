@@ -511,6 +511,11 @@ pub struct DfPnSolver {
     /// true にすると saved_depth 20-26 での depth=16→17 挿入をスキップする (IDS-17 導入前の挙動)．
     /// デフォルト false = IDS-17 有効 (depth=17 を明示的に経由)．
     pub(super) param_no_ids17: bool,
+    /// Hypothesis 1H 検証用フラグ (v0.27.5)．
+    /// true にすると warmup 前の clear_working_shallow() 呼び出しをスキップする (v0.25.5 相当)．
+    /// v0.27.3 で導入した clear_working_shallow は warmup が中間エントリを活用できなくする
+    /// 可能性がある．デフォルト false = 現行挙動．
+    pub(super) param_no_warmup_shallow_clear: bool,
     /// refutable check の再帰深さ (デフォルト 5)．
     pub(super) param_refutable_depth: u32,
     /// refutable check の呼び出し回数上限 (デフォルト 10,000)．
@@ -762,6 +767,7 @@ impl DfPnSolver {
             param_warmup_clear_proven: false,
             param_warmup_nm_guard_outer: false,
             param_no_ids17: false,
+            param_no_warmup_shallow_clear: false,
             param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
             param_refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
             a6_boundary_pns_calls_remaining: 0,
@@ -1013,6 +1019,14 @@ impl DfPnSolver {
     /// デフォルト false = IDS-17 有効．
     pub fn set_no_ids17(&mut self, enable: bool) -> &mut Self {
         self.param_no_ids17 = enable;
+        self
+    }
+
+    /// Hypothesis 1H 検証用: warmup 前の clear_working_shallow() をスキップするか設定する．
+    /// true にすると v0.25.5 相当 (warmup 前に WorkingTT 浅いエントリを削除しない)．
+    /// デフォルト false = v0.27.3 以降の現行挙動．
+    pub fn set_no_warmup_shallow_clear(&mut self, enable: bool) -> &mut Self {
+        self.param_no_warmup_shallow_clear = enable;
         self
     }
 

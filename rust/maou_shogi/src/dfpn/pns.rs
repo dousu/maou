@@ -1572,7 +1572,12 @@ impl DfPnSolver {
                         //   (warmup での lookup 範囲に入るため干渉しうる)
                         // - remaining > warmup_depth の deep intermediate は保持
                         //   (warmup には当たらず，main search で再利用可能)
-                        self.table.clear_working_shallow(warmup_depth as u16);
+                        if !self.param_no_warmup_shallow_clear {
+                            // v0.27.3: shallow clear で warmup 干渉を防ぐ．
+                            // param_no_warmup_shallow_clear=true (1H) は v0.25.5 相当:
+                            // warmup が既存の中間エントリを活用できるよう clear をスキップ．
+                            self.table.clear_working_shallow(warmup_depth as u16);
+                        }
                         self.depth = warmup_depth;
                         let save_warmup_mode = self.warmup_mode;
                         self.warmup_mode = true;
