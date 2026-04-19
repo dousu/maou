@@ -5133,7 +5133,10 @@ threshold=0 と同等の NPS/ノード数で，退行は解消しない．
 | threshold=0 (N-1 無効) | 193.0M | 161K | Unknown |
 | 1E 無効 | 195.3M | 163K | Unknown |
 | 1G v2 無効 (clear_proven_non_proofs) | 172.1M | 143K | Unknown |
-| **IDS-17 無効** | **TBD** | **TBD** | **TBD** |
+| IDS-17 無効 | 174.2M | 145K | Unknown |
+| **1H (no_shallow_clear + warmup_clear_proven)** | **143.9M** | **136K** | **Mate(21) ✓** |
+
+**→ 原因特定: `clear_working_shallow(warmup_depth)` (v0.27.3 導入) が退行の原因．**
 
 ---
 
@@ -5150,8 +5153,38 @@ IDS シーケンス比較:
 
 | Ply | 残り | Nodes | NPS | 結果 |
 |:---:|:---:|---:|---:|:---:|
-| 20 | 19 | TBD | TBD | TBD |
-| **18** | **21** | **TBD** | **TBD** | **TBD** |
+| 20 | 19 | 45.1M | 90K | Mate(19) ✓ |
+| **18** | **21** | **174.2M** | **145K** | **Unknown** |
+
+**結論: IDS-17 は ply 18 退行の原因でない**．
+
+---
+
+### 10.2.22 Hypothesis 1H 検証 (v0.27.5/v0.27.6) — 退行原因特定
+
+v0.27.3 で導入した `clear_working_shallow(warmup_depth)` が v0.25.5 との差異原因と仮定．
+warmup 前の WorkingTT shallow clear をスキップ (`param_no_warmup_shallow_clear=true`) と
+warmup 入口での `clear_proven_non_proofs()` 呼び出し復元 (`param_warmup_clear_proven=true`)
+を組み合わせ，v0.25.5 の warmup 挙動を完全復元して検証する．
+
+**v0.25.5 の warmup シーケンス (1H 復元):**
+1. 前処理なし (WorkingTT 維持，全エントリ保持)
+2. warmup mid_fallback 入口: `clear_proven_non_proofs()` (ProvenTT 非 proof のみ除去)
+3. warmup at depth=19: 既存の depth=16 中間エントリを活用して効率的に探索
+
+**テスト:** `test_tsume_39te_backward_200m_1h` (no_warmup_shallow_clear=true + warmup_clear_proven=true)
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | 97.2M | 128K | Mate(19) ✓ |
+| **18** | **21** | **143.9M** | **136K** | **Mate(21) ✓** |
+
+**結論: 退行原因は `clear_working_shallow(warmup_depth)` (v0.27.3 導入)．**
+warmup 前に WorkingTT の shallow エントリ (remaining ≤ warmup_depth) を削除することで，
+warmup が前の IDS step (depth=16/17) で構築した中間エントリを活用できなくなっていた．
+
+**次のステップ:** `clear_working_shallow` を除去 (または warmup 前の削除をスキップ) し，
+v0.25.5 相当の warmup 挙動をデフォルトに戻すバグ修正を実装する (§11.x)．
 
 ---
 
