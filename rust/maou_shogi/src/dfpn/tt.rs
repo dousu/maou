@@ -2145,13 +2145,9 @@ impl TranspositionTable {
                 && new_rem < REMAINING_INFINITE;
             if keep {
                 entry.set_remaining(new_rem);
-                if self.retain_pn_dn_cap < u32::MAX {
-                    entry.pn = entry.pn.min(self.retain_pn_dn_cap);
-                    entry.dn = entry.dn.min(self.retain_pn_dn_cap);
-                }
-                kept += 1;
                 #[cfg(feature = "tt_diag")]
                 {
+                    // cap 適用前の値で分布を記録する
                     let pb = match entry.pn as usize {
                         1 => 0, 2..=7 => 1, 8..=63 => 2,
                         64..=511 => 3, 512..=4095 => 4, _ => 5,
@@ -2163,6 +2159,11 @@ impl TranspositionTable {
                     };
                     self.diag_retained_dn_dist[db] += 1;
                 }
+                if self.retain_pn_dn_cap < u32::MAX {
+                    entry.pn = entry.pn.min(self.retain_pn_dn_cap);
+                    entry.dn = entry.dn.min(self.retain_pn_dn_cap);
+                }
+                kept += 1;
                 #[cfg(feature = "verbose")]
                 {
                     let b = match new_rem as usize {

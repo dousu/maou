@@ -10359,7 +10359,6 @@ use crate::types::{Color, PieceType};
                     solver.table.diag_disproof_refutable_skip,
                     solver.table.diag_disproof_working).unwrap();
                 // WorkingTT 中間エントリヒット診断 (v0.25.7)
-                #[cfg(feature = "tt_diag")]
                 {
                     use std::sync::atomic::Ordering;
                     let exact_hits = solver.table.diag_working_intermediate_hits[0]
@@ -10368,13 +10367,13 @@ use crate::types::{Color, PieceType};
                         .load(Ordering::Relaxed);
                     writeln!(out, "    working_intermediate_hits: exact={} fc={} total={}",
                         exact_hits, fc_hits, exact_hits + fc_hits).unwrap();
-                    writeln!(out, "    last_retained_count: {}",
+                    writeln!(out, "    last_retained_count: {} (last call only)",
                         solver.table.diag_last_retained_count).unwrap();
                     let pd = &solver.table.diag_retained_pn_dist;
-                    writeln!(out, "    retained_pn_dist: 1={} 2-7={} 8-63={} 64-511={} 512-4095={} 4096+={}",
+                    writeln!(out, "    retained_pn_dist (cumulative): 1={} 2-7={} 8-63={} 64-511={} 512-4095={} 4096+={}",
                         pd[0], pd[1], pd[2], pd[3], pd[4], pd[5]).unwrap();
                     let dd = &solver.table.diag_retained_dn_dist;
-                    writeln!(out, "    retained_dn_dist: 1={} 2-7={} 8-63={} 64-511={} 512-4095={} 4096+={}",
+                    writeln!(out, "    retained_dn_dist (cumulative): 1={} 2-7={} 8-63={} 64-511={} 512-4095={} 4096+={}",
                         dd[0], dd[1], dd[2], dd[3], dd[4], dd[5]).unwrap();
                     // N-8 (v0.26.0): LeafDisproofTT 直接計測
                     writeln!(out, "    leaf_disproof_inserts = {}", solver.table.diag_leaf_inserts).unwrap();
