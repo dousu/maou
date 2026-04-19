@@ -1540,7 +1540,7 @@ impl DfPnSolver {
                 // 前段の warmup depth を追跡し，段間の remaining shift に使用する．
                 let mut prev_warmup_depth: Option<u32> = None;
 
-                for (i, &wd) in warmup_depths.iter().enumerate() {
+                for (_i, &wd) in warmup_depths.iter().enumerate() {
                     if wd >= final_depth { continue; }
                     if self.nodes_searched >= saved_max_nodes || self.timed_out {
                         break;
@@ -1807,7 +1807,7 @@ impl DfPnSolver {
     pub(super) fn refutable_check_with_cache(
         &mut self,
         board: &mut Board,
-        pos_key: u64,
+        _pos_key: u64,
         checks: &[Move],
     ) -> bool {
         // F3: OR レベル success cache (有効時)
@@ -4399,7 +4399,7 @@ impl DfPnSolver {
                         );
                         if cdn_j == 0 { continue; }
                         // 異マスの child j に対して reverse_disproof_sharing を試行
-                        let prev_hits = {
+                        let _prev_hits = {
                             #[cfg(feature = "tt_diag")]
                             { self.diag_reverse_disproof_hits }
                             #[cfg(not(feature = "tt_diag"))]
