@@ -156,3 +156,12 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 101 | M-D: adaptive disproof threshold policy 精緻化 (depth 20-22 → 1) | maou 独自 | §10.2.11 | v0.25.3 |
 | 102 | M-1 F1+F3: full_eval + or_success_cache で refut_tt_hits 0 → 2032 | maou 独自 | §10.2.12 | v0.25.4 |
 | 103 | F3 (or_success_cache) default ON + full_hash keying: ply 18 nodes **-75%** | maou 独自 | §10.2.13 | v0.25.5 |
+| 104 | N-1: depth-adaptive disproof_remaining_threshold デフォルト化 (depth=23→threshold=1) | maou 独自 | §10.2.15 | v0.25.6 |
+| 105 | IDS-17: saved_depth 20-26 で depth=16→17 を明示的に経由 (39手詰め sweet spot 活用) | maou 独自 | §2.3 | v0.25.8 |
+| 106 | Hypothesis 1E/1F/1G: warmup NM guard ・MID 予算・ProvenTT clear の最適化 | maou 独自 | §10.2.14 | v0.25.9 |
+| 107 | N-8: LeafDisproofTT (remaining ≤ 2 の overflow 専用 compact TT, 32MB) | maou 独自 | §6.6 | v0.26.0 |
+| 108 | N-2: refutable depth floor を target 24-31 で 8→6 に緩和 (NPS 回復) | maou 独自 | §10.2 | v0.26.0 |
+| 109 | ~~N-7: スライダー打ち駒 DN penalty~~ **v0.27.1 で退行のため無効化** | maou 独自 | — | v0.27.0 |
+| 110 | N-1 depth=23 threshold 退行修正: depth=23 の threshold を 3→1 に修正 | maou 独自 | §10.2.17 | v0.27.2 |
+| 111 | ~~1D selective clear: warmup 前 clear_working_shallow(warmup_depth) 導入~~ **v0.27.7 で退行原因と特定し修正** | maou 独自 | §10.2.18, §10.2.22 | v0.27.3 |
+| 112 | **Hypothesis 1H (v0.27.7): clear_working_shallow 除去 + warmup 入口で clear_proven_non_proofs() デフォルト化 (v0.25.5 相当に復元)** | maou 独自 | §10.2.22 | v0.27.7 |

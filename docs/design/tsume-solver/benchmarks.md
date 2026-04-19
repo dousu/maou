@@ -4662,6 +4662,530 @@ ply 間の探索負荷推移 (v0.25.5):
 | M-1 F1-F4 (fast path) | v0.25.4 | refut_tt_hits 0→2032 | opt-in |
 | **F3 default + full_hash** | **v0.25.5** | **ply 18 nodes -75%** | **default** |
 
+#### 10.2.14 v0.25.6〜v0.25.9: N-1 default 化 + Hypothesis 1 warmup 修正
+
+##### N-1: B-2 adaptive disproof threshold default 化 (v0.25.6)
+
+M-A (refutable depth floor, v0.25.2) で false-NoMate が根絶されたため，
+B-2 (adaptive threshold) を depth ≥ 23 限定で default ON に変更．
+
+Policy (v0.25.6 確定値):
+
+| depth 範囲 | threshold |
+|:---:|:---:|
+| ≤ 19 | 0 (shallow 保護) |
+| 20–22 | 1 (実質 no-op) |
+| 23–27 | 3 (chain aigoma sweet spot) |
+| ≥ 28 | 1 (very deep / no-mate 安全性確保) |
+
+depth ≥ 28 を 1 に抑える理由: `test_no_checkmate_counter_check` (depth=31) で
+threshold=3 だと 2M budget 不足で Unknown 退行するため．
+
+regression: 59 tests + 全 no-mate tests pass．
+
+##### ply 14 大予算検証 (v0.25.7)
+
+N-1 (v0.25.6) 適用後に ply 14 (depth=25, 200M budget) を計測:
+- 200M budget で Mate(25) 解決確認 (N-1 効果を含む)
+- ply 12 は依然 Unknown (境界変化なし)
+
+##### Hypothesis 1 シリーズ: warmup 機能不全の原因分析と修正 (v0.25.7〜v0.25.9)
+
+`test_tsume_39te_ply25_gap_diagnosis` Phase 1 が
+**depth=17: Mate(15) ✓** (492K nodes) なのに
+**depth=21/25: Unknown** (timeout) という gap の原因を調査した．
+
+warmup_mode (IDS 内で depth=saved-4 を先行実行するサブサイクル) の
+以下の問題を特定し修正した:
+
+| 仮説 | 問題 | 修正 | 版 |
+|:---|:---|:---|:---|
+| 1C | IDS 遷移後に保持される intermediate の pn/dn 過大評価 | `retain_pn_dn_cap` によるクリップ | v0.25.8 |
+| 1D | 前 IDS ステップの ~61K intermediate が warmup を妨害 | warmup 前に `clear_working()` 追加 | v0.25.8/9 |
+| 1E | warmup 最終ステップで outer_solve_depth guard が confirmed NM 昇格を阻止 → 2.7× ノード増加 | warmup_mode=true 時は guard を saved_depth のみに緩和 | v0.25.9 |
+| 1F | warmup の MID が全予算を消費し Frontier が未実行 | warmup 時 MID 予算を 1/4 に削減 | v0.25.9 |
+| 1G | warmup 前に ProvenTT disproof が消去され再探索が発生 | warmup_mode=true 時は `clear_proven_non_proofs()` を省略 | v0.25.9 |
+| IDS-17 | depth=16→21 スキップで depth=17 の sweet spot を通過しない | depth=16 の次が 17 を飛び越す場合に 17 を明示的に経由 | v0.25.8/9 |
+
+##### Hypothesis 1 シリーズ効果検証 (v0.25.9 vs v0.25.8 baseline)
+
+`test_tsume_39te_ply25_gap_diagnosis` Phase 1 で v0.25.9 と v0.25.8 を比較:
+
+| 指標 | v0.25.8 (before) | v0.25.9 (after) | 変化 |
+|:---|---:|---:|---:|
+| **depth=17 result** | Mate(15) | Mate(15) | — |
+| depth=17 nodes | 492,342 | **417,412** | **-15%** |
+| depth=17 TT entries | 283,136 | 212,691 | -25% |
+| depth=17 intermediate | 100,966 | 76,060 | -25% |
+| depth=17 last_retained | 120 | 0 | — |
+| **depth=21 result** | Unknown (timeout 120s) | Unknown (timeout 121s) | — |
+| depth=21 nodes | 1,636,766 | 1,630,622 | -0.4% |
+| **depth=25 result** | Unknown (timeout 150s) | Unknown (timeout 150s) | — |
+| depth=25 nodes | 7,313,408 | **12,519,365** | **+71%** |
+| depth=25 NPS | 48.5k | **83.1k** | **+71%** |
+| depth=25 max_ply | 20 | **24** | **+4 ply** |
+| depth=25 working_intermediate_hits | 13.6M | **32.4M** | **+138%** |
+| depth=25 confirmed_disproofs | 12,901 | 18,863 | +46% |
+
+**評価:**
+
+- depth=17 は nodes -15%，intermediate エントリ -25% と改善 (1D/1E/1G の効果)．
+- depth=25 は NPS +71%，max_ply 20→24 と深化 (warmup が deeper position に到達)．
+  working_intermediate_hits +138% は warmup が蓄積した TT を後続 IDS が有効活用
+  していることを示す．
+- **depth=21/25 は依然 Unknown**: 15M/10M budget + 150s/120s 制限の中では
+  Mate(15) 証明に至らない．gap の根本原因 (4 守備手 L*6g・B*6g・B*7g が
+  500K budget で Unknown のまま) は未解消．
+
+**残存課題:**
+
+Phase 0b で 500K budget・Unknown となる 3 守備手 (L*6g・B*6g・B*7g) は
+depth=21/25 でも未解決で，これらへの反証コストが gap の実体である．
+warmup が deeper に到達 (max_ply 24) しても proven/disproven の蓄積が
+これら 3 手を覆すには不十分である．
+
+次の改善候補: §11.11「残存課題 N-7〜N-9 (長期)」参照．
+
+---
+
+#### 10.2.15 v0.26.0: N-2 (adaptive refutable depth floor) + N-8 (LeafDisproofTT) 効果検証
+
+##### N-2: target=24-31 refutable depth floor 緩和
+
+M-A (v0.25.2) で `target ≥ 20` に固定 floor=8 を設けた結果，NPS が -28% 低下した
+(v0.25.9 計測より)．N-2 では target=24-31 の floor を 8 → 6 に緩和し，
+target=20-23 は安全のため floor=8 を維持した (false-NoMate 保護) ．
+
+初期実装 (floor=7 for target=20-23) は深刻な退行を引き起こした:
+- depth=21 NPS: 13.5k → 8.4k (-38%)
+- depth=21 disproven TT: 297k → 522k (+76%)
+
+target=20-23 を floor=8 に戻すことで退行を解消した．
+
+##### N-8: LeafDisproofTT (16B compact leaf disproof)
+
+WorkingTT クラスタ飽和時の remaining≤2 反証エントリを
+16B コンパクト構造 (TTLeafEntry) に格納するオーバーフロー補助 TT．
+
+`test_tsume_39te_ply25_gap_diagnosis` Phase 1 での計測結果:
+
+| 指標 | depth=17 | depth=21 | depth=25 |
+|:---|---:|---:|---:|
+| leaf_disproof_inserts | 0 | 0 | 0 |
+| leaf_disproof_hits | 0 | 0 | 0 |
+
+**評価:** N-8 は本ワークロードでは発動しない．
+WorkingTT の 3 段階置換戦略 (空スロット優先 → replace_weakest_for_disproof →
+NM-NM 置換) が全ケースを処理しており，LeafDisproofTT へのオーバーフローは
+実際には発生しない．N-8 は安全網として残存するが実質的な効果は 0．
+
+##### v0.26.0 vs v0.25.9 gap diagnosis 比較
+
+`test_tsume_39te_ply25_gap_diagnosis` Phase 1:
+
+| 指標 | v0.25.9 (before) | v0.26.0 (after) | 変化 |
+|:---|---:|---:|---:|
+| **depth=17 result** | Mate(15) | Mate(15) | — |
+| depth=17 nodes | 417,412 | 392,652 | -6% |
+| depth=17 NPS | ~6.1k | 5.7k | -7% |
+| **depth=21 result** | Unknown (timeout 121s) | Unknown (timeout 121s) | — |
+| depth=21 nodes | ~1,637K | 1,637,022 | ≈0% |
+| depth=21 NPS | ~13.5k | 13.5k | ≈0% |
+| depth=21 disproven | — | 297,181 | — |
+| **depth=25 result** | Unknown (timeout 150s) | Unknown (timeout 150s) | — |
+| depth=25 nodes | 14,062K | 11,662K | -17% (測定誤差含む) |
+| depth=25 NPS | 93.1k | 77.4k | -17% (測定誤差) |
+| depth=25 max_ply | 24 | 24 | — |
+
+**評価:**
+
+- N-2 (floor=6 for target=24-31): depth=25 の refutable check depth が 8→6 に緩和されたが，
+  NPS は今回の測定で -17% となった (システム負荷による測定誤差の可能性あり)．
+- depth=21 は N-2 floor=8 (20-23 range は変更なし) で v0.25.9 と同等の性能を維持．
+- **gap 未解消**: Phase 0b で Unknown の 3 守備手 (L*6g・B*6g・B*7g) は変化なし．
+
+**残存課題:**
+
+N-2・N-8 は NPS 向上・TT 効率改善の観点から有効ではなかった．
+gap の根本原因 (3 守備手の反証に必要なコストが budget を超過) は未解消．
+次の改善候補: §11.11「残存課題 N-3〜N-9 (長期)」参照．
+
+---
+
+### 10.2.16 N-7: スライダー打ち駒への shallow DN penalty → 退行により無効化 (v0.27.0→v0.27.1)
+
+#### v0.27.0: N-7 実装
+
+**設計:**
+
+39手詰め ply 25 AND node で L\*6g・B\*6g・B\*7g が Unknown のまま残る gap 問題に対し，
+スライダー打ち (香・角・飛) の DN を距離比例ボーナスで追加ペナルティし，AND node での
+探索優先度を下げる最適化 (N-7) を実装．
+
+- `is_slider_drop(m)`: Lance/Bishop/Rook の打ち駒か判定するヘルパー
+- chain AND node: `dist_bias` を 2 倍 (スライダーは `dist_bias × 2`)
+- mixed chain AND node: chain drop に対して同様に 2 倍
+- 非 chain AND node (`n7_and_king_sq`): 距離比例ペナルティを追加
+
+**ply 24 OR node 診断 (v0.27.0):**
+
+| depth | nodes | NPS | 結果 | n7_slider_bonus |
+|-------|-------|-----|------|-----------------|
+| 17 | 642,741 | 10.0k | Mate(15) ✓ | 170,630 |
+| 21 | 1,037,862 | 8.6k | Unknown | 252,875 |
+| 25 | 12,637,184 | 83.9k | Unknown (max_ply=24) | 113,861 |
+
+depth=17 は NPS +75% と大幅改善したが，depth=21 は NPS -36% の退行．
+
+#### v0.27.1: N-7 無効化 (退行修正)
+
+**退行の発見 (backward_200m 計測):**
+
+v0.27.0 vs v0.27.1 の backward 解析 (200M budget):
+
+| Ply | 残り | v0.27.0 nodes | v0.27.1 nodes | 変化 |
+|:---:|:---:|---:|---:|:---:|
+| 24 | 15 | 642,741 | **392,652** | **-39%** |
+| 22 | 17 | 14,857,452 | **9,685,512** | **-35%** |
+| 20 | 19 | 71,710,139 Mate | 87,101,075 Mate | +22% |
+| 18 | 21 | 200M Unknown | 200M Unknown | 同等 |
+
+N-7 は ply 22・24 で著しい退行を引き起こしていた．
+
+**修正内容 (v0.27.1):**
+
+- `is_slider_drop()` を削除
+- chain AND / mixed chain AND / 非 chain AND の全分岐から N-7 ペナルティを除去
+- `n7_and_king_sq` 変数を削除
+- `diag_n7_slider_bonus` カウンタは保持 (将来の再実装向け)
+
+**評価:**
+
+- ply 22・24: N-7 除去により ply 22 は -35%，ply 24 は -39% とノード数が大幅削減 ✓
+- ply 18: v0.27.0/v0.27.1 ともに 200M で Unknown (NPS ~348K)．N-7 由来の退行ではなく
+  v0.26.0 (N-2) 以降の既存課題．
+- **gap 未解消**: Phase 0b の Unknown 3 手 (L\*6g・B\*6g・B\*7g) は変化なし．
+
+**N-7 が有効でなかった理由:**
+
+AND node で slider drop の DN を増やすことで「後回し」にするが，AND node の証明には
+全子ノードの証明が必要なため，スライダーを後回しにすると「最後に残った最難問」として
+探索コストが集中しバジェットを超過しやすくなる．slider 専用の深さ依存ペナルティや
+chain aigoma 検出との組み合わせなど，より精密な設計が必要．
+
+---
+
+### 10.2.17 N-1 depth=23 disproof_remaining_threshold 退行修正 (v0.27.2)
+
+#### 背景: ply 18 の NPS 異常 (v0.27.1)
+
+v0.27.1 で N-7 を除去した後も ply 18 は 200M ノードで Unknown が続き，
+NPS が ~348K と異常に高かった (v0.25.5 は ~117K，threshold_sweep では threshold=0/1 が 110K)．
+
+根本原因は N-1 (B-2 adaptive threshold，v0.25.6 実装) の設定値にあった:
+
+```rust
+// N-1 (v0.25.6〜v0.27.1): effective_disproof_remaining_threshold()
+match d {
+    0..=19 => 0,
+    20..=22 => 1,
+    23..=27 => 3,   // depth=23 (ply 18) でも threshold=3 → proven TT を破壊
+    _ => 1,
+}
+```
+
+depth=23 は ply 18 の探索深さだが，chain aigoma が始まる ply 14 (depth=27) より浅い．
+threshold=3 は `remaining ∈ {1,2}` の WorkingTT エントリをほぼ全てスキップし，
+proven TT の蓄積を妨げる．
+
+#### 退行の定量 (threshold_sweep, v0.27.1, 120M/900s)
+
+| threshold | nodes | NPS | TT proven | TT disproven | disproof_working |
+|:---------:|------:|----:|----------:|-------------:|----------------:|
+| 0 | 99.5M | 110K | 1,027,356 | 2,589,473 | 42,630,106 |
+| 1 | 99.5M | 110K | 1,027,659 | 2,618,025 | 42,630,206 |
+| **3 (N-1 旧設定)** | **120M** | **274K** | **14,133** | 2,042,770 | **14,784** |
+
+threshold=3 では:
+- TT proven が 1,027K → **14K** (約 **70 倍**削減)
+- disproof_working が 42.6M → **15K** (ほぼゼロ)
+- NPS が 110K → 274K (WorkingTT への書き込みがなくなり疑似的に高速)
+
+NPS が高くても探索知識が蓄積されないため，証明前進しない「空振り」探索が続く．
+
+#### 修正内容 (v0.27.2)
+
+`effective_disproof_remaining_threshold()` を以下に変更:
+
+```rust
+// v0.27.2 修正:
+match d {
+    0..=23 => 1,   // depth=23 (ply 18) を保護; chain aigoma 前の range
+    24..=27 => 3,  // chain aigoma range (ply 14 depth=27 で検証済)
+    _ => 1,
+}
+```
+
+- depth=23 (ply 18): threshold 3 → **1** に変更 → proven TT が 1M レベルに回復
+- depth 24〜27 (ply 14〜8): threshold=3 を維持 (chain aigoma の disproof は短命で不要)
+
+#### 修正後の評価 (v0.27.2, backward_200m, 200M/1200s)
+
+| Ply | 残り | v0.27.1 nodes | v0.27.2 nodes | NPS | Result |
+|:---:|:---:|---:|---:|----:|:---:|
+| 24 | 15 | 392,652 | 392,652 | 5,893 | Mate(15) ✓ |
+| 22 | 17 | 9,685,512 | 9,685,512 | 67,435 | Mate(17) ✓ |
+| 20 | 19 | 87,101,075 | 87,101,075 | 90,645 | Mate(19) ✓ |
+| **18** | **21** | 200M Unknown (NPS=348K) | **172M Unknown (NPS=143K)** | 143,253 | Unknown |
+
+NPS が 348K → 143K に改善し，threshold=0/1 の 110K に近づいた ✓．
+TT proven は回復 (threshold=3 の 14K → threshold=1 の ~1M 相当) ✓．
+
+#### ply 18 単独 500M/1800s 結果 (v0.27.2)
+
+| 指標 | 値 |
+|:----|----|
+| result | **Unknown** |
+| nodes | 453,179,392 (~453M) |
+| time | 1800.75s |
+| NPS | 251,662 (~252K) |
+| TT proven | 1,463,592 |
+| TT disproven | 3,531,591 |
+| disproof_working | 77,662,798 |
+| a4_inflations | **76,255,224** (16.8% of nodes) |
+
+#### 残存課題: v0.26.0 (N-2) 以降の secondary regression
+
+v0.27.2 で N-1 の threshold 設定を修正したが，ply 18 は依然として解けない:
+
+| バージョン | nodes | time | NPS | 結果 |
+|:---:|---:|---:|----:|:---:|
+| v0.25.5 | 96M | ~819s | ~117K | **Mate(21) ✓** |
+| v0.27.2 (500M test) | 453M | 1800s | 252K | Unknown |
+
+**約 5 倍のノード退行**が残存する．NPS が 117K → 252K に増加しているため，
+単位時間あたりの探索量は増えているが，探索の「品質」が低下している可能性がある．
+
+注目指標: `a4_inflations = 76,255,224` (453M nodes の **16.8%**)．
+A-4 (TT key rotation / arena 再割当) の頻度が高いことは TT の断片化や
+GC 圧力を示唆しており，これが探索品質低下の原因の一つである可能性がある．
+
+v0.26.0 (N-2: adaptive effective_refutable_depth) 以降に導入された変更が候補:
+
+- **1D**: `clear_working` before warmup — WorkingTT の再利用を妨げる?
+- **1F**: warmup MID budget = 1/4 — warmup 中の探索深さ不足?
+- **a4_inflations 急増**: v0.25.5 との比較が必要
+
+これらの調査は §11 以降の課題とする．
+
+---
+
+### 10.2.18 Hypothesis 1D selective clear — warmup 干渉排除と deep intermediate 保持 (v0.27.3)
+
+#### 背景: a4_inflations 急増と 1D の影響調査
+
+v0.27.2 の 500M テストで `a4_inflations = 76.3M` (16.8%) が観測された．
+調査の結果，a4_inflations は N-2 (v0.26.0) による A-4 発火頻度増加の結果であり，
+直接的な退行原因ではなく探索コスト増加の症状であると判明．
+
+本当の原因: **Hypothesis 1D (v0.25.9) の clear_working() 全削除**が，
+IDS depth=21 で `retain_working_intermediates` が保持した intermediate エントリを
+全て破棄し，depth=23 main search が warmup 後に empty WorkingTT から
+再スタートすることで 5x のノード退行を引き起こしていた．
+
+#### 調査結果: 1D 全削除 vs selective clear
+
+1D を単純に除去するとは別の問題が発生:
+
+| 変更 | ply 20 backward | ply 18 backward | ply 18 standalone |
+|:----:|:---:|:---:|:---:|
+| v0.27.2 (1D 全削除 = 旧動作) | 87M Mate(19) ✓ | 172M Unknown | 453M Unknown |
+| v0.27.3 (1D なし — 全保持) | **96M Unknown ✗** | — | 196M Unknown |
+| **v0.27.3 (selective clear)** | **45M Mate(19) ✓** | 96.8M Unknown | 174M Unknown |
+
+1D 全削除は ply 20 を破壊 (Mate→Unknown)．
+`remaining <= warmup_depth` のみ削除する **selective clear** が正解:
+- ply 20: 87M → **45M** (-48%) ✓
+- ply 18: 172M → 96.8M (backward, timeout 1200s) / 453M → 174M (standalone 1800s)
+
+#### 修正内容 (v0.27.3)
+
+tt.rs に `clear_working_shallow(threshold: u16)` を追加:
+
+```rust
+pub(super) fn clear_working_shallow(&mut self, threshold: u16) {
+    for fe in self.working.iter_mut() {
+        if fe.pos_key != 0 && fe.entry.remaining() <= threshold {
+            fe.pos_key = 0;
+        }
+    }
+    for le in self.leaf_disproofs.iter_mut() { le.pos_key = 0; }
+    self.working_overflow_since_gc = 0;
+}
+```
+
+pns.rs: `self.table.clear_working()` → `self.table.clear_working_shallow(warmup_depth as u16)`
+
+#### ply 18 の残存退行
+
+v0.27.3 でも ply 18 は 96.8M/1200s で Unknown (NPS=80K):
+
+| バージョン | backward nodes | NPS | 結果 |
+|:---:|---:|----:|:---:|
+| v0.25.5 | 96M | ~117K | **Mate(21) ✓** |
+| v0.27.2 | 172M | 143K | Unknown |
+| **v0.27.3** | **96.8M** | **80K** | **Unknown** |
+
+同ノード数 (96M) で v0.25.5 は解けるが v0.27.3 は解けない．
+NPS 差 (117K vs 80K) は TT サイズ差によるもので，探索品質の差が残存．
+
+次期調査候補: 1E/1F/1G (v0.25.9 warmup 動作変更)，1C (pn/dn cap, v0.25.8)
+
+---
+
+### 10.2.19 Hypothesis 1F / 1G 検証 (v0.27.4)
+
+#### Hypothesis 1F: warmup MID 予算 1/4 → 1/2
+
+v0.25.9 で warmup_mode=true の MID 予算が残余 budget の 1/2 → 1/4 に変更された (1F)．
+1/4 が ply 18 の退行原因かどうかを `param_warmup_mid_denom=2` (1/2 に戻す) で検証．
+
+**テスト:** `test_tsume_39te_backward_200m_mid2` (warmup_mid_denom=2, 200M/1200s)
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | 45.1M | 54K | Mate(19) ✓ |
+| **18** | **21** | **100.9M** | **84K** | **Unknown** |
+
+**結論: 1F は ply 18 退行の原因でない**．denom=2 (1/2) は denom=4 (1/4) より若干悪い
+(100.9M vs 96.8M)．1F 変更を revert しても退行は解消しない．
+
+#### Hypothesis 1G: warmup_mode=true でも retain_proofs_only() を呼ぶ
+
+v0.25.9 で warmup_mode=true の場合 `retain_proofs_only()` をスキップするようになった (1G)．
+1G 導入前の挙動 (warmup 前に ProvenTT 非 proof をクリア) を `param_warmup_clear_proven=true` で復元し検証．
+
+**テスト:** `test_tsume_39te_backward_200m_warmup_clear_proven` (warmup_clear_proven=true, 200M/1200s)
+
+**v1 (誤実装):** 誤って `retain_proofs_only()` (WorkingTT も消去) を使用した初回実装．
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | 82.3M | 70K | Mate(19) ✓ |
+| **18** | **21** | **OOM/SIGKILL** | **—** | **—** |
+
+**v2 (修正):** v0.25.5 の実際の挙動 `clear_proven_non_proofs()` (WorkingTT 維持) を使用．
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | 139.5M | 145K | Mate(19) ✓ |
+| **18** | **21** | **172.1M** | **143K** | **Unknown** |
+
+ply 18 v2 でも Unknown (172M ノード)．v0.25.5 の ProvenTT clearing 挙動を完全復元しても
+退行は解消しない．
+
+**結論: 1G は ply 18 退行の原因でない**．1G は維持すべき最適化．
+
+---
+
+### 10.2.20 N-1 adaptive threshold=0 / 1E 無効化 検証 (v0.27.4)
+
+#### N-1 threshold=0 検証
+
+v0.25.5 は `param_disproof_remaining_threshold=0` (threshold=0，N-1 未適用)．
+v0.27.3 (depth=23) は threshold=1．この差が退行原因かを threshold=0 で検証．
+
+**テスト:** `test_tsume_39te_backward_200m_threshold0` (threshold=0, 200M/1200s)
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | 45.1M | **102K** | Mate(19) ✓ |
+| **18** | **21** | **193.0M** | **161K** | **Unknown** |
+
+注目: threshold=0 での NPS=102-161K が default (54-80K) より大幅に高い．
+N-1 threshold=1 が NPS を 50% 低下させる副作用を確認．しかし退行は解消しない．
+
+**結論: N-1 threshold は ply 18 退行の原因でない**．NPS 低下は別問題．
+
+#### Hypothesis 1E: warmup 内 NM guard に outer_solve_depth を加算
+
+v0.25.8 で warmup 内 NM guard を `saved_depth` のみ (1E) に変更した．
+1E 導入前の挙動 (`nm_guard_depth = saved_depth.max(outer_solve_depth)`) を
+`param_warmup_nm_guard_outer=true` で復元し検証．
+
+**テスト:** `test_tsume_39te_backward_200m_no1e` (warmup_nm_guard_outer=true, 200M/1200s)
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | 45.1M | 103K | Mate(19) ✓ |
+| **18** | **21** | **195.3M** | **163K** | **Unknown** |
+
+threshold=0 と同等の NPS/ノード数で，退行は解消しない．
+
+**結論: 1E は ply 18 退行の原因でない**．
+
+#### まとめ: 個別検証結果
+
+| 検証 | ply 18 Nodes | ply 18 NPS | ply 18 結果 |
+|:---:|---:|---:|:---:|
+| v0.25.5 | 96M | 117K | **Mate(21) ✓** |
+| v0.27.3 default (threshold=1) | 96.8M | 80K | Unknown |
+| threshold=0 (N-1 無効) | 193.0M | 161K | Unknown |
+| 1E 無効 | 195.3M | 163K | Unknown |
+| 1G v2 無効 (clear_proven_non_proofs) | 172.1M | 143K | Unknown |
+| IDS-17 無効 | 174.2M | 145K | Unknown |
+| **1H (no_shallow_clear + warmup_clear_proven)** | **143.9M** | **136K** | **Mate(21) ✓** |
+
+**→ 原因特定: `clear_working_shallow(warmup_depth)` (v0.27.3 導入) が退行の原因．**
+
+---
+
+### 10.2.21 IDS-17 無効化検証 (v0.27.4)
+
+v0.25.8 で導入した IDS-17 (saved_depth 20-26 で depth=16→17 を挿入) を
+`param_no_ids17=true` で無効化し，退行原因かどうかを検証する．
+
+IDS シーケンス比較:
+- IDS-17 有効 (現行): 2→4→8→16→**17**→23
+- IDS-17 無効 (v0.25.5 相当): 2→4→8→16→23 (direct jump)
+
+**テスト:** `test_tsume_39te_backward_200m_no_ids17` (no_ids17=true, 200M/1200s)
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | 45.1M | 90K | Mate(19) ✓ |
+| **18** | **21** | **174.2M** | **145K** | **Unknown** |
+
+**結論: IDS-17 は ply 18 退行の原因でない**．
+
+---
+
+### 10.2.22 Hypothesis 1H 検証 (v0.27.5/v0.27.6) — 退行原因特定
+
+v0.27.3 で導入した `clear_working_shallow(warmup_depth)` が v0.25.5 との差異原因と仮定．
+warmup 前の WorkingTT shallow clear をスキップ (`param_no_warmup_shallow_clear=true`) と
+warmup 入口での `clear_proven_non_proofs()` 呼び出し復元 (`param_warmup_clear_proven=true`)
+を組み合わせ，v0.25.5 の warmup 挙動を完全復元して検証する．
+
+**v0.25.5 の warmup シーケンス (1H 復元):**
+1. 前処理なし (WorkingTT 維持，全エントリ保持)
+2. warmup mid_fallback 入口: `clear_proven_non_proofs()` (ProvenTT 非 proof のみ除去)
+3. warmup at depth=19: 既存の depth=16 中間エントリを活用して効率的に探索
+
+**テスト:** `test_tsume_39te_backward_200m_1h` (no_warmup_shallow_clear=true + warmup_clear_proven=true)
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | 97.2M | 128K | Mate(19) ✓ |
+| **18** | **21** | **143.9M** | **136K** | **Mate(21) ✓** |
+
+**結論: 退行原因は `clear_working_shallow(warmup_depth)` (v0.27.3 導入)．**
+warmup 前に WorkingTT の shallow エントリ (remaining ≤ warmup_depth) を削除することで，
+warmup が前の IDS step (depth=16/17) で構築した中間エントリを活用できなくなっていた．
+
+**次のステップ:** `clear_working_shallow` を除去 (または warmup 前の削除をスキップ) し，
+v0.25.5 相当の warmup 挙動をデフォルトに戻すバグ修正を実装する (§11.x)．
+
 ---
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較

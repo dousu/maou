@@ -63,17 +63,22 @@ PNS で未解決の場合に自動的に Phase 2 として呼び出される．
 
 **実装:** `mid_fallback()` 関数 (`pns.rs`)．
 
-- **深さ進行** (v0.24.60+):
+- **深さ進行** (v0.24.60+, IDS-17 は v0.25.8+):
 
 ```
   depth ≤ 19:      2 -> 4 -> depth  (直接ジャンプ)
-  depth 20-31:     2 -> 4 -> [warmup(depth-4)] -> 8 -> 16 -> depth (段階的)
+  depth 20-26:     2 -> 4 -> 8 -> 16 -> 17 -> depth  (IDS-17: depth=17 を明示経由)
+  depth 27-31:     2 -> 4 -> 8 -> 16 -> depth  (段階的)
   depth > 31:      2 -> 4 -> 8 -> 16 -> 32 -> 36 -> ... (倍増→+4)
 ```
 
   - `depth ≤ 19`: 直接ジャンプ．epsilon denom=3 が自然に適用され cliff 不発生
-  - `depth > 19`: 段階的 IDS + **warmup mid\_fallback** (後述)
-  - `depth > 32`: +4 刻み
+  - `depth 20-26`: **IDS-17** (v0.25.8): depth=16 の次に depth=17 を挿入．
+    39手詰め問題では depth=17 (remaining=17 から Mate(15) が見つかる) が
+    sweet spot であり，16→depth の直接ジャンプでは warmup に頼ることになるが
+    warmup へのバジェット不足が発生した (実測: ~70s しか残らず timeout)．
+    IDS に depth=17 を含めることで確実に実行される
+  - `depth > 31`: +4 刻み
 
 - **solve() レベルの warmup** (v0.24.65〜v0.24.77, v0.24.78 でデフォルト無効):
 
@@ -110,6 +115,29 @@ PNS で未解決の場合に自動的に Phase 2 として呼び出される．
   - `clear_proven_disproofs_below(ids_depth / 2)`: ProvenTT の浅い confirmed disproof のみ
     選択的に除去(v0.24.38)
   - rem=0 仮反証は TT に格納しない (v0.24.14 以降，§6.6.4 参照)
+- **warmup 前 TT 管理** (v0.27.7，Hypothesis 1H):
+
+  full-depth step (ids\_depth == saved\_depth) で warmup mid\_fallback を呼ぶ前に
+  WorkingTT は **クリアしない**．前の IDS step (depth=16/17) で構築した
+  中間エントリをそのまま残し，warmup が lower bound として活用できるようにする．
+
+  - **v0.27.3 の退行原因** (§10.2.22): `clear_working_shallow(warmup_depth)` を
+    warmup 前に導入し remaining ≤ warmup\_depth のエントリを削除した結果，
+    warmup が深さ 16/17 の中間エントリを活用できなくなり ply 18 が
+    200M ノードでも解けない退行が発生 (96M nodes → Unknown)．
+  - **v0.27.7 の修正**: `clear_working_shallow` を無効化 (デフォルト)．
+    `param_use_warmup_shallow_clear=true` で旧挙動に戻せる．
+
+- **warmup mid\_fallback 入口 TT 管理** (v0.27.7，v0.25.5 相当):
+
+  warmup\_mode=true の `mid_fallback` 入口で `clear_proven_non_proofs()` を呼び
+  ProvenTT の非 proof エントリ(disproof 等)を除去する．WorkingTT は変更しない．
+
+  - **1G (v0.25.9〜v0.27.6 の旧挙動)**: ProvenTT クリアをスキップ (disproof 再利用)．
+    `clear_working_shallow` と組み合わせると退行を引き起こした．
+  - **v0.27.7 デフォルト**: `clear_proven_non_proofs()` を呼ぶ (v0.25.5 相当)．
+    `param_warmup_clear_proven=false` で 1G 挙動に戻せる．
+
 - **NM 昇格**: 反復終了後に `depth_limit_all_checks_refutable()` で全王手が
   反駁可能と確認できれば，NM を `REMAINING_INFINITE` に昇格
   - **昇格ガード** (v0.24.63+): `ids_depth >= max(saved_depth, outer_solve_depth)`

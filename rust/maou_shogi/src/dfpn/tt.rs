@@ -27,6 +27,14 @@ pub(super) static NEIGHBOR_DIAG: [AtomicU64; 4] = [
     AtomicU64::new(0), AtomicU64::new(0),
 ];
 
+/// WorkingTT 中間エントリヒット診断カウンタ (verbose feature)．
+/// [0]: exact_match ヒット回数 (hand 完全一致)
+/// [1]: fc_match ヒット回数 (forward-chain dominance)
+#[cfg(feature = "verbose")]
+pub(super) static WORKING_DIAG: [AtomicU64; 2] = [
+    AtomicU64::new(0), AtomicU64::new(0),
+];
+
 /// ProvenTT の 1 クラスタあたりのエントリ数．
 ///
 /// 持ち駒の種類数(7) + 1 = 8 エントリとすることで，同一盤面・異なる
@@ -63,6 +71,43 @@ const DEFAULT_NUM_CLUSTERS: usize = 1 << 21; // 2M
 /// ProvenTT のクラスタ数の倍率．
 /// 1 = WorkingTT と同数(2M)．
 const PROVEN_CLUSTER_MULTIPLIER: usize = 1;
+
+/// LeafDisproofTT のクラスタサイズ (4 エントリ × 16B = 64B / クラスタ = 1 cache line)．
+const LEAF_CLUSTER_SIZE: usize = 4;
+
+/// LeafDisproofTT のクラスタ数 (2^19 = 512K クラスタ)．
+/// 512K × 4 entries × 16B = 32MB．WorkingTT overflow の remaining≤2 専用バッファ．
+const LEAF_NUM_CLUSTERS: usize = 1 << 19;
+
+/// LeafDisproofTT のコンパクトエントリ (16B)．
+///
+/// N-8 (v0.26.0): remaining ≤ 2 の depth-limited disproof を WorkingTT の
+/// overflow として格納する compact entry．
+/// WorkingTT の TTFlatEntry (32B) の半分のサイズで，同一メモリに 2× のエントリを保持．
+///
+/// - pos_key: 空スロット判定 (0 = 空)
+/// - hand: hand_gte_forward_chain 比較用
+/// - remaining: 格納時の remaining 値 (1 or 2)
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct TTLeafEntry {
+    pos_key: u64,           // 8B
+    hand: [u8; HAND_KINDS], // 7B
+    remaining: u8,          // 1B (remaining 値: 1 or 2)
+}
+
+const _: () = assert!(
+    std::mem::size_of::<TTLeafEntry>() == 16,
+    "TTLeafEntry must be 16 bytes"
+);
+
+impl TTLeafEntry {
+    const EMPTY: Self = TTLeafEntry {
+        pos_key: 0,
+        hand: [0; HAND_KINDS],
+        remaining: 0,
+    };
+}
 
 /// WorkingTT のフラットエントリ (intermediate + depth-limited/path-dep disproof)．
 ///
@@ -154,10 +199,16 @@ pub(super) struct TranspositionTable {
     proven: Vec<TTFlatProvenEntry>,
     /// WorkingTT: GC 対象エントリ(intermediate + depth-limited disproof)．
     working: Vec<TTFlatEntry>,
+    /// LeafDisproofTT: remaining ≤ 2 の overflow 専用 compact テーブル (N-8, v0.26.0)．
+    /// WorkingTT クラスタが飽和した際の remaining ≤ 2 エントリのフォールバック先．
+    /// 16B/entry で WorkingTT (32B) の半サイズ．512K clusters × 4 = 2M entries = 32MB．
+    leaf_disproofs: Vec<TTLeafEntry>,
     /// ProvenTT の `num_clusters - 1`(高速 modulo 用ビットマスク)．
     proven_mask: usize,
     /// WorkingTT の `num_clusters - 1`．
     working_mask: usize,
+    /// LeafDisproofTT の `num_clusters - 1`．
+    leaf_mask: usize,
     /// store_proven での amount 計算に使用する現在の ply．
     /// mid() が TT store 前にセットする．ply が小さい(ルートに近い)ほど
     /// amount が高くなり，eviction 耐性が上がる．
@@ -222,6 +273,25 @@ pub(super) struct TranspositionTable {
     pub(super) diag_disproof_refutable_skip: u64,
     #[cfg(feature = "tt_diag")]
     pub(super) diag_disproof_working: u64,
+    /// (v0.25.7) WorkingTT 中間エントリヒット回数: exact_match / fc_match 別カウント．
+    /// retain_working_intermediates で保持されたエントリが再利用されているかを確認する．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_working_intermediate_hits: [std::sync::atomic::AtomicU64; 2],
+    /// (v0.25.7) 直近の retain_working_intermediates で保持されたエントリ数．
+    /// IDS 遷移後の保持エントリ数を診断するために使用する．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_last_retained_count: u64,
+    /// (v0.25.7) 保持エントリの pn 分布 (累積): [1, 2-7, 8-63, 64-511, 512-4095, 4096+]．
+    /// Hypothesis 1C (pn/dn キャップ値選定) のための診断用．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_retained_pn_dist: [u64; 6],
+    /// (v0.25.7) 保持エントリの dn 分布 (累積): [1, 2-7, 8-63, 64-511, 512-4095, 4096+]．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_retained_dn_dist: [u64; 6],
+    /// (v0.25.7, Hypothesis 1C) retain_working_intermediates で保持するエントリの
+    /// pn/dn 上限値．u32::MAX はキャップなし(デフォルト)．
+    /// 浅い IDS depth での過大評価 pn/dn が深い depth での探索優先度を歪めるのを防ぐ．
+    pub(super) retain_pn_dn_cap: u32,
     /// (v0.25.0) `remaining < threshold` の depth-limited disproof は WorkingTT
     /// への格納をスキップする．デフォルト 0 (スキップなし)．
     /// `path_dependent` と `remaining == REMAINING_INFINITE` は対象外．
@@ -229,6 +299,10 @@ pub(super) struct TranspositionTable {
     pub(super) disproof_remaining_threshold: u16,
     /// (v0.25.0) 閾値スキップにより格納を省略した depth-limited disproof の累計数．
     pub(super) diag_disproof_threshold_skip: u64,
+    /// (N-8, v0.26.0) LeafDisproofTT への挿入数 (overflow fallback 含む)．
+    pub(super) diag_leaf_inserts: u64,
+    /// (N-8, v0.26.0) LeafDisproofTT からのヒット数 (look_up_working からの atomic カウント)．
+    pub(super) diag_leaf_hits: std::sync::atomic::AtomicU64,
 }
 
 impl TranspositionTable {
@@ -243,11 +317,14 @@ impl TranspositionTable {
         let proven_clusters = (num_clusters * PROVEN_CLUSTER_MULTIPLIER).next_power_of_two();
         let proven_total = proven_clusters * PROVEN_CLUSTER_SIZE;
         let working_total = working_clusters * WORKING_CLUSTER_SIZE;
+        let leaf_total = LEAF_NUM_CLUSTERS * LEAF_CLUSTER_SIZE;
         TranspositionTable {
             proven: vec![TTFlatProvenEntry::EMPTY; proven_total],
             working: vec![TTFlatEntry::EMPTY; working_total],
+            leaf_disproofs: vec![TTLeafEntry::EMPTY; leaf_total],
             proven_mask: proven_clusters - 1,
             working_mask: working_clusters - 1,
+            leaf_mask: LEAF_NUM_CLUSTERS - 1,
             hint_ply: 0,
             current_ids_depth: 0,
             working_overflow_since_gc: 0,
@@ -288,9 +365,32 @@ impl TranspositionTable {
             diag_disproof_refutable_skip: 0,
             #[cfg(feature = "tt_diag")]
             diag_disproof_working: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_working_intermediate_hits: [
+                std::sync::atomic::AtomicU64::new(0),
+                std::sync::atomic::AtomicU64::new(0),
+            ],
+            #[cfg(feature = "tt_diag")]
+            diag_last_retained_count: 0,
+            #[cfg(feature = "tt_diag")]
+            diag_retained_pn_dist: [0; 6],
+            #[cfg(feature = "tt_diag")]
+            diag_retained_dn_dist: [0; 6],
+            retain_pn_dn_cap: u32::MAX,
             disproof_remaining_threshold: 0,
             diag_disproof_threshold_skip: 0,
+            diag_leaf_inserts: 0,
+            diag_leaf_hits: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// retain_working_intermediates で保持するエントリの pn/dn 上限を設定する (v0.25.7)．
+    ///
+    /// `u32::MAX` はキャップなし (デフォルト)．
+    /// Hypothesis 1C: 浅い IDS depth での過大評価が深い depth の探索効率を下げる場合，
+    /// 適切な上限でクリップすることで探索優先度の歪みを軽減できる．
+    pub(super) fn set_retain_pn_dn_cap(&mut self, cap: u32) {
+        self.retain_pn_dn_cap = cap;
     }
 
     /// depth-limited disproof の格納閾値を設定する (v0.25.0)．
@@ -357,6 +457,15 @@ impl TranspositionTable {
     fn proven_cluster_start(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> usize {
         let mixed = pos_key ^ Self::hand_hash(hand);
         ((mixed as usize) & self.proven_mask) * PROVEN_CLUSTER_SIZE
+    }
+
+    /// LeafDisproofTT のクラスタ開始インデックス (N-8)．
+    ///
+    /// WorkingTT と同じ fc_hand_hash を使用し，leaf_mask でクラスタを選択する．
+    #[inline(always)]
+    fn leaf_cluster_start(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> usize {
+        let mixed = pos_key ^ Self::fc_hand_hash(hand);
+        ((mixed as usize) & self.leaf_mask) * LEAF_CLUSTER_SIZE
     }
 
     /// WorkingTT のクラスタ開始インデックス．
@@ -477,9 +586,17 @@ impl TranspositionTable {
             }
         }
         if let Some(m) = exact_match {
+            #[cfg(feature = "verbose")]
+            { WORKING_DIAG[0].fetch_add(1, Ordering::Relaxed); }
+            #[cfg(feature = "tt_diag")]
+            { self.diag_working_intermediate_hits[0].fetch_add(1, Ordering::Relaxed); }
             return m;
         }
         if let Some(m) = fc_match {
+            #[cfg(feature = "verbose")]
+            { WORKING_DIAG[1].fetch_add(1, Ordering::Relaxed); }
+            #[cfg(feature = "tt_diag")]
+            { self.diag_working_intermediate_hits[1].fetch_add(1, Ordering::Relaxed); }
             return m;
         }
 
@@ -500,6 +617,22 @@ impl TranspositionTable {
                 {
                     NEIGHBOR_DIAG[2].fetch_add(1, Ordering::Relaxed);
                     return (e.pn, 0, e.source);
+                }
+            }
+        }
+
+        // N-8 (v0.26.0): LeafDisproofTT を検索 (remaining ≤ 2 の overflow エントリ)．
+        // WorkingTT で見つからなかった場合のみチェックし，ヒット時は (PN_UNIT, 0, 0) を返す．
+        if remaining <= 2 {
+            let l_start = self.leaf_cluster_start(pos_key, hand);
+            let l_cluster = &self.leaf_disproofs[l_start..l_start + LEAF_CLUSTER_SIZE];
+            for le in l_cluster {
+                if le.pos_key != pos_key { continue; }
+                if hand_gte_forward_chain(&le.hand, hand)
+                    && (le.remaining as u16) >= remaining
+                {
+                    self.diag_leaf_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return (PN_UNIT, 0, 0);
                 }
             }
         }
@@ -1393,6 +1526,37 @@ impl TranspositionTable {
                 return;
             }
         }
+        // N-8 (v0.26.0): remaining ≤ 2 かつ WorkingTT に入れなかった場合，
+        // LeafDisproofTT に格納し中間エントリを圧迫しない．
+        // always-replace policy でクラスタ最初の空きか，先頭スロットを上書き．
+        if !new_entry.path_dependent() && remaining <= 2 {
+            let l_start = self.leaf_cluster_start(pos_key, &hand);
+            let l_cluster = &mut self.leaf_disproofs[l_start..l_start + LEAF_CLUSTER_SIZE];
+            // 既存の同 pos_key 被支配エントリを置換，なければ空きか先頭に格納
+            let leaf_entry = TTLeafEntry { pos_key, hand, remaining: remaining as u8 };
+            let mut stored = false;
+            for le in l_cluster.iter_mut() {
+                if le.pos_key == pos_key
+                    && hand_gte_forward_chain(&hand, &le.hand)
+                    && remaining >= le.remaining as u16
+                {
+                    *le = leaf_entry;
+                    stored = true;
+                    break;
+                }
+            }
+            if !stored {
+                if let Some(slot) = l_cluster.iter_mut().find(|le| le.pos_key == 0) {
+                    *slot = leaf_entry;
+                    stored = true;
+                }
+            }
+            if !stored {
+                l_cluster[0] = leaf_entry;
+            }
+            self.diag_leaf_inserts += 1;
+            return;
+        }
         // フォールバック
         let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
         if Self::replace_weakest_in(w_cluster, pos_key, new_entry) {
@@ -1890,9 +2054,40 @@ impl TranspositionTable {
         }
     }
 
+    /// WorkingTT の confirmed disproof (dn=0, !path_dep, remaining=INF) の数を返す．
+    ///
+    /// warmup 診断用: IDS depth 切り替え後に WorkingTT に残っている
+    /// confirmed disproof 数を確認する．
+    pub(super) fn count_working_confirmed_disproofs(&self) -> usize {
+        self.working.iter().filter(|fe| {
+            fe.pos_key != 0
+                && fe.entry.dn == 0
+                && !fe.entry.path_dependent()
+                && fe.entry.remaining() == REMAINING_INFINITE
+        }).count()
+    }
+
     /// WorkingTT を全クリアする（IDS depth 切り替え時の強制クリア用）．
     pub(super) fn clear_working(&mut self) {
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
+        // N-8: LeafDisproofTT も同時にクリア
+        for le in self.leaf_disproofs.iter_mut() { le.pos_key = 0; }
+        self.working_overflow_since_gc = 0;
+    }
+
+    /// warmup 前の selective クリア (v0.27.3): remaining <= threshold のエントリのみ削除し，
+    /// remaining > threshold のエントリ (より深い intermediate) を保持する．
+    ///
+    /// 1D (v0.25.9) の全消去を置き換える．warmup_depth を threshold として渡すことで:
+    /// - warmup に干渉しうる shallow intermediate (remaining <= warmup_depth) を除去 ✓
+    /// - main search で再利用可能な deep intermediate (remaining > warmup_depth) を保持 ✓
+    pub(super) fn clear_working_shallow(&mut self, threshold: u16) {
+        for fe in self.working.iter_mut() {
+            if fe.pos_key != 0 && fe.entry.remaining() <= threshold {
+                fe.pos_key = 0;
+            }
+        }
+        for le in self.leaf_disproofs.iter_mut() { le.pos_key = 0; }
         self.working_overflow_since_gc = 0;
     }
 
@@ -1932,6 +2127,9 @@ impl TranspositionTable {
         delta_remaining: u16,
     ) -> usize {
         let mut kept = 0usize;
+        // [0]:0-1, [1]:2-3, [2]:4-7, [3]:8-15, [4]:16-31, [5]:32+
+        #[cfg(feature = "verbose")]
+        let mut rem_dist = [0usize; 6];
         for fe in self.working.iter_mut() {
             if fe.pos_key == 0 { continue; }
             let entry = &mut fe.entry;
@@ -1947,12 +2145,47 @@ impl TranspositionTable {
                 && new_rem < REMAINING_INFINITE;
             if keep {
                 entry.set_remaining(new_rem);
+                #[cfg(feature = "tt_diag")]
+                {
+                    // cap 適用前の値で分布を記録する
+                    let pb = match entry.pn as usize {
+                        1 => 0, 2..=7 => 1, 8..=63 => 2,
+                        64..=511 => 3, 512..=4095 => 4, _ => 5,
+                    };
+                    self.diag_retained_pn_dist[pb] += 1;
+                    let db = match entry.dn as usize {
+                        1 => 0, 2..=7 => 1, 8..=63 => 2,
+                        64..=511 => 3, 512..=4095 => 4, _ => 5,
+                    };
+                    self.diag_retained_dn_dist[db] += 1;
+                }
+                if self.retain_pn_dn_cap < u32::MAX {
+                    entry.pn = entry.pn.min(self.retain_pn_dn_cap);
+                    entry.dn = entry.dn.min(self.retain_pn_dn_cap);
+                }
                 kept += 1;
+                #[cfg(feature = "verbose")]
+                {
+                    let b = match new_rem as usize {
+                        0..=1 => 0, 2..=3 => 1, 4..=7 => 2,
+                        8..=15 => 3, 16..=31 => 4, _ => 5,
+                    };
+                    rem_dist[b] += 1;
+                }
             } else {
                 fe.pos_key = 0;
             }
         }
         self.working_overflow_since_gc = 0;
+        #[cfg(feature = "tt_diag")]
+        { self.diag_last_retained_count = kept as u64; }
+        #[cfg(feature = "verbose")]
+        eprintln!(
+            "[retain_intermediates] delta={} kept={} rem_dist(post-shift): \
+             0-1:{} 2-3:{} 4-7:{} 8-15:{} 16-31:{} 32+:{}",
+            delta_remaining, kept,
+            rem_dist[0], rem_dist[1], rem_dist[2], rem_dist[3], rem_dist[4], rem_dist[5],
+        );
         kept
     }
 

@@ -464,6 +464,11 @@ pub struct DfPnSolver {
     /// AND ノード訪問で複数 child に inflation が発火するとその分加算される．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_a4_inflations: u64,
+    /// TT 診断 (N-7, v0.27.0): slider drop (香・角・飛) に距離比例追加ペナルティを
+    /// 適用した回数．chain_king_sq / mixed_chain_king_sq / 非 chain AND の
+    /// 全 AND ノードで集計する．
+    #[cfg(feature = "tt_diag")]
+    pub(super) diag_n7_slider_bonus: u64,
     /// TT 診断: 施策 α (v0.24.54-v0.24.72) で境界層 filter が発火した MID 数．
     /// 施策 α は v0.24.72 で不採用確定．dead code (削除候補)．
     #[cfg(feature = "tt_diag")]
@@ -491,6 +496,30 @@ pub struct DfPnSolver {
     /// refutable disproof 機構が NM 蓄積を提供するため warmup は冗長．
     /// デフォルト true = warmup 無効．set_skip_warmup(false) で再有効化可能．
     pub(super) skip_warmup: bool,
+    /// warmup_mode=true の IDS 最終ステップで MID に割り当てる予算の分母 (デフォルト 4 = 1/4)．
+    /// 2 にすると 1/2 (1F 導入前の挙動) に戻る．テスト用．
+    pub(super) param_warmup_mid_denom: u32,
+    /// warmup 入口で clear_proven_non_proofs() を呼ぶかどうか (v0.27.6 デフォルト true)．
+    /// true (v0.27.6 デフォルト, v0.25.5 相当): ProvenTT 非 proof を除去，WorkingTT 維持．
+    /// false (v0.25.9〜v0.27.5 の旧デフォルト, 1G 有効): ProvenTT もクリアしない．
+    pub(super) param_warmup_clear_proven: bool,
+    /// warmup 前に clear_working_shallow(warmup_depth) を呼ぶかどうか (v0.27.6 デフォルト false)．
+    /// false (v0.27.6 デフォルト, v0.25.5 相当): 前処理なし，warmup が中間エントリを活用可能．
+    /// true (v0.27.3〜v0.27.5 の旧挙動): remaining ≤ warmup_depth の WorkingTT を削除．退行の原因．
+    pub(super) param_use_warmup_shallow_clear: bool,
+    /// Hypothesis 1E 検証用フラグ (v0.27.4)．
+    /// true にすると warmup_mode=true でも outer_solve_depth を NM guard に加える (1E 導入前の挙動)．
+    /// デフォルト false = 1E 有効 (warmup 内は saved_depth のみで guard)．
+    pub(super) param_warmup_nm_guard_outer: bool,
+    /// Hypothesis IDS-17 無効化フラグ (v0.27.4)．
+    /// true にすると saved_depth 20-26 での depth=16→17 挿入をスキップする (IDS-17 導入前の挙動)．
+    /// デフォルト false = IDS-17 有効 (depth=17 を明示的に経由)．
+    pub(super) param_no_ids17: bool,
+    /// Hypothesis 1H 検証用フラグ (v0.27.5)．
+    /// true にすると warmup 前の clear_working_shallow() 呼び出しをスキップする (v0.25.5 相当)．
+    /// v0.27.3 で導入した clear_working_shallow は warmup が中間エントリを活用できなくする
+    /// 可能性がある．デフォルト false = 現行挙動．
+    pub(super) param_no_warmup_shallow_clear: bool,
     /// refutable check の再帰深さ (デフォルト 5)．
     pub(super) param_refutable_depth: u32,
     /// refutable check の呼び出し回数上限 (デフォルト 10,000)．
@@ -731,11 +760,19 @@ impl DfPnSolver {
             #[cfg(feature = "tt_diag")]
             diag_a4_inflations: 0,
             #[cfg(feature = "tt_diag")]
+            diag_n7_slider_bonus: 0,
+            #[cfg(feature = "tt_diag")]
             diag_alpha_x_filter_applied: 0,
             alpha_x_filter_active: false,
             warmup_mode: false,
             skip_refutable_disproof: false,
             skip_warmup: true,
+            param_warmup_mid_denom: 4,
+            param_warmup_clear_proven: true,   // v0.27.6: v0.25.5 相当をデフォルト化
+            param_warmup_nm_guard_outer: false,
+            param_no_ids17: false,
+            param_no_warmup_shallow_clear: false, // 後方互換テスト用 (実運用では param_use_warmup_shallow_clear を使用)
+            param_use_warmup_shallow_clear: false, // v0.27.6: shallow clear 無効がデフォルト
             param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
             param_refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
             a6_boundary_pns_calls_remaining: 0,
@@ -830,6 +867,15 @@ impl DfPnSolver {
         }
     }
 
+    /// retain_working_intermediates での pn/dn 上限を設定する (v0.25.7, Hypothesis 1C)．
+    ///
+    /// `u32::MAX` はキャップなし(デフォルト)．
+    /// IDS 遷移後に保持された中間エントリの pn/dn を上限値でクリップし，
+    /// 浅い探索での過大評価が深い探索の優先度を歪めるのを防ぐ．
+    pub fn set_retain_pn_dn_cap(&mut self, cap: u32) {
+        self.table.set_retain_pn_dn_cap(cap);
+    }
+
     /// depth-adaptive disproof threshold を opt-in で有効化する (v0.25.1)．
     ///
     /// solve() 時に `outer_solve_depth` に基づいて閾値を自動決定する:
@@ -846,15 +892,15 @@ impl DfPnSolver {
         // solve() 入口で outer_solve_depth を見て TT に反映される．
     }
 
-    /// Depth-adaptive な実効 disproof 格納閾値を返す (v0.25.1〜v0.25.6)．
+    /// Depth-adaptive な実効 disproof 格納閾値を返す (v0.25.1〜v0.27.2)．
     ///
     /// `param_disproof_remaining_threshold` が `DISPROOF_THRESHOLD_ADAPTIVE` の
     /// 場合，`outer_solve_depth` に基づいて閾値を自動決定する．
     ///
-    /// **ポリシー (N-1, v0.25.6)**:
-    /// - depth ≤ 19: **0** (shallow 保護．S-2 で remaining=1 が致命的と実証)
-    /// - depth 20-22: **1** (実質 no-op．rem=0 entry はほぼ存在しない)
-    /// - depth 23-27: **3** (chain aigoma sweet spot．ply 14-18 で -75% 実証)
+    /// **ポリシー (N-1 修正, v0.27.2)**:
+    /// - depth ≤ 23: **1** (shallow〜中深度保護．depth=23 は chain aigoma 前の
+    ///   ply 18 に対応し，threshold=3 は proven TT を 70x 破壊するため除外)
+    /// - depth 24-27: **3** (chain aigoma sweet spot．ply 14 (depth=27) で実証)
     /// - depth ≥ 28: **1** (very deep．no-mate 証明の予算要求を保護．
     ///   `test_no_checkmate_counter_check` depth=31 で threshold=3 は
     ///   2M 予算不足 Unknown を引き起こすため，保守的に 1 に抑える)
@@ -871,9 +917,8 @@ impl DfPnSolver {
             self.depth
         };
         match d {
-            0..=19 => 0,
-            20..=22 => 1,
-            23..=27 => 3,
+            0..=23 => 1,
+            24..=27 => 3,
             _ => 1,
         }
     }
@@ -948,6 +993,53 @@ impl DfPnSolver {
     /// warmup 使用時 Unknown に退行することを確認．
     pub fn set_skip_warmup(&mut self, skip: bool) -> &mut Self {
         self.skip_warmup = skip;
+        self
+    }
+
+    /// warmup_mode=true の IDS 最終ステップで MID に割り当てる予算の分母を設定する．
+    /// デフォルト 4 (= 1/4，Hypothesis 1F)．2 にすると 1/2 (1F 導入前) になる．
+    pub fn set_warmup_mid_denom(&mut self, denom: u32) -> &mut Self {
+        self.param_warmup_mid_denom = denom.max(1);
+        self
+    }
+
+    /// Hypothesis 1G 検証用: warmup_mode=true でも retain_proofs_only() を呼ぶかどうかを設定する．
+    /// true にすると 1G 導入前の挙動 (ProvenTT 非 proof を warmup 前にクリア)．
+    /// デフォルト false = 1G 有効 (スキップ)．
+    pub fn set_warmup_clear_proven(&mut self, enable: bool) -> &mut Self {
+        self.param_warmup_clear_proven = enable;
+        self
+    }
+
+    /// Hypothesis 1E 検証用: warmup_mode=true で outer_solve_depth を NM guard に含めるか設定する．
+    /// true にすると 1E 導入前の挙動 (nm_guard_depth = saved_depth.max(outer_solve_depth))．
+    /// デフォルト false = 1E 有効 (nm_guard_depth = saved_depth のみ)．
+    pub fn set_warmup_nm_guard_outer(&mut self, enable: bool) -> &mut Self {
+        self.param_warmup_nm_guard_outer = enable;
+        self
+    }
+
+    /// Hypothesis IDS-17 無効化検証用: saved_depth 20-26 での depth=16→17 挿入をスキップするか設定する．
+    /// true にすると IDS-17 導入前の挙動 (depth=16 の次は saved_depth へ直接ジャンプ)．
+    /// デフォルト false = IDS-17 有効．
+    pub fn set_no_ids17(&mut self, enable: bool) -> &mut Self {
+        self.param_no_ids17 = enable;
+        self
+    }
+
+    /// Hypothesis 1H 検証用: warmup 前の clear_working_shallow() をスキップするか設定する．
+    /// true にすると v0.25.5 相当 (warmup 前に WorkingTT 浅いエントリを削除しない)．
+    /// デフォルト false = v0.27.6 以降の現行挙動 (もともとデフォルトで skip)．
+    pub fn set_no_warmup_shallow_clear(&mut self, enable: bool) -> &mut Self {
+        self.param_no_warmup_shallow_clear = enable;
+        self
+    }
+
+    /// 旧挙動復元用: warmup 前に clear_working_shallow() を呼ぶかどうかを設定する．
+    /// true にすると v0.27.3〜v0.27.5 の旧挙動 (退行の原因)．
+    /// デフォルト false = v0.27.6 以降のデフォルト (clear しない = v0.25.5 相当)．
+    pub fn set_use_warmup_shallow_clear(&mut self, enable: bool) -> &mut Self {
+        self.param_use_warmup_shallow_clear = enable;
         self
     }
 
@@ -1851,13 +1943,14 @@ impl DfPnSolver {
     /// する現象を確認．warmup で代替できたため，固定 depth=10 相当の対策を
     /// 組み込む．
     ///
+    /// **N-2 (v0.26.0)**: target 24-31 の固定フロア 8 を 6 に緩和し
+    /// NPS -28% (M-A による) の一部を回収する．
+    /// - target=1-19:  depth_floor=3 → d=3〜5 (変更なし)
+    /// - target=20-23: depth_floor=**8** (M-A 維持) → d=8 (ply 20-23 false-NM を保護)
+    /// - target=24-31: depth_floor=**6** (was 8) → d=6 (より深い問題では緩和安全)
+    /// - target=32+:   depth_floor=3 → log_val(≥6) が dominates (元の formula に復帰)
+    ///
     /// 式: d = max(target.ilog2() + 1, depth_floor(target)).min(10)
-    /// - target=1-15:  depth_floor=3 → d=3〜4 (変更なし)
-    /// - target=16-19: depth_floor=3 → d=5 (変更なし)
-    /// - target=20-31: depth_floor=**8** → d=**8** (ply 20 false-NM 防止)
-    /// - target=32-127: depth_floor=8 → d=8 (target.ilog2+1 が 6〜7 でも 8 に上げる)
-    /// - target=128-511: d=8〜9 (log_val が 8〜9)
-    /// - target=512+: d=10 (min で飽和)
     #[inline]
     fn effective_refutable_depth(&self) -> u32 {
         if self.param_refutable_depth != Self::EFFECTIVE_DEPTH_ADAPTIVE {
@@ -1872,9 +1965,12 @@ impl DfPnSolver {
             return 3;
         }
         let log_val = (target as u32).ilog2() + 1;
-        // M-A: target ≥ 20 は深いリーフ NM が誤判定されうるため
-        // フロア 8 を強制．それ以外は従来通り．
-        let depth_floor: u32 = if target >= 20 { 8 } else { 3 };
+        // N-2 (v0.26.0): target 24-31 のみ floor を緩和．target ≥ 32 では log_val ≥ 6．
+        let depth_floor: u32 = match target {
+            0..=23 => if target >= 20 { 8 } else { 3 },
+            24..=31 => 6,
+            _ => 3,
+        };
         log_val.max(depth_floor).min(10)
     }
 
@@ -2919,7 +3015,7 @@ impl DfPnSolver {
                 None
             };
 
-        // プレフィルタで全合駒が証明済み(children が空になった場合)
+// プレフィルタで全合駒が証明済み(children が空になった場合)
         if !or_node && init_prefiltered_count > 0 && children.is_empty() {
             let mut p = init_and_proof;
             for k in 0..HAND_KINDS {
@@ -3515,9 +3611,10 @@ impl DfPnSolver {
                                 .unsigned_abs() as u32;
                             let dc = (to.col() as i8 - ksq.col() as i8)
                                 .unsigned_abs() as u32;
+                            let dist = dr.max(dc);
                             // 内側(d=1)はバイアス0，外側は距離に比例
-                            let base_bias =
-                                dr.max(dc).saturating_sub(1) * PN_UNIT;
+                            let dist_bias = dist.saturating_sub(1) * PN_UNIT;
+                            let base_bias = dist_bias;
                             let bias = if boundary_inflate {
                                 // 施策 A-4: chain drop に追加ペナルティ
                                 #[cfg(feature = "tt_diag")]
@@ -3545,10 +3642,10 @@ impl DfPnSolver {
                                 .unsigned_abs() as u32;
                             let dc = (to.col() as i8 - ksq.col() as i8)
                                 .unsigned_abs() as u32;
+                            let dist = dr.max(dc);
                             // chain drop: INTERPOSE_DN_BIAS + 距離比例加算．
-                            // 外側(d=5)は INTERPOSE_DN_BIAS + 4*PN_UNIT
-                            let base_bias = INTERPOSE_DN_BIAS
-                                + dr.max(dc).saturating_sub(1) * PN_UNIT;
+                            let dist_bias = dist.saturating_sub(1) * PN_UNIT;
+                            let base_bias = INTERPOSE_DN_BIAS + dist_bias;
                             let bias = if boundary_inflate {
                                 // 施策 A-4: 境界層で mixed chain drop も
                                 // 8 倍 inflate
@@ -3567,6 +3664,7 @@ impl DfPnSolver {
                             cdn
                         }
                     } else if m.is_drop() {
+                        // 非 chain AND での drop
                         cdn.saturating_add(INTERPOSE_DN_BIAS)
                     } else {
                         cdn
