@@ -1403,7 +1403,14 @@ impl DfPnSolver {
             // WorkingTT は Hypothesis 1D (outer IDS 側) で既にクリア済み．
             // ProvenTT の選択的 disproof 除去は IDS 各ステップ後の
             // clear_proven_disproofs_below() に委ねる．
-            // param_warmup_clear_proven=true (1G 無効) の場合は retain_proofs_only() を呼ぶ．
+            // param_warmup_clear_proven=true (1G 無効) の場合は v0.25.5 挙動:
+            // clear_proven_non_proofs() のみ (WorkingTT は維持)．
+        } else if self.warmup_mode {
+            // param_warmup_clear_proven=true (1G 無効, v0.25.5 相当):
+            // ProvenTT の非 proof のみ除去し WorkingTT intermediate を保持する．
+            // v0.25.5 は warmup_mode=true で clear_proven_non_proofs() を呼んでいた．
+            // retain_proofs_only() は WorkingTT も消去するため v0.25.5 と異なる．
+            self.table.clear_proven_non_proofs();
         } else {
             self.table.retain_proofs_only();
         }
@@ -1919,7 +1926,9 @@ impl DfPnSolver {
                 };
                 if saved_depth <= 19 && next > 4 && next < saved_depth {
                     ids_depth = saved_depth;
-                } else if ids_depth == 16 && next > 17 && saved_depth > 19 && saved_depth <= 26 {
+                } else if ids_depth == 16 && next > 17 && saved_depth > 19 && saved_depth <= 26
+                    && !self.param_no_ids17
+                {
                     // Hypothesis IDS-17 (v0.25.8): saved_depth 20-26 で depth=16 の
                     // 次ステップが 17 を飛び越す場合，17 を明示的に経由する．
                     //
@@ -1935,6 +1944,8 @@ impl DfPnSolver {
                     //      warmup コストを回避できる
                     //   3. depth=17 で未解決の場合も ProvenTT に証明が蓄積され
                     //      depth=21+ の全探索を加速する
+                    //
+                    // param_no_ids17=true で IDS-17 導入前の挙動 (16→saved_depth 直接ジャンプ) に戻す．
                     ids_depth = 17;
                 } else {
                     ids_depth = next.min(saved_depth);

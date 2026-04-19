@@ -5067,19 +5067,30 @@ v0.25.9 で warmup_mode=true の場合 `retain_proofs_only()` をスキップす
 
 **テスト:** `test_tsume_39te_backward_200m_warmup_clear_proven` (warmup_clear_proven=true, 200M/1200s)
 
+**v1 (誤実装):** 誤って `retain_proofs_only()` (WorkingTT も消去) を使用した初回実装．
+
 | Ply | 残り | Nodes | NPS | 結果 |
 |:---:|:---:|---:|---:|:---:|
 | 20 | 19 | 82.3M | 70K | Mate(19) ✓ |
 | **18** | **21** | **OOM/SIGKILL** | **—** | **—** |
 
-ply 18 は OOM で強制終了 (出力なし)．1G 無効時の ProvenTT disproof クリアが
-大量の再探索を引き起こしメモリ不足になった．1G 有効が明らかに優位．
+**v2 (修正):** v0.25.5 の実際の挙動 `clear_proven_non_proofs()` (WorkingTT 維持) を使用．
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | 139.5M | 145K | Mate(19) ✓ |
+| **18** | **21** | **172.1M** | **143K** | **Unknown** |
+
+ply 18 v2 でも Unknown (172M ノード)．v0.25.5 の ProvenTT clearing 挙動を完全復元しても
+退行は解消しない．
 
 **結論: 1G は ply 18 退行の原因でない**．1G は維持すべき最適化．
 
 ---
 
-### 10.2.20 N-1 adaptive threshold=0 検証 (v0.27.4)
+### 10.2.20 N-1 adaptive threshold=0 / 1E 無効化 検証 (v0.27.4)
+
+#### N-1 threshold=0 検証
 
 v0.25.5 は `param_disproof_remaining_threshold=0` (threshold=0，N-1 未適用)．
 v0.27.3 (depth=23) は threshold=1．この差が退行原因かを threshold=0 で検証．
@@ -5089,10 +5100,58 @@ v0.27.3 (depth=23) は threshold=1．この差が退行原因かを threshold=0 
 | Ply | 残り | Nodes | NPS | 結果 |
 |:---:|:---:|---:|---:|:---:|
 | 20 | 19 | 45.1M | **102K** | Mate(19) ✓ |
-| **18** | **21** | **TBD** | **TBD** | **TBD** |
+| **18** | **21** | **193.0M** | **161K** | **Unknown** |
 
-注目: threshold=0 での ply 20 NPS=102K，ply 22 NPS=98K が非常に高い (default: ~54K)．
-v0.27.3 default (threshold=1) よりも大幅に速い．
+注目: threshold=0 での NPS=102-161K が default (54-80K) より大幅に高い．
+N-1 threshold=1 が NPS を 50% 低下させる副作用を確認．しかし退行は解消しない．
+
+**結論: N-1 threshold は ply 18 退行の原因でない**．NPS 低下は別問題．
+
+#### Hypothesis 1E: warmup 内 NM guard に outer_solve_depth を加算
+
+v0.25.8 で warmup 内 NM guard を `saved_depth` のみ (1E) に変更した．
+1E 導入前の挙動 (`nm_guard_depth = saved_depth.max(outer_solve_depth)`) を
+`param_warmup_nm_guard_outer=true` で復元し検証．
+
+**テスト:** `test_tsume_39te_backward_200m_no1e` (warmup_nm_guard_outer=true, 200M/1200s)
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | 45.1M | 103K | Mate(19) ✓ |
+| **18** | **21** | **195.3M** | **163K** | **Unknown** |
+
+threshold=0 と同等の NPS/ノード数で，退行は解消しない．
+
+**結論: 1E は ply 18 退行の原因でない**．
+
+#### まとめ: 個別検証結果
+
+| 検証 | ply 18 Nodes | ply 18 NPS | ply 18 結果 |
+|:---:|---:|---:|:---:|
+| v0.25.5 | 96M | 117K | **Mate(21) ✓** |
+| v0.27.3 default (threshold=1) | 96.8M | 80K | Unknown |
+| threshold=0 (N-1 無効) | 193.0M | 161K | Unknown |
+| 1E 無効 | 195.3M | 163K | Unknown |
+| 1G v2 無効 (clear_proven_non_proofs) | 172.1M | 143K | Unknown |
+| **IDS-17 無効** | **TBD** | **TBD** | **TBD** |
+
+---
+
+### 10.2.21 IDS-17 無効化検証 (v0.27.4)
+
+v0.25.8 で導入した IDS-17 (saved_depth 20-26 で depth=16→17 を挿入) を
+`param_no_ids17=true` で無効化し，退行原因かどうかを検証する．
+
+IDS シーケンス比較:
+- IDS-17 有効 (現行): 2→4→8→16→**17**→23
+- IDS-17 無効 (v0.25.5 相当): 2→4→8→16→23 (direct jump)
+
+**テスト:** `test_tsume_39te_backward_200m_no_ids17` (no_ids17=true, 200M/1200s)
+
+| Ply | 残り | Nodes | NPS | 結果 |
+|:---:|:---:|---:|---:|:---:|
+| 20 | 19 | TBD | TBD | TBD |
+| **18** | **21** | **TBD** | **TBD** | **TBD** |
 
 ---
 

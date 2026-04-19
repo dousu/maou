@@ -507,6 +507,10 @@ pub struct DfPnSolver {
     /// true にすると warmup_mode=true でも outer_solve_depth を NM guard に加える (1E 導入前の挙動)．
     /// デフォルト false = 1E 有効 (warmup 内は saved_depth のみで guard)．
     pub(super) param_warmup_nm_guard_outer: bool,
+    /// Hypothesis IDS-17 無効化フラグ (v0.27.4)．
+    /// true にすると saved_depth 20-26 での depth=16→17 挿入をスキップする (IDS-17 導入前の挙動)．
+    /// デフォルト false = IDS-17 有効 (depth=17 を明示的に経由)．
+    pub(super) param_no_ids17: bool,
     /// refutable check の再帰深さ (デフォルト 5)．
     pub(super) param_refutable_depth: u32,
     /// refutable check の呼び出し回数上限 (デフォルト 10,000)．
@@ -757,6 +761,7 @@ impl DfPnSolver {
             param_warmup_mid_denom: 4,
             param_warmup_clear_proven: false,
             param_warmup_nm_guard_outer: false,
+            param_no_ids17: false,
             param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
             param_refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
             a6_boundary_pns_calls_remaining: 0,
@@ -1000,6 +1005,14 @@ impl DfPnSolver {
     /// デフォルト false = 1E 有効 (nm_guard_depth = saved_depth のみ)．
     pub fn set_warmup_nm_guard_outer(&mut self, enable: bool) -> &mut Self {
         self.param_warmup_nm_guard_outer = enable;
+        self
+    }
+
+    /// Hypothesis IDS-17 無効化検証用: saved_depth 20-26 での depth=16→17 挿入をスキップするか設定する．
+    /// true にすると IDS-17 導入前の挙動 (depth=16 の次は saved_depth へ直接ジャンプ)．
+    /// デフォルト false = IDS-17 有効．
+    pub fn set_no_ids17(&mut self, enable: bool) -> &mut Self {
+        self.param_no_ids17 = enable;
         self
     }
 
