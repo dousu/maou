@@ -36,7 +36,17 @@
         			"tests"
     			],
     			"python.testing.unittestEnabled": false,
-    			"python.testing.pytestEnabled": true
+    			"python.testing.pytestEnabled": true,
+				"rust-analyzer.cargo.features": "all",
+				"rust-analyzer.checkOnSave": true,
+				"rust-analyzer.cargo.buildScripts.rebuildOnSave": false,
+				"rust-analyzer.inlayHints.closureCaptureHints.enable": true,
+				"rust-analyzer.inlayHints.genericParameterHints.lifetime.enable": true,
+				"rust-analyzer.inlayHints.genericParameterHints.type.enable": true,
+				"rust-analyzer.inlayHints.parameterHints.missingArguments.enable": true,
+				"rust-analyzer.inlayHints.rangeExclusiveHints.enable": true,
+				"rust-analyzer.imports.granularity.group": "module",
+				"rust-analyzer.imports.prefix": "self"
 			},
 			"extensions": [
 				"esbenp.prettier-vscode"
