@@ -38,7 +38,7 @@ mod pns;
 mod tests;
 
 pub use solver::{DfPnSolver, TsumeResult};
-pub use pns::{solve_tsume, solve_tsume_with_timeout};
+pub use pns::{solve_tsume, solve_tsume_with_timeout, solve_tsume_and_collect_pn_dn_dist};
 
 /// 王手手/応手の最大数．
 /// 将棋の合法手上限は593であり，長手数の詰将棋では

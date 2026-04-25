@@ -1476,7 +1476,7 @@ impl DfPnSolver {
             #[cfg(feature = "tt_diag")]
             let pre_nodes = self.nodes_searched;
             #[cfg(feature = "tt_diag")]
-            let pre_max_ply = self.max_ply;
+            let _pre_max_ply = self.max_ply;
             // IDS 反復ごとに max_ply をリセットし，各反復の到達深さを追跡する
             self.max_ply = 0;
 
@@ -1973,6 +1973,14 @@ impl DfPnSolver {
             // 直接ジャンプする場合は delta が大きくなりうるが，
             // shift 後の remaining が REMAINING_INFINITE を超えない限り
             // 安全に保持される (超える場合は個別に除去される)．
+            // IDS depth 遷移前: 現在の WorkingTT 分布をスナップショットとして記録する．
+            // TT 遷移 (retain_working_intermediates / clear_working) の直前であり，
+            // この depth での探索が完了した時点の完全な分布が得られる．
+            {
+                let (pd_pn, pd_dn, pd_joint) = self.table.collect_working_pn_dn_dist();
+                self.pn_dn_per_depth.push((prev_ids_depth, self.nodes_searched, pd_pn, pd_dn, pd_joint));
+            }
+
             if ids_depth > prev_ids_depth {
                 let delta = (ids_depth - prev_ids_depth) as u16;
                 // min_remaining=0: 全ての非 path-dep intermediate を保持
@@ -3282,3 +3290,50 @@ pub fn solve_tsume_with_timeout(
     Ok(solver.solve(&mut board))
 }
 
+/// 詰将棋を解き，探索終了時の WorkingTT pn/dn 分布を返す (分析用)．
+///
+/// 返り値: `(TsumeResult, pn_hist, dn_hist, joint_hist)`
+/// - pn_hist: pn 値の log2 ヒストグラム (32 バケット)
+/// - dn_hist: dn 値の log2 ヒストグラム (32 バケット)
+/// - joint_hist: (pn バケット × dn バケット) の 2D ヒストグラム (32×32 = 1024 要素)
+pub fn solve_tsume_and_collect_pn_dn_dist(
+    sfen: &str,
+    depth: Option<u32>,
+    nodes: Option<u64>,
+    draw_ply: Option<u32>,
+    timeout_secs: Option<u64>,
+    find_shortest: Option<bool>,
+    pv_nodes_per_child: Option<u64>,
+    tt_gc_threshold: Option<usize>,
+) -> Result<
+    (
+        TsumeResult,
+        [u64; 32],
+        [u64; 32],
+        Vec<u64>,
+        Vec<(u32, u64, [u64; 32], [u64; 32], Vec<u64>)>,
+    ),
+    crate::board::SfenError,
+> {
+    let mut board = Board::empty();
+    board.set_sfen(sfen)?;
+
+    let mut solver = DfPnSolver::with_timeout(
+        depth.unwrap_or(31),
+        nodes.unwrap_or(1_048_576),
+        draw_ply.unwrap_or(32767),
+        timeout_secs.unwrap_or(300),
+    );
+    solver.set_find_shortest(find_shortest.unwrap_or(true));
+    if let Some(budget) = pv_nodes_per_child {
+        solver.set_pv_nodes_per_child(budget);
+    }
+    if let Some(gc) = tt_gc_threshold {
+        solver.set_tt_gc_threshold(gc);
+    }
+
+    let result = solver.solve(&mut board);
+    let (pn_hist, dn_hist, joint_hist) = solver.collect_pn_dn_dist();
+    let per_depth = solver.collect_pn_dn_dist_per_depth().to_vec();
+    Ok((result, pn_hist, dn_hist, joint_hist, per_depth))
+}

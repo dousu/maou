@@ -397,6 +397,83 @@ fn solve_tsume(
     }
 }
 
+/// 詰将棋を解き，探索終了時の WorkingTT における pn/dn 値の分布を返す (分析用)．
+///
+/// 返り値: `(TsumeResult, pn_hist, dn_hist, joint_hist, per_depth)` のタプル．
+///   - `result`: `TsumeResult` オブジェクト
+///   - `pn_hist`: pn 値の log2 ヒストグラム (32 要素のリスト)
+///   - `dn_hist`: dn 値の log2 ヒストグラム (32 要素のリスト)
+///   - `joint_hist`: pn/dn の 2D ヒストグラム (32×32 = 1024 要素のリスト，行 = pn バケット)
+///   - `per_depth`: IDS 各 depth の分布リスト．
+///     各要素は `(ids_depth, nodes_searched, pn_hist, dn_hist, joint_hist)` のタプル．
+///     TT 遷移 (retain_working_intermediates / clear_working) の直前に収集される．
+///
+/// # バケット定義
+///
+/// - バケット 0: val == 0
+/// - バケット k (1..=30): 2^(k-1) <= val < 2^k
+/// - バケット 31: val >= 2^30 (INF = u32::MAX を含む)
+#[pyfunction]
+#[pyo3(signature = (sfen, depth=41, nodes=100_000_000, draw_ply=32767, timeout_secs=600, find_shortest=false, pv_nodes_per_child=1024, tt_gc_threshold=0))]
+fn solve_tsume_pn_dn_dist(
+    py: Python<'_>,
+    sfen: &str,
+    depth: u32,
+    nodes: u64,
+    draw_ply: u32,
+    timeout_secs: u64,
+    find_shortest: bool,
+    pv_nodes_per_child: u64,
+    tt_gc_threshold: usize,
+) -> PyResult<(TsumeResult, Vec<u64>, Vec<u64>, Vec<u64>, Vec<(u32, u64, Vec<u64>, Vec<u64>, Vec<u64>)>)> {
+    let sfen_owned = sfen.to_owned();
+    let result = py.detach(move || {
+        dfpn::solve_tsume_and_collect_pn_dn_dist(
+            &sfen_owned,
+            Some(depth),
+            Some(nodes),
+            Some(draw_ply),
+            Some(timeout_secs),
+            Some(find_shortest),
+            Some(pv_nodes_per_child),
+            Some(tt_gc_threshold),
+        )
+    })
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+    let (tsume_result, pn_hist, dn_hist, joint_hist, per_depth) = result;
+
+    let py_result = match tsume_result {
+        dfpn::TsumeResult::Checkmate { moves, nodes_searched } => TsumeResult {
+            status: "checkmate".to_string(),
+            moves: moves.iter().map(|m| m.to_usi()).collect(),
+            nodes_searched,
+        },
+        dfpn::TsumeResult::CheckmateNoPv { nodes_searched } => TsumeResult {
+            status: "checkmate_no_pv".to_string(),
+            moves: Vec::new(),
+            nodes_searched,
+        },
+        dfpn::TsumeResult::NoCheckmate { nodes_searched } => TsumeResult {
+            status: "no_checkmate".to_string(),
+            moves: Vec::new(),
+            nodes_searched,
+        },
+        dfpn::TsumeResult::Unknown { nodes_searched } => TsumeResult {
+            status: "unknown".to_string(),
+            moves: Vec::new(),
+            nodes_searched,
+        },
+    };
+
+    let per_depth_py: Vec<(u32, u64, Vec<u64>, Vec<u64>, Vec<u64>)> = per_depth
+        .into_iter()
+        .map(|(d, n, pn, dn, joint)| (d, n, pn.to_vec(), dn.to_vec(), joint))
+        .collect();
+
+    Ok((py_result, pn_hist.to_vec(), dn_hist.to_vec(), joint_hist, per_depth_py))
+}
+
 /// Create maou_shogi submodule
 pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let m = PyModule::new(py, "maou_shogi")?;
@@ -411,6 +488,7 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_function(wrap_pyfunction!(move_is_promotion, &m)?)?;
     m.add_function(wrap_pyfunction!(move_drop_hand_piece, &m)?)?;
     m.add_function(wrap_pyfunction!(solve_tsume, &m)?)?;
+    m.add_function(wrap_pyfunction!(solve_tsume_pn_dn_dist, &m)?)?;
 
     Ok(m)
 }

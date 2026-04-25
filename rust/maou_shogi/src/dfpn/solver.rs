@@ -629,6 +629,16 @@ pub struct DfPnSolver {
     /// TT 診断: remaining=0 で仮反証(provisional disproof)を返した回数．
     #[cfg(feature = "tt_diag")]
     pub(super) diag_rem0_provisional: u64,
+    /// ノード制限到達時点の WorkingTT pn/dn 分布スナップショット (分析用)．
+    ///
+    /// max_nodes に達した最初の mid() 呼び出しで `collect_working_pn_dn_dist()` を
+    /// 実行して保存する．None の場合はノード制限に達していないことを示す．
+    pub(super) pn_dn_snapshot: Option<([u64; 32], [u64; 32], Vec<u64>)>,
+    /// IDS 各 depth 反復終了時点の WorkingTT pn/dn 分布スナップショット列 (分析用)．
+    ///
+    /// `mid_fallback` 内で各 IDS depth のMID 完了後，TT 遷移 (retain_working_intermediates
+    /// / clear_working) の直前に収集する．(ids_depth, nodes_searched, pn_hist, dn_hist, joint_hist)
+    pub(super) pn_dn_per_depth: Vec<(u32, u64, [u64; 32], [u64; 32], Vec<u64>)>,
 }
 
 impl DfPnSolver {
@@ -838,6 +848,8 @@ impl DfPnSolver {
             diag_rem0_proof: 0,
             #[cfg(feature = "tt_diag")]
             diag_rem0_provisional: 0,
+            pn_dn_snapshot: None,
+            pn_dn_per_depth: Vec::new(),
         }
     }
 
@@ -1078,6 +1090,30 @@ impl DfPnSolver {
     pub fn set_tt_gc_threshold(&mut self, v: usize) -> &mut Self {
         self.tt_gc_threshold = v;
         self
+    }
+
+    /// WorkingTT の pn/dn 分布を返す (分析用)．
+    ///
+    /// ノード制限到達時点のスナップショットがあればそれを返す．
+    /// スナップショットがない場合は現在の WorkingTT を収集する．
+    /// 返り値: (pn_hist, dn_hist, joint_hist)
+    /// - pn_hist: pn 値の log2 ヒストグラム (32 バケット)
+    /// - dn_hist: dn 値の log2 ヒストグラム (32 バケット)
+    /// - joint_hist: (pn バケット, dn バケット) の 2D ヒストグラム (32×32 = 1024 要素)
+    pub fn collect_pn_dn_dist(&self) -> ([u64; 32], [u64; 32], Vec<u64>) {
+        if let Some((pn, dn, joint)) = &self.pn_dn_snapshot {
+            (*pn, *dn, joint.clone())
+        } else {
+            self.table.collect_working_pn_dn_dist()
+        }
+    }
+
+    /// IDS 各 depth 反復終了時点の WorkingTT pn/dn 分布スナップショット列を返す (分析用)．
+    ///
+    /// `mid_fallback` 内で各 IDS depth のMID 完了後，TT 遷移前に収集する．
+    /// 返り値: `(ids_depth, nodes_searched, pn_hist, dn_hist, joint_hist)` のスライス
+    pub fn collect_pn_dn_dist_per_depth(&self) -> &[(u32, u64, [u64; 32], [u64; 32], Vec<u64>)] {
+        &self.pn_dn_per_depth
     }
 
     /// TT 診断の監視対象を設定する．
@@ -1459,6 +1495,7 @@ impl DfPnSolver {
     pub fn solve(&mut self, board: &mut Board) -> TsumeResult {
         self.table.clear();
         self.nodes_searched = 0;
+        self.pn_dn_per_depth.clear();
         self.max_ply = 0;
         self.ply_nodes = [0; 64];
         self.path_len = 0;
@@ -1540,7 +1577,7 @@ impl DfPnSolver {
                 // 前段の warmup depth を追跡し，段間の remaining shift に使用する．
                 let mut prev_warmup_depth: Option<u32> = None;
 
-                for (_i, &wd) in warmup_depths.iter().enumerate() {
+                for (i, &wd) in warmup_depths.iter().enumerate() {
                     if wd >= final_depth { continue; }
                     if self.nodes_searched >= saved_max_nodes || self.timed_out {
                         break;
@@ -2192,6 +2229,9 @@ impl DfPnSolver {
         if self.nodes_searched >= self.max_nodes {
             #[cfg(feature = "tt_diag")]
             { self.diag_node_limit_exits += 1; }
+            if self.pn_dn_snapshot.is_none() {
+                self.pn_dn_snapshot = Some(self.table.collect_working_pn_dn_dist());
+            }
             return;
         }
         // 1024 ノードごとにタイマーをチェック
@@ -4399,7 +4439,7 @@ impl DfPnSolver {
                         );
                         if cdn_j == 0 { continue; }
                         // 異マスの child j に対して reverse_disproof_sharing を試行
-                        let _prev_hits = {
+                        let prev_hits = {
                             #[cfg(feature = "tt_diag")]
                             { self.diag_reverse_disproof_hits }
                             #[cfg(not(feature = "tt_diag"))]

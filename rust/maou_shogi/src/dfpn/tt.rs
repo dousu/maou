@@ -384,6 +384,48 @@ impl TranspositionTable {
         }
     }
 
+    /// WorkingTT エントリの pn/dn 分布を収集する (分析用)．
+    ///
+    /// 空エントリ (pos_key == 0) を除く全エントリの pn/dn を log2 バケットに分類する．
+    ///
+    /// 返り値: (pn_hist, dn_hist, joint_hist)
+    /// - pn_hist[k]: pn が バケット k に属するエントリ数
+    /// - dn_hist[k]: dn が バケット k に属するエントリ数
+    /// - joint_hist[i * 32 + j]: pn がバケット i かつ dn がバケット j のエントリ数
+    ///
+    /// バケット定義 (32 バケット):
+    /// - バケット 0: val == 0
+    /// - バケット k (1..=30): 2^(k-1) <= val < 2^k
+    /// - バケット 31: val >= 2^30 (INF = u32::MAX を含む)
+    pub(super) fn collect_working_pn_dn_dist(&self) -> ([u64; 32], [u64; 32], Vec<u64>) {
+        let mut pn_hist = [0u64; 32];
+        let mut dn_hist = [0u64; 32];
+        let mut joint_hist = vec![0u64; 32 * 32];
+
+        for flat in &self.working {
+            if flat.is_empty() {
+                continue;
+            }
+            let pi = Self::pn_dn_log2_bucket(flat.entry.pn);
+            let di = Self::pn_dn_log2_bucket(flat.entry.dn);
+            pn_hist[pi] += 1;
+            dn_hist[di] += 1;
+            joint_hist[pi * 32 + di] += 1;
+        }
+
+        (pn_hist, dn_hist, joint_hist)
+    }
+
+    /// pn/dn 値を log2 バケットインデックスに変換する．
+    #[inline(always)]
+    fn pn_dn_log2_bucket(val: u32) -> usize {
+        match val {
+            0 => 0,
+            u32::MAX => 31,
+            v => ((32u32 - v.leading_zeros()) as usize).min(30),
+        }
+    }
+
     /// retain_working_intermediates で保持するエントリの pn/dn 上限を設定する (v0.25.7)．
     ///
     /// `u32::MAX` はキャップなし (デフォルト)．
