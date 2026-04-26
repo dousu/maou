@@ -17,7 +17,7 @@ use crate::types::{Color, Piece, PieceType, Square, HAND_KINDS};
 use super::entry::{PnsNode, PNS_INIT_CAPACITY_CAP};
 use super::solver::{DfPnSolver, TsumeResult};
 use super::{
-    adjust_hand_for_move, edge_cost_and, edge_cost_or,
+    adjust_hand_for_move, edge_cost_and, edge_cost_or, heuristic_dn_from_pn,
     position_key, propagate_nm_remaining, push_move, sacrifice_check_boost,
     INF, MAX_MOVES, PN_UNIT, REMAINING_INFINITE, WPN_GAMMA_SHIFT,
 };
@@ -2722,7 +2722,7 @@ impl DfPnSolver {
                         cpn = self.heuristic_or_pn(board, nc)
                             .saturating_add(edge_cost_and(*m))
                             .saturating_add(sacrifice_check_boost(board, &checks));
-                        cdn = PN_UNIT;
+                        cdn = heuristic_dn_from_pn(cpn);
                         self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk as u32);
                     }
                 } else {
@@ -2738,7 +2738,7 @@ impl DfPnSolver {
                         if let Some(ksq) = defender_king_sq {
                             cpn = cpn.saturating_add(edge_cost_or(*m, ksq));
                         }
-                        cdn = PN_UNIT;
+                        cdn = heuristic_dn_from_pn(cpn);
                         self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk as u32);
                     }
                 }

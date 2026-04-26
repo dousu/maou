@@ -16,7 +16,7 @@ use super::tt::TranspositionTable;
 #[cfg(feature = "profile")]
 use super::profile::ProfileStats;
 use super::{
-    adjust_hand_for_move, edge_cost_and, edge_cost_or,
+    adjust_hand_for_move, edge_cost_and, edge_cost_or, heuristic_dn_from_pn,
     hand_gte_forward_chain,
     position_key, propagate_nm_remaining, push_move, snda_dedup,
     CheckCache,
@@ -2647,7 +2647,7 @@ impl DfPnSolver {
                             if let Some(ksq) = defender_king_sq {
                                 pn = pn.saturating_add(edge_cost_or(*m, ksq));
                             }
-                            let dn = PN_UNIT;
+                            let dn = heuristic_dn_from_pn(pn);
                             self.store(child_pk, child_hand, pn, dn,
                                 child_remaining, child_pk as u32);
                         }
@@ -2658,7 +2658,7 @@ impl DfPnSolver {
                         if let Some(ksq) = defender_king_sq {
                             pn = pn.saturating_add(edge_cost_or(*m, ksq));
                         }
-                        let dn = PN_UNIT;
+                        let dn = heuristic_dn_from_pn(pn);
                         self.store(child_pk, child_hand, pn, dn,
                             child_remaining, child_pk as u32);
                     }
@@ -2682,7 +2682,7 @@ impl DfPnSolver {
                         let nc = checks.len() as u32;
                         let pn = self.heuristic_or_pn(board, nc)
                             .saturating_add(edge_cost_and(*m));
-                        let dn = PN_UNIT;
+                        let dn = heuristic_dn_from_pn(pn);
                         self.store(child_pk, child_hand, pn,
                             dn, child_remaining, child_pk as u32);
                     }
@@ -4603,30 +4603,27 @@ impl DfPnSolver {
         let adjacent_total = king_adjacent.count(); // 移動可能マス総数
 
         if adjacent_total >= 5 && pressured == 0 && safe_escapes >= 4 {
-            // 玉周辺に攻め駒の利きが皆無の開放空間 → 非常に詰みにくい
-            return 8 * PN_UNIT;
+            // 玉周辺に攻め駒の利きが皆無の開放空間 → 最大 pn (極めて詰みにくい)
+            return 64 * PN_UNIT;
         }
 
-        // 拡張 heuristic_or_pn: S〜8S の範囲で num_checks と safe_escapes の
-        // 二次元スケーリング(KomoringHeights の pn=10-80 に相当)．
+        // 拡張 heuristic_or_pn: 1S〜64S の範囲で num_checks と safe_escapes の
+        // 二次元スケーリング．safe_escapes ごとに 2 倍スケール (log2 bucket 対応)．
         //
         // 基本方針:
         // - safe_escapes が多い → 追い詰めに手数を要する(pn↑)
         // - num_checks が少ない → 選択肢が少なく詰みにくい(pn↑)
-        // - 両方が悪い場合は乗算的に大きくなる
         //
-        // safe_escapes に基づくベース値(S〜4S):
-        let escape_base = if safe_escapes == 0 {
-            PN_UNIT // 逃げ場なし: 詰みやすい
-        } else if safe_escapes == 1 {
-            PN_UNIT + PN_UNIT / 2 // 1.5S
-        } else if safe_escapes == 2 {
-            2 * PN_UNIT // 2S
-        } else if safe_escapes == 3 {
-            3 * PN_UNIT // 3S
-        } else {
-            // safe_escapes >= 4: 4S ベース
-            4 * PN_UNIT
+        // safe_escapes に基づくベース値(1S〜48S):
+        let escape_base = match safe_escapes {
+            0 => PN_UNIT,           // 1S  (bucket 4)
+            1 => 2 * PN_UNIT,       // 2S  (bucket 5)
+            2 => 4 * PN_UNIT,       // 4S  (bucket 6)
+            3 => 8 * PN_UNIT,       // 8S  (bucket 7)
+            4 => 16 * PN_UNIT,      // 16S (bucket 8)
+            5 => 24 * PN_UNIT,      // 24S (~bucket 8.6)
+            6 => 32 * PN_UNIT,      // 32S (bucket 9)
+            _ => 48 * PN_UNIT,      // 48S (7+逃げ場, ~bucket 9.6)
         };
 
         // num_checks に基づくスケーリング(escape_base の 1.0〜2.0 倍):
@@ -4642,8 +4639,8 @@ impl DfPnSolver {
             escape_base * 2
         };
 
-        // 上限 8S(128): 不詰証明遅延を抑制
-        adjusted_pn.min(8 * PN_UNIT)
+        // 上限 64S (1024, bucket 10)
+        adjusted_pn.min(64 * PN_UNIT)
     }
 
     /// OR 子ノード(攻め方局面)で，取りの王手が既証明局面に到達するか TT を先読みする．
