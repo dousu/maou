@@ -21,7 +21,7 @@ use super::{
     position_key, propagate_nm_remaining, push_move, snda_dedup,
     CheckCache,
     DEEP_DFPN_R, DISPROOF_THRESHOLD_ADAPTIVE, EPSILON_DENOM_ADAPTIVE, INF, INTERPOSE_DN_BIAS,
-    MAX_MOVES, PN_UNIT, REMAINING_INFINITE, STAGNATION_LIMIT, TCA_EXTEND_DENOM,
+    MAX_MOVES, PN_UNIT, REMAINING_INFINITE, STAGNATION_LIMIT, TCA_EXTEND_DENOM, WPN_GAMMA_SHIFT,
     ZERO_PROGRESS_LIMIT,
 };
 
@@ -3522,9 +3522,10 @@ impl DfPnSolver {
                 let mut best_effective_dn: u32 = INF;
                 // SNDA: (source, pn) ペアを収集
                 snda_pairs.clear();
-                // WPN: max(cpn) と未証明子の数を追跡
+                // WPN: max(cpn)，未証明子の数，pn 合計を追跡
                 let mut max_cpn: u32 = 0;
                 let mut unproven_count: u32 = 0;
+                let mut sum_cpn: u64 = 0;
                 // CD-WPN: 同一マスのドロップを1グループとして数える
                 let mut cd_grouped_count: u32 = 0;
                 let mut drop_squares_seen: u128 = 0;
@@ -3603,6 +3604,7 @@ impl DfPnSolver {
                         max_cpn = cpn;
                     }
                     unproven_count += 1;
+                    sum_cpn += cpn as u64;
                     // CD-WPN: 同一マスのドロップは1グループとして数える
                     if m.is_drop() {
                         let sq_bit = 1u128 << (m.to_sq().index() as u32);
@@ -3734,20 +3736,24 @@ impl DfPnSolver {
 
                 // WPN (Weak Proof Number) / CD-WPN 計算:
                 //
-                // 通常 WPN: current_pn = max(cpn) + (unproven_count - 1)
-                // CD-WPN:   current_pn = max(cpn) + (grouped_count - 1)
-                //   where grouped_count = non_drops + unique_drop_squares
-                //
                 // チェーン AND: CD-WPN を使用．同一マスの未証明ドロップは
                 // cross-deduce で一括証明できるため1グループとして数える．
-                // 非チェーン AND: 通常 WPN を使用．
+                //   CD-WPN: current_pn = max(cpn) + (grouped_count - 1) * PN_UNIT
+                //   where grouped_count = non_drops + unique_drop_squares
+                //
+                // 非チェーン AND: スケールドサム WPN を使用．
+                //   pn = max(cpn) + (sum(cpn) - max(cpn)) >> WPN_GAMMA_SHIFT
+                //   旧式 max + (count-1)*PN_UNIT は非最大子の変化を伝播しないため
+                //   pn 分布が狭く収束する問題があった．スケールドサムは実際の
+                //   子 pn 値を使いつつ DAG 二重カウントを割り引く中間的近似．
                 if chain_king_sq.is_some() && cd_grouped_count > 0 {
                     current_pn = (max_cpn as u64)
                         .saturating_add((cd_grouped_count as u64 - 1) * PN_UNIT as u64)
                         .min(INF as u64) as u32;
                 } else if unproven_count > 0 {
+                    let sum_other = sum_cpn.saturating_sub(max_cpn as u64);
                     current_pn = (max_cpn as u64)
-                        .saturating_add((unproven_count as u64 - 1) * PN_UNIT as u64)
+                        .saturating_add(sum_other >> WPN_GAMMA_SHIFT)
                         .min(INF as u64) as u32;
                 }
 

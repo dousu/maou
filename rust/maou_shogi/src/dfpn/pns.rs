@@ -19,7 +19,7 @@ use super::solver::{DfPnSolver, TsumeResult};
 use super::{
     adjust_hand_for_move, edge_cost_and, edge_cost_or,
     position_key, propagate_nm_remaining, push_move, sacrifice_check_boost,
-    INF, MAX_MOVES, PN_UNIT, REMAINING_INFINITE,
+    INF, MAX_MOVES, PN_UNIT, REMAINING_INFINITE, WPN_GAMMA_SHIFT,
 };
 
 impl DfPnSolver {
@@ -2900,6 +2900,7 @@ impl DfPnSolver {
                 // AND ノード: WPN, dn = min(child_dn)
                 // best_child: min by (dn, pn) among unproven children
                 let mut max_pn: u32 = 0;
+                let mut sum_pn: u64 = 0;
                 let mut min_dn = INF;
                 let mut best_idx = arena[ni].children[0];
                 let mut best_key = (u32::MAX, u32::MAX);
@@ -2925,6 +2926,7 @@ impl DfPnSolver {
                     if arena[ci].pn > max_pn {
                         max_pn = arena[ci].pn;
                     }
+                    sum_pn += arena[ci].pn as u64;
                     if arena[ci].dn < min_dn {
                         min_dn = arena[ci].dn;
                     }
@@ -2940,8 +2942,9 @@ impl DfPnSolver {
                     // MPN 選択時に次の合駒を活性化するため pn=1, dn=1 で保持
                     (PN_UNIT, PN_UNIT, best_idx)
                 } else {
+                    let sum_other = sum_pn.saturating_sub(max_pn as u64);
                     let pn = (max_pn as u64)
-                        .saturating_add((unproven as u64 - 1) * PN_UNIT as u64)
+                        .saturating_add(sum_other >> WPN_GAMMA_SHIFT)
                         .min(INF as u64) as u32;
                     (pn, min_dn, best_idx)
                 }
