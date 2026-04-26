@@ -6,6 +6,7 @@ pn/dn 値の分布をグラフ化する．IDS 各 depth 反復終了時点の分
 
 import time
 import numpy as np
+import scipy.stats as stats
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -36,6 +37,27 @@ def val_to_bucket(val: int) -> int:
         return 31
     bit = val.bit_length()
     return min(bit, 30)
+
+
+def _fit_normal_to_histogram(
+    counts: np.ndarray, bucket_range: range
+) -> tuple[float, float, np.ndarray] | None:
+    """バケット範囲内のカウントに正規分布をフィット．
+
+    Returns (mean, std, fitted_curve) or None if too few data points.
+    """
+    xs = np.array(list(bucket_range), dtype=float)
+    ys = counts[list(bucket_range)]
+    total = ys.sum()
+    if total < 2:
+        return None
+    # 重み付き平均・分散
+    mean = float(np.dot(xs, ys) / total)
+    var = float(np.dot((xs - mean) ** 2, ys) / total)
+    std = np.sqrt(max(var, 0.1))  # ゼロ除算防止
+    # フィットされたカーブ (スケール: total に合わせる)
+    curve = stats.norm.pdf(xs, mean, std) * total
+    return mean, std, curve
 
 
 def plot_final_dist(
@@ -135,6 +157,167 @@ def plot_final_dist(
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"グラフを保存: {out_path}")
+    plt.close(fig)
+
+
+def plot_intermediate_dist(
+    pn_hist: list[int],
+    dn_hist: list[int],
+    per_depth: list[tuple[int, int, list[int], list[int], list[int]]],
+    out_path: str,
+    snapshot_label: str = "最終",
+) -> None:
+    """中間エントリ (0 < pn/dn < INF) のみの分布と正規分布フィットを可視化する．
+
+    - bucket 0 (pn=0 or dn=0) と bucket 31 (INF) を除外
+    - バケット 1-30 のみ対象
+    - Gaussian フィットを重ね表示
+    """
+    pn_arr = np.array(pn_hist, dtype=np.int64)
+    dn_arr = np.array(dn_hist, dtype=np.int64)
+
+    # 中間エントリのみ抽出 (bucket 1-30)
+    interm_range = range(1, 31)
+    pn_interm = pn_arr[list(interm_range)]
+    dn_interm = dn_arr[list(interm_range)]
+    pn_total = int(pn_interm.sum())
+    dn_total = int(dn_interm.sum())
+
+    labels = [bucket_label_short(k) for k in interm_range]
+    xs = np.arange(len(interm_range))
+
+    # per_depth のうち外部 IDS 分のみ (最初の数スナップショット)
+    # warmup 再帰を除いた最初の 6 スナップショット
+    outer_depth = [d for d, *_ in per_depth if d <= 36]  # depth <= 36 のスナップショット
+
+    fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+    fig.suptitle(
+        f"WorkingTT 中間エントリ (0 < pn/dn < INF) 分布と正規分布フィット [{snapshot_label}]",
+        fontsize=14,
+    )
+
+    for col, (arr, total, color, name) in enumerate([
+        (pn_interm, pn_total, "steelblue", "pn"),
+        (dn_interm, dn_total, "coral", "dn"),
+    ]):
+        ax = axes[col]
+        ax.bar(xs, arr, color=color, alpha=0.7, label=f"{name} (中間のみ, total={total:,})")
+
+        # 正規分布フィット
+        fit = _fit_normal_to_histogram(np.concatenate([[0], arr, [0]]),
+                                       range(0, len(arr) + 2))
+        # 正しい範囲でフィット
+        if total > 0:
+            xs_float = np.array(list(interm_range), dtype=float)
+            ys = arr.astype(float)
+            mean_w = float(np.dot(xs_float, ys) / total)
+            var_w = float(np.dot((xs_float - mean_w) ** 2, ys) / total)
+            std_w = np.sqrt(max(var_w, 0.5))
+            xs_cont = np.linspace(1, 30, 300)
+            curve = stats.norm.pdf(xs_cont, mean_w, std_w) * total
+            ax.plot(xs_cont - 1, curve, "k-", linewidth=2, label=f"正規分布フィット\n(μ={mean_w:.1f}, σ={std_w:.1f})")
+
+            # 正規性の指標 (KL divergence)
+            eps = 1e-10
+            p_data = ys / (total + eps)
+            p_fit = stats.norm.pdf(xs_float, mean_w, std_w)
+            p_fit = p_fit / (p_fit.sum() + eps)
+            kl = float(np.sum(p_data[p_data > 0] * np.log(p_data[p_data > 0] / (p_fit[p_data > 0] + eps))))
+            ax.set_title(f"{name} 中間エントリ分布\n(bucket 1-30, KL={kl:.3f}, μ={mean_w:.1f}bucket, σ={std_w:.1f}bucket)")
+        else:
+            ax.set_title(f"{name} 中間エントリ分布 (データなし)")
+
+        ax.set_xticks(xs[::2])
+        ax.set_xticklabels([labels[k] for k in range(0, len(labels), 2)], rotation=60, fontsize=7)
+        ax.set_xlabel("バケット (log2: bucket k = 2^(k-1) <= val < 2^k)")
+        ax.set_ylabel("エントリ数")
+        ax.legend(fontsize=9)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    print(f"中間エントリ分布グラフを保存: {out_path}")
+    plt.close(fig)
+
+
+def plot_intermediate_per_depth(
+    per_depth: list[tuple[int, int, list[int], list[int], list[int]]],
+    out_path: str,
+) -> None:
+    """IDS 各 depth で中間エントリの分布がどう変化するかを可視化する．
+
+    warmup 再帰を除いた外部 IDS スナップショットのみを使用する．
+    """
+    # warmup 再帰を除外: depth が単調増加するものだけ
+    outer = []
+    prev_d = -1
+    for snap in per_depth:
+        d = snap[0]
+        if d > prev_d:
+            outer.append(snap)
+            prev_d = d
+        else:
+            break  # depth が減ったら warmup 開始
+
+    if not outer:
+        print("IDS per-depth データなし")
+        return
+
+    n = len(outer)
+    labels = [bucket_label_short(k) for k in range(1, 31)]
+    fig, axes = plt.subplots(n, 2, figsize=(16, 4 * n))
+    if n == 1:
+        axes = axes[np.newaxis, :]
+
+    fig.suptitle("IDS 各 depth での中間エントリ (0 < pn/dn < INF) 分布と正規フィット", fontsize=13)
+
+    for row, (ids_depth, nodes, pn_h, dn_h, _) in enumerate(outer):
+        pn_arr = np.array(pn_h, dtype=np.int64)
+        dn_arr = np.array(dn_h, dtype=np.int64)
+
+        # 中間のみ
+        pn_interm = pn_arr[1:31]
+        dn_interm = dn_arr[1:31]
+        pn_total = int(pn_interm.sum())
+        dn_total = int(dn_interm.sum())
+
+        xs = np.arange(len(pn_interm))
+        xs_float = np.array(range(1, 31), dtype=float)
+
+        for col, (arr, total, color, name) in enumerate([
+            (pn_interm, pn_total, "steelblue", "pn"),
+            (dn_interm, dn_total, "coral", "dn"),
+        ]):
+            ax = axes[row, col]
+            ax.bar(xs, arr, color=color, alpha=0.7, linewidth=0.3)
+            mean_str, kl_str = "N/A", "N/A"
+            if total > 0:
+                mean_w = float(np.dot(xs_float, arr) / total)
+                var_w = float(np.dot((xs_float - mean_w) ** 2, arr) / total)
+                std_w = np.sqrt(max(var_w, 0.5))
+                xs_cont = np.linspace(1, 30, 300)
+                curve = stats.norm.pdf(xs_cont, mean_w, std_w) * total
+                ax.plot(xs_cont - 1, curve, "k-", linewidth=1.5)
+
+                eps = 1e-10
+                p_data = arr.astype(float) / (total + eps)
+                p_fit = stats.norm.pdf(xs_float, mean_w, std_w)
+                p_fit = p_fit / (p_fit.sum() + eps)
+                kl = float(np.sum(p_data[p_data > 0] * np.log(p_data[p_data > 0] / (p_fit[p_data > 0] + eps))))
+                mean_str = f"{mean_w:.1f}"
+                kl_str = f"{kl:.3f}"
+
+            ax.set_title(
+                f"depth={ids_depth} | {name} 中間 | total={total:,} | nodes={nodes:,} | μ={mean_str} | KL={kl_str}",
+                fontsize=8,
+            )
+            ax.set_xticks(xs[::2])
+            ax.set_xticklabels([labels[k] for k in range(0, 30, 2)], rotation=60, fontsize=6)
+            ax.set_ylabel("エントリ数", fontsize=7)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=130, bbox_inches="tight")
+    print(f"IDS per-depth 中間エントリグラフを保存: {out_path}")
     plt.close(fig)
 
 
@@ -274,6 +457,36 @@ def print_text_summary(
             pct = 100.0 * dn_arr[k] / max(total_entries, 1)
             print(f"  [{k:2d}] {bucket_label_short(k):>8s}: {dn_arr[k]:>12,} ({pct:5.1f}%)")
 
+    # 中間エントリ (bucket 1-30) の統計
+    pn_interm = pn_arr[1:31]
+    dn_interm = dn_arr[1:31]
+    pn_interm_total = int(pn_interm.sum())
+    dn_interm_total = int(dn_interm.sum())
+
+    print(f"\n=== 中間エントリ統計 (bucket 1-30, INF/0 除外) ===")
+    print(f"  pn 中間エントリ数: {pn_interm_total:,} ({100.0 * pn_interm_total / max(total_entries, 1):.1f}%)")
+    print(f"  dn 中間エントリ数: {dn_interm_total:,} ({100.0 * dn_interm_total / max(total_entries, 1):.1f}%)")
+
+    xs_float = np.array(range(1, 31), dtype=float)
+    for name, arr, total in [("pn", pn_interm, pn_interm_total), ("dn", dn_interm, dn_interm_total)]:
+        if total > 0:
+            mean_w = float(np.dot(xs_float, arr) / total)
+            var_w = float(np.dot((xs_float - mean_w) ** 2, arr) / total)
+            std_w = np.sqrt(max(var_w, 0.1))
+            # 歪度
+            skew_w = float(np.dot((xs_float - mean_w) ** 3, arr) / total) / (std_w ** 3)
+            # 尖度
+            kurt_w = float(np.dot((xs_float - mean_w) ** 4, arr) / total) / (std_w ** 4) - 3
+            print(f"  {name}: μ={mean_w:.2f} bucket, σ={std_w:.2f} bucket, "
+                  f"歪度={skew_w:.3f}, 超過尖度={kurt_w:.3f}")
+            # バケット 1-30 を表示 (非ゼロのみ)
+            print(f"  {name} 非ゼロバケット:")
+            for k in range(1, 31):
+                v = arr[k - 1]
+                if v > 0:
+                    pct = 100.0 * v / total
+                    print(f"    [{k:2d}] {bucket_label_short(k):>8s}: {v:>10,} ({pct:5.1f}%)")
+
     print("\n=== pn パーセンタイル ===")
     for pct_target in [50, 75, 90, 95, 99]:
         threshold = total_entries * pct_target / 100
@@ -296,13 +509,25 @@ def print_text_summary(
 
     if per_depth:
         print("\n=== IDS depth ごとの WorkingTT 分布サマリ ===")
-        print(f"  {'depth':>6}  {'nodes':>12}  {'total':>12}  {'pn=INF%':>8}  {'dn=INF%':>8}  {'dn=0%':>7}")
+        print(f"  {'depth':>6}  {'nodes':>12}  {'total':>12}  {'pn=INF%':>8}  {'dn=INF%':>8}  {'dn=0%':>7}  {'pn_μ(中間)':>12}  {'pn_σ(中間)':>12}")
         for ids_depth, nodes, pn_h, dn_h, _ in per_depth:
             total = sum(pn_h)
             inf_pn = 100.0 * pn_h[31] / max(total, 1)
             inf_dn = 100.0 * dn_h[31] / max(total, 1)
             zero_dn = 100.0 * dn_h[0] / max(total, 1)
-            print(f"  {ids_depth:>6}  {nodes:>12,}  {total:>12,}  {inf_pn:>7.1f}%  {inf_dn:>7.1f}%  {zero_dn:>6.1f}%")
+            # 中間エントリの平均バケット
+            pn_interm = np.array(pn_h[1:31], dtype=float)
+            pn_interm_tot = pn_interm.sum()
+            if pn_interm_tot > 0:
+                xs_f = np.arange(1, 31, dtype=float)
+                mean_b = float(np.dot(xs_f, pn_interm) / pn_interm_tot)
+                var_b = float(np.dot((xs_f - mean_b) ** 2, pn_interm) / pn_interm_tot)
+                std_b = np.sqrt(max(var_b, 0.1))
+                mean_str = f"{mean_b:.1f}"
+                std_str = f"{std_b:.1f}"
+            else:
+                mean_str, std_str = "N/A", "N/A"
+            print(f"  {ids_depth:>6}  {nodes:>12,}  {total:>12,}  {inf_pn:>7.1f}%  {inf_dn:>7.1f}%  {zero_dn:>6.1f}%  {mean_str:>12}  {std_str:>12}")
 
 
 def main() -> None:
@@ -329,6 +554,27 @@ def main() -> None:
                     "/tmp/pn_dn_dist_39te.png")
     plot_per_depth(per_depth, "/tmp/pn_dn_dist_39te_per_depth.png")
     plot_per_depth_total_trend(per_depth, "/tmp/pn_dn_dist_39te_trend.png")
+    # 最後の外部 IDS スナップショットを使用; depth が単調増加する先頭部分のみが外部 IDS
+    # (warmup 再帰では depth がリセットされる)
+    outer_snaps = []
+    prev_d = -1
+    for s in per_depth:
+        if s[0] > prev_d:
+            outer_snaps.append(s)
+            prev_d = s[0]
+        else:
+            break
+    last_outer = outer_snaps[-1] if outer_snaps else None
+    if last_outer is not None:
+        _, _, last_pn_h, last_dn_h, _ = last_outer
+        snap_label = f"IDS depth={last_outer[0]}"
+    else:
+        last_pn_h, last_dn_h = pn_hist, dn_hist
+        snap_label = "最終"
+    plot_intermediate_dist(last_pn_h, last_dn_h, per_depth,
+                           "/tmp/pn_dn_dist_39te_intermediate.png",
+                           snapshot_label=snap_label)
+    plot_intermediate_per_depth(per_depth, "/tmp/pn_dn_dist_39te_intermediate_depth.png")
     print_text_summary(pn_hist, dn_hist, per_depth)
 
 

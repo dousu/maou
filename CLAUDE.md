@@ -114,6 +114,25 @@ SHOULD prefer Serena tools for token efficiency:
 - SHOULD write regression tests for bug fixes
 - Test path: `src/maou/{layer}/{module}/file.py` → `tests/maou/{layer}/{module}/test_file.py`
 
+### 重いテスト (Rust dfpn) — release ビルド必須
+
+doc コメントに `**[SLOW]**` フラグがついている Rust テストは，debug ビルドでは release 比
+約 6 倍遅く，ノード/時間制限を超過してテストが失敗する場合がある．
+これらのテストを実行する際は MUST `--release` フラグを付けること:
+
+```bash
+cargo test --release -p maou_shogi -- <test_name> --nocapture
+```
+
+現在 `[SLOW]` フラグがついている主なテスト (`rust/maou_shogi/src/dfpn/tests.rs`):
+
+| テスト名 | バジェット | 備考 |
+|---|---|---|
+| `test_tsume_39te_ply24_mate15_regression` | 1M nodes / 600s | PV 正確性の回帰テスト |
+| `test_tsume_39te_ply24_mate15_soundness_depth25` | 3M nodes / 300s | soundness ガード |
+| `test_tsume_39te_ply2_no_false_nomate` | 10M nodes / 600s | false NoMate 回帰テスト |
+| `test_tsume_39te_backward_1m` | 1M nodes × 複数局面 | 逆順解析 (ログ出力) |
+
 ## Quick Reference
 
 ### Common Commands
@@ -129,6 +148,11 @@ uv sync --extra cuda --extra visualize     # Full development
 uv run pytest                              # Run tests
 uv run maturin develop                     # Build Rust extension
 uv run maou --help                         # CLI help
+
+# Rust tests
+cargo test -p maou_shogi                                          # 通常テスト (debug)
+cargo test --release -p maou_shogi -- <test_name> --nocapture     # [SLOW] テスト (release 必須)
+cargo test --release -p maou_shogi -- --ignored --nocapture       # #[ignore] テスト (release 必須)
 ```
 
 ### Japanese Writing Rules (日本語記述規則)

@@ -2387,6 +2387,9 @@ use crate::types::{Color, PieceType};
 
     /// 39手詰め ply 24 から Mate(15) を発見する **非 ignore 回帰テスト**．
     ///
+    /// **[SLOW]** debug ビルドでは release 比 ~6 倍遅い (~312s)．
+    /// `cargo test --release -p maou_shogi -- test_tsume_39te_ply24_mate15_regression` で実行すること．
+    ///
     /// 役割: PV 抽出の無駄合チェーン対策 (`count_useless_interpose_pairs`)
     /// が正しく動作することを保証する．
     ///
@@ -2467,6 +2470,9 @@ use crate::types::{Color, PieceType};
 
     /// 39手詰め ply24 depth=25 soundness regression (v0.24.50+)．
     ///
+    /// **[SLOW]** 3M ノード / 300s バジェット．debug ビルドでは時間制限を超過するリスクがある．
+    /// `cargo test --release -p maou_shogi -- test_tsume_39te_ply24_mate15_soundness_depth25` で実行すること．
+    ///
     /// 施策 A-4 (境界層 DN inflation) と今後の境界層施策が canonical PV を
     /// 壊さないことを保証する soundness-only test．
     ///
@@ -2537,6 +2543,9 @@ use crate::types::{Color, PieceType};
     /// 39手詰め逆順サブ問題: 1M ノード / 180 秒で各 OR ノードから解き，
     /// 解けなくなった境界を特定する．解けない局面ではANDノードの各応手の
     /// 探索コスト内訳を報告する．
+    ///
+    /// **[SLOW]** 複数局面を直列に解くため合計で数分かかる．
+    /// `cargo test --release -p maou_shogi -- test_tsume_39te_backward_1m --nocapture` で実行すること．
     #[test]
     fn test_tsume_39te_backward_1m() {
         use std::io::Write;
@@ -10806,6 +10815,9 @@ use crate::types::{Color, PieceType};
     }
 
     /// ply 2 false NoMate 回帰テスト (v0.24.63)．
+    ///
+    /// **[SLOW]** 10M ノード / 600s バジェット．debug ビルドでは時間制限を超過する．
+    /// `cargo test --release -p maou_shogi -- test_tsume_39te_ply2_no_false_nomate --nocapture` で実行すること．
     ///
     /// 39手詰め PV 上の ply 2 局面 (37手詰め) を depth=39, 10M budget で solve し，
     /// NoCheckmate を返さないことを検証する．Unknown は正常 (budget 不足)．
