@@ -74,14 +74,16 @@ const INF: u32 = u32::MAX;
 /// 盤面状態の比較(safe_escapes >= 4 等)，ループカウンタ．
 const PN_UNIT: u32 = 16;
 
-/// WPN スケールドサム: AND pn の非最大子寄与率 (1/2^WPN_GAMMA_SHIFT)．
+/// WPN スケールドサム: AND pn および OR dn の非最大子寄与率 (1/2^WPN_GAMMA_SHIFT)．
 ///
 ///   AND pn = max(child_pn) + (sum(child_pn) - max(child_pn)) >> WPN_GAMMA_SHIFT
+///   OR  dn = max(child_dn) + (sum(child_dn) - max(child_dn)) >> WPN_GAMMA_SHIFT
 ///
 /// 旧式 `sum` は DAG で過大評価される．`max + (count-1)*PN_UNIT` は非最大子の
-/// 変化を伝播しない．スケールドサムは実際の子 pn 値を使いつつ DAG 二重カウントを
+/// 変化を伝播しない．スケールドサムは実際の子の値を使いつつ DAG 二重カウントを
 /// SNDA と協調して割り引く中間的近似．
-/// OR dn は `sum + SNDA` が適切な近似のため WPN 不要 (disproof 探索に逆効果)．
+/// SNDA は直接の兄弟の重複のみ補正するため，深い DAG 合流には WPN が必要．
+/// 初期 pn/dn 値域拡大 (v0.30.0) により OR dn WPN の効果が安定した．
 ///
 /// crossover 点: max = PN_UNIT * 2^WPN_GAMMA_SHIFT
 ///   (これより小さい max では旧式より保守的，大きい max では旧式より積極的)

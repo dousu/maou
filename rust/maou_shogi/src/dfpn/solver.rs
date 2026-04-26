@@ -3336,7 +3336,7 @@ impl DfPnSolver {
             let mut or_nm_min_remaining: u16;
 
             if or_node {
-                // OR ノード: min(pn), sum(dn)
+                // OR ノード: min(pn), WPN-scaled sum(dn)
                 current_pn = INF;
                 current_dn = 0;
                 second_best = INF; // 2番目に小さい pn(選択用，予算枯渇除外込み)
@@ -3346,6 +3346,8 @@ impl DfPnSolver {
                 // SNDA: (source, dn) ペアを収集し，同一 source の子は
                 // sum の代わりに max で集約して過大評価を補正する
                 snda_pairs.clear();
+                // WPN: OR dn の max(child_dn) を追跡
+                let mut max_cdn: u32 = 0;
 
                 for (i, &(ref _m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
@@ -3433,6 +3435,8 @@ impl DfPnSolver {
                     } else if cpn < second_best {
                         second_best = cpn;
                     }
+                    // WPN: max(child_dn) を更新
+                    if cdn > max_cdn { max_cdn = cdn; }
                     // sum(dn) を累積
                     current_dn = (current_dn as u64)
                         .saturating_add(cdn as u64)
@@ -3498,11 +3502,20 @@ impl DfPnSolver {
                     return;
                 }
 
+                // WPN スケールドサム: OR dn の DAG 二重計数補正 (AND pn と対称)
+                // OR dn = max(child_dn) + (sum(child_dn) - max(child_dn)) >> WPN_GAMMA_SHIFT
+                {
+                    let sum_other = (current_dn as u64).saturating_sub(max_cdn as u64);
+                    current_dn = (max_cdn as u64)
+                        .saturating_add(sum_other >> WPN_GAMMA_SHIFT)
+                        .min(INF as u64) as u32;
+                }
                 // SNDA 補正: 同一 source の子は DAG 合流の可能性
                 // 重複グループの最大値のみ残し重複分を控除して過大評価を補正
-                // OR dn は sum + SNDA が適切な近似 (AND pn と異なり WPN 不要)
+                // floor: SNDA の過剰控除を防ぎ，単一最大子の dn を下限とする
                 if snda_pairs.len() >= 2 {
-                    current_dn = snda_dedup(&mut snda_pairs, current_dn);
+                    let snda_result = snda_dedup(&mut snda_pairs, current_dn);
+                    current_dn = snda_result.max(max_cdn);
                 }
 
             } else {

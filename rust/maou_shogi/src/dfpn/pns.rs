@@ -2875,10 +2875,11 @@ impl DfPnSolver {
             let old_dn = arena[ni].dn;
 
             let (new_pn, new_dn, best) = if arena[ni].or_node {
-                // OR ノード: pn = min(child_pn), dn = sum(child_dn)
+                // OR ノード: pn = min(child_pn), dn = WPN-scaled sum(child_dn)
                 // best_child: min by (pn, dn)
                 let mut min_pn = INF;
                 let mut sum_dn: u64 = 0;
+                let mut max_dn: u32 = 0;
                 let mut best_idx = arena[ni].children[0];
                 let mut best_key = (u32::MAX, u32::MAX);
                 let num_children = arena[ni].children.len();
@@ -2893,9 +2894,14 @@ impl DfPnSolver {
                     if arena[ci].pn < min_pn {
                         min_pn = arena[ci].pn;
                     }
+                    if arena[ci].dn > max_dn { max_dn = arena[ci].dn; }
                     sum_dn = sum_dn.saturating_add(arena[ci].dn as u64);
                 }
-                (min_pn, sum_dn.min(INF as u64) as u32, best_idx)
+                let sum_other = sum_dn.saturating_sub(max_dn as u64);
+                let dn = (max_dn as u64)
+                    .saturating_add(sum_other >> WPN_GAMMA_SHIFT)
+                    .min(INF as u64) as u32;
+                (min_pn, dn, best_idx)
             } else {
                 // AND ノード: WPN, dn = min(child_dn)
                 // best_child: min by (dn, pn) among unproven children
