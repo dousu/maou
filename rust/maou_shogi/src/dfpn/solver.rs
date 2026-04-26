@@ -3433,7 +3433,7 @@ impl DfPnSolver {
                     } else if cpn < second_best {
                         second_best = cpn;
                     }
-                    // SNDA: sum 計算は後段で行う
+                    // sum(dn) を累積
                     current_dn = (current_dn as u64)
                         .saturating_add(cdn as u64)
                         .min(INF as u64)
@@ -3499,7 +3499,8 @@ impl DfPnSolver {
                 }
 
                 // SNDA 補正: 同一 source の子は DAG 合流の可能性
-                // 重複グループの最小値分を控除して過大評価を補正
+                // 重複グループの最大値のみ残し重複分を控除して過大評価を補正
+                // OR dn は sum + SNDA が適切な近似 (AND pn と異なり WPN 不要)
                 if snda_pairs.len() >= 2 {
                     current_dn = snda_dedup(&mut snda_pairs, current_dn);
                 }

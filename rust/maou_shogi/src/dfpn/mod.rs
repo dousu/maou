@@ -74,18 +74,18 @@ const INF: u32 = u32::MAX;
 /// 盤面状態の比較(safe_escapes >= 4 等)，ループカウンタ．
 const PN_UNIT: u32 = 16;
 
-/// WPN スケールドサム: 非最大子の pn 寄与率 (1/2^WPN_GAMMA_SHIFT)．
+/// WPN スケールドサム: AND pn の非最大子寄与率 (1/2^WPN_GAMMA_SHIFT)．
 ///
-/// AND ノード pn = max(child_pn) + (sum(child_pn) - max(child_pn)) >> WPN_GAMMA_SHIFT
+///   AND pn = max(child_pn) + (sum(child_pn) - max(child_pn)) >> WPN_GAMMA_SHIFT
 ///
-/// 旧式 `max + (count-1)*PN_UNIT` は非最大子の変化を伝播しないため
-/// pn 分布が狭く収束していた．スケールドサムは実際の子 pn 値を使いつつ
-/// DAG 二重カウントを SNDA と協調して割り引く中間的近似．
+/// 旧式 `sum` は DAG で過大評価される．`max + (count-1)*PN_UNIT` は非最大子の
+/// 変化を伝播しない．スケールドサムは実際の子 pn 値を使いつつ DAG 二重カウントを
+/// SNDA と協調して割り引く中間的近似．
+/// OR dn は `sum + SNDA` が適切な近似のため WPN 不要 (disproof 探索に逆効果)．
 ///
 /// crossover 点: max = PN_UNIT * 2^WPN_GAMMA_SHIFT
 ///   (これより小さい max では旧式より保守的，大きい max では旧式より積極的)
-/// GAMMA_SHIFT=6 → crossover = 1024 (bucket 10): 典型域 (bucket 8.4) では
-/// 旧式より保守的，hard なノード (bucket 11+) では旧式より積極的．
+/// GAMMA_SHIFT=6 → crossover = 1024 (bucket 10)
 const WPN_GAMMA_SHIFT: u32 = 6;
 
 /// AND ノードで合駒(drop)を後回しにするための dn バイアス．
