@@ -14,6 +14,7 @@
 | [合駒最適化](aigoma-optimization.md) | Futile/Chain 分類, 遅延展開, プレフィルタ, DN バイアス |
 | [既知の課題とベンチマーク](benchmarks.md) | 29手詰め, 39手詰め, ミクロコスモス |
 | [最適化案の評価](optimization-proposals.md) | History Heuristic, フラットハッシュテーブル, Frontier Variant 等 |
+| [pn/dn 分布の正規化](pn-dn-distribution.md) | 現状計測，改善履歴，残存課題と次のアクション |
 | [参考文献](references.md) | 論文, 既存ソルバー, 日本語リソース, 変更履歴 |
 
 ---
