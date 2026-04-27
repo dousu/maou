@@ -79,7 +79,7 @@ WorkingTT の pn/dn 分布を IDS depth ごとに計測する．
 
 ---
 
-## 2. 現状 (v0.35.0)
+## 2. ベースライン計測 (v0.35.0)
 
 ### 2.1 計測結果
 
@@ -210,13 +210,35 @@ OR dn = max(child_dn) + (sum(child_dn) - max(child_dn)) >> WPN_GAMMA_SHIFT
 **効果:** チェーン AND での pn 変化の伝播精度が向上．39手詰め問題の
 chain aigoma 探索で pn 分布の連続性が改善される．全 SLOW テスト pass を確認．
 
+**影響範囲の限界:** chain AND ノードは全ノードの一部に過ぎないため，
+全体 KL 値への影響は軽微であった (v0.35.0 時点: KL(pn)=1.616，KL(dn)=0.695)．
+
+### 3.5 `heuristic_dn_from_pn` 下限引き上げ — 案 A-1 (v0.36.0)
+
+**変更:** `heuristic_dn_from_pn` の clamp 下限を 1S → 2S に引き上げ
+
+```rust
+// Before (v0.30.0〜v0.35.0):
+((C / pn.max(1) as u64) as u32).clamp(PN_UNIT, 64 * PN_UNIT)
+
+// After (v0.36.0):
+((C / pn.max(1) as u64) as u32).clamp(2 * PN_UNIT, 64 * PN_UNIT)
+```
+
+**狙い:** pn=64S (開放局面) が dn=1S (bucket 4) に固着していた問題を解消し，
+dn の実質値域を bucket 4〜7 (4 幅) から bucket 5〜10 (最大 6 幅) に拡大する．
+
+**効果 (計測待ち):** `test_no_checkmate_counter_check` 等の正常動作確認後に
+`scripts/analyze_pn_dn_dist.py` で KL(dn) を計測予定．
+目標: KL(dn) < 0.4，σ(dn) > 1.5 bucket 幅．
+
 ---
 
 ## 4. 残存課題と次のアクション
 
-### 4.1 [課題 A] dn スパイク at bucket 4 かつ値域が 4 bucket 幅に限定 ← 最優先
+### 4.1 [課題 A] dn スパイク at bucket 4 かつ値域が 4 bucket 幅に限定
 
-**現状:** dn が bucket 4 (=1S=PN_UNIT) に集中 (KL=0.695，σ=0.8，実質値域 4 bucket 幅)
+**ベースライン (v0.35.0):** dn が bucket 4 (=1S=PN_UNIT) に集中 (KL=0.695，σ=0.8，実質値域 4 bucket 幅)
 
 **2 つの問題:**
 1. **分布の形:** bucket 4 への集中で中間値が少なく，WorkingTT に残るべきノードの
@@ -226,23 +248,20 @@ chain aigoma 探索で pn 分布の連続性が改善される．全 SLOW テス
 
 **根本原因:**
 ```rust
-// heuristic_dn_from_pn: 下限が 1S のため pn=64S → dn=1S
+// heuristic_dn_from_pn: 下限が 1S のため pn=64S → dn=1S に固着
 fn heuristic_dn_from_pn(pn: u32) -> u32 {
     ((C / pn as u64) as u32).clamp(PN_UNIT, 64 * PN_UNIT)
-    //                              ^^^^^^ bucket 4 が下限
+    //                              ^^^^^^ bucket 4 が下限 → 開放局面が全て dn=1S
 }
 ```
 
-pn=64S (開放局面) のノードが全て dn=1S となり，OR node dn 計算で
-WPN が機能する前に bucket 4 に固着する．
+**段階的な下限引き上げ:**
 
-**提案:** 下限を段階的に引き上げる
-
-| 変更 | dn の下限 | bucket | 実質値域 (推定) | 想定 KL |
-|------|-----------|--------|----------------|---------|
-| 現状 | 1S (16) | 4 | 4 bucket 幅 | 0.695 |
-| 案 A-1 | 2S (32) | 5 | 〜6 bucket 幅 | 推定 0.5〜 |
-| 案 A-2 | 4S (64) | 6 | 〜8 bucket 幅 | 推定 0.3〜 |
+| 変更 | dn の下限 | bucket | 実質値域 (推定) | 想定 KL | 状況 |
+|------|-----------|--------|----------------|---------|------|
+| ベースライン | 1S (16) | 4 | 4 bucket 幅 | 0.695 | (v0.35.0 計測済み) |
+| **案 A-1** | **2S (32)** | **5** | **〜6 bucket 幅** | **推定 0.5〜** | **✓ 実装済み (v0.36.0，計測待ち)** |
+| 案 A-2 | 4S (64) | 6 | 〜8 bucket 幅 | 推定 0.3〜 | A-1 計測後に判断 |
 
 **注意点:** v0.30.0 で `test_no_checkmate_counter_check` の通過を目的に
 下限=1S が選ばれた経緯がある (§4.1)．引き上げ時は同テストの再確認が必須．
@@ -325,9 +344,14 @@ depth=16 への対処が本当に必要かどうかは再計測後に判断．
 ## 6. アクションプラン
 
 ```
+[完了]
+ └── 課題 A-1: heuristic_dn_from_pn の下限 1S→2S (v0.36.0 実装済み)
+      └── 次: test_no_checkmate_counter_check 確認 → KL 計測
+
 [優先度 高]
- ├── 課題 A: heuristic_dn_from_pn の下限引き上げ (1S→2S 試験)
- │    └── 成功なら 4S に引き上げ
+ ├── 課題 A 計測: analyze_pn_dn_dist.py で KL(dn) 再測定
+ │    ├── KL(dn) < 0.4 なら A 完了，課題 B へ
+ │    └── 改善不十分なら案 A-2 (4S) を検討
  └── 課題 B: heuristic_or_pn の中間値追加 (safe_escapes=1-2 の細分化)
 
 [優先度 中]
