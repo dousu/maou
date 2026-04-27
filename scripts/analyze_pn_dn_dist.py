@@ -1,7 +1,11 @@
 """39手詰め問題における pn/dn 分布の分析スクリプト．
 
-100M ノード探索後に Unknown となる 39手詰め問題の WorkingTT における
+50M ノード探索後に Unknown となる 39手詰め問題の WorkingTT における
 pn/dn 値の分布をグラフ化する．IDS 各 depth 反復終了時点の分布も出力する．
+
+分布フィット: バケット空間での対数正規分布 (k ~ LogNormal(μ_ln, σ_ln))．
+  PN_UNIT が下限として機能するため，バケット空間での正規分布は左裾が切り取られ
+  右裾型 (right-skewed) になる．対数正規分布がより自然な目標分布である．
 """
 
 import time
@@ -39,25 +43,45 @@ def val_to_bucket(val: int) -> int:
     return min(bit, 30)
 
 
-def _fit_normal_to_histogram(
-    counts: np.ndarray, bucket_range: range
-) -> tuple[float, float, np.ndarray] | None:
-    """バケット範囲内のカウントに正規分布をフィット．
+def _fit_lognormal_to_histogram(
+    counts_1_30: np.ndarray,
+) -> tuple[float, float, float, np.ndarray] | None:
+    """bucket 1-30 の 30 要素カウント配列に対数正規分布をフィット．
 
-    Returns (mean, std, fitted_curve) or None if too few data points.
+    バケット値 k (1-30) に対して k ~ LogNormal(μ_ln, σ_ln) を仮定．
+    ln(k) の重み付き平均・分散からパラメータを推定する．
+
+    Returns (mu_ln, sigma_ln, kl_div, curve) or None if too few data.
+    curve は bucket 1-30 上の連続フィットカーブ (total スケール，300 点)．
     """
-    xs = np.array(list(bucket_range), dtype=float)
-    ys = counts[list(bucket_range)]
+    xs = np.arange(1, 31, dtype=float)  # バケット値 1-30
+    ys = counts_1_30.astype(float)
     total = ys.sum()
     if total < 2:
         return None
-    # 重み付き平均・分散
-    mean = float(np.dot(xs, ys) / total)
-    var = float(np.dot((xs - mean) ** 2, ys) / total)
-    std = np.sqrt(max(var, 0.1))  # ゼロ除算防止
-    # フィットされたカーブ (スケール: total に合わせる)
-    curve = stats.norm.pdf(xs, mean, std) * total
-    return mean, std, curve
+
+    eps = 1e-10
+    ln_xs = np.log(xs)
+
+    # ln(bucket) の重み付き平均・分散
+    mu_ln = float(np.dot(ln_xs, ys) / total)
+    var_ln = float(np.dot((ln_xs - mu_ln) ** 2, ys) / total)
+    sigma_ln = np.sqrt(max(var_ln, 0.01))
+
+    # 離散確率質量 (正規化)
+    pdf_at_xs = stats.lognorm.pdf(xs, s=sigma_ln, scale=np.exp(mu_ln))
+    p_fit = pdf_at_xs / (pdf_at_xs.sum() + eps)
+    p_data = ys / (total + eps)
+
+    # KL divergence D(data || lognormal)
+    kl = float(np.sum(p_data[p_data > 0] * np.log(p_data[p_data > 0] / (p_fit[p_data > 0] + eps))))
+
+    # 連続フィットカーブ (total にスケール，bucket 1-30 の範囲)
+    xs_cont = np.linspace(1.0, 30.0, 300)
+    pdf_cont = stats.lognorm.pdf(xs_cont, s=sigma_ln, scale=np.exp(mu_ln))
+    curve = pdf_cont / (pdf_at_xs.sum() + eps) * total
+
+    return mu_ln, sigma_ln, kl, curve
 
 
 def plot_final_dist(
@@ -167,11 +191,11 @@ def plot_intermediate_dist(
     out_path: str,
     snapshot_label: str = "最終",
 ) -> None:
-    """中間エントリ (0 < pn/dn < INF) のみの分布と正規分布フィットを可視化する．
+    """中間エントリ (0 < pn/dn < INF) のみの分布と対数正規分布フィットを可視化する．
 
     - bucket 0 (pn=0 or dn=0) と bucket 31 (INF) を除外
     - バケット 1-30 のみ対象
-    - Gaussian フィットを重ね表示
+    - 対数正規分布フィット (k ~ LogNormal(μ_ln, σ_ln)) を重ね表示
     """
     pn_arr = np.array(pn_hist, dtype=np.int64)
     dn_arr = np.array(dn_hist, dtype=np.int64)
@@ -186,11 +210,9 @@ def plot_intermediate_dist(
     labels = [bucket_label_short(k) for k in interm_range]
     xs = np.arange(len(interm_range))
 
-    outer_depth = [d for d, *_ in per_depth if d <= 36]  # depth <= 36 のスナップショット
-
     fig, axes = plt.subplots(1, 2, figsize=(18, 7))
     fig.suptitle(
-        f"WorkingTT 中間エントリ (0 < pn/dn < INF) 分布と正規分布フィット [{snapshot_label}]",
+        f"WorkingTT 中間エントリ (0 < pn/dn < INF) 分布と対数正規分布フィット [{snapshot_label}]",
         fontsize=14,
     )
 
@@ -201,27 +223,21 @@ def plot_intermediate_dist(
         ax = axes[col]
         ax.bar(xs, arr, color=color, alpha=0.7, label=f"{name} (中間のみ, total={total:,})")
 
-        # 正規分布フィット
-        fit = _fit_normal_to_histogram(np.concatenate([[0], arr, [0]]),
-                                       range(0, len(arr) + 2))
-        # 正しい範囲でフィット
         if total > 0:
-            xs_float = np.array(list(interm_range), dtype=float)
-            ys = arr.astype(float)
-            mean_w = float(np.dot(xs_float, ys) / total)
-            var_w = float(np.dot((xs_float - mean_w) ** 2, ys) / total)
-            std_w = np.sqrt(max(var_w, 0.5))
-            xs_cont = np.linspace(1, 30, 300)
-            curve = stats.norm.pdf(xs_cont, mean_w, std_w) * total
-            ax.plot(xs_cont - 1, curve, "k-", linewidth=2, label=f"正規分布フィット\n(μ={mean_w:.1f}, σ={std_w:.1f})")
-
-            # 正規性の指標 (KL divergence)
-            eps = 1e-10
-            p_data = ys / (total + eps)
-            p_fit = stats.norm.pdf(xs_float, mean_w, std_w)
-            p_fit = p_fit / (p_fit.sum() + eps)
-            kl = float(np.sum(p_data[p_data > 0] * np.log(p_data[p_data > 0] / (p_fit[p_data > 0] + eps))))
-            ax.set_title(f"{name} 中間エントリ分布\n(bucket 1-30, KL={kl:.3f}, μ={mean_w:.1f}bucket, σ={std_w:.1f}bucket)")
+            result = _fit_lognormal_to_histogram(arr)
+            if result is not None:
+                mu_ln, sigma_ln, kl, curve = result
+                median_bucket = np.exp(mu_ln)
+                xs_cont = np.linspace(1, 30, 300)
+                ax.plot(xs_cont - 1, curve, "k-", linewidth=2,
+                        label=f"対数正規分布フィット\n(μ_ln={mu_ln:.2f}, σ_ln={sigma_ln:.2f})\n"
+                              f"中央値={median_bucket:.1f} bucket")
+                ax.set_title(
+                    f"{name} 中間エントリ分布\n"
+                    f"(bucket 1-30, KL={kl:.3f}, 中央値={median_bucket:.1f}bucket, σ_ln={sigma_ln:.2f})"
+                )
+            else:
+                ax.set_title(f"{name} 中間エントリ分布 (フィット不可)")
         else:
             ax.set_title(f"{name} 中間エントリ分布 (データなし)")
 
@@ -264,46 +280,37 @@ def plot_intermediate_per_depth(
     if n == 1:
         axes = axes[np.newaxis, :]
 
-    fig.suptitle("IDS 各 depth での中間エントリ (0 < pn/dn < INF) 分布と正規フィット", fontsize=13)
+    fig.suptitle("IDS 各 depth での中間エントリ (0 < pn/dn < INF) 分布と対数正規フィット", fontsize=13)
 
     for row, (ids_depth, nodes, pn_h, dn_h, _) in enumerate(outer):
         pn_arr = np.array(pn_h, dtype=np.int64)
         dn_arr = np.array(dn_h, dtype=np.int64)
 
-        # 中間のみ
+        # 中間のみ (bucket 1-30)
         pn_interm = pn_arr[1:31]
         dn_interm = dn_arr[1:31]
-        pn_total = int(pn_interm.sum())
-        dn_total = int(dn_interm.sum())
 
         xs = np.arange(len(pn_interm))
-        xs_float = np.array(range(1, 31), dtype=float)
 
-        for col, (arr, total, color, name) in enumerate([
-            (pn_interm, pn_total, "steelblue", "pn"),
-            (dn_interm, dn_total, "coral", "dn"),
+        for col, (arr, color, name) in enumerate([
+            (pn_interm, "steelblue", "pn"),
+            (dn_interm, "coral", "dn"),
         ]):
             ax = axes[row, col]
+            total = int(arr.sum())
             ax.bar(xs, arr, color=color, alpha=0.7, linewidth=0.3)
-            mean_str, kl_str = "N/A", "N/A"
+            title_stats = "N/A"
             if total > 0:
-                mean_w = float(np.dot(xs_float, arr) / total)
-                var_w = float(np.dot((xs_float - mean_w) ** 2, arr) / total)
-                std_w = np.sqrt(max(var_w, 0.5))
-                xs_cont = np.linspace(1, 30, 300)
-                curve = stats.norm.pdf(xs_cont, mean_w, std_w) * total
-                ax.plot(xs_cont - 1, curve, "k-", linewidth=1.5)
-
-                eps = 1e-10
-                p_data = arr.astype(float) / (total + eps)
-                p_fit = stats.norm.pdf(xs_float, mean_w, std_w)
-                p_fit = p_fit / (p_fit.sum() + eps)
-                kl = float(np.sum(p_data[p_data > 0] * np.log(p_data[p_data > 0] / (p_fit[p_data > 0] + eps))))
-                mean_str = f"{mean_w:.1f}"
-                kl_str = f"{kl:.3f}"
+                result = _fit_lognormal_to_histogram(arr)
+                if result is not None:
+                    mu_ln, sigma_ln, kl, curve = result
+                    median_bucket = np.exp(mu_ln)
+                    xs_cont = np.linspace(1, 30, 300)
+                    ax.plot(xs_cont - 1, curve, "k-", linewidth=1.5)
+                    title_stats = f"KL={kl:.3f} | 中央値={median_bucket:.1f} | σ_ln={sigma_ln:.2f}"
 
             ax.set_title(
-                f"depth={ids_depth} | {name} 中間 | total={total:,} | nodes={nodes:,} | μ={mean_str} | KL={kl_str}",
+                f"depth={ids_depth} | {name} 中間 | total={total:,} | nodes={nodes:,} | {title_stats}",
                 fontsize=8,
             )
             ax.set_xticks(xs[::2])
@@ -431,6 +438,21 @@ def plot_per_depth_total_trend(
     plt.close(fig)
 
 
+def _lognormal_stats(arr: np.ndarray) -> tuple[float, float, float, float] | None:
+    """bucket 1-30 の中間エントリから対数正規分布パラメータを計算する．
+
+    Returns (mu_ln, sigma_ln, kl_div, median_bucket) or None.
+    """
+    total = float(arr.sum())
+    if total < 2:
+        return None
+    result = _fit_lognormal_to_histogram(arr)
+    if result is None:
+        return None
+    mu_ln, sigma_ln, kl, _ = result
+    return mu_ln, sigma_ln, kl, float(np.exp(mu_ln))
+
+
 def print_text_summary(
     pn_hist: list[int],
     dn_hist: list[int],
@@ -462,18 +484,22 @@ def print_text_summary(
     print(f"  pn 中間エントリ数: {pn_interm_total:,} ({100.0 * pn_interm_total / max(total_entries, 1):.1f}%)")
     print(f"  dn 中間エントリ数: {dn_interm_total:,} ({100.0 * dn_interm_total / max(total_entries, 1):.1f}%)")
 
-    xs_float = np.array(range(1, 31), dtype=float)
     for name, arr, total in [("pn", pn_interm, pn_interm_total), ("dn", dn_interm, dn_interm_total)]:
         if total > 0:
-            mean_w = float(np.dot(xs_float, arr) / total)
-            var_w = float(np.dot((xs_float - mean_w) ** 2, arr) / total)
-            std_w = np.sqrt(max(var_w, 0.1))
-            # 歪度
-            skew_w = float(np.dot((xs_float - mean_w) ** 3, arr) / total) / (std_w ** 3)
-            # 尖度
-            kurt_w = float(np.dot((xs_float - mean_w) ** 4, arr) / total) / (std_w ** 4) - 3
-            print(f"  {name}: μ={mean_w:.2f} bucket, σ={std_w:.2f} bucket, "
-                  f"歪度={skew_w:.3f}, 超過尖度={kurt_w:.3f}")
+            result = _lognormal_stats(arr)
+            if result is not None:
+                mu_ln, sigma_ln, kl, median_bucket = result
+                xs_float = np.array(range(1, 31), dtype=float)
+                ys = arr.astype(float)
+                # 参考: バケット空間での算術平均・分散
+                mean_bkt = float(np.dot(xs_float, ys) / total)
+                var_bkt = float(np.dot((xs_float - mean_bkt) ** 2, ys) / total)
+                std_bkt = np.sqrt(max(var_bkt, 0.1))
+                # 歪度
+                skew_w = float(np.dot((xs_float - mean_bkt) ** 3, ys) / total) / (std_bkt ** 3)
+                print(f"  {name}: KL(対数正規)={kl:.3f}, μ_ln={mu_ln:.3f}, σ_ln={sigma_ln:.3f}, "
+                      f"中央値={median_bucket:.1f}bucket")
+                print(f"       (参考: 算術 μ={mean_bkt:.1f}bucket, σ={std_bkt:.1f}bucket, 歪度={skew_w:.3f})")
             # バケット 1-30 を表示 (非ゼロのみ)
             print(f"  {name} 非ゼロバケット:")
             for k in range(1, 31):
@@ -504,25 +530,39 @@ def print_text_summary(
 
     if per_depth:
         print("\n=== IDS depth ごとの WorkingTT 分布サマリ ===")
-        print(f"  {'depth':>6}  {'nodes':>12}  {'total':>12}  {'pn=INF%':>8}  {'dn=INF%':>8}  {'dn=0%':>7}  {'pn_μ(中間)':>12}  {'pn_σ(中間)':>12}")
+        print(f"  {'depth':>6}  {'nodes':>12}  {'total':>12}  {'pn=INF%':>8}  {'dn=0%':>7}"
+              f"  {'pn中央値':>9}  {'pn_σ_ln':>8}  {'pn_KL':>7}"
+              f"  {'dn中央値':>9}  {'dn_σ_ln':>8}  {'dn_KL':>7}")
         for ids_depth, nodes, pn_h, dn_h, _ in per_depth:
             total = sum(pn_h)
             inf_pn = 100.0 * pn_h[31] / max(total, 1)
-            inf_dn = 100.0 * dn_h[31] / max(total, 1)
             zero_dn = 100.0 * dn_h[0] / max(total, 1)
-            # 中間エントリの平均バケット
-            pn_interm = np.array(pn_h[1:31], dtype=float)
-            pn_interm_tot = pn_interm.sum()
-            if pn_interm_tot > 0:
-                xs_f = np.arange(1, 31, dtype=float)
-                mean_b = float(np.dot(xs_f, pn_interm) / pn_interm_tot)
-                var_b = float(np.dot((xs_f - mean_b) ** 2, pn_interm) / pn_interm_tot)
-                std_b = np.sqrt(max(var_b, 0.1))
-                mean_str = f"{mean_b:.1f}"
-                std_str = f"{std_b:.1f}"
+
+            # pn 中間エントリの対数正規統計
+            pn_interm_arr = np.array(pn_h[1:31], dtype=np.int64)
+            pn_res = _lognormal_stats(pn_interm_arr)
+            if pn_res is not None:
+                _, pn_sig, pn_kl, pn_med = pn_res
+                pn_med_str = f"{pn_med:.1f}"
+                pn_sig_str = f"{pn_sig:.3f}"
+                pn_kl_str  = f"{pn_kl:.3f}"
             else:
-                mean_str, std_str = "N/A", "N/A"
-            print(f"  {ids_depth:>6}  {nodes:>12,}  {total:>12,}  {inf_pn:>7.1f}%  {inf_dn:>7.1f}%  {zero_dn:>6.1f}%  {mean_str:>12}  {std_str:>12}")
+                pn_med_str = pn_sig_str = pn_kl_str = "N/A"
+
+            # dn 中間エントリの対数正規統計
+            dn_interm_arr = np.array(dn_h[1:31], dtype=np.int64)
+            dn_res = _lognormal_stats(dn_interm_arr)
+            if dn_res is not None:
+                _, dn_sig, dn_kl, dn_med = dn_res
+                dn_med_str = f"{dn_med:.1f}"
+                dn_sig_str = f"{dn_sig:.3f}"
+                dn_kl_str  = f"{dn_kl:.3f}"
+            else:
+                dn_med_str = dn_sig_str = dn_kl_str = "N/A"
+
+            print(f"  {ids_depth:>6}  {nodes:>12,}  {total:>12,}  {inf_pn:>7.1f}%  {zero_dn:>6.1f}%"
+                  f"  {pn_med_str:>9}  {pn_sig_str:>8}  {pn_kl_str:>7}"
+                  f"  {dn_med_str:>9}  {dn_sig_str:>8}  {dn_kl_str:>7}")
 
 
 def main() -> None:
