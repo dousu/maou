@@ -3340,8 +3340,10 @@ impl DfPnSolver {
                 let mut unproven_count: u32 = 0;
                 let mut sum_cpn: u64 = 0;
                 // CD-WPN: 同一マスのドロップを1グループとして数える
+                // cd_sq_min_pn[sq] = そのマスへの全ドロップの min(cpn) (グループ代表値)
                 let mut cd_grouped_count: u32 = 0;
                 let mut drop_squares_seen: u128 = 0;
+                let mut cd_sq_min_pn: [u32; 81] = [INF; 81];
 
                 for (i, &(ref m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
@@ -3419,11 +3421,16 @@ impl DfPnSolver {
                     unproven_count += 1;
                     sum_cpn += cpn as u64;
                     // CD-WPN: 同一マスのドロップは1グループとして数える
+                    // グループ代表値 = 同一マスへのドロップの中で最小 cpn
                     if m.is_drop() {
-                        let sq_bit = 1u128 << (m.to_sq().index() as u32);
+                        let sq_idx = m.to_sq().index();
+                        let sq_bit = 1u128 << sq_idx;
                         if drop_squares_seen & sq_bit == 0 {
                             drop_squares_seen |= sq_bit;
                             cd_grouped_count += 1;
+                        }
+                        if cpn < cd_sq_min_pn[sq_idx] {
+                            cd_sq_min_pn[sq_idx] = cpn;
                         }
                     } else {
                         cd_grouped_count += 1;
@@ -3549,19 +3556,31 @@ impl DfPnSolver {
 
                 // WPN (Weak Proof Number) / CD-WPN 計算:
                 //
-                // チェーン AND: CD-WPN を使用．同一マスの未証明ドロップは
-                // cross-deduce で一括証明できるため1グループとして数える．
-                //   CD-WPN: current_pn = max(cpn) + (grouped_count - 1) * PN_UNIT
-                //   where grouped_count = non_drops + unique_drop_squares
+                // チェーン AND: CD-WPN スケールドサムを使用．
+                //   同一マスへのドロップをグループ化し，グループ代表値 = min(cpn in group)．
+                //   cross-deduce で同一マスの兄弟ドロップが一括証明されるため，
+                //   グループのコストはそのマスで最も小さい cpn で代表される．
+                //   CD-WPN = max(rep) + (sum(rep) - max(rep)) >> WPN_GAMMA_SHIFT
+                //   旧式 max + (grouped_count-1)*PN_UNIT は非最大グループの
+                //   子 pn 変化を伝播しない問題があった．
                 //
                 // 非チェーン AND: スケールドサム WPN を使用．
                 //   pn = max(cpn) + (sum(cpn) - max(cpn)) >> WPN_GAMMA_SHIFT
-                //   旧式 max + (count-1)*PN_UNIT は非最大子の変化を伝播しないため
-                //   pn 分布が狭く収束する問題があった．スケールドサムは実際の
-                //   子 pn 値を使いつつ DAG 二重カウントを割り引く中間的近似．
                 if chain_king_sq.is_some() && cd_grouped_count > 0 {
-                    current_pn = (max_cpn as u64)
-                        .saturating_add((cd_grouped_count as u64 - 1) * PN_UNIT as u64)
+                    // グループ代表値の max/sum を drop_squares_seen のビット列から収集
+                    let mut cd_max_group: u32 = 0;
+                    let mut cd_sum_group: u64 = 0;
+                    let mut bits = drop_squares_seen;
+                    while bits != 0 {
+                        let sq_idx = bits.trailing_zeros() as usize;
+                        bits &= bits - 1;
+                        let rep = cd_sq_min_pn[sq_idx];
+                        cd_sum_group = cd_sum_group.saturating_add(rep as u64);
+                        if rep > cd_max_group { cd_max_group = rep; }
+                    }
+                    let sum_other = cd_sum_group.saturating_sub(cd_max_group as u64);
+                    current_pn = (cd_max_group as u64)
+                        .saturating_add(sum_other >> WPN_GAMMA_SHIFT)
                         .min(INF as u64) as u32;
                 } else if unproven_count > 0 {
                     let sum_other = sum_cpn.saturating_sub(max_cpn as u64);
