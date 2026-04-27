@@ -4438,36 +4438,42 @@ impl DfPnSolver {
             return 64 * PN_UNIT;
         }
 
-        // 拡張 heuristic_or_pn: 1S〜64S の範囲で num_checks と safe_escapes の
-        // 二次元スケーリング．safe_escapes ごとに 2 倍スケール (log2 bucket 対応)．
+        // heuristic_or_pn: safe_escapes × num_checks による pn 初期値マッピング
         //
         // 基本方針:
         // - safe_escapes が多い → 追い詰めに手数を要する(pn↑)
         // - num_checks が少ない → 選択肢が少なく詰みにくい(pn↑)
         //
-        // safe_escapes に基づくベース値(1S〜48S):
-        let escape_base = match safe_escapes {
-            0 => PN_UNIT,           // 1S  (bucket 4)
-            1 => 2 * PN_UNIT,       // 2S  (bucket 5)
-            2 => 4 * PN_UNIT,       // 4S  (bucket 6)
-            3 => 8 * PN_UNIT,       // 8S  (bucket 7)
-            4 => 16 * PN_UNIT,      // 16S (bucket 8)
-            5 => 24 * PN_UNIT,      // 24S (~bucket 8.6)
-            6 => 32 * PN_UNIT,      // 32S (bucket 9)
-            _ => 48 * PN_UNIT,      // 48S (7+逃げ場, ~bucket 9.6)
-        };
-
-        // num_checks に基づくスケーリング(escape_base の 1.0〜2.0 倍):
-        // 王手が少ないほど詰みにくい → pn を大きくする
-        let adjusted_pn = if num_checks >= 8 {
-            escape_base // ×1.0: 多数の王手 → ベースのまま
-        } else if num_checks >= 4 {
-            escape_base + escape_base / 4 // ×1.25
-        } else if num_checks >= 2 {
-            escape_base + escape_base / 2 // ×1.5
-        } else {
-            // num_checks == 1: 王手がたった1つ → ×2.0
-            escape_base * 2
+        // safe_escapes=1-2 (大多数の39手詰め局面) は直接マッピングで粒度を上げ，
+        // pn 分布が bucket 5-6 に集中するスパイクを緩和する (Case B v0.37.0)．
+        // safe_escapes=0, 3+ は escape_base × num_checks 係数の既存ロジックを維持．
+        let adjusted_pn = match safe_escapes {
+            1 => {
+                // 逃げ場 1: checks が多いほど詰みやすい → pn を下げる
+                if num_checks >= 4 { 3 * PN_UNIT / 2 }   // 1.5S = 24 (~bucket 4.6)
+                else if num_checks >= 2 { 3 * PN_UNIT }   // 3S = 48 (~bucket 5.6)
+                else { 4 * PN_UNIT }                      // 4S = 64 (bucket 6, checks=1)
+            }
+            2 => {
+                // 逃げ場 2: checks≥4 なら 3S，それ以外 5S
+                if num_checks >= 4 { 3 * PN_UNIT }        // 3S = 48 (~bucket 5.6)
+                else { 5 * PN_UNIT }                      // 5S = 80 (~bucket 6.3)
+            }
+            _ => {
+                // safe_escapes=0, 3+: escape_base × num_checks 係数
+                let escape_base = match safe_escapes {
+                    0 => PN_UNIT,           // 1S  (bucket 4)
+                    3 => 8 * PN_UNIT,       // 8S  (bucket 7)
+                    4 => 16 * PN_UNIT,      // 16S (bucket 8)
+                    5 => 24 * PN_UNIT,      // 24S (~bucket 8.6)
+                    6 => 32 * PN_UNIT,      // 32S (bucket 9)
+                    _ => 48 * PN_UNIT,      // 48S (7+逃げ場, ~bucket 9.6)
+                };
+                if num_checks >= 8 { escape_base }
+                else if num_checks >= 4 { escape_base + escape_base / 4 }
+                else if num_checks >= 2 { escape_base + escape_base / 2 }
+                else { escape_base * 2 }
+            }
         };
 
         // 上限 64S (1024, bucket 10)

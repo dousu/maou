@@ -277,16 +277,16 @@ fn sacrifice_check_boost(board: &Board, checks: &[Move]) -> u32 {
 /// pn に対して逆比例する初期 dn ヒューリスティック (df-pn+ 対称初期化)．
 ///
 /// 証明が容易な局面(小 pn)ほど反証困難(大 dn)になるよう設定し，
-/// 初期 pn/dn の有効値域を bucket 5〜10 に広げる．
+/// 初期 pn/dn の有効値域を bucket 6〜10 に広げる．
 ///
 ///   pn × dn ≈ (8·PN_UNIT)²
 ///   pn = 1S → dn = 64S  (上限)
 ///   pn = 8S → dn = 8S   (対称点)
-///   pn = 64S → dn = 2S  (下限: 1S→2S に引き上げ，bucket 4 スパイク抑制)
+///   pn = 64S → dn = 4S  (下限: 2S→4S に引き上げ，bucket 5 スパイク抑制)
 #[inline]
 pub(super) fn heuristic_dn_from_pn(pn: u32) -> u32 {
     const C: u64 = (8 * PN_UNIT as u64) * (8 * PN_UNIT as u64);
-    ((C / pn.max(1) as u64) as u32).clamp(2 * PN_UNIT, 64 * PN_UNIT)
+    ((C / pn.max(1) as u64) as u32).clamp(4 * PN_UNIT, 64 * PN_UNIT)
 }
 
 /// SNDA (Kishimoto 2010) の積極的ソースグループ集約．
