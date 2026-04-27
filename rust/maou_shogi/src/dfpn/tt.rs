@@ -2083,23 +2083,8 @@ impl TranspositionTable {
         }
     }
 
-    /// ProvenTT の非 proof エントリのみを除去する（WorkingTT は触らない）．
-    ///
-    /// nested warmup (warmup\_mode=true) の mid\_fallback 入口で使用する．
-    /// ProvenTT の confirmed disproof (浅い depth で生成されたものが深い
-    /// depth を汚染するリスク) を除去し，WorkingTT intermediate は保持する．
-    pub(super) fn clear_proven_non_proofs(&mut self) {
-        for fe in self.proven.iter_mut() {
-            if fe.pos_key != 0 && !fe.entry.is_proof() {
-                fe.pos_key = 0;
-            }
-        }
-    }
-
     /// WorkingTT の confirmed disproof (dn=0, !path_dep, remaining=INF) の数を返す．
-    ///
-    /// warmup 診断用: IDS depth 切り替え後に WorkingTT に残っている
-    /// confirmed disproof 数を確認する．
+    #[cfg(feature = "tt_diag")]
     pub(super) fn count_working_confirmed_disproofs(&self) -> usize {
         self.working.iter().filter(|fe| {
             fe.pos_key != 0
@@ -2113,22 +2098,6 @@ impl TranspositionTable {
     pub(super) fn clear_working(&mut self) {
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
         // N-8: LeafDisproofTT も同時にクリア
-        for le in self.leaf_disproofs.iter_mut() { le.pos_key = 0; }
-        self.working_overflow_since_gc = 0;
-    }
-
-    /// warmup 前の selective クリア (v0.27.3): remaining <= threshold のエントリのみ削除し，
-    /// remaining > threshold のエントリ (より深い intermediate) を保持する．
-    ///
-    /// 1D (v0.25.9) の全消去を置き換える．warmup_depth を threshold として渡すことで:
-    /// - warmup に干渉しうる shallow intermediate (remaining <= warmup_depth) を除去 ✓
-    /// - main search で再利用可能な deep intermediate (remaining > warmup_depth) を保持 ✓
-    pub(super) fn clear_working_shallow(&mut self, threshold: u16) {
-        for fe in self.working.iter_mut() {
-            if fe.pos_key != 0 && fe.entry.remaining() <= threshold {
-                fe.pos_key = 0;
-            }
-        }
         for le in self.leaf_disproofs.iter_mut() { le.pos_key = 0; }
         self.working_overflow_since_gc = 0;
     }
@@ -2296,27 +2265,6 @@ impl TranspositionTable {
     /// ProvenTT の非空エントリ数を返す．
     pub(super) fn proven_len(&self) -> usize {
         self.proven.iter().filter(|fe| fe.pos_key != 0).count()
-    }
-
-    /// ProvenTT の proof (pn=0) エントリ数を返す．
-    pub(super) fn proven_count(&self) -> usize {
-        self.proven.iter().filter(|fe| fe.pos_key != 0 && fe.entry.is_proof()).count()
-    }
-
-    /// 特定の position_key + hand の WorkingTT エントリを除去する (v0.24.66)．
-    ///
-    /// warmup mid_fallback 後に root 局面の depth-limited NM を除去して
-    /// full-depth IDS での false NoCheckmate を防止する目的で使用．
-    pub(super) fn clear_working_entry(&mut self, pos_key: u64, hand: &[u8; HAND_KINDS]) {
-        let pos_key = Self::safe_key(pos_key);
-        let start = self.working_cluster_start(pos_key, hand);
-        for fe in &mut self.working[start..start + WORKING_CLUSTER_SIZE] {
-            if fe.pos_key == pos_key
-                && hand_gte_forward_chain(&fe.entry.hand, hand)
-            {
-                fe.pos_key = 0;
-            }
-        }
     }
 
     /// WorkingTT の非空エントリ数を返す(`len` のエイリアス)．

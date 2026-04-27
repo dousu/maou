@@ -329,15 +329,9 @@ pub struct DfPnSolver {
     /// `look_up` に拡張．depth-limited disproof (rem>=floor) も match
     /// として count し，coverage を向上．
     pub(super) param_refut_extended_lookup: bool,
-    /// 段階的予算拡大の warmup depth リスト (v0.24.65)．
-    ///
-    /// 空ならば warmup なし．非空の場合，solve() 内で各 depth の
-    /// warmup solve を実行して ProvenTT に proof を蓄積する．
-    pub(super) warmup_depths: Vec<u32>,
     /// solve() に渡された真の目標 depth (v0.24.66)．
     ///
-    /// warmup mid_fallback 内では `saved_depth` が warmup_depth に上書きされる
-    /// ため，IDS NM 昇格判定で true depth を参照するために保持する．
+    /// IDS NM 昇格判定で true depth を参照するために保持する．
     /// 0 の場合は未設定 (saved_depth をそのまま使用)．
     pub(super) outer_solve_depth: u32,
     /// 最終 IDS depth (solve 時の depth)．
@@ -479,47 +473,14 @@ pub struct DfPnSolver {
     /// 機構 (v0.24.75+, aigoma-optimization.md §8.9) で代替されており，
     /// 再有効化の予定なし．dead code (削除候補)．
     pub(super) alpha_x_filter_active: bool,
-    /// Warmup モード (v0.24.68-v0.24.73): true の場合，mid_fallback 入口で
-    /// ProvenTT の非 proof のみ除去し WorkingTT intermediate を保持する．
-    ///
-    /// v0.24.73 で warmup 段間 intermediate 保持を revert．さらに
-    /// v0.24.78 で `skip_warmup=true` デフォルト化により solver.rs の warmup
-    /// ループ自体が実行されない (§11.6 単一スレッド方針下で warmup 不要)．
-    /// 現在 `true` に設定されるのは `pns.rs` の nested warmup
-    /// (IDS 内 warmup mid_fallback) のみ．
-    pub(super) warmup_mode: bool,
     /// PNS 探索中に true に設定し，`look_up_pn_dn` で refutable disproof を
     /// スキップする (v0.24.75)．PNS の arena-limited false NM を防止．
     /// MID 探索では false (refutable disproof を通常の NM として使用)．
     pub(super) skip_refutable_disproof: bool,
-    /// 施策 C (v0.24.77): warmup を無効化するフラグ．
-    /// refutable disproof 機構が NM 蓄積を提供するため warmup は冗長．
-    /// デフォルト true = warmup 無効．set_skip_warmup(false) で再有効化可能．
-    pub(super) skip_warmup: bool,
-    /// warmup_mode=true の IDS 最終ステップで MID に割り当てる予算の分母 (デフォルト 4 = 1/4)．
-    /// 2 にすると 1/2 (1F 導入前の挙動) に戻る．テスト用．
-    pub(super) param_warmup_mid_denom: u32,
-    /// warmup 入口で clear_proven_non_proofs() を呼ぶかどうか (v0.27.6 デフォルト true)．
-    /// true (v0.27.6 デフォルト, v0.25.5 相当): ProvenTT 非 proof を除去，WorkingTT 維持．
-    /// false (v0.25.9〜v0.27.5 の旧デフォルト, 1G 有効): ProvenTT もクリアしない．
-    pub(super) param_warmup_clear_proven: bool,
-    /// warmup 前に clear_working_shallow(warmup_depth) を呼ぶかどうか (v0.27.6 デフォルト false)．
-    /// false (v0.27.6 デフォルト, v0.25.5 相当): 前処理なし，warmup が中間エントリを活用可能．
-    /// true (v0.27.3〜v0.27.5 の旧挙動): remaining ≤ warmup_depth の WorkingTT を削除．退行の原因．
-    pub(super) param_use_warmup_shallow_clear: bool,
-    /// Hypothesis 1E 検証用フラグ (v0.27.4)．
-    /// true にすると warmup_mode=true でも outer_solve_depth を NM guard に加える (1E 導入前の挙動)．
-    /// デフォルト false = 1E 有効 (warmup 内は saved_depth のみで guard)．
-    pub(super) param_warmup_nm_guard_outer: bool,
     /// Hypothesis IDS-17 無効化フラグ (v0.27.4)．
     /// true にすると saved_depth 20-26 での depth=16→17 挿入をスキップする (IDS-17 導入前の挙動)．
     /// デフォルト false = IDS-17 有効 (depth=17 を明示的に経由)．
     pub(super) param_no_ids17: bool,
-    /// Hypothesis 1H 検証用フラグ (v0.27.5)．
-    /// true にすると warmup 前の clear_working_shallow() 呼び出しをスキップする (v0.25.5 相当)．
-    /// v0.27.3 で導入した clear_working_shallow は warmup が中間エントリを活用できなくする
-    /// 可能性がある．デフォルト false = 現行挙動．
-    pub(super) param_no_warmup_shallow_clear: bool,
     /// refutable check の再帰深さ (デフォルト 5)．
     pub(super) param_refutable_depth: u32,
     /// refutable check の呼び出し回数上限 (デフォルト 10,000)．
@@ -698,7 +659,6 @@ impl DfPnSolver {
             // depth ≤ 19: 0, depth 20-22: 1, depth ≥ 23: 3 (§3.6, M-D)．
             param_disproof_remaining_threshold: DISPROOF_THRESHOLD_ADAPTIVE,
             saved_depth_for_epsilon: 0,
-            warmup_depths: Vec::new(),
             outer_solve_depth: 0,
             killer_table: Vec::new(),
             table: TranspositionTable::new(),
@@ -774,15 +734,8 @@ impl DfPnSolver {
             #[cfg(feature = "tt_diag")]
             diag_alpha_x_filter_applied: 0,
             alpha_x_filter_active: false,
-            warmup_mode: false,
             skip_refutable_disproof: false,
-            skip_warmup: true,
-            param_warmup_mid_denom: 4,
-            param_warmup_clear_proven: true,   // v0.27.6: v0.25.5 相当をデフォルト化
-            param_warmup_nm_guard_outer: false,
             param_no_ids17: false,
-            param_no_warmup_shallow_clear: false, // 後方互換テスト用 (実運用では param_use_warmup_shallow_clear を使用)
-            param_use_warmup_shallow_clear: false, // v0.27.6: shallow clear 無効がデフォルト
             param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
             param_refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
             a6_boundary_pns_calls_remaining: 0,
@@ -976,58 +929,10 @@ impl DfPnSolver {
         self
     }
 
-    /// 段階的予算拡大の warmup depth リストを設定する (v0.24.65)．
-    ///
-    /// 空 (デフォルト) なら warmup なし (従来の `solve()` と同一)．
-    /// 例: `&[17, 21]` を設定すると `solve()` 内で depth=17 → depth=21 の
-    /// 順に warmup solve を実行し，ProvenTT に proof を蓄積してから
-    /// full depth で最終 solve を実行する．
-    ///
-    /// warmup 各段では全ノード予算の 1/(N+1) を割り当て (N = warmup 段数)，
-    /// 残りを最終 solve に使用する．
-    pub fn set_warmup_depths(&mut self, depths: &[u32]) -> &mut Self {
-        self.warmup_depths = depths.to_vec();
-        self
-    }
-
     /// refutable check のパラメータを設定する (v0.24.76)．
     pub fn set_refutable_params(&mut self, depth: u32, call_limit: u32) -> &mut Self {
         self.param_refutable_depth = depth;
         self.param_refutable_call_limit = call_limit;
-        self
-    }
-
-    /// warmup の有効/無効を設定する (v0.24.77 施策 C)．
-    ///
-    /// デフォルト skip=true (warmup 無効)．refutable disproof 機構が
-    /// NM 蓄積を提供するため warmup は冗長で budget を無駄にする．
-    /// v0.24.77 の backward_10m_warmup で ply 22 が no-warmup の Mate(17) →
-    /// warmup 使用時 Unknown に退行することを確認．
-    pub fn set_skip_warmup(&mut self, skip: bool) -> &mut Self {
-        self.skip_warmup = skip;
-        self
-    }
-
-    /// warmup_mode=true の IDS 最終ステップで MID に割り当てる予算の分母を設定する．
-    /// デフォルト 4 (= 1/4，Hypothesis 1F)．2 にすると 1/2 (1F 導入前) になる．
-    pub fn set_warmup_mid_denom(&mut self, denom: u32) -> &mut Self {
-        self.param_warmup_mid_denom = denom.max(1);
-        self
-    }
-
-    /// Hypothesis 1G 検証用: warmup_mode=true でも retain_proofs_only() を呼ぶかどうかを設定する．
-    /// true にすると 1G 導入前の挙動 (ProvenTT 非 proof を warmup 前にクリア)．
-    /// デフォルト false = 1G 有効 (スキップ)．
-    pub fn set_warmup_clear_proven(&mut self, enable: bool) -> &mut Self {
-        self.param_warmup_clear_proven = enable;
-        self
-    }
-
-    /// Hypothesis 1E 検証用: warmup_mode=true で outer_solve_depth を NM guard に含めるか設定する．
-    /// true にすると 1E 導入前の挙動 (nm_guard_depth = saved_depth.max(outer_solve_depth))．
-    /// デフォルト false = 1E 有効 (nm_guard_depth = saved_depth のみ)．
-    pub fn set_warmup_nm_guard_outer(&mut self, enable: bool) -> &mut Self {
-        self.param_warmup_nm_guard_outer = enable;
         self
     }
 
@@ -1036,22 +941,6 @@ impl DfPnSolver {
     /// デフォルト false = IDS-17 有効．
     pub fn set_no_ids17(&mut self, enable: bool) -> &mut Self {
         self.param_no_ids17 = enable;
-        self
-    }
-
-    /// Hypothesis 1H 検証用: warmup 前の clear_working_shallow() をスキップするか設定する．
-    /// true にすると v0.25.5 相当 (warmup 前に WorkingTT 浅いエントリを削除しない)．
-    /// デフォルト false = v0.27.6 以降の現行挙動 (もともとデフォルトで skip)．
-    pub fn set_no_warmup_shallow_clear(&mut self, enable: bool) -> &mut Self {
-        self.param_no_warmup_shallow_clear = enable;
-        self
-    }
-
-    /// 旧挙動復元用: warmup 前に clear_working_shallow() を呼ぶかどうかを設定する．
-    /// true にすると v0.27.3〜v0.27.5 の旧挙動 (退行の原因)．
-    /// デフォルト false = v0.27.6 以降のデフォルト (clear しない = v0.25.5 相当)．
-    pub fn set_use_warmup_shallow_clear(&mut self, enable: bool) -> &mut Self {
-        self.param_use_warmup_shallow_clear = enable;
         self
     }
 
@@ -1548,100 +1437,11 @@ impl DfPnSolver {
         let (root_pn_after_pns, root_dn_after_pns, _) =
             self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
 
-        // PNS で未解決 + 残り予算あり → warmup + MID フォールバック
+        // PNS で未解決 + 残り予算あり → MID フォールバック
         if root_pn_after_pns != 0 && root_dn_after_pns != 0
             && self.nodes_searched < self.max_nodes
             && !self.timed_out
         {
-            // Adaptive warmup 予算配分 (v0.24.65):
-            //
-            // warmup は proof 蓄積が目的であり，full solve ほどの予算は不要．
-            // 各 warmup 段に残り予算の小さな割合を割り当て，main solve に
-            // 予算の大部分を残す．
-            //
-            // 予算戦略:
-            // - 各 warmup 段: 残り予算の 10%，上限 1M (浅い段) / 2M (深い段)
-            // - main solve: 残り予算の全部 (warmup が少額なので 80%+ が残る)
-            //
-            // 早期終了:
-            // - warmup で proved (pn=0) → main solve 不要
-            // - warmup が proof を 1 件も蓄積しなかった → 以降スキップ
-            // (v0.24.77 施策 C) refutable disproof 機構が NM 蓄積を提供するため，
-            // 従来の warmup は budget を消費するだけで効果が限定的．
-            // backward_10m_warmup で ply 22 が no-warmup の Mate(17) → Unknown に退行することを確認．
-            // skip_warmup フラグで明示的に無効化可能 (デフォルト true = warmup 無効)．
-            if !self.warmup_depths.is_empty() && !self.skip_warmup {
-                let warmup_depths = self.warmup_depths.clone();
-                let final_depth = self.depth;
-                let mut prev_proven_count = self.table.proven_count();
-                // 前段の warmup depth を追跡し，段間の remaining shift に使用する．
-                let mut prev_warmup_depth: Option<u32> = None;
-
-                for (i, &wd) in warmup_depths.iter().enumerate() {
-                    if wd >= final_depth { continue; }
-                    if self.nodes_searched >= saved_max_nodes || self.timed_out {
-                        break;
-                    }
-
-                    // warmup 段間の TT 管理:
-                    //
-                    // v0.24.68 で intermediate 保持を試みたが，浅い depth で探索
-                    // した中間値が深い depth で不正に使われ false proof を生成する
-                    // 問題が判明 (Mate(7) at ply 22, expected Mate(17))．
-                    // fc-normalized hand hash (v0.24.70) との相互作用で，異なる
-                    // hand variant の intermediate が同一クラスタに集約され，
-                    // remaining shift 後の pn/dn が不正確になる．
-                    //
-                    // 安全のため従来の retain_proofs_only に戻す．
-                    if prev_warmup_depth.is_some() {
-                        self.table.retain_proofs_only();
-                    }
-
-                    let remaining_budget = saved_max_nodes - self.nodes_searched;
-                    let cap = if wd <= 17 { 500_000u64 } else { 1_000_000u64 };
-                    let warmup_budget = (remaining_budget / 10).min(cap).max(100_000);
-
-                    self.max_nodes = self.nodes_searched + warmup_budget;
-                    self.depth = wd;
-                    verbose_eprintln!(
-                        "[solve] warmup {}/{}: depth={} budget={}K nodes={}K time={:.1}s",
-                        i + 1, warmup_depths.len(), wd,
-                        warmup_budget / 1000,
-                        self.nodes_searched / 1000,
-                        self.start_time.elapsed().as_secs_f64(),
-                    );
-                    self.mid_fallback(board);
-
-                    let (wp, _) = self.look_up_board(board);
-                    let new_proven = self.table.proven_count();
-                    let proofs_added = new_proven.saturating_sub(prev_proven_count);
-                    verbose_eprintln!(
-                        "[solve] warmup {} done: pn={} proofs=+{} nodes={}K time={:.1}s",
-                        i + 1, wp, proofs_added,
-                        self.nodes_searched / 1000,
-                        self.start_time.elapsed().as_secs_f64(),
-                    );
-
-                    if wp == 0 { break; }
-                    if proofs_added == 0 {
-                        verbose_eprintln!("[solve] warmup {}: no proofs, skip rest", i + 1);
-                        break;
-                    }
-                    prev_proven_count = new_proven;
-                    prev_warmup_depth = Some(wd);
-                    // v0.24.73: 段間の retain_proofs_only はループ先頭で実行．
-                }
-
-                self.depth = final_depth;
-                self.max_nodes = saved_max_nodes;
-                // warmup 完了後: WorkingTT を clear して depth-limited disproof を
-                // 除去する．warmup の浅い depth で生成された depth-limited NM
-                // (dn=0, remaining < INFINITE) が main solve の look_up でヒット
-                // すると false NoCheckmate が発生する (v0.24.66)．
-                self.table.retain_proofs_only();
-            }
-
-            // 最終 MID フォールバック (full depth)
             let (rp, rd) = self.look_up_board(board);
             if rp != 0 && rd != 0
                 && self.nodes_searched < self.max_nodes
@@ -1977,8 +1777,7 @@ impl DfPnSolver {
     /// **M-A (v0.25.2)**: target ≥ 20 に **下限フロア 8** を追加．
     /// §10.2.9 ply 20 false-NoMate 診断で，target=21 の log-adaptive d=5 では
     /// refutable check の判定が浅すぎて非 NM 局面を refutable disproof と誤判定
-    /// する現象を確認．warmup で代替できたため，固定 depth=10 相当の対策を
-    /// 組み込む．
+    /// する現象を確認．固定 depth=10 相当の対策を組み込む．
     ///
     /// **N-2 (v0.26.0)**: target 24-31 の固定フロア 8 を 6 に緩和し
     /// NPS -28% (M-A による) の一部を回収する．

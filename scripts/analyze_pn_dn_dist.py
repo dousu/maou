@@ -186,8 +186,6 @@ def plot_intermediate_dist(
     labels = [bucket_label_short(k) for k in interm_range]
     xs = np.arange(len(interm_range))
 
-    # per_depth のうち外部 IDS 分のみ (最初の数スナップショット)
-    # warmup 再帰を除いた最初の 6 スナップショット
     outer_depth = [d for d, *_ in per_depth if d <= 36]  # depth <= 36 のスナップショット
 
     fig, axes = plt.subplots(1, 2, figsize=(18, 7))
@@ -244,11 +242,8 @@ def plot_intermediate_per_depth(
     per_depth: list[tuple[int, int, list[int], list[int], list[int]]],
     out_path: str,
 ) -> None:
-    """IDS 各 depth で中間エントリの分布がどう変化するかを可視化する．
-
-    warmup 再帰を除いた外部 IDS スナップショットのみを使用する．
-    """
-    # warmup 再帰を除外: depth が単調増加するものだけ
+    """IDS 各 depth で中間エントリの分布がどう変化するかを可視化する．"""
+    # depth が単調増加するスナップショットのみを使用する
     outer = []
     prev_d = -1
     for snap in per_depth:
@@ -257,7 +252,7 @@ def plot_intermediate_per_depth(
             outer.append(snap)
             prev_d = d
         else:
-            break  # depth が減ったら warmup 開始
+            break
 
     if not outer:
         print("IDS per-depth データなし")
@@ -543,6 +538,8 @@ def main() -> None:
         draw_ply=32767,
         timeout_secs=600,
         find_shortest=False,
+        pv_nodes_per_child=0,
+        tt_gc_threshold=0,
     )
     elapsed = time.time() - t0
 
@@ -554,20 +551,11 @@ def main() -> None:
                     "/tmp/pn_dn_dist_39te.png")
     plot_per_depth(per_depth, "/tmp/pn_dn_dist_39te_per_depth.png")
     plot_per_depth_total_trend(per_depth, "/tmp/pn_dn_dist_39te_trend.png")
-    # 最後の外部 IDS スナップショットを使用; depth が単調増加する先頭部分のみが外部 IDS
-    # (warmup 再帰では depth がリセットされる)
-    outer_snaps = []
-    prev_d = -1
-    for s in per_depth:
-        if s[0] > prev_d:
-            outer_snaps.append(s)
-            prev_d = s[0]
-        else:
-            break
-    last_outer = outer_snaps[-1] if outer_snaps else None
-    if last_outer is not None:
-        _, _, last_pn_h, last_dn_h, _ = last_outer
-        snap_label = f"IDS depth={last_outer[0]}"
+    # 最後の IDS スナップショットを使用
+    last_snap = per_depth[-1] if per_depth else None
+    if last_snap is not None:
+        _, _, last_pn_h, last_dn_h, _ = last_snap
+        snap_label = f"IDS depth={last_snap[0]}"
     else:
         last_pn_h, last_dn_h = pn_hist, dn_hist
         snap_label = "最終"
