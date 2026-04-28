@@ -88,6 +88,10 @@ const PN_UNIT: u32 = 16;
 /// crossover 点: max = PN_UNIT * 2^WPN_GAMMA_SHIFT
 ///   (これより小さい max では旧式より保守的，大きい max では旧式より積極的)
 /// GAMMA_SHIFT=6 → crossover = 1024 (bucket 10)
+///
+/// OR dn 専用 γ_dn の分離も試みた (v0.39.0, γ_dn=4) が，AND-min 伝播が支配的であり
+/// σ_ln の改善は得られなかった．OR dn 緩和は AND ノードで即座に min されて消えるため，
+/// WPN_GAMMA_SHIFT は pn/dn 共通で 6 を維持する (pn-dn-distribution.md §3.10 参照)．
 const WPN_GAMMA_SHIFT: u32 = 6;
 
 /// AND ノードで合駒(drop)を後回しにするための dn バイアス．
@@ -284,8 +288,9 @@ fn sacrifice_check_boost(board: &Board, checks: &[Move]) -> u32 {
 ///   pn = 8S  → dn = 8S   (対称点)
 ///   pn = 64S → dn = 4S   (下限)
 ///
-/// Note: dn 初期値を高 pn 局面で引き上げると AND ノードの閾値が連鎖的に増大し
-/// 探索効率が指数的に劣化するため，clamp は v0.37.0 値 (4S, 64S) を維持する．
+/// Note: 下限を 1S に下げると AND ノードの最小 dn が低下し，
+/// bucket 4-5 への集中が生じて σ_ln が悪化する (v0.39.0 実験で確認)．
+/// clamp 下限は 4S に固定する．
 #[inline]
 pub(super) fn heuristic_dn_from_pn(pn: u32) -> u32 {
     const C: u64 = (8 * PN_UNIT as u64) * (8 * PN_UNIT as u64);
