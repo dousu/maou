@@ -2446,7 +2446,7 @@ impl DfPnSolver {
                             if let Some(ksq) = defender_king_sq {
                                 pn = pn.saturating_add(edge_cost_or(*m, ksq));
                             }
-                            let dn = heuristic_dn_from_pn(pn);
+                            let dn = self.heuristic_and_dn_blended(board, pn);
                             self.store(child_pk, child_hand, pn, dn,
                                 child_remaining, child_pk as u32);
                         }
@@ -2457,7 +2457,7 @@ impl DfPnSolver {
                         if let Some(ksq) = defender_king_sq {
                             pn = pn.saturating_add(edge_cost_or(*m, ksq));
                         }
-                        let dn = heuristic_dn_from_pn(pn);
+                        let dn = self.heuristic_and_dn_blended(board, pn);
                         self.store(child_pk, child_hand, pn, dn,
                             child_remaining, child_pk as u32);
                     }
@@ -4399,6 +4399,47 @@ impl DfPnSolver {
             num_defenses * PN_UNIT + safe_escapes * PN_UNIT / 2
         };
         base
+    }
+
+    /// AND 子ノード(守備側局面)のヒューリスティック初期 dn を計算する(df-pn+)．
+    ///
+    /// safe_escapes が少ない → 玉の逃げ場なし → 反証困難 → dn 大．
+    /// safe_escapes が多い → 逃げやすい → 反証容易 → dn 小．
+    /// heuristic_or_pn と逆方向のスケール (safe_escapes=0 → 64S, 6+ → 1S)．
+    pub(super) fn heuristic_and_dn(&self, board: &Board) -> u32 {
+        let defender = board.turn;
+        let king_sq = match board.king_square(defender) {
+            Some(sq) => sq,
+            None => return 4 * PN_UNIT,
+        };
+        let king_moves = attack::step_attacks(defender, PieceType::King, king_sq);
+        let our_occ = board.occupied[defender.index()];
+        let danger = board.compute_king_danger(defender, king_sq);
+        let safe_escapes = (king_moves & !our_occ & !danger).count();
+        match safe_escapes {
+            0 => 64 * PN_UNIT,
+            1 => 32 * PN_UNIT,
+            2 => 16 * PN_UNIT,
+            3 =>  8 * PN_UNIT,
+            4 =>  4 * PN_UNIT,
+            5 =>  2 * PN_UNIT,
+            _ =>      PN_UNIT,
+        }
+    }
+
+    /// AND leaf の dn を pn ベースと safe_escapes ベースの幾何平均で計算する．
+    ///
+    /// heuristic_dn_from_pn(pn) は pn の逆数スケール，heuristic_and_dn は safe_escapes 逆数スケール．
+    /// 幾何平均 sqrt(pn_dn × escape_dn) で両信号をブレンドし，
+    /// どちらか一方が 64S 上限に張り付いても相手方の引き下げ効果が働く．
+    ///
+    /// 例: safe_escapes=0, pn=4S → sqrt(16S × 64S) = 32S (旧: 16S)
+    ///     safe_escapes=4, pn=1S → sqrt(64S × 4S)  = 16S (旧: 64S)
+    pub(super) fn heuristic_and_dn_blended(&self, board: &Board, pn: u32) -> u32 {
+        let dn_pn = heuristic_dn_from_pn(pn) as u64;
+        let dn_escape = self.heuristic_and_dn(board) as u64;
+        let blended = ((dn_pn * dn_escape) as f64).sqrt() as u32;
+        blended.clamp(4 * PN_UNIT, 64 * PN_UNIT)
     }
 
     /// OR 子ノード(攻め方局面)のヒューリスティック初期 pn を計算する(df-pn+)．
