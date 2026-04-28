@@ -4435,7 +4435,7 @@ impl DfPnSolver {
 
         if adjacent_total >= 5 && pressured == 0 && safe_escapes >= 4 {
             // 玉周辺に攻め駒の利きが皆無の開放空間 → 最大 pn (極めて詰みにくい)
-            return 64 * PN_UNIT;
+            return 512 * PN_UNIT;
         }
 
         // heuristic_or_pn: safe_escapes × num_checks による pn 初期値マッピング
@@ -4446,7 +4446,8 @@ impl DfPnSolver {
         //
         // safe_escapes=1-2 (大多数の39手詰め局面) は直接マッピングで粒度を上げ，
         // pn 分布が bucket 5-6 に集中するスパイクを緩和する (Case B v0.37.0)．
-        // safe_escapes=0, 3+ は escape_base × num_checks 係数の既存ロジックを維持．
+        // safe_escapes=3+ は escape_base を指数的にスケールし，bucket 9〜13 へ分散する
+        // (Case C v0.38.0: σ_ln 拡大のための値域拡大)．
         let adjusted_pn = match safe_escapes {
             1 => {
                 // 逃げ場 1: checks が多いほど詰みやすい → pn を下げる
@@ -4461,13 +4462,14 @@ impl DfPnSolver {
             }
             _ => {
                 // safe_escapes=0, 3+: escape_base × num_checks 係数
+                // 3+ は指数的スケール (bucket 7/9/11/12/13) で σ_ln を拡大
                 let escape_base = match safe_escapes {
-                    0 => PN_UNIT,           // 1S  (bucket 4)
-                    3 => 8 * PN_UNIT,       // 8S  (bucket 7)
-                    4 => 16 * PN_UNIT,      // 16S (bucket 8)
-                    5 => 24 * PN_UNIT,      // 24S (~bucket 8.6)
-                    6 => 32 * PN_UNIT,      // 32S (bucket 9)
-                    _ => 48 * PN_UNIT,      // 48S (7+逃げ場, ~bucket 9.6)
+                    0 => PN_UNIT,             //   1S (bucket 4)
+                    3 => 8 * PN_UNIT,         //   8S (bucket 7)
+                    4 => 32 * PN_UNIT,        //  32S (bucket 9)
+                    5 => 128 * PN_UNIT,       // 128S (bucket 11)
+                    6 => 256 * PN_UNIT,       // 256S (bucket 12)
+                    _ => 512 * PN_UNIT,       // 512S (bucket 13, 7+逃げ場)
                 };
                 if num_checks >= 8 { escape_base }
                 else if num_checks >= 4 { escape_base + escape_base / 4 }
@@ -4476,8 +4478,8 @@ impl DfPnSolver {
             }
         };
 
-        // 上限 64S (1024, bucket 10)
-        adjusted_pn.min(64 * PN_UNIT)
+        // 上限 512S (~bucket 13)
+        adjusted_pn.min(512 * PN_UNIT)
     }
 
     /// OR 子ノード(攻め方局面)で，取りの王手が既証明局面に到達するか TT を先読みする．

@@ -280,9 +280,12 @@ fn sacrifice_check_boost(board: &Board, checks: &[Move]) -> u32 {
 /// 初期 pn/dn の有効値域を bucket 6〜10 に広げる．
 ///
 ///   pn × dn ≈ (8·PN_UNIT)²
-///   pn = 1S → dn = 64S  (上限)
-///   pn = 8S → dn = 8S   (対称点)
-///   pn = 64S → dn = 4S  (下限: 2S→4S に引き上げ，bucket 5 スパイク抑制)
+///   pn = 1S  → dn = 64S  (上限)
+///   pn = 8S  → dn = 8S   (対称点)
+///   pn = 64S → dn = 4S   (下限)
+///
+/// Note: dn 初期値を高 pn 局面で引き上げると AND ノードの閾値が連鎖的に増大し
+/// 探索効率が指数的に劣化するため，clamp は v0.37.0 値 (4S, 64S) を維持する．
 #[inline]
 pub(super) fn heuristic_dn_from_pn(pn: u32) -> u32 {
     const C: u64 = (8 * PN_UNIT as u64) * (8 * PN_UNIT as u64);
