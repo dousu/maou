@@ -278,23 +278,32 @@ fn sacrifice_check_boost(board: &Board, checks: &[Move]) -> u32 {
     2 * PN_UNIT
 }
 
-/// pn に対して逆比例する初期 dn ヒューリスティック (df-pn+ 対称初期化)．
+/// pn に対して平方根逆比例する初期 dn ヒューリスティック (df-pn+ 連続スケーリング)．
 ///
-/// 証明が容易な局面(小 pn)ほど反証困難(大 dn)になるよう設定し，
-/// 初期 pn/dn の有効値域を bucket 6〜10 に広げる．
+/// `dn ∝ 1/√pn` により，pn が大きい範囲 (safe_escapes=3+) でも
+/// dn が 4S に張り付かず多様な値を持つ．
+/// 旧 `1/pn` 式では pn>16S が全て dn=4S に集中していたが，
+/// `1/√pn` 式では pn∈[1S, 256S] が dn∈[4S, 64S] に連続的にマップされる．
 ///
-///   pn × dn ≈ (8·PN_UNIT)²
-///   pn = 1S  → dn = 64S  (上限)
-///   pn = 8S  → dn = 8S   (対称点)
-///   pn = 64S → dn = 4S   (下限)
+///   dn = sqrt(C² / pn),  C = 64·PN_UNIT·√PN_UNIT = 4096
+///   pn =   1S → dn = 64S  (上限)
+///   pn =   4S → dn = 32S
+///   pn =  16S → dn = 16S  (対称点)
+///   pn =  64S → dn =  8S
+///   pn = 256S → dn =  4S  (下限)
+///   pn > 256S → dn =  4S  (clamp)
 ///
-/// Note: 下限を 1S に下げると AND ノードの最小 dn が低下し，
-/// bucket 4-5 への集中が生じて σ_ln が悪化する (v0.39.0 実験で確認)．
-/// clamp 下限は 4S に固定する．
+/// 旧式との比較:
+///   pn=8S:  旧 8S → 新 ≈22S (+1.5 bucket)
+///   pn=32S: 旧 4S → 新 ≈11S (+1.5 bucket)
+///
+/// clamp 下限は 4S を維持 (v0.39.0 で 1S 緩和は悪化を確認)．
 #[inline]
 pub(super) fn heuristic_dn_from_pn(pn: u32) -> u32 {
-    const C: u64 = (8 * PN_UNIT as u64) * (8 * PN_UNIT as u64);
-    ((C / pn.max(1) as u64) as u32).clamp(4 * PN_UNIT, 64 * PN_UNIT)
+    // C² = (64 · PN_UNIT · √PN_UNIT)² = 64² · PN_UNIT³ = 4096² = 16_777_216
+    const C2: u64 = 4096 * 4096;
+    let dn = ((C2 / pn.max(1) as u64) as f64).sqrt() as u32;
+    dn.clamp(4 * PN_UNIT, 64 * PN_UNIT)
 }
 
 /// SNDA (Kishimoto 2010) の積極的ソースグループ集約．

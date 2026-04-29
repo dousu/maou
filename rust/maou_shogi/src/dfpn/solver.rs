@@ -2446,7 +2446,7 @@ impl DfPnSolver {
                             if let Some(ksq) = defender_king_sq {
                                 pn = pn.saturating_add(edge_cost_or(*m, ksq));
                             }
-                            let dn = self.heuristic_and_dn_blended(board, pn);
+                            let dn = heuristic_dn_from_pn(pn);
                             self.store(child_pk, child_hand, pn, dn,
                                 child_remaining, child_pk as u32);
                         }
@@ -2457,7 +2457,7 @@ impl DfPnSolver {
                         if let Some(ksq) = defender_king_sq {
                             pn = pn.saturating_add(edge_cost_or(*m, ksq));
                         }
-                        let dn = self.heuristic_and_dn_blended(board, pn);
+                        let dn = heuristic_dn_from_pn(pn);
                         self.store(child_pk, child_hand, pn, dn,
                             child_remaining, child_pk as u32);
                     }
@@ -4401,47 +4401,6 @@ impl DfPnSolver {
         base
     }
 
-    /// AND 子ノード(守備側局面)のヒューリスティック初期 dn を計算する(df-pn+)．
-    ///
-    /// safe_escapes が少ない → 玉の逃げ場なし → 反証困難 → dn 大．
-    /// safe_escapes が多い → 逃げやすい → 反証容易 → dn 小．
-    /// heuristic_or_pn と逆方向のスケール (safe_escapes=0 → 64S, 6+ → 1S)．
-    pub(super) fn heuristic_and_dn(&self, board: &Board) -> u32 {
-        let defender = board.turn;
-        let king_sq = match board.king_square(defender) {
-            Some(sq) => sq,
-            None => return 4 * PN_UNIT,
-        };
-        let king_moves = attack::step_attacks(defender, PieceType::King, king_sq);
-        let our_occ = board.occupied[defender.index()];
-        let danger = board.compute_king_danger(defender, king_sq);
-        let safe_escapes = (king_moves & !our_occ & !danger).count();
-        match safe_escapes {
-            0 => 64 * PN_UNIT,
-            1 => 32 * PN_UNIT,
-            2 => 16 * PN_UNIT,
-            3 =>  8 * PN_UNIT,
-            4 =>  4 * PN_UNIT,
-            5 =>  2 * PN_UNIT,
-            _ =>      PN_UNIT,
-        }
-    }
-
-    /// AND leaf の dn を pn ベースと safe_escapes ベースの幾何平均で計算する．
-    ///
-    /// heuristic_dn_from_pn(pn) は pn の逆数スケール，heuristic_and_dn は safe_escapes 逆数スケール．
-    /// 幾何平均 sqrt(pn_dn × escape_dn) で両信号をブレンドし，
-    /// どちらか一方が 64S 上限に張り付いても相手方の引き下げ効果が働く．
-    ///
-    /// 例: safe_escapes=0, pn=4S → sqrt(16S × 64S) = 32S (旧: 16S)
-    ///     safe_escapes=4, pn=1S → sqrt(64S × 4S)  = 16S (旧: 64S)
-    pub(super) fn heuristic_and_dn_blended(&self, board: &Board, pn: u32) -> u32 {
-        let dn_pn = heuristic_dn_from_pn(pn) as u64;
-        let dn_escape = self.heuristic_and_dn(board) as u64;
-        let blended = ((dn_pn * dn_escape) as f64).sqrt() as u32;
-        blended.clamp(4 * PN_UNIT, 64 * PN_UNIT)
-    }
-
     /// OR 子ノード(攻め方局面)のヒューリスティック初期 pn を計算する(df-pn+)．
     ///
     /// 標準 df-pn では OR ノードの初期 pn=1 だが，これでは全ての
@@ -4449,6 +4408,18 @@ impl DfPnSolver {
     /// 実際は玉の逃げ場が多い局面ほど詰みにくく，追い詰めに多くの手を要する．
     ///
     /// AND 親ノードの sum(pn) に直接影響し，閾値配分の精度を向上させる．
+    ///
+    /// # v0.43.0 変更点
+    ///
+    /// pn 値域を右方向に拡大して σ_ln を改善する:
+    ///
+    /// 1. 上限を 512S (bucket 13) から 2048S (bucket 15) に引き上げ．
+    /// 2. 開放空間検出を safe_escapes に応じて段階化:
+    ///    - safe_escapes=4-5, pressured=0: 1024S (bucket 14)
+    ///    - safe_escapes≥6, pressured=0: 2048S (bucket 15)
+    /// 3. safe_escapes=7 を 6 から分離して独立した base 値を設定．
+    /// 4. num_checks=1 の乗数を ×2 から ×4 に強化
+    ///    (1手しか王手がない = 詰めにくさが大幅に増す)．
     pub(super) fn heuristic_or_pn(&self, board: &Board, num_checks: u32) -> u32 {
         if num_checks == 0 {
             return INF; // 王手なし → 不詰(呼び出し側で処理済みのはず)
@@ -4466,17 +4437,20 @@ impl DfPnSolver {
         let danger = board.compute_king_danger(defender, king_sq);
         let safe_escapes = (king_moves & !def_occ & !danger).count();
 
-        // --- 開放空間逃走検出(人間的枝刈り) ---
-        // 玉周辺(隣接8マス)への攻め駒の利き数が少なく，かつ逃げ場が多い場合，
+        // --- 開放空間逃走検出(人間的枝刈り，段階化 v0.43.0) ---
+        // 玉周辺(隣接8マス)への攻め駒の利きが皆無かつ逃げ場が多い場合，
         // 人間が「玉が広い方に逃げて捕まらない」と直感するのと同様に
         // pn を引き上げて探索優先度を下げる．
+        // safe_escapes の大きさに応じて詰めにくさをより細かく区別する．
         let king_adjacent = king_moves & !def_occ; // 玉が移動可能なマス(自駒除外)
         let pressured = (king_adjacent & danger).count(); // 攻め方に利かれているマス数
         let adjacent_total = king_adjacent.count(); // 移動可能マス総数
 
         if adjacent_total >= 5 && pressured == 0 && safe_escapes >= 4 {
-            // 玉周辺に攻め駒の利きが皆無の開放空間 → 最大 pn (極めて詰みにくい)
-            return 512 * PN_UNIT;
+            return match safe_escapes {
+                4 | 5 => 1024 * PN_UNIT, // bucket 14: やや広い開放空間
+                _ => 2048 * PN_UNIT,     // bucket 15: 6+ 逃げ場の完全開放空間
+            };
         }
 
         // heuristic_or_pn: safe_escapes × num_checks による pn 初期値マッピング
@@ -4487,8 +4461,8 @@ impl DfPnSolver {
         //
         // safe_escapes=1-2 (大多数の39手詰め局面) は直接マッピングで粒度を上げ，
         // pn 分布が bucket 5-6 に集中するスパイクを緩和する (Case B v0.37.0)．
-        // safe_escapes=3+ は escape_base を指数的にスケールし，bucket 9〜13 へ分散する
-        // (Case C v0.38.0: σ_ln 拡大のための値域拡大)．
+        // safe_escapes=3+ は escape_base を指数的にスケールし，bucket 7〜15 へ分散する
+        // (Case C v0.38.0, v0.43.0: σ_ln 拡大のための値域拡大)．
         let adjusted_pn = match safe_escapes {
             1 => {
                 // 逃げ場 1: checks が多いほど詰みやすい → pn を下げる
@@ -4503,24 +4477,26 @@ impl DfPnSolver {
             }
             _ => {
                 // safe_escapes=0, 3+: escape_base × num_checks 係数
-                // 3+ は指数的スケール (bucket 7/9/11/12/13) で σ_ln を拡大
+                // 3+ は指数的スケール (bucket 7/9/11/12/13/14) で σ_ln を拡大
                 let escape_base = match safe_escapes {
-                    0 => PN_UNIT,             //   1S (bucket 4)
-                    3 => 8 * PN_UNIT,         //   8S (bucket 7)
-                    4 => 32 * PN_UNIT,        //  32S (bucket 9)
-                    5 => 128 * PN_UNIT,       // 128S (bucket 11)
-                    6 => 256 * PN_UNIT,       // 256S (bucket 12)
-                    _ => 512 * PN_UNIT,       // 512S (bucket 13, 7+逃げ場)
+                    0 => PN_UNIT,              //    1S (bucket 4)
+                    3 => 8 * PN_UNIT,          //    8S (bucket 7)
+                    4 => 32 * PN_UNIT,         //   32S (bucket 9)
+                    5 => 128 * PN_UNIT,        //  128S (bucket 11)
+                    6 => 256 * PN_UNIT,        //  256S (bucket 12)
+                    7 => 512 * PN_UNIT,        //  512S (bucket 13, v0.43.0 分離)
+                    _ => 1024 * PN_UNIT,       // 1024S (bucket 14, 8+逃げ場)
                 };
+                // num_checks=1 の乗数を ×4 に強化 (v0.43.0: ×2 から変更)
                 if num_checks >= 8 { escape_base }
                 else if num_checks >= 4 { escape_base + escape_base / 4 }
                 else if num_checks >= 2 { escape_base + escape_base / 2 }
-                else { escape_base * 2 }
+                else { escape_base * 4 }  // checks=1: ×4
             }
         };
 
-        // 上限 512S (~bucket 13)
-        adjusted_pn.min(512 * PN_UNIT)
+        // 上限 2048S (bucket 15) に引き上げ (v0.43.0: 512S から拡大)
+        adjusted_pn.min(2048 * PN_UNIT)
     }
 
     /// OR 子ノード(攻め方局面)で，取りの王手が既証明局面に到達するか TT を先読みする．
