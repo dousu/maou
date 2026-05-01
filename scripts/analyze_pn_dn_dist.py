@@ -438,6 +438,241 @@ def plot_per_depth_total_trend(
     plt.close(fig)
 
 
+def analyze_kl_by_bucket(
+    per_depth: list[tuple[int, int, list[int], list[int], list[int]]],
+    out_path: str,
+) -> None:
+    """課題 D: depth ごとの per-bucket KL 寄与度を可視化する．
+
+    各 depth の中間エントリ (bucket 1-30) に対し KL(P||Q) = Σ_k p_k * log(p_k/q_k) を
+    bucket k ごとに分解する．Q は対数正規フィット，正値は実分布の過剰，負値は不足を示す．
+    特定 bucket へのスパイクが KL 劣化の主因かを判定する (課題 D 診断)．
+    """
+    outer: list[tuple[int, int, list[int], list[int], list[int]]] = []
+    prev_d = -1
+    for snap in per_depth:
+        d = snap[0]
+        if d > prev_d:
+            outer.append(snap)
+            prev_d = d
+        else:
+            break
+
+    if not outer:
+        print("per-bucket KL 分析: データなし")
+        return
+
+    n = len(outer)
+    bucket_xs = np.arange(1, 31, dtype=float)
+    labels = [bucket_label_short(k) for k in range(1, 31)]
+    cmap = plt.colormaps.get_cmap("viridis")
+    colors = [cmap(i / max(n - 1, 1)) for i in range(n)]
+    eps = 1e-10
+
+    fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+    fig.suptitle(
+        "課題 D — per-bucket KL 寄与度 (depth 増加に伴う KL 劣化の分析)\n"
+        "正値: 実分布 > 対数正規フィット (過剰)，負値: 実分布 < 対数正規 (不足)",
+        fontsize=12,
+    )
+
+    print("\n=== per-bucket KL 寄与: 最大寄与 bucket (depth 別) ===")
+
+    for col, name in enumerate(["pn", "dn"]):
+        ax = axes[col]
+
+        for i, (ids_depth, _nodes, pn_h, dn_h, _jh) in enumerate(outer):
+            raw_h = pn_h if name == "pn" else dn_h
+            arr = np.array(raw_h[1:31], dtype=np.float64)
+            total = arr.sum()
+            if total < 2:
+                continue
+
+            result = _fit_lognormal_to_histogram(arr.astype(np.int64))
+            if result is None:
+                continue
+
+            mu_ln, sigma_ln, kl_total, _ = result
+            pdf_at_xs = stats.lognorm.pdf(bucket_xs, s=sigma_ln, scale=np.exp(mu_ln))
+            q_k = pdf_at_xs / (pdf_at_xs.sum() + eps)
+            p_k = arr / (total + eps)
+
+            kl_by_bucket = np.zeros(30)
+            mask = p_k > 0
+            kl_by_bucket[mask] = p_k[mask] * np.log(p_k[mask] / (q_k[mask] + eps))
+
+            ax.plot(
+                np.arange(30), kl_by_bucket,
+                color=colors[i], linewidth=1.5, marker="o", markersize=3,
+                label=f"depth={ids_depth} (KL={kl_total:.3f})",
+            )
+
+            max_idx = int(np.argmax(np.abs(kl_by_bucket)))
+            print(f"  {name} depth={ids_depth:>3}: KL={kl_total:.3f}, "
+                  f"max寄与 bucket {max_idx + 1} ({bucket_label_short(max_idx + 1)}) = {kl_by_bucket[max_idx]:.4f}")
+
+        ax.axhline(0, color="black", linewidth=0.8, linestyle="--", alpha=0.5)
+        ax.set_xticks(range(0, 30, 2))
+        ax.set_xticklabels([labels[k] for k in range(0, 30, 2)], rotation=60, fontsize=7)
+        ax.set_xlabel("bucket k (log2 スケール, 1-30)")
+        ax.set_ylabel("KL 寄与 = p_k · log(p_k / q_k)")
+        ax.set_title(f"{name}: per-bucket KL 寄与度 (bucket 1-30)")
+        ax.legend(fontsize=7, ncol=2)
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=130, bbox_inches="tight")
+    print(f"per-bucket KL 寄与グラフを保存: {out_path}")
+    plt.close(fig)
+
+
+def analyze_pn_tail(
+    joint_hist_flat: list[int],
+    per_depth: list[tuple[int, int, list[int], list[int], list[int]]],
+    out_path: str,
+    high_pn_threshold: int = 20,
+) -> None:
+    """課題 C: pn 右テール (bucket >= high_pn_threshold) の dn 分布を分析する．
+
+    joint_hist から高 pn エントリの dn 分布を抽出し，ノードの性質を推定する:
+      高 pn + 低 dn (bucket <= 6) → AND ノード候補 (WPN sum 累積が主因)
+      高 pn + 高 dn (bucket >= 12) → OR ノード候補 (全子が高コスト)
+    """
+    joint_final = np.array(joint_hist_flat, dtype=np.int64).reshape(32, 32)
+    labels = [bucket_label_short(k) for k in range(32)]
+
+    dn_of_high_pn = joint_final[high_pn_threshold:, :].sum(axis=0)
+    total_high_pn = int(dn_of_high_pn.sum())
+    and_count = int(dn_of_high_pn[:7].sum())
+    or_count = int(dn_of_high_pn[12:].sum())
+    and_pct = 100.0 * and_count / max(total_high_pn, 1)
+    or_pct = 100.0 * or_count / max(total_high_pn, 1)
+
+    outer: list[tuple[int, int, np.ndarray]] = []
+    prev_d = -1
+    for snap in per_depth:
+        d = snap[0]
+        if d > prev_d:
+            jh = np.array(snap[4], dtype=np.int64).reshape(32, 32)
+            dn_dist = jh[high_pn_threshold:, :].sum(axis=0)
+            outer.append((d, snap[1], dn_dist))
+            prev_d = d
+        else:
+            break
+
+    print(f"\n=== pn 右テール分析 (bucket >= {high_pn_threshold}) ===")
+    print(f"  最終スナップショット: 高 pn エントリ = {total_high_pn:,}")
+    print(f"    AND候補 (dn<=2^6):  {and_count:,} ({and_pct:.1f}%)")
+    print(f"    OR候補  (dn>=2^12): {or_count:,} ({or_pct:.1f}%)")
+    if outer:
+        print("  depth 別内訳:")
+        for d, _, dn_d in outer:
+            tot = int(dn_d.sum())
+            a = int(dn_d[:7].sum())
+            o = int(dn_d[12:].sum())
+            print(f"    depth={d:>3}: total={tot:>8,}, AND候補={a:>7,} ({100*a/max(tot,1):.1f}%), "
+                  f"OR候補={o:>7,} ({100*o/max(tot,1):.1f}%)")
+
+    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
+    fig.suptitle(
+        f"課題 C: pn 右テール (bucket ≥ {high_pn_threshold}, pn ≥ {2**(high_pn_threshold-1):,}) の dn 分布分析\n"
+        f"高 pn + 低 dn → AND ノード候補，高 pn + 高 dn → OR ノード候補",
+        fontsize=12,
+    )
+
+    # --- (0,0): 最終スナップショットの高 pn エントリの dn 分布 ---
+    ax = axes[0, 0]
+    bar_colors = [
+        "#d73027" if k <= 6 else "#4575b4" if k >= 12 else "#74add1"
+        for k in range(32)
+    ]
+    ax.bar(range(32), dn_of_high_pn, color=bar_colors, edgecolor="white", linewidth=0.3)
+    if dn_of_high_pn.max() > 0:
+        ax.set_yscale("log")
+    ax.set_xticks(range(0, 32, 2))
+    ax.set_xticklabels([labels[k] for k in range(0, 32, 2)], rotation=60, fontsize=7)
+    ax.set_xlabel("dn バケット")
+    ax.set_ylabel("エントリ数 (対数軸)")
+    ax.set_title(
+        f"高 pn エントリの dn 分布 [最終]\n"
+        f"total={total_high_pn:,} | 赤=AND候補(dn≤64) | 青=OR候補(dn≥4096)",
+    )
+    ax.axvline(6.5, color="red", linestyle="--", linewidth=1.2, alpha=0.8)
+    ax.axvline(11.5, color="blue", linestyle="--", linewidth=1.2, alpha=0.8)
+    ymax = dn_of_high_pn.max() if dn_of_high_pn.max() > 0 else 1
+    ax.text(3, ymax * 0.3, f"AND候補\n{and_count:,}\n({and_pct:.1f}%)",
+            ha="center", fontsize=9, color="darkred",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.7))
+    ax.text(20, ymax * 0.3, f"OR候補\n{or_count:,}\n({or_pct:.1f}%)",
+            ha="center", fontsize=9, color="darkblue",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.7))
+
+    # --- (0,1): joint heatmap (右テール領域を赤線で強調) ---
+    ax = axes[0, 1]
+    masked = np.ma.masked_where(joint_final == 0, joint_final)
+    im = ax.imshow(
+        masked,
+        origin="lower",
+        aspect="auto",
+        norm=mcolors.LogNorm(vmin=1, vmax=max(joint_final.max(), 1)),
+        cmap="viridis",
+    )
+    plt.colorbar(im, ax=ax, label="エントリ数 (対数)")
+    ax.axhline(high_pn_threshold - 0.5, color="red", linewidth=2, linestyle="--",
+               label=f"pn bucket ≥ {high_pn_threshold}")
+    ax.set_xticks(range(0, 32, 2))
+    ax.set_xticklabels([labels[k] for k in range(0, 32, 2)], rotation=60, fontsize=7)
+    ax.set_yticks(range(0, 32, 2))
+    ax.set_yticklabels([labels[k] for k in range(0, 32, 2)], fontsize=7)
+    ax.set_xlabel("dn バケット")
+    ax.set_ylabel("pn バケット")
+    ax.set_title("pn vs dn 2D 分布 [最終] (赤線以上が右テール)")
+    ax.legend(fontsize=8)
+
+    # --- (1,0): per-depth の高 pn エントリ数 ---
+    ax = axes[1, 0]
+    if outer:
+        depths = [d for d, _, _ in outer]
+        counts = [int(dn_d.sum()) for _, _, dn_d in outer]
+        ax.bar(range(len(depths)), counts, color="purple", alpha=0.8)
+        ax.set_xticks(range(len(depths)))
+        ax.set_xticklabels([str(d) for d in depths])
+        ax.set_xlabel("IDS depth")
+        ax.set_ylabel(f"pn bucket ≥ {high_pn_threshold} のエントリ数")
+        ax.set_title("各 depth での右テールエントリ数")
+        for i, c in enumerate(counts):
+            ax.text(i, c * 1.01, f"{c:,}", ha="center", va="bottom", fontsize=7)
+
+    # --- (1,1): per-depth の AND/OR 構成割合 ---
+    ax = axes[1, 1]
+    if outer:
+        depths = [d for d, _, _ in outer]
+        and_fracs = [100.0 * dn_d[:7].sum() / max(dn_d.sum(), 1) for _, _, dn_d in outer]
+        or_fracs = [100.0 * dn_d[12:].sum() / max(dn_d.sum(), 1) for _, _, dn_d in outer]
+        mid_fracs = [100.0 - a - o for a, o in zip(and_fracs, or_fracs)]
+
+        x = range(len(depths))
+        ax.bar(x, and_fracs, label="AND候補 (dn≤2^6=64)", color="#d73027", alpha=0.85)
+        ax.bar(x, mid_fracs, bottom=and_fracs, label="中間 (2^6<dn<2^12)", color="#74add1", alpha=0.85)
+        ax.bar(
+            x, or_fracs,
+            bottom=[a + m for a, m in zip(and_fracs, mid_fracs)],
+            label="OR候補 (dn≥2^12=4096)", color="#4575b4", alpha=0.85,
+        )
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(d) for d in depths])
+        ax.set_xlabel("IDS depth")
+        ax.set_ylabel("割合 (%)")
+        ax.set_title("各 depth での右テールエントリの AND/OR 構成割合")
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3, axis="y")
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=130, bbox_inches="tight")
+    print(f"pn 右テール分析グラフを保存: {out_path}")
+    plt.close(fig)
+
+
 def _lognormal_stats(arr: np.ndarray) -> tuple[float, float, float, float] | None:
     """bucket 1-30 の中間エントリから対数正規分布パラメータを計算する．
 
@@ -603,6 +838,8 @@ def main() -> None:
                            "/tmp/pn_dn_dist_39te_intermediate.png",
                            snapshot_label=snap_label)
     plot_intermediate_per_depth(per_depth, "/tmp/pn_dn_dist_39te_intermediate_depth.png")
+    analyze_kl_by_bucket(per_depth, "/tmp/pn_dn_dist_39te_kl_by_bucket.png")
+    analyze_pn_tail(joint_hist_flat, per_depth, "/tmp/pn_dn_dist_39te_pn_tail.png")
     print_text_summary(pn_hist, dn_hist, per_depth)
 
 
