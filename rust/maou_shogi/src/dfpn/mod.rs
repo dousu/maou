@@ -89,6 +89,10 @@ const PN_UNIT: u32 = 16;
 ///   (これより小さい max では旧式より保守的，大きい max では旧式より積極的)
 /// GAMMA_SHIFT=6 → crossover = 1024 (bucket 10)
 ///
+/// v0.51.0 で GAMMA_SHIFT=7 を試みたが，WPN 和の貢献を半減させると
+/// 収束が遅くなり AND pn テールが逆に爆発した (depth=20 で 217K→2.4M エントリ)．
+/// KL も全 depth で悪化したため 6 に戻した (v0.51.1, pn-dn-distribution.md §4.5 参照)．
+///
 /// OR dn 専用 γ_dn の分離も試みた (v0.39.0, γ_dn=4) が，AND-min 伝播が支配的であり
 /// σ_ln の改善は得られなかった．OR dn 緩和は AND ノードで即座に min されて消えるため，
 /// WPN_GAMMA_SHIFT は pn/dn 共通で 6 を維持する (pn-dn-distribution.md §3.10 参照)．

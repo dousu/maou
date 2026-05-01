@@ -4470,14 +4470,16 @@ impl DfPnSolver {
         let adjusted_pn = match safe_escapes {
             1 => {
                 // 逃げ場 1: checks が多いほど詰みやすい → pn を下げる
-                if num_checks >= 4 { 3 * PN_UNIT / 2 }   // 1.5S = 24 (~bucket 4.6)
-                else if num_checks >= 2 { 3 * PN_UNIT }   // 3S = 48 (~bucket 5.6)
-                else { 4 * PN_UNIT }                      // 4S = 64 (bucket 6, checks=1)
+                // v0.50.0: bucket 6-7 スパイク緩和のため全ケースを +1 bucket 分シフト
+                if num_checks >= 4 { 3 * PN_UNIT / 2 }   // 1.5S = 24 (~bucket 4.6, 変化なし)
+                else if num_checks >= 2 { 4 * PN_UNIT }   // 4S = 64 (bucket 7, was 3S=48 bucket 6)
+                else { 8 * PN_UNIT }                      // 8S = 128 (bucket 8, was 4S=64 bucket 7)
             }
             2 => {
-                // 逃げ場 2: checks≥4 なら 3S，それ以外 5S
-                if num_checks >= 4 { 3 * PN_UNIT }        // 3S = 48 (~bucket 5.6)
-                else { 5 * PN_UNIT }                      // 5S = 80 (~bucket 6.3)
+                // 逃げ場 2: v0.50.0: 2-way → 3-way 分岐で bucket 6-7 スパイク緩和
+                if num_checks >= 4 { 4 * PN_UNIT }        // 4S = 64 (bucket 7, was 3S=48 bucket 6)
+                else if num_checks >= 2 { 8 * PN_UNIT }   // 8S = 128 (bucket 8, was 5S=80 bucket 7)
+                else { 16 * PN_UNIT }                     // 16S = 256 (bucket 9, was 5S=80 bucket 7)
             }
             _ => {
                 // safe_escapes=0, 3+: escape_base × num_checks 係数
