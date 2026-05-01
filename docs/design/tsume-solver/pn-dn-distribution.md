@@ -1028,13 +1028,70 @@ v0.48.0 の mini-IDS warm-up (3.8M) と比較して **4× 少ないノード数*
 **実装場所:**
 - `rust/maou_shogi/src/dfpn/tt.rs`: `look_up_working`, `retain_working_intermediates`
 
+**分布計測結果 (v0.49.0):** → §2.6 参照
+
+---
+
+### 2.6 v0.49.0 — pn=INF 中間エントリ depth-limited 扱い後の計測
+
+**計測条件:** 39手詰め，50M ノードで未解決 (status=unknown)，release ビルド (276.5s)
+
+| depth | 累積 nodes | total TT | pn=INF% | dn=0% | pn 中央値 | pn σ_ln | pn KL | dn 中央値 | dn σ_ln | dn KL |
+|-------|-----------|---------|---------|------|---------|---------|------|---------|---------|------|
+| 4 | 150K | 118 | 52.5% | 52.5% | 10.7 | 0.253 | 0.891 | 7.3 | 0.165 | 0.207 |
+| 8 | 160K | 18,463 | 43.7% | 43.7% | 9.9 | 0.277 | 0.395 | 7.9 | 0.195 | 0.128 |
+| 16 | 3.7M | 1,085,759 | 93.8% | 93.4% | 9.3 | 0.403 | 0.473 | 6.6 | 0.283 | 0.531 |
+| 20 | 7.6M | 67,886 | 0.4% | 0.4% | 9.3 | 0.403 | 0.473 | 6.7 | 0.283 | 0.507 |
+| 24 | 11.8M | 723,693 | 85.4% | 84.9% | 8.7 | 0.383 | 0.507 | 6.1 | 0.271 | 0.683 |
+| (28+) | 50M (未完了) | — | — | — | — | — | — | — | — | — |
+
+中央値は exp(μ_ln) [bucket 単位]．
+
+**v0.43.0→v0.49.0 の主要変化:**
+
+| 指標 | v0.43.0 | v0.49.0 | 変化 |
+|------|---------|---------|------|
+| pn σ_ln (d=16) | 0.368 | **0.403** | +0.035 ↑ 目標 ≥0.37 達成 |
+| dn σ_ln (d=8) | 0.139 | **0.195** | +0.056 ↑ |
+| dn σ_ln (d=16) | 0.268 | **0.283** | +0.015 ↑ |
+| total TT (d=16) | 398,521 | **1,085,759** | 2.7× 拡大 |
+| 到達 depth (50M nodes) | **28** | **24** | −4 ↓ 性能回帰 |
+
+**観察:**
+
+- **σ_ln の全体改善:** pn σ_ln が depth=16-20 で 0.403 (目標 ≥0.37 を達成)，
+  dn σ_ln も全 depth で改善 (特に浅い depth で顕著)
+- **depth=16 TT 拡大:** pn=INF エントリが除外されたことで depth=16 内の再探索量が増大し，
+  TT サイズが 398K → 1.1M に拡大した (depth=16 の累積 nodes 自体は同じ 3.7M)
+- **depth=20 の pn=INF% が 0.4% に減少:** v0.43.0 は 4.1%．pn=INF 中間エントリが
+  `retain_working_intermediates` で廃棄されるため，depth=20 開始時の TT がクリーンになった
+- **depth=28 未到達 (50M nodes):** v0.43.0 では 16.6M nodes で depth=28 完了．
+  depth=28 で 38.2M+ nodes を消費しても完了せず → **性能回帰**
+
+**depth=28 到達遅延の根本原因 — pn=INF エントリ廃棄によるヒント喪失:**
+
+```
+v0.43.0: depth=24 → depth=28 遷移時
+  retain_working_intermediates: pn=INF エントリも保持 (remaining=24→28 にシフト)
+  depth=28 MID: depth=24 の pn=INF ヒントを利用して 4.8M nodes で完了
+
+v0.49.0: depth=24 → depth=28 遷移時
+  retain_working_intermediates: pn=INF エントリを廃棄 (セマンティクス的に保守的な処理)
+  depth=28 MID: ヒントなし → 38.2M+ nodes を消費しても未完了
+```
+
+depth=24 の TT の 85% は pn=INF エントリ (total = ~615,000 件)．
+これらは「24手内では証明不能」を意味し，depth=28 での探索でも有効なヒントとなりうるが，
+v0.49.0 では全廃棄されるため depth=28 以降の探索コストが大幅に増大した．
+この問題の詳細と対策候補を §4.5 に記載する．
+
 ---
 
 ## 4. 残存課題と次のアクション
 
 ### 4.1 [課題 A] σ_ln が小さすぎる: ln(bucket) 空間でも分布が狭い
 
-**現状 (v0.44.0，depth=16-28):** pn σ_ln=0.359-0.368，dn σ_ln=0.234-0.268
+**現状 (v0.49.0，depth=16-24):** pn σ_ln=0.383-0.403，dn σ_ln=0.271-0.283
 
 **バージョン別推移 (depth=20):**
 
@@ -1044,14 +1101,16 @@ v0.48.0 の mini-IDS warm-up (3.8M) と比較して **4× 少ないノード数*
 | v0.41.0 | 0.362 | 0.179 | 2.0M | AND leaf dn 幾何平均ブレンド (爆発) |
 | v0.42.0 | 0.362 | 0.179 | 2.0M | heuristic_dn_from_pn sqrt 式 (変化なし) |
 | v0.43.0 | 0.368 | 0.268 | 40K | heuristic_or_pn 値域拡大 (爆発解消) |
-| **v0.44.0** | **0.368** | **0.268** | **40K** | SNDA 前適用試験・棄却，機能は v0.43.0 と同等 |
+| v0.44.0 | 0.368 | 0.268 | 40K | SNDA 前適用試験・棄却，機能は v0.43.0 と同等 |
+| **v0.49.0** | **0.403** | **0.283** | **68K** | pn=INF 中間エントリ depth-limited 扱い |
 
-**pn σ_ln (現状 0.368, 目標: 下方修正 → §4.1 参照):**
-- depth=16-28 でほぼ横ばい (0.360-0.368)
+**pn σ_ln (現状 0.403 @ depth=16-20): 目標 ≥0.37 達成 ✓**
+- v0.49.0 で depth=16-20 において 0.403 に向上 (目標 ≥0.37 を超過)
+- depth=24 で 0.383 に低下するが目標範囲内
 
-**dn σ_ln (現状 0.234-0.268, 目標 ≥ 0.2): 達成 ✓**
+**dn σ_ln (現状 0.271-0.283, 目標 ≥ 0.2): 達成 ✓**
 - v0.43.0 の pn 値域拡大による de-prioritization 効果で TT の集団展開が解消された
-- depth=16-28 全域で dn σ_ln ≥ 0.2 を達成 (旧目標 0.5 は AND-min 制約により不可)
+- depth=16-24 全域で dn σ_ln ≥ 0.2 を達成 (旧目標 0.5 は AND-min 制約により不可)
 - **dn σ_ln 目標を ≥ 0.2 に下方修正 (AND-min 伝播の構造的制約による)**
 
 #### pn σ_ln の構造的上限と目標の下方修正
@@ -1129,12 +1188,166 @@ DAG 補正効果も低下するため，現時点では調査を優先する．
 
 ### 4.4 [課題 D] depth 増加に伴う KL 劣化
 
-**現状:** depth=8 で KL(pn)=0.074 (良好) だが depth=32 では 0.815 まで劣化
+**現状 (v0.49.0):** depth=8 で pn KL=0.395 (v0.43.0 の 0.442 より改善)，
+depth=24 で pn KL=0.507 (v0.43.0 の 0.520 より改善)．
+深い depth では INF/0 エントリが累積し中間値の分布が偏る傾向は継続している．
 
-**原因:** 深い depth では INF/0 エントリが累積し，中間値の分布が特定パターンに偏る
-(探索の自然な振る舞い)．
+**対応:** 課題 A が σ_ln の目標を達成したため，次は backward 解析 (§10.2) で実効性を確認してから判断する．
 
-**対応:** 課題 A・B を先に解決し，初期値が改善されてから再計測して判断する．
+---
+
+### 4.5 [課題 E] v0.49.0 による depth=28+ 探索のコスト増大
+
+**現状:** 50M nodes で depth=24 まで到達 (v0.43.0 は 16.6M nodes で depth=28 到達)
+depth=28 以降: v0.49.0 では 38.2M+ nodes 消費しても depth=28 未完了
+
+**原因:** `retain_working_intermediates` による pn=INF エントリ全廃棄 (§2.6 参照)
+
+```
+depth=24 TT に含まれる pn=INF エントリ: 約 615,000 件 (全 TT の 85%)
+これらの「24手内では証明不能」ヒントが depth=28 探索で使えなくなる
+→ depth=28 が深さ独立に探索をやり直す必要が生じる
+```
+
+**影響の範囲:**
+
+- `test_no_checkmate_counter_check`: v0.49.0 で修正 (950K → 解決) ✓
+- 39手詰め通常探索: 深 depth での探索コストが増大
+- 一般的な詰将棋問題: depth=28+ 到達がより難しくなる可能性
+
+---
+
+#### IDS の delta シフトと remaining チェックの関係
+
+`retain_working_intermediates(delta_remaining)` は保持対象の全エントリに対して
+`e.remaining += delta_remaining` を適用する (tt.rs:2166)．
+この delta シフトが look_up の remaining チェックと干渉する:
+
+```
+IDS depth D → D+Δ (例: 24 → 28, Δ=4) のとき:
+
+  retain が pn=INF エントリを保持する場合 (v0.49.0 以前):
+    1. depth=D 終了: pn=INF エントリは e.remaining = D で TT に存在
+    2. retain 実行: e.remaining += Δ → e.remaining = D+Δ
+    3. depth=D+Δ の look_up (remaining=D+Δ):
+         e.remaining() < remaining → (D+Δ) < (D+Δ) = FALSE
+         → スキップされず，そのまま使われる ← バグ再現
+
+  retain が pn=INF エントリを保持しない場合 (v0.49.0):
+    1. retain 実行: pn=INF エントリは fe.pos_key = 0 で消去
+    2. depth=D+Δ の look_up: エントリが存在しない → キャッシュミス → 再探索
+```
+
+**delta シフトが look_up チェックを無効化する構造:**
+
+IDS が n ステップを経由する場合も同様に無効化される．
+counter-check バグ (depth=16 → 31) も，IDS が途中で retain を n 回実行すれば
+remaining=16 が 16+4×n に更新され，最終的に e.remaining = remaining になる:
+
+```
+depth=16 pn=INF (remaining=16)
+  → retain ×1 (Δ=4): remaining=20
+  → retain ×2 (Δ=4): remaining=24
+  → retain ×3 (Δ=4): remaining=28
+  → retain ×4 (Δ=4): remaining=32
+
+depth=32 の look_up (remaining=32): 32 < 32 = FALSE → 使われる ← バグ
+```
+
+`look_up` の remaining チェック (`e.remaining() < remaining`) は，
+retain が delta シフトを行う限り，**隣接 depth 間では機能しない**．
+v0.49.0 の counter-check fix の本体は look_up 側ではなく **retain 側の除外** である
+(look_up チェックは retain が行われない経路のための safety net)．
+
+---
+
+#### 対策候補の検討
+
+**「retain を元に戻して look_up チェックのみ残す」案 — 不可:**
+
+```
+retain: pn=INF エントリを delta シフトして保持
+  → e.remaining = D+Δ = remaining_new
+look_up: e.remaining() < remaining → (D+Δ) < (D+Δ) = FALSE → スキップされない
+```
+counter-check バグが再現する．look_up チェックは delta シフト済みエントリに対して無効．
+
+**「delta シフトせずに retain する」案 — 効果なし:**
+
+```
+retain: pn=INF エントリを remaining 更新せずに保持
+  → e.remaining = D (stale のまま)
+look_up: e.remaining() < remaining → D < D+Δ = TRUE → スキップ
+```
+counter-check は fix されるが，depth=D+Δ でエントリが常にスキップされるため
+「保持しないこと」と性能上の違いがない (TT 空間を無駄に占有するだけ)．
+
+**「δ 許容チェック (`e.remaining() + DELTA < remaining`)」案 — 同様に不可:**
+
+delta シフト後の e.remaining = D+Δ = remaining_new に対して
+(D+Δ) + DELTA < (D+Δ) = FALSE が DELTA ≥ 0 である限り常に成立しない．
+つまり，retain が delta シフトを行う限り，どのような許容幅を設けても
+シフト済みエントリはスキップされない．
+
+#### 結論: 現行アーキテクチャでは再利用と counter-check fix は両立しない
+
+`retain_working_intermediates` が delta シフトを行う設計である限り，
+pn=INF エントリの「保持 + 隣接 depth 間での再利用防止」を
+look_up チェックだけで実現することは不可能である．
+
+**唯一の clean な解決策は現行 v0.49.0 の方針 (不保持) であり，性能回帰は正しい振る舞いのコスト．**
+
+---
+
+#### backward 解析による影響評価 (v0.49.0 計測)
+
+`test_tsume_39te_backward_1m` / `test_tsume_39te_backward_10m` を **release ビルド**で実行．
+
+**backward_1m 結果 (1M nodes / 180s per ply):**
+
+| ply | remain | nodes | time(s) | result |
+|-----|--------|-------|---------|--------|
+| 24 | 15 | 267,899 | 49.41 | Mate(15) ✓ |
+| 22 | 17 | 986,363 | 115.74 | Mate(17) ✓ |
+| 20 | 19 | 1,000,000 | 106.68 | **Unknown** ← 境界 |
+
+**backward_10m 結果 (10M nodes / 600s per ply):**
+
+| ply | remain | depth (IDS上限) | nodes | time(s) | result |
+|-----|--------|----------------|-------|---------|--------|
+| 22 | 17 | 19 | 6,884,094 | 106.62 | Mate(17) ✓ |
+| 20 | 19 | 21 | 8,077,824 | 158.40 | Mate(19) ✓ |
+| 18 | 21 | 23 | 9,992,668 | 167.86 | **Unknown** ← 境界 |
+| 16 | 23 | 25 | 10,000,000 | 85.06 | Unknown |
+| 14 | 25 | 27 | 10,000,000 | 191.76 | Unknown |
+| 12 | 27 | **29** | 10,000,000 | 217.09 | Unknown |
+| 10 | 29 | 31 | 10,000,000 | 117.62 | Unknown |
+
+**比較 (v0.24.33 baseline との対比):**
+
+| 予算 | v0.24.33 境界 | v0.49.0 境界 | 変化 |
+|------|-------------|-------------|------|
+| 1M nodes | ply 22 | **ply 20** | **+2 ply 改善** ✓ |
+| 10M nodes | ply 18 | ply 18 | 変化なし (ply 22 が 6.88M で解決 → 効率改善) |
+
+**depth=28 回帰の実際の影響:**
+
+depth=28 回帰が現れるのは IDS 上限 ≥ 28 = remaining ≥ 26 = **ply ≤ 13** のみ．
+
+```
+depth 式: min(remaining + 2, 41)
+  ply 14: min(27, 41) = 27 → 回帰なし
+  ply 12: min(29, 41) = 29 → 回帰あり ← 但し 10M で Unknown (回帰有無に関係なく解けない)
+```
+
+**ply ≤ 12 は現行 10M 予算では回帰の有無に関わらず Unknown** のため，
+v0.49.0 の depth=28 回帰は現状の backward 解析結果に影響しない．
+
+影響を観測するには **30M-100M 予算**での ply 12-16 計測が必要だが，
+1M/10M の境界改善 (+2 ply) および TT 爆発解消の恩恵の方が大きく，
+追加対策の優先度は低い．
+
+**現在の優先度:** 優先度 低 (現行予算での backward 解析に影響なし；100M+ 予算で再評価)
 
 ---
 
@@ -1197,19 +1410,26 @@ DAG 補正効果も低下するため，現時点では調査を優先する．
        ├── look_up_working: intermediate パスに remaining チェック追加 (pn=INF は depth 依存)
        ├── retain_working_intermediates: pn=INF エントリを保持対象から除外
        ├── 収束: 950,037 ノード (2M 予算)，~6s (release) ✓
-       └── v0.47.0–v0.48.0 の特例処理 (disproof_mode, mini-IDS warm-up) を削除 (§3.18)
+       ├── v0.47.0–v0.48.0 の特例処理 (disproof_mode, mini-IDS warm-up) を削除 (§3.18)
+       └── 分布計測 (§2.6): pn σ_ln 目標 ≥0.37 達成 (0.403)，dn σ_ln ≥0.2 維持 ✓
+             副作用: depth=28+ 探索コスト増大 (50M nodes で depth=24 止まり) → §4.5
+
+[完了 (このセッション)]
+ ├── 39手詰め backward 解析 (§10.2) で v0.49.0 全体の実効性を確認 ✓
+ │     → 1M 境界 +2 ply 改善 (ply 22→20)，10M 境界 ply 18 維持 (benchmarks.md §10.2.24)
+ └── 課題 E: backward 解析により優先度を 低 に変更 ✓ (§4.5 参照)
 
 [優先度 中]
- ├── 課題 B: KL(対数正規) 改善 (depth=16 で pn KL=0.375，目標 < 0.3)
- └── 39手詰め backward 解析 (§10.2) で v0.49.0 の実効性を確認
+ └── 課題 B: KL(対数正規) 改善 (depth=8 で pn KL=0.395，depth=24 で 0.507；目標 < 0.3)
 
-[優先度 低 / 再計測後判断]
+[優先度 低]
  ├── 課題 C: pn 右テールのノード特定 (tt_diag 追加)
- └── 課題 D: depth 増加に伴う KL 劣化の追加対策
+ ├── 課題 D: depth 増加に伴う KL 劣化の追加対策
+ └── 課題 E: depth=28+ 探索コスト増大 (100M+ 予算での ply 12-16 計測で再評価，§4.5)
 ```
 
 各ステップ後に `scripts/analyze_pn_dn_dist.py` で対数正規指標を計測し，
-**σ_ln(pn) ≥ 0.5，σ_ln(dn) ≥ 0.2 (達成)，KL(対数正規) < 0.3** を近期目標とする．
+**σ_ln(pn) ≥ 0.37 (達成 v0.49.0 ✓)，σ_ln(dn) ≥ 0.2 (達成 ✓)，KL(対数正規) < 0.3** を近期目標とする．
 最終的な有効性は 39手詰め backward 解析 (§10.2) のノード数改善で評価する．
 
 ---
