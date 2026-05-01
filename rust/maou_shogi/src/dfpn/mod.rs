@@ -280,30 +280,27 @@ fn sacrifice_check_boost(board: &Board, checks: &[Move]) -> u32 {
 
 /// pn に対して平方根逆比例する初期 dn ヒューリスティック (df-pn+ 連続スケーリング)．
 ///
-/// `dn ∝ 1/√pn` により，pn が大きい範囲 (safe_escapes=3+) でも
-/// dn が 4S に張り付かず多様な値を持つ．
-/// 旧 `1/pn` 式では pn>16S が全て dn=4S に集中していたが，
-/// `1/√pn` 式では pn∈[1S, 256S] が dn∈[4S, 64S] に連続的にマップされる．
+/// `dn ∝ 1/√pn` により，pn が大きい範囲でも dn に差がつく．
+/// v0.43.0 で `heuristic_or_pn` の上限が 512S→2048S に拡大されたことに対応して
+/// clamp 下限を 4S→1S に拡張 (pn∈[256S, 4096S] が dn∈[1S, 4S) を取る)．
 ///
 ///   dn = sqrt(C² / pn),  C = 64·PN_UNIT·√PN_UNIT = 4096
-///   pn =   1S → dn = 64S  (上限)
-///   pn =   4S → dn = 32S
-///   pn =  16S → dn = 16S  (対称点)
-///   pn =  64S → dn =  8S
-///   pn = 256S → dn =  4S  (下限)
-///   pn > 256S → dn =  4S  (clamp)
+///   pn =    1S → dn = 64S  (上限)
+///   pn =    4S → dn = 32S
+///   pn =   16S → dn = 16S  (対称点)
+///   pn =   64S → dn =  8S
+///   pn =  256S → dn =  4S
+///   pn = 1024S → dn =  2S  (v0.43.0 以降の逆王手後開放局面で生じる範囲)
+///   pn = 4096S → dn =  1S  (下限 = PN_UNIT)
 ///
-/// 旧式との比較:
-///   pn=8S:  旧 8S → 新 ≈22S (+1.5 bucket)
-///   pn=32S: 旧 4S → 新 ≈11S (+1.5 bucket)
-///
-/// clamp 下限は 4S を維持 (v0.39.0 で 1S 緩和は悪化を確認)．
+/// v0.39.0 での 1S 緩和失敗は旧 `1/pn` 式での実験であり，現行 `1/√pn` 式では
+/// pn≤256S の範囲は変わらず，pn>256S (v0.43.0 新規域) のみ新たな分化が生まれる．
 #[inline]
 pub(super) fn heuristic_dn_from_pn(pn: u32) -> u32 {
     // C² = (64 · PN_UNIT · √PN_UNIT)² = 64² · PN_UNIT³ = 4096² = 16_777_216
     const C2: u64 = 4096 * 4096;
     let dn = ((C2 / pn.max(1) as u64) as f64).sqrt() as u32;
-    dn.clamp(4 * PN_UNIT, 64 * PN_UNIT)
+    dn.clamp(PN_UNIT, 64 * PN_UNIT)
 }
 
 /// SNDA (Kishimoto 2010) の積極的ソースグループ集約．
@@ -320,6 +317,28 @@ pub(super) fn heuristic_dn_from_pn(pn: u32) -> u32 {
 /// 過小評価リスクは TCA の閾値拡張で緩和される．
 ///
 /// `source == 0` のペアは独立ノード(TT ミス)としてスキップする．
+///
+/// ## 39手詰め計測結果 (50M nodes)
+///
+/// - 呼び出し: 981,397 回
+/// - deduction > 0: 6,558 回 (0.67%)
+/// - うち max_cpn floor に吸収: 6,358 回 (96.9%)
+/// - 実際に pn/dn を削減: 119 回 (0.012%)
+///
+/// WPN 後に適用されるため deduction のほとんどが max_cpn に抑えられ，
+/// 分布への実効的な影響は無視できる水準 (§3.15 参照)．
+///
+/// ## Kishimoto 2010 正規実装 (SNDA→WPN) を採用しない理由 (§3.17)
+///
+/// 正規実装では raw sum から deduction して WPN を適用する．
+/// しかし raw sum には TT ミス子 (初期 cdn が heuristic 値で大きい) が含まれ，
+/// effective_dn = raw_dn - ded が max_cdn より遥かに大きくなる．
+/// 結果として WPN 後の OR dn が激増し，不詰検出に 20M+ ノードが必要になった
+/// (旧実装は ~2M ノードで解決)．
+///
+/// 旧実装の floor (`.max(max_cdn)`) は SNDA fire 時に TT ミス子の寄与を
+/// 打ち消して max_cdn に戻す副作用を持ち，これが不詰検出の効率に不可欠だった．
+/// 正確さより探索効率を優先し，WPN→SNDA→floor の順序を維持する．
 #[inline]
 fn snda_dedup(pairs: &mut [(u32, u32)], raw_sum: u32) -> u32 {
     pairs.sort_unstable_by_key(|&(s, _)| s);

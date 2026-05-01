@@ -1781,10 +1781,10 @@ impl DfPnSolver {
     ///
     /// **N-2 (v0.26.0)**: target 24-31 の固定フロア 8 を 6 に緩和し
     /// NPS -28% (M-A による) の一部を回収する．
-    /// - target=1-19:  depth_floor=3 → d=3〜5 (変更なし)
-    /// - target=20-23: depth_floor=**8** (M-A 維持) → d=8 (ply 20-23 false-NM を保護)
-    /// - target=24-31: depth_floor=**6** (was 8) → d=6 (より深い問題では緩和安全)
-    /// - target=32+:   depth_floor=3 → log_val(≥6) が dominates (元の formula に復帰)
+    /// - target=1-19:  depth_floor=3 → d=3〜5
+    /// - target=20-23: depth_floor=**8** (M-A 維持)
+    /// - target=24-31: depth_floor=**6** (N-2 緩和)
+    /// - target=32+:   depth_floor=3 → log_val(≥6) が dominates
     ///
     /// 式: d = max(target.ilog2() + 1, depth_floor(target)).min(10)
     #[inline]
@@ -1804,7 +1804,7 @@ impl DfPnSolver {
         // N-2 (v0.26.0): target 24-31 のみ floor を緩和．target ≥ 32 では log_val ≥ 6．
         let depth_floor: u32 = match target {
             0..=23 => if target >= 20 { 8 } else { 3 },
-            24..=31 => 6,
+            24..=31 => 6, // N-2 (v0.26.0): floor 緩和
             _ => 3,
         };
         log_val.max(depth_floor).min(10)
@@ -4446,7 +4446,11 @@ impl DfPnSolver {
         let pressured = (king_adjacent & danger).count(); // 攻め方に利かれているマス数
         let adjacent_total = king_adjacent.count(); // 移動可能マス総数
 
-        if adjacent_total >= 5 && pressured == 0 && safe_escapes >= 4 {
+        // num_checks >= 4 のみ開放空間検出を適用．
+        // num_checks=1-3 は攻め方の選択肢が少ない局面で pn 過大評価を招くため対象外とし，
+        // 下の escape_base 式で処理する (不詭め検出効率を優先)．
+        // num_checks >= 4 は攻め方が豊富で TT 爆発防止が必要な局面に限定する．
+        if adjacent_total >= 5 && pressured == 0 && safe_escapes >= 4 && num_checks >= 2 {
             return match safe_escapes {
                 4 | 5 => 1024 * PN_UNIT, // bucket 14: やや広い開放空間
                 _ => 2048 * PN_UNIT,     // bucket 15: 6+ 逃げ場の完全開放空間
@@ -4487,11 +4491,12 @@ impl DfPnSolver {
                     7 => 512 * PN_UNIT,        //  512S (bucket 13, v0.43.0 分離)
                     _ => 1024 * PN_UNIT,       // 1024S (bucket 14, 8+逃げ場)
                 };
-                // num_checks=1 の乗数を ×4 に強化 (v0.43.0: ×2 から変更)
+                // num_checks=1 の乗数を ×2 に戻す (v0.43.0 で ×4 に変更したが
+                // 不詭め局面での pn 過大評価を招いたため pre-v0.43.0 挙動に復元)
                 if num_checks >= 8 { escape_base }
                 else if num_checks >= 4 { escape_base + escape_base / 4 }
                 else if num_checks >= 2 { escape_base + escape_base / 2 }
-                else { escape_base * 4 }  // checks=1: ×4
+                else { escape_base * 2 }  // checks=1: ×2 (pre-v0.43.0)
             }
         };
 

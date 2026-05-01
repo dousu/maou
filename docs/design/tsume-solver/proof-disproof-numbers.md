@@ -123,7 +123,7 @@ source ハッシュに基づくグループ化で重複分を控除する．
                                     corrected dn = 8 - 3 = 5
 ```
 
-**実装:** mod.rs (`snda_dedup`), solver.rs (OR/AND collect)
+**実装:** mod.rs (`snda_deduction`), solver.rs (OR/AND collect)
 
 TT エントリに `source` フィールドを追加
 (v0.24.0 で u64→u32 に圧縮，上位 32 bit 切り捨て．衝突確率は 2⁻³² で実用上十分)．
@@ -133,31 +133,49 @@ TT エントリに `source` フィールドを追加
 deduction = sum(group) - max(group)
 ```
 
-控除後: `value' = raw_sum - total_deduction` (最低値 PN_UNIT)
+- OR ノード: `(source, dn)` ペアで dn を補正
+- AND ノード: `(source, pn)` ペアで pn を補正
 
-- OR ノード: `(source, dn)` ペアで dn を補正 (WPN 適用後に実施)
-- AND ノード: `(source, pn)` ペアで pn を補正 (WPN 適用後に実施)
-
-#### WPN との適用順序と floor
+#### WPN との適用順序 (現行: WPN→SNDA→floor)
 
 SNDA は WPN スケールドサムの**後**に適用する:
 
 ```
-1. WPN:  current_dn = max(cdn) + (sum(cdn) - max(cdn)) >> γ
-2. SNDA: current_dn = snda_dedup(pairs, current_dn)
-3. floor: current_dn = max(current_dn, max_cdn)   // OR dn のみ
+1. WPN:  current = max(c) + (sum - max(c)) >> γ
+2. SNDA: current = snda_dedup(pairs, current)   ← WPN 圧縮後に適用
+3. floor: current = max(current, max(c))         ← 過剰控除防止
 ```
 
-floor (下限 = max(child_dn)) を設定する理由:
-- SNDA のハッシュ衝突により，無関係なノードが同一グループに入ることがある
-- 過剰控除が発生しても，単一の最大子 dn を下回らないことを保証する
+計測 (50M nodes, §3.15) で deduction の **96.9% が floor に吸収** され
+事実上 no-op だが，floor による `max(c)` への収束が不詭め検出効率に貢献する．
 
-AND pn も同様に `max(child_pn)` が WPN+SNDA 後の下限 (v0.20.24〜)．
+```
+適用例: OR dn で [A:300, A:500, B:200] (sum=1000, max=500)
+  WPN = 500 + (500+200)>>6 = 500 + 10 = 510
+  SNDA: pairs={(A,300),(A,500)} → deduction=300 → result=210
+  floor: max(210, 500) = 500   ← max(c) に収束
+```
+
+**Kishimoto 2010 正規実装 (SNDA→WPN) を採用しない理由:**
+
+正規実装は WPN **前**に SNDA を適用する:
+```
+1. SNDA: effective_sum = sum - snda_deduction(pairs)
+2. WPN:  current = max(c) + (effective_sum - max(c)) >> γ   (floor 不要)
+```
+
+v0.44.0 で試験したところ，`test_no_checkmate_counter_check` が 2M→20M+ ノードに回帰．
+原因: TT ミス子 (source=0) の heuristic dn が raw sum に加算されたまま残り，
+WPN 前 effective_sum が max_cdn より遥かに大きくなって OR dn が膨張する (詳細 §3.17)．
+WPN→SNDA→floor の floor は `heuristic_dn_from_pn` の均一 dn=4S を補償する暫定機能を持つ．
 
 **SNDA の適用範囲の限界:**
 SNDA は直接の兄弟ノードが同一 source を持つ場合のみ補正する．
 孫以下の深い DAG 合流 (異なる source ハッシュを持つ子が共通の孫を持つ場合)
 は補正できない．この深い合流に対しては WPN が第一の対策となる．
+
+CD-WPN パス (chain aigoma AND ノード) への SNDA は未適用 —
+cross-deduction が同一マスドロップの DAG 重複を別途処理するため．
 
 **出典との差異:**
 - 論文は親ポインタ追跡による共通祖先検出を提案するが，

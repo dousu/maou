@@ -132,6 +132,8 @@ cargo test --release -p maou_shogi -- <test_name> --nocapture
 | `test_tsume_39te_ply24_mate15_soundness_depth25` | 3M nodes / 300s | soundness ガード |
 | `test_tsume_39te_ply2_no_false_nomate` | 10M nodes / 600s | false NoMate 回帰テスト |
 | `test_tsume_39te_backward_1m` | 1M nodes × 複数局面 | 逆順解析 (ログ出力) |
+| `test_ply24_diagnostic` | 250K × 6局面 | 診断用ログ出力 |
+| `test_ply24_tt_sharing_effectiveness` | 500K × 8ペア | TT共有効果測定 |
 
 ## Quick Reference
 

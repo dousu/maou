@@ -1349,9 +1349,11 @@ use crate::types::{Color, PieceType};
     /// 4三飛→2三飛成は王手だが，後手3三銀の逆王手(2四の先手玉に対する王手)
     /// により攻め方は王手回避を強いられ，詰みにならない．
     /// 先手に持ち駒がなく他の有効な攻めがないため不詰．
+    ///
     #[test]
     fn test_no_checkmate_counter_check() {
         let sfen = "7l1/5n1k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s3n2l17p 1";
+        // v0.49.0: pn=INF 中間エントリの depth-limited 扱いにより ~950K で解決．
         let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
 
         match &result {
@@ -6547,7 +6549,10 @@ use crate::types::{Color, PieceType};
     /// Unknown となった4応手(1g1f, N*6g, P*7g, N*7g)の探索構造を調査する．
     /// 各Unknownの応手について，攻め手が取り進んだ後の再帰的なチェーン構造を
     /// 深さ2まで展開して報告する．
+    ///
+    /// **[SLOW]** 診断用 (debug では低速)．`--release` ビルド推奨．
     #[test]
+    #[ignore]
     fn test_ply24_diagnostic() {
         use std::io::Write;
         let out_path = "/tmp/ply24_diagnostic.log";
@@ -6716,7 +6721,10 @@ use crate::types::{Color, PieceType};
     /// 1. L*6g (解ける) を解いた後の TT を保持したまま N*6g を解く (共有あり)
     /// 2. N*6g を新規 TT で解く (共有なし)
     /// 3. ノード数とTTエントリ数を比較
+    ///
+    /// **[SLOW]** 診断用 (debug では低速)．`--release` ビルド推奨．
     #[test]
+    #[ignore]
     fn test_ply24_tt_sharing_effectiveness() {
         use std::io::Write;
         let out_path = "/tmp/ply24_tt_sharing.log";
@@ -10222,4 +10230,20 @@ use crate::types::{Color, PieceType};
                 eprintln!("MateNoPV");
             }
         }
+    }
+
+    /// counter_check 不詭め局面のノード予算プローブ
+    #[test]
+    #[ignore]
+    fn test_no_checkmate_counter_check_probe() {
+        let sfen = "7l1/5n1k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s3n2l17p 1";
+        for budget in [3_000_000u64, 5_000_000, 10_000_000] {
+            let result = solve_tsume(sfen, Some(31), Some(budget), None).unwrap();
+            eprintln!("budget={}: {:?}", budget, result);
+            if let TsumeResult::NoCheckmate { nodes_searched } = &result {
+                eprintln!("  → solved at {} nodes", nodes_searched);
+                return;
+            }
+        }
+        eprintln!("Still not solved at 10M");
     }

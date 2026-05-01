@@ -618,6 +618,10 @@ impl TranspositionTable {
                 return (e.pn, 0, e.source);
             }
             if e.pn != 0 && e.dn != 0 {
+                // pn=INF intermediate は depth-limited 証明不能．
+                // dn=0 disproof と同様に，保存時の remaining が現在の remaining
+                // より浅い場合は無効 — より深い探索で再展開が必要．
+                if e.pn == u32::MAX && e.remaining() < remaining { continue; }
                 if e.hand == *hand {
                     exact_match = Some((e.pn, e.dn, e.source));
                 } else if fc_match.is_none()
@@ -2149,7 +2153,11 @@ impl TranspositionTable {
             let is_path_dep = entry.path_dependent();
             let is_depth_limited = rem < REMAINING_INFINITE;
             let new_rem = rem.saturating_add(delta_remaining);
+            // pn=INF の intermediate は depth-limited 証明不能であり，
+            // remaining をシフトしても新 depth で同じブロックが再発する．
+            // 保持せず破棄して新 depth での再探索に委ねる．
             let keep = is_intermediate
+                && entry.pn < u32::MAX
                 && !is_path_dep
                 && is_depth_limited
                 && rem >= min_remaining

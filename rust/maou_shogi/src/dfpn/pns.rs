@@ -1473,6 +1473,7 @@ impl DfPnSolver {
 
                 let remaining_budget =
                     total_max_nodes.saturating_sub(self.nodes_searched);
+
                 let mid_max_budget = remaining_budget / 2;
                 // チャンクサイズ: 1M (TT 停滞の早期検出のため固定)
                 let chunk_size: u64 = 1_000_000;
