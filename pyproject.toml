@@ -23,7 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 # GPU種類ごとのextra
 cpu = [
-    "torch>=2.6.0,<=2.10.0",
+    "torch>=2.6.0,<=2.11.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "onnxruntime",
@@ -31,7 +31,7 @@ cpu = [
     "onnxslim",
 ]
 cuda = [
-    "torch>=2.6.0,<=2.10.0",
+    "torch>=2.6.0,<=2.11.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "nvidia-ml-py>=11.4.1",
@@ -40,7 +40,7 @@ cuda = [
     "onnxslim",
 ]
 mpu = [
-    "torch>=2.6.0,<=2.10.0",
+    "torch>=2.6.0,<=2.11.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "onnxruntime-gpu",
