@@ -16,7 +16,7 @@ use super::tt::TranspositionTable;
 #[cfg(feature = "profile")]
 use super::profile::ProfileStats;
 use super::{
-    adjust_hand_for_move, edge_cost_and, edge_cost_or, heuristic_dn_from_pn,
+    adjust_hand_for_move, edge_cost_and, edge_cost_or, heuristic_dn_from_pn, heuristic_or_dn,
     hand_gte_forward_chain,
     position_key, propagate_nm_remaining, push_move, snda_dedup,
     CheckCache,
@@ -2479,9 +2479,9 @@ impl DfPnSolver {
                         // 取りの王手で既証明局面に到達 → 即座に証明
                     } else {
                         let nc = checks.len() as u32;
-                        let pn = self.heuristic_or_pn(board, nc)
-                            .saturating_add(edge_cost_and(*m));
-                        let dn = heuristic_dn_from_pn(pn);
+                        let (or_pn, or_se) = self.heuristic_or_pn(board, nc);
+                        let pn = or_pn.saturating_add(edge_cost_and(*m));
+                        let dn = heuristic_or_dn(or_se, nc, pn);
                         self.store(child_pk, child_hand, pn,
                             dn, child_remaining, child_pk as u32);
                     }
@@ -4420,15 +4420,18 @@ impl DfPnSolver {
     /// 3. safe_escapes=7 を 6 から分離して独立した base 値を設定．
     /// 4. num_checks=1 の乗数を ×2 から ×4 に強化
     ///    (1手しか王手がない = 詰めにくさが大幅に増す)．
-    pub(super) fn heuristic_or_pn(&self, board: &Board, num_checks: u32) -> u32 {
+    /// OR 子ノードの初期 pn と safe_escapes を返す (v0.52.0)．
+    /// safe_escapes は呼び出し側で `heuristic_or_dn(se, nc, final_pn)` の計算に使う．
+    /// final_pn = 返り値.0 + edge_cost + sacrifice_boost など呼び出し側で加算する．
+    pub(super) fn heuristic_or_pn(&self, board: &Board, num_checks: u32) -> (u32, u32) {
         if num_checks == 0 {
-            return INF; // 王手なし → 不詰(呼び出し側で処理済みのはず)
+            return (INF, 0); // 王手なし → 不詰(呼び出し側で処理済みのはず)
         }
 
         let defender = board.turn.opponent();
         let king_sq = match board.king_square(defender) {
             Some(sq) => sq,
-            None => return PN_UNIT,
+            None => return (PN_UNIT, 0), // 玉なし: safe_escapes=0
         };
 
         // 玉の安全な逃げ場をカウント(ビットボード一括判定)
@@ -4451,10 +4454,11 @@ impl DfPnSolver {
         // 下の escape_base 式で処理する (不詭め検出効率を優先)．
         // num_checks >= 4 は攻め方が豊富で TT 爆発防止が必要な局面に限定する．
         if adjacent_total >= 5 && pressured == 0 && safe_escapes >= 4 && num_checks >= 2 {
-            return match safe_escapes {
+            let pn = match safe_escapes {
                 4 | 5 => 1024 * PN_UNIT, // bucket 14: やや広い開放空間
                 _ => 2048 * PN_UNIT,     // bucket 15: 6+ 逃げ場の完全開放空間
             };
+            return (pn, safe_escapes);
         }
 
         // heuristic_or_pn: safe_escapes × num_checks による pn 初期値マッピング
@@ -4503,7 +4507,8 @@ impl DfPnSolver {
         };
 
         // 上限 2048S (bucket 15) に引き上げ (v0.43.0: 512S から拡大)
-        adjusted_pn.min(2048 * PN_UNIT)
+        let pn = adjusted_pn.min(2048 * PN_UNIT);
+        (pn, safe_escapes)
     }
 
     /// OR 子ノード(攻め方局面)で，取りの王手が既証明局面に到達するか TT を先読みする．

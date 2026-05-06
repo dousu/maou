@@ -307,6 +307,39 @@ pub(super) fn heuristic_dn_from_pn(pn: u32) -> u32 {
     dn.clamp(PN_UNIT, 64 * PN_UNIT)
 }
 
+/// OR ノード専用の初期 dn ヒューリスティック (v0.52.0)．
+///
+/// `pn` は edge_cost 加算後の最終 pn 値を渡すこと．
+/// これにより se=0-3 では v0.51.1 以前と完全に同一の挙動を維持する．
+///
+/// **修正:** safe_escapes=0-3 (39手詰め主流局面) は従来の `heuristic_dn_from_pn(pn)`
+/// を維持し，safe_escapes=4+ 開放局面のみ `num_checks` ベースのフロアを設けて
+/// bucket 5 への張り付きを防ぐ (詳細は pn-dn-distribution.md §4.4)．
+///
+/// # 主要ケースの dn 値 (final_pn=2048S+edge≈32800, dn_raw≈22, PN_UNIT=16)
+/// ```text
+/// safe_escapes=0-3: heuristic_dn_from_pn(pn) のまま (変化なし)
+/// safe_escapes=4+, nc=1:   max(22,  1S=16) =  22  (bucket 5, nc 少で変化なし)
+/// safe_escapes=4+, nc=2-3: max(22,  2S=32) =  32  (bucket 6, 改善)
+/// safe_escapes=4+, nc=4-7: max(22,  4S=64) =  64  (bucket 7, 改善)
+/// safe_escapes=4+, nc=8+:  max(22,  8S=128) = 128 (bucket 8, 改善)
+/// ```
+#[inline]
+pub(super) fn heuristic_or_dn(safe_escapes: u32, num_checks: u32, pn: u32) -> u32 {
+    let raw = heuristic_dn_from_pn(pn);
+    if safe_escapes < 4 {
+        return raw; // se=0-3: 従来値を維持
+    }
+    // se=4+: 開放局面で raw≈PN_UNIT に張り付く場合に num_checks ベースのフロアを適用
+    let checks_floor: u32 = match num_checks {
+        1 => PN_UNIT,              // nc=1: フロアなし (単一王手は不詭め示しやすい)
+        2..=3 => 2 * PN_UNIT,     // nc=2-3: bucket 6 以上
+        4..=7 => 4 * PN_UNIT,     // nc=4-7: bucket 7 以上
+        _ => 8 * PN_UNIT,         // nc=8+: bucket 8 以上
+    };
+    raw.max(checks_floor)
+}
+
 /// SNDA (Kishimoto 2010) の積極的ソースグループ集約．
 ///
 /// `(source, value)` ペアのリストと通常の sum を受け取り，
