@@ -2481,7 +2481,7 @@ impl DfPnSolver {
                         let nc = checks.len() as u32;
                         let (or_pn, or_se) = self.heuristic_or_pn(board, nc);
                         let pn = or_pn.saturating_add(edge_cost_and(*m));
-                        let dn = heuristic_or_dn(or_se, nc, pn);
+                        let dn = heuristic_or_dn(or_se, nc);
                         self.store(child_pk, child_hand, pn,
                             dn, child_remaining, child_pk as u32);
                     }

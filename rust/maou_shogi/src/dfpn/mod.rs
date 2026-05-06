@@ -307,37 +307,70 @@ pub(super) fn heuristic_dn_from_pn(pn: u32) -> u32 {
     dn.clamp(PN_UNIT, 64 * PN_UNIT)
 }
 
-/// OR ノード専用の初期 dn ヒューリスティック (v0.52.0)．
+/// OR ノード専用の初期 dn ヒューリスティック (v0.52.1)．
 ///
-/// `pn` は edge_cost 加算後の最終 pn 値を渡すこと．
-/// これにより se=0-3 では v0.51.1 以前と完全に同一の挙動を維持する．
+/// pn に依存せず (safe_escapes, num_checks) から直接 dn を決定する．
+/// 逃げ場が少ない → 不詭めを示しにくい → dn 大．王手数が多い → dn 大．
 ///
-/// **修正:** safe_escapes=0-3 (39手詰め主流局面) は従来の `heuristic_dn_from_pn(pn)`
-/// を維持し，safe_escapes=4+ 開放局面のみ `num_checks` ベースのフロアを設けて
-/// bucket 5 への張り付きを防ぐ (詳細は pn-dn-distribution.md §4.4)．
+/// se=0-3 の値は v0.51.1 `heuristic_dn_from_pn(final_pn)` の実値に精密に合わせ
+/// 回帰を防ぐ．se>=4 (開放局面) は v0.51.1 の ≈22 (bucket 4) から bucket 5-7
+/// へ改善し bucket 5 への全集中を解消する (詳細は pn-dn-distribution.md §4.4)．
 ///
-/// # 主要ケースの dn 値 (final_pn=2048S+edge≈32800, dn_raw≈22, PN_UNIT=16)
 /// ```text
-/// safe_escapes=0-3: heuristic_dn_from_pn(pn) のまま (変化なし)
-/// safe_escapes=4+, nc=1:   max(22,  1S=16) =  22  (bucket 5, nc 少で変化なし)
-/// safe_escapes=4+, nc=2-3: max(22,  2S=32) =  32  (bucket 6, 改善)
-/// safe_escapes=4+, nc=4-7: max(22,  4S=64) =  64  (bucket 7, 改善)
-/// safe_escapes=4+, nc=8+:  max(22,  8S=128) = 128 (bucket 8, 改善)
+/// se\nc |   1   | 2-3  | 4-7  |  8+     (dn, v0.51.1 実値)
+/// ------+-------+------+------+------
+///   0   |  640  |  640 |  640 |  640   (v0.51.1 591-724, bucket 9)
+///   1   |  352  |  448 |  640 |  640   (v0.51.1 341-648, bucket 8-9)
+///   2   |  240  |  352 |  448 |  448   (v0.51.1 248-458, bucket 7-8)
+///   3   |  240  |  288 |  288 |  352   (v0.51.1 248-341, bucket 7-8)
+///   4   |   64  |   80 |   96 |  128   (v0.51.1 ≈22, bucket 6-7)
+///   5   |   48  |   64 |   80 |   80   (v0.51.1 ≈22, bucket 5-6)
+///  6+   |   32  |   48 |   64 |   64   (v0.51.1 ≈22, bucket 5-6)
 /// ```
 #[inline]
-pub(super) fn heuristic_or_dn(safe_escapes: u32, num_checks: u32, pn: u32) -> u32 {
-    let raw = heuristic_dn_from_pn(pn);
-    if safe_escapes < 4 {
-        return raw; // se=0-3: 従来値を維持
-    }
-    // se=4+: 開放局面で raw≈PN_UNIT に張り付く場合に num_checks ベースのフロアを適用
-    let checks_floor: u32 = match num_checks {
-        1 => PN_UNIT,              // nc=1: フロアなし (単一王手は不詭め示しやすい)
-        2..=3 => 2 * PN_UNIT,     // nc=2-3: bucket 6 以上
-        4..=7 => 4 * PN_UNIT,     // nc=4-7: bucket 7 以上
-        _ => 8 * PN_UNIT,         // nc=8+: bucket 8 以上
+pub(super) fn heuristic_or_dn(safe_escapes: u32, num_checks: u32) -> u32 {
+    let dn: u32 = match safe_escapes {
+        // se=0: bucket 9 全域 — nc 差異が小さいため統一
+        0 => 40 * PN_UNIT, // 640
+        // se=1: bucket 8-9
+        1 => match num_checks {
+            1 => 22 * PN_UNIT, // 352 (b8)  v0.51.1≈341
+            2..=3 => 28 * PN_UNIT, // 448 (b8)  v0.51.1≈458
+            _ => 40 * PN_UNIT,     // 640 (b9)  v0.51.1≈648
+        },
+        // se=2: bucket 7-8
+        2 => match num_checks {
+            1 => 15 * PN_UNIT,     // 240 (b7)  v0.51.1≈248
+            2..=3 => 22 * PN_UNIT, // 352 (b8)  v0.51.1≈341
+            _ => 28 * PN_UNIT,     // 448 (b8)  v0.51.1≈458
+        },
+        // se=3: bucket 7-8
+        3 => match num_checks {
+            1 => 15 * PN_UNIT,     // 240 (b7)  v0.51.1≈248
+            2..=7 => 18 * PN_UNIT, // 288 (b8)  v0.51.1≈284-309
+            _ => 22 * PN_UNIT,     // 352 (b8)  v0.51.1≈341
+        },
+        // se=4: bucket 6-7 (v0.51.1 比大幅改善)
+        4 => match num_checks {
+            1 => 4 * PN_UNIT,      //  64 (b6)
+            2..=3 => 5 * PN_UNIT,  //  80 (b6)
+            4..=7 => 6 * PN_UNIT,  //  96 (b6)
+            _ => 8 * PN_UNIT,      // 128 (b7)
+        },
+        // se=5: bucket 5-6
+        5 => match num_checks {
+            1 => 3 * PN_UNIT,     // 48 (b5)
+            2..=3 => 4 * PN_UNIT, // 64 (b6)
+            _ => 5 * PN_UNIT,     // 80 (b6)
+        },
+        // se=6+: bucket 5-6
+        _ => match num_checks {
+            1 => 2 * PN_UNIT,     // 32 (b5)
+            2..=3 => 3 * PN_UNIT, // 48 (b5)
+            _ => 4 * PN_UNIT,     // 64 (b6)
+        },
     };
-    raw.max(checks_floor)
+    dn.clamp(PN_UNIT, 64 * PN_UNIT)
 }
 
 /// SNDA (Kishimoto 2010) の積極的ソースグループ集約．

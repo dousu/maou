@@ -2514,7 +2514,7 @@ impl DfPnSolver {
                         cpn = or_pn
                             .saturating_add(edge_cost_and(*m))
                             .saturating_add(sacrifice_check_boost(board, &checks));
-                        cdn = heuristic_or_dn(or_se, nc, cpn);
+                        cdn = heuristic_or_dn(or_se, nc);
                         self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk as u32);
                     }
                 } else {
