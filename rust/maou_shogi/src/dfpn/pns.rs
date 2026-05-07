@@ -1757,7 +1757,7 @@ impl DfPnSolver {
             // 問題の原因となっていた．
             //
             // 保持条件 (`retain_working_intermediates` 参照):
-            //   pn>0 && dn>0 && !path_dependent && remaining < INFINITE
+            //   pn>0 && dn>0 && pn<INF && !path_dependent && remaining < INFINITE
             //
             // 保持時は `remaining` に depth 差分 (delta) を加算する．
             // 旧 depth で計算された pn/dn は新 depth での初期下限値として

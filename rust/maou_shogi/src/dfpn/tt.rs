@@ -2115,9 +2115,10 @@ impl TranspositionTable {
     ///
     /// 以下を全て満たすエントリのみ保持する:
     /// 1. `pn > 0 && dn > 0` (intermediate; proven/disproven は既に ProvenTT にあるか除去される)
-    /// 2. `!path_dependent` (GHI 不整合防止)
-    /// 3. `remaining >= min_remaining` (前 IDS step の上位 N ply 分の作業のみ保持)
-    /// 4. `remaining != REMAINING_INFINITE` (depth-limited のみ; 仮値は除外)
+    /// 2. `pn < u32::MAX` (pn=INF は廃棄; WPN 累積値は depth 依存で次 depth での下限値にならない)
+    /// 3. `!path_dependent` (GHI 不整合防止)
+    /// 4. `remaining >= min_remaining` (前 IDS step の上位 N ply 分の作業のみ保持)
+    /// 5. `remaining != REMAINING_INFINITE` (depth-limited のみ; 仮値は除外)
     ///
     /// # remaining の shift
     ///
@@ -2135,6 +2136,8 @@ impl TranspositionTable {
     /// - path-dependent disproof は常に除去する (GHI 対策)
     /// - depth-limited disproof (dn=0, remaining < INFINITE) も除去する
     ///   (新 depth では無効になる可能性が高い)
+    /// - pn=INF (u32::MAX) は廃棄する: WPN 累積値は depth 依存であり，
+    ///   次 depth での有効な下限値にならない (§4.7 参照)
     /// - 保持後は `working_overflow_since_gc` をリセットする
     pub(super) fn retain_working_intermediates(
         &mut self,
