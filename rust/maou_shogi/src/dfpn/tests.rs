@@ -10372,3 +10372,157 @@ use crate::types::{Color, PieceType};
         }
         eprintln!("Still not solved at 10M");
     }
+
+    /// ply 22 vs ply 20 IDS 深さ進行プロファイル診断
+    ///
+    /// **動機:** v0.54.0 の 10M backward 解析で ply 22 (9.44M) が ply 20 (5.33M) より
+    /// 多くのノードを消費するという逆転現象が観測された．ply 22 は ply 20 のサブ問題の
+    /// 1つであるため，直感に反する結果である．
+    ///
+    /// **仮説:** IDS 深さ進行ポリシーの違いが根本原因:
+    /// - ply 22 (saved_depth=19): `saved_depth <= 19` 条件により 2→4→19 に直接ジャンプ
+    ///   (TT 暖機ほぼなし)
+    /// - ply 20 (saved_depth=21): 段階的進行 2→4→8→16→17→21 (TT 暖機あり)
+    ///
+    /// **確認内容:** `collect_pn_dn_dist_per_depth()` で各 IDS depth の累積ノード数を確認し，
+    /// ply 22 がフルデプス (ids_depth=19) でほぼ全ノードを消費することを実証する．
+    ///
+    /// **[SLOW]** `cargo test --release -p maou_shogi -- test_ply22_vs_ply20_ids_profile --nocapture`
+    #[test]
+    #[ignore]
+    fn test_ply22_vs_ply20_ids_profile() {
+        use std::io::Write;
+        let out_path = "/tmp/ply22_vs_ply20_profile.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        // 各 ply の局面を事前構築
+        let mut board_root = Board::new();
+        board_root.set_sfen(sfen).unwrap();
+        let mut positions: Vec<(usize, Board)> = Vec::new();
+        positions.push((0, board_root.clone()));
+        for ply_start in (0..38).step_by(2) {
+            let m1 = board_root.move_from_usi(pv[ply_start]).unwrap();
+            board_root.do_move(m1);
+            let m2 = board_root.move_from_usi(pv[ply_start + 1]).unwrap();
+            board_root.do_move(m2);
+            positions.push((ply_start + 2, board_root.clone()));
+        }
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " IDS 深さ進行プロファイル: ply 22 vs ply 20 (v0.54.0)").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, "").unwrap();
+        writeln!(out, "仮説: ply 22 は saved_depth=19 の直接ジャンプポリシーで TT 暖機が少なく,").unwrap();
+        writeln!(out, "      ply 20 は saved_depth=21 の段階的 IDS で TT 暖機が充分に行われる.").unwrap();
+        writeln!(out, "      この差がノード数の逆転 (ply22 > ply20) の根本原因と推定.").unwrap();
+        writeln!(out, "").unwrap();
+
+        for &target_ply in &[22usize, 20usize] {
+            let (ply, pos) = positions.iter().find(|(p, _)| *p == target_ply).unwrap();
+            let remaining = 39 - ply;
+            let saved_depth = (remaining + 2).min(41) as u32;
+
+            writeln!(out, "{}", "-".repeat(70)).unwrap();
+            writeln!(out, "Ply {} (remaining={}, saved_depth={})", ply, remaining, saved_depth).unwrap();
+            writeln!(out, "SFEN: {}", pos.sfen()).unwrap();
+
+            let mut test_board = pos.clone();
+            let mut solver = DfPnSolver::with_timeout(saved_depth, 10_000_000, 32767, 600);
+            solver.set_find_shortest(false);
+
+            let start = Instant::now();
+            let result = solver.solve(&mut test_board);
+            let elapsed = start.elapsed();
+
+            let result_str = match &result {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+
+            writeln!(out, "Result: {}  total_nodes={}  time={:.2}s  TT_pos={}",
+                result_str, solver.nodes_searched, elapsed.as_secs_f64(),
+                solver.table.len()).unwrap();
+
+            // IDS 深さ別ノード数内訳
+            writeln!(out, "").unwrap();
+            writeln!(out, "IDS per-depth breakdown (from collect_pn_dn_dist_per_depth):").unwrap();
+            writeln!(out, "  {:<10} {:<16} {:<16} {:<10}",
+                "ids_depth", "cumul_nodes", "incr_nodes", "TT_work").unwrap();
+
+            let snapshots = solver.collect_pn_dn_dist_per_depth();
+            let mut prev_nodes: u64 = 0;
+            for (ids_dep, nodes, pn_hist, dn_hist, _joint) in snapshots {
+                let incr = nodes - prev_nodes;
+                // TT working entries = 非ゼロ bucket の合計 (pn_hist は working TT の分布)
+                let working_entries: u64 = pn_hist.iter().sum();
+                writeln!(out, "  {:<10} {:<16} {:<16} {:<10}",
+                    ids_dep, nodes, incr, working_entries).unwrap();
+                prev_nodes = *nodes;
+            }
+            // フルデプスのコスト (スナップショットなし = 最後の反復)
+            let final_incr = solver.nodes_searched - prev_nodes;
+            writeln!(out, "  {:<10} {:<16} {:<16} (final depth, no snapshot)",
+                saved_depth, solver.nodes_searched, final_incr).unwrap();
+
+            writeln!(out, "").unwrap();
+
+            // ply 22 のみ: 「depth=16 暖機あり」シミュレーション
+            // depth=16 で 10M 予算で解いた場合のコストを計測
+            if *ply == 22 {
+                writeln!(out, "=== ply 22 追加分析: 各 sub-depth での独立コスト ===").unwrap();
+                writeln!(out, "(各 sub-depth は独立したフレッシュ TT で実行, IDS の TT 共有なし)").unwrap();
+                writeln!(out, "  {:<10} {:<16} {:<10} {:<10} {}",
+                    "depth", "nodes", "time(s)", "TT_pos", "result").unwrap();
+
+                for sub_depth in [4u32, 8, 12, 16, 17, 18, 19] {
+                    if sub_depth > saved_depth { break; }
+                    let mut sub_board = pos.clone();
+                    let mut sub_solver = DfPnSolver::with_timeout(sub_depth, 10_000_000, 32767, 120);
+                    sub_solver.set_find_shortest(false);
+
+                    let sub_start = Instant::now();
+                    let sub_result = sub_solver.solve(&mut sub_board);
+                    let sub_elapsed = sub_start.elapsed();
+
+                    let sub_str = match &sub_result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    writeln!(out, "  {:<10} {:<16} {:<10.2} {:<10} {}",
+                        sub_depth, sub_solver.nodes_searched, sub_elapsed.as_secs_f64(),
+                        sub_solver.table.len(), sub_str).unwrap();
+                    out.flush().unwrap();
+                    if sub_str.starts_with("Mate") { break; }
+                }
+                writeln!(out, "").unwrap();
+            }
+
+            out.flush().unwrap();
+        }
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, "診断完了: {}", out_path).unwrap();
+        eprintln!("診断完了: {}", out_path);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
