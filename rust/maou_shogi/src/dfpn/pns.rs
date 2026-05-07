@@ -1719,26 +1719,28 @@ impl DfPnSolver {
                 // depth < 16: 倍増 (2→4→8→16)
                 // depth ≥ 16: +4 刻みスキップなし (16→20→24→28→32→36→40→...)
                 //
-                // saved_depth ≤ 19: 直接ジャンプ (2→saved_depth)
-                //   浅い問題は直接ジャンプが最効率．
-                //   depth ≤ 19 は epsilon denom=3 (自然に loose) のため
-                //   cliff は発生しない．
+                // saved_depth ≤ 15: 直接ジャンプ (2→4→saved_depth)
+                //   非常に浅い問題 (remaining ≤ 13) は中間 TT 暖機が不要なため直接ジャンプ．
                 //
-                // saved_depth > 19: 段階的 IDS
-                //   中間 depth (16→20→24→...) の TT 蓄積により深い問題を効率的に解く．
-                //   warmup 除去後はこの段階的進行が TT プライミングを担う．
+                // saved_depth > 15: 段階的 IDS
+                //   倍増フェーズ (2→4→8→16) + IDS-17 中間ステップ + +4 刻みで
+                //   TT を段階的に構築してから最終深さに到達する．
+                //   saved_depth=17/19 (ply 24/22) は直接ジャンプ廃止で TT 暖機コストを削減．
+                //   (実測: saved_depth=19 で直接ジャンプ時は TT=121 件のみで 9.29M nodes;
+                //    段階的にすると TT=311K 件相当の暖機が得られる見込み)
                 let next = if ids_depth >= 16 {
                     ids_depth + 4
                 } else {
                     ids_depth.saturating_mul(2).max(ids_depth + 2)
                 };
-                if saved_depth <= 19 && next > 4 && next < saved_depth {
+                if saved_depth <= 15 && next > 4 && next < saved_depth {
                     ids_depth = saved_depth;
                 } else if ids_depth == 16 && next > 17 && saved_depth > 19 && saved_depth <= 26
                     && !self.param_no_ids17
                 {
-                    // NOTE: +4 スケジュールでは ids_depth=16 は到達不能 (14→18 にジャンプ)
-                    // のため，このブランチはデッドコード．
+                    // ids_depth=16 は 2→4→8→16 の倍増パスで到達する．
+                    // saved_depth=21-26 のとき +4 で 20 にジャンプする前に
+                    // 17 を挟んで TT 暖機を追加する．
                     ids_depth = 17;
                 } else {
                     ids_depth = next.min(saved_depth);
