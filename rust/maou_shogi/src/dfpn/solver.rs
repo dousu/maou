@@ -2483,7 +2483,7 @@ impl DfPnSolver {
                         // 取りの王手で既証明局面に到達 → 即座に証明
                     } else {
                         let nc = checks.len() as u32;
-                        let (or_pn, or_se) = self.heuristic_or_pn(board, nc);
+                        let (or_pn, or_se) = self.heuristic_or_pn(board, nc, child_pk);
                         let pn = or_pn.saturating_add(edge_cost_and(*m));
                         let att_in_check = board.is_in_check(board.turn);
                         let dn = heuristic_or_dn(or_se, nc, att_in_check);
@@ -4428,7 +4428,14 @@ impl DfPnSolver {
     /// OR 子ノードの初期 pn と safe_escapes を返す (v0.52.0)．
     /// safe_escapes は呼び出し側で `heuristic_or_dn(se, nc, final_pn)` の計算に使う．
     /// final_pn = 返り値.0 + edge_cost + sacrifice_boost など呼び出し側で加算する．
-    pub(super) fn heuristic_or_pn(&self, board: &Board, num_checks: u32) -> (u32, u32) {
+    ///
+    /// # v0.54.0 変更点
+    ///
+    /// `pos_key` の 3 ビットを使って pn に位置依存ジッタを加える．
+    /// 同一 (safe_escapes, num_checks) の全局面が同じ pn 値に集中して
+    /// KL スパイク (bucket 12 への離散集積) を生じさせるため，
+    /// `×(13..20)/16` = ±20% の 8 段階ジッタで分散させる．
+    pub(super) fn heuristic_or_pn(&self, board: &Board, num_checks: u32, pos_key: u64) -> (u32, u32) {
         if num_checks == 0 {
             return (INF, 0); // 王手なし → 不詰(呼び出し側で処理済みのはず)
         }
@@ -4511,8 +4518,10 @@ impl DfPnSolver {
             }
         };
 
-        // 上限 2048S (bucket 15) に引き上げ (v0.43.0: 512S から拡大)
-        let pn = adjusted_pn.min(2048 * PN_UNIT);
+        // pos_key の 3 ビットで 8 段階 (×0.8125..×1.25) のジッタを加える (v0.54.0)．
+        // 同一 (se, nc) の全局面が同値になる離散スパイクを分散させる．
+        let jitter = ((pos_key >> 17) & 7) as u32;
+        let pn = (adjusted_pn * (13 + jitter) / 16).max(PN_UNIT).min(2048 * PN_UNIT);
         (pn, safe_escapes)
     }
 
