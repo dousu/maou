@@ -1368,10 +1368,6 @@ use crate::types::{Color, PieceType};
 
     /// 逆王手で不詰のケース．
     ///
-    /// **[SLOW]** 後手持ち駒が多いため，各 AND ノードで合い駒候補が多く
-    /// 全不詰証明に多ノードを要する．
-    /// `cargo test --release -p maou_shogi -- test_no_checkmate_counter_check --nocapture` で実行すること．
-    ///
     /// 局面: 先手玉2四，先手飛4三，先手歩1三，先手香2五
     ///       後手玉2二，後手香2一，後手桂4二，後手銀3四
     /// 先手持駒: なし
@@ -1380,11 +1376,13 @@ use crate::types::{Color, PieceType};
     /// 4三飛→2三飛成は王手だが，後手3四銀→2三銀の逆王手(2四の先手玉に対する王手)
     /// により攻め方は次の王手ができず不詰になる．他の王手(4二飛成等)も後手が
     /// 逆王手や玉の逃げで対処できるため不詰．
+    ///
+    /// v0.53.2 で attacker_in_check dn 引き下げ，v0.53.3 で INTERPOSE_DN_BIAS 拡大により
+    /// 441K ノードで解決 (旧: 30M ノード超過)．
     #[test]
-    #[ignore]
     fn test_no_checkmate_counter_check() {
         let sfen = "7l1/5n1k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s3n2l17p 1";
-        let result = solve_tsume(sfen, Some(31), Some(30_000_000), None).unwrap();
+        let result = solve_tsume(sfen, Some(31), Some(3_000_000), None).unwrap();
 
         match &result {
             TsumeResult::NoCheckmate { .. } => {}

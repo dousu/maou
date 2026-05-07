@@ -134,7 +134,6 @@ cargo test --release -p maou_shogi -- <test_name> --nocapture
 | `test_tsume_39te_backward_1m` | 1M nodes × 複数局面 | 逆順解析 (ログ出力) |
 | `test_ply24_diagnostic` | 250K × 6局面 | 診断用ログ出力 |
 | `test_ply24_tt_sharing_effectiveness` | 500K × 8ペア | TT共有効果測定 |
-| `test_no_checkmate_counter_check` | 3M nodes | 双玉逆王手不詭め・逆王手 dn オーバーライド (v0.53.2) + INTERPOSE_DN_BIAS 拡大 (v0.53.3) で改善済み (441K ノードで解決) |
 | `test_counter_check_diagnostic` | - | 診断用ログ出力 (#[ignore]) |
 | `test_no_checkmate_counter_check_probe` | 10M nodes | ノード予算プローブ (#[ignore]) |
 

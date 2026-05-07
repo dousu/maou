@@ -244,11 +244,22 @@ TT の hand\_hash Zobrist 混合によるクラスタ分散を迂回する pos\_
 
 AND ノードの合駒(駒打ち)の初期 dn にバイアスを加算し，探索優先度を下げる．
 
-**実装:** 定数 `INTERPOSE_DN_BIAS = 8` (mod.rs)
+**実装:** 定数 `INTERPOSE_DN_BIAS = 40 * PN_UNIT = 640` (mod.rs)
 
-非合駒応手の初期 dn(=1)より十分大きく設定し，
-df-pn の自然な閾値制御で king move → drop の順序を実現する．
+`heuristic_or_dn` の実用上限と等値に設定することで，全 `(se, nc)` の組み合わせに対して
+以下の順序保証を成立させる:
+
+```
+board_move.effective_dn = heuristic_or_dn(se, nc)                  ∈ [16,   640]
+drop.effective_dn       = heuristic_or_dn(se, nc) + INTERPOSE_DN_BIAS  ∈ [656, 1280]
+```
+
+df-pn の自然な閾値制御で board move (王逃げ・駒移動) → drop (合駒) の順序を実現する．
 遅延展開(§8.3)が主要な制御手段であり，DN バイアスは補助的な役割．
+
+**設計不変条件:** `INTERPOSE_DN_BIAS ≥ max(heuristic_or_dn)` を常に満たすこと．
+`heuristic_or_dn` の値域上限を変更した場合は `INTERPOSE_DN_BIAS` も同時に更新する
+(§3.22.2 の pn-dn-distribution.md 参照)．
 
 ### 8.7 チェーンマス内→外順序
 

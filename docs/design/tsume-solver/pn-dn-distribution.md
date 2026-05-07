@@ -1175,6 +1175,76 @@ AND pn の蓄積速度が遅くなる → 右テール縮小を期待．
 
 ---
 
+### 3.22 逆王手局面の `heuristic_or_dn` 修正と INTERPOSE_DN_BIAS 制約 — 採用 (v0.53.2 / v0.53.3)
+
+#### 3.22.1 問題: 逆王手局面で王逃げの dn が過大 (v0.53.2)
+
+**動機:** 双玉局面 (攻め方も玉を持つ) で攻め方が逆王手を受けた OR ノードにおいて，
+守備方の王逃げ応手に `heuristic_or_dn(se=0, nc=*)=40*PN_UNIT=640` が付いていた．
+一方，合い駒応手には `dn ≈ 128` が付くため，DFPN は合い駒を先に展開してしまう．
+
+根本原因: `se=0` (後手玉の安全逃げ場ゼロ) は「後手玉が追い詰められている → dn を高く」
+という推定だが，逆王手局面ではこの推定が誤りになる．攻め方が逆王手を受けている状態では
+攻め方の王手可能手数 `nc` が 1〜4 に激減しており，実際には守備方は容易に不詭めを証明できる．
+
+**修正 (v0.53.2):** `heuristic_or_dn` に `attacker_in_check: bool` フラグを追加．
+
+```rust
+pub(super) fn heuristic_or_dn(se: u32, nc: u32, attacker_in_check: bool) -> u32 {
+    if attacker_in_check && nc <= 4 {
+        return match nc {
+            1..=2 => 2 * PN_UNIT,   // 32  — 攻め方の王手手段が極めて少ない
+            _     => 4 * PN_UNIT,   // 64  — nc=3..=4
+        };
+    }
+    // ... se/nc 通常テーブル (§3.21)
+}
+```
+
+呼び出し元 (`solver.rs`, `pns.rs`) で `board.is_in_check(board.turn)` を取得して渡す．
+
+**効果:** `test_no_checkmate_counter_check` が 30M ノード予算圏内で解決可能になった (441K 実測)．
+
+#### 3.22.2 問題: INTERPOSE_DN_BIAS と heuristic_or_dn 値域の不整合 (v0.53.3)
+
+**動機:** `INTERPOSE_DN_BIAS = 8*PN_UNIT = 128` は §3.21 以前の `heuristic_or_dn` 値域
+`[16, ≈240]` に対して設計された値だった．§3.21 で `heuristic_or_dn(se=0)=40*PN_UNIT=640`
+が確立されたことで，以下の不等式が崩れていた:
+
+```
+board_move.effective_dn = heuristic_or_dn(se, nc)  ∈ [16, 640]
+drop.effective_dn        = heuristic_or_dn(se, nc) + INTERPOSE_DN_BIAS
+                         = heuristic_or_dn(se, nc) + 128  ∈ [144, 768]
+```
+
+`se=0` の board move (640) > `se≥5` の drop (144 = 16+128) となり，
+AND ノードで「board move を drop より先に探索する」保証が失われる局面が存在した．
+
+**修正 (v0.53.3):** `INTERPOSE_DN_BIAS = 40*PN_UNIT = 640` (= `heuristic_or_dn` の実用上限).
+
+```
+board_move.effective_dn ∈ [16,   640]
+drop.effective_dn       ∈ [656, 1280]
+```
+
+全 `(se, nc)` の組み合わせに対して `board_move < drop` が保証される．
+
+**設計不変条件:**
+
+> `INTERPOSE_DN_BIAS ≥ max(heuristic_or_dn)` を常に満たすこと．
+> `heuristic_or_dn` の値域上限を変更した場合は `INTERPOSE_DN_BIAS` も同時に更新する．
+
+`heuristic_or_dn` の現在の実用上限は `se=0` のとき `40*PN_UNIT=640`．
+`dn.clamp(PN_UNIT, 64*PN_UNIT)` の理論上限は `64*PN_UNIT=1024` だが，
+`se=0` 以外では最大でも `40*PN_UNIT` 止まりのため実用上限は 640.
+
+**効果:**
+
+- `test_no_checkmate_counter_check`: 30M バジェット → 3M バジェット (実測 441K ノード)
+- `test_tsume_39te_ply24_mate15_regression`: 109s → 48s
+
+---
+
 ### 2.6 v0.49.0 — pn=INF 中間エントリ depth-limited 扱い後の計測
 
 **計測条件:** 39手詰め，50M ノードで未解決 (status=unknown)，release ビルド (276.5s)
