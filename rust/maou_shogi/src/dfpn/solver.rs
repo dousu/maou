@@ -1146,13 +1146,12 @@ impl DfPnSolver {
                 &self.path_hand[i],
             );
         }
-        // root 自体も保護(path には含まれない場合がある)
-        if self.path_len > 0 {
-            self.table.protect_working_entry(
-                self.diag_root_pk,
-                &self.diag_root_hand,
-            );
-        }
+        // root 自体も保護(path には含まれない場合がある)．
+        // diag_root_pk は solve() 冒頭で必ず設定されるため，常に呼んでよい．
+        self.table.protect_working_entry(
+            self.diag_root_pk,
+            &self.diag_root_hand,
+        );
     }
 
     /// 転置表を更新する(位置キー＋持ち駒指定)．
@@ -1434,6 +1433,11 @@ impl DfPnSolver {
 
         let pk = position_key(board);
         let att_hand = board.hand[self.attacker.index()];
+        // root の pos_key / hand を GC 保護用に記録する．
+        // diag_root_pk が 0 のまま GC が起動すると protect_working_entry が
+        // 空振りし，root entry が evict されて探索が崩壊する．
+        self.diag_root_pk = pk;
+        self.diag_root_hand = att_hand;
         let (root_pn_after_pns, root_dn_after_pns, _) =
             self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
 
@@ -2481,7 +2485,8 @@ impl DfPnSolver {
                         let nc = checks.len() as u32;
                         let (or_pn, or_se) = self.heuristic_or_pn(board, nc);
                         let pn = or_pn.saturating_add(edge_cost_and(*m));
-                        let dn = heuristic_or_dn(or_se, nc);
+                        let att_in_check = board.is_in_check(board.turn);
+                        let dn = heuristic_or_dn(or_se, nc, att_in_check);
                         self.store(child_pk, child_hand, pn,
                             dn, child_remaining, child_pk as u32);
                     }

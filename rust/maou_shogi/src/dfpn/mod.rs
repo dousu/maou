@@ -307,10 +307,14 @@ pub(super) fn heuristic_dn_from_pn(pn: u32) -> u32 {
     dn.clamp(PN_UNIT, 64 * PN_UNIT)
 }
 
-/// OR ノード専用の初期 dn ヒューリスティック (v0.52.1)．
+/// OR ノード専用の初期 dn ヒューリスティック (v0.52.1, v0.53.2)．
 ///
 /// pn に依存せず (safe_escapes, num_checks) から直接 dn を決定する．
 /// 逃げ場が少ない → 不詭めを示しにくい → dn 大．王手数が多い → dn 大．
+///
+/// `attacker_in_check=true` (逆王手局面): 攻め方の合法王手は「自玉危機解除 AND
+/// 後手玉への王手」を同時に満たす手のみに限定される．nc≤4 では探索木が極めて
+/// 小さく不詭めを示しやすいため，dn を引き下げる (v0.53.2)．
 ///
 /// se=0-3 の値は v0.51.1 `heuristic_dn_from_pn(final_pn)` の実値に精密に合わせ
 /// 回帰を防ぐ．se>=4 (開放局面) は v0.51.1 の ≈22 (bucket 4) から bucket 5-7
@@ -326,9 +330,20 @@ pub(super) fn heuristic_dn_from_pn(pn: u32) -> u32 {
 ///   4   |   64  |   80 |   96 |  128   (v0.51.1 ≈22, bucket 6-7)
 ///   5   |   48  |   64 |   80 |   80   (v0.51.1 ≈22, bucket 5-6)
 ///  6+   |   32  |   48 |   64 |   64   (v0.51.1 ≈22, bucket 5-6)
+///
+/// 逆王手オーバーライド (attacker_in_check=true, nc≤4):
+///   nc 1-2: 32  (b5)
+///   nc 3-4: 64  (b6)
 /// ```
 #[inline]
-pub(super) fn heuristic_or_dn(safe_escapes: u32, num_checks: u32) -> u32 {
+pub(super) fn heuristic_or_dn(safe_escapes: u32, num_checks: u32, attacker_in_check: bool) -> u32 {
+    // 逆王手局面: nc が小さい場合は探索木が極めて浅く不詭めを示しやすい
+    if attacker_in_check && num_checks <= 4 {
+        return match num_checks {
+            1..=2 => 2 * PN_UNIT, // 32  (b5)
+            _ => 4 * PN_UNIT,     // 64  (b6) for nc=3..=4
+        };
+    }
     let dn: u32 = match safe_escapes {
         // se=0: bucket 9 全域 — nc 差異が小さいため統一
         0 => 40 * PN_UNIT, // 640

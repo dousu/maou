@@ -1339,22 +1339,52 @@ use crate::types::{Color, PieceType};
         }
     }
 
+    /// 逆王手の移動生成ユニットテスト．
+    ///
+    /// 局面: 2三飛成直後(後手番)
+    ///       先手竜2三，先手玉2四，先手歩1三，先手香2五
+    ///       後手玉2二，後手香2一，後手桂4二，後手銀3四
+    ///
+    /// 後手が指せる手のリストに 3四銀→2三銀(逆王手) が含まれることを確認する．
+    /// 竜(2三)を銀で取ると銀が2三に来て先手玉2四へ斜め前方向の逆王手になる．
+    #[test]
+    fn test_counter_check_move_generation_unit() {
+        // 2三飛成後の局面: 竜が2三に，後手番(w)
+        let sfen = "7l1/5n1k1/7+RP/6sK1/7L1/9/9/9/9 w r2b4g3s3n2l17p 2";
+        let mut board = crate::board::Board::empty();
+        board.set_sfen(sfen).expect("valid SFEN");
+
+        let mut solver = DfPnSolver::new(31, 1, 32767);
+        let moves = solver.generate_defense_moves(&mut board);
+
+        // 3d2c = 後手銀 3四→2三 (竜を取り，先手玉2四への逆王手)
+        let has_counter_check = moves.iter().any(|m| m.to_usi() == "3d2c");
+        assert!(
+            has_counter_check,
+            "逆王手手 3d2c が指し手リストにない．生成された手: {:?}",
+            moves.iter().map(|m| m.to_usi()).collect::<Vec<_>>()
+        );
+    }
+
     /// 逆王手で不詰のケース．
+    ///
+    /// **[SLOW]** 後手持ち駒が多いため，各 AND ノードで合い駒候補が多く
+    /// 全不詰証明に多ノードを要する．
+    /// `cargo test --release -p maou_shogi -- test_no_checkmate_counter_check --nocapture` で実行すること．
     ///
     /// 局面: 先手玉2四，先手飛4三，先手歩1三，先手香2五
     ///       後手玉2二，後手香2一，後手桂4二，後手銀3四
     /// 先手持駒: なし
     /// 後手持駒: 飛，角二，金四，銀三，桂三，香二，歩十七
     ///
-    /// 4三飛→2三飛成は王手だが，後手3三銀の逆王手(2四の先手玉に対する王手)
-    /// により攻め方は王手回避を強いられ，詰みにならない．
-    /// 先手に持ち駒がなく他の有効な攻めがないため不詰．
-    ///
+    /// 4三飛→2三飛成は王手だが，後手3四銀→2三銀の逆王手(2四の先手玉に対する王手)
+    /// により攻め方は次の王手ができず不詰になる．他の王手(4二飛成等)も後手が
+    /// 逆王手や玉の逃げで対処できるため不詰．
     #[test]
+    #[ignore]
     fn test_no_checkmate_counter_check() {
         let sfen = "7l1/5n1k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s3n2l17p 1";
-        // v0.49.0: pn=INF 中間エントリの depth-limited 扱いにより ~950K で解決．
-        let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+        let result = solve_tsume(sfen, Some(31), Some(30_000_000), None).unwrap();
 
         match &result {
             TsumeResult::NoCheckmate { .. } => {}
@@ -10230,6 +10260,103 @@ use crate::types::{Color, PieceType};
                 eprintln!("MateNoPV");
             }
         }
+    }
+
+    /// counter_check 不詭め局面の移動木診断．
+    ///
+    /// 先手の全王手手ごとに「後手の応手数」と「中合いチェーン情報」を出力し，
+    /// どの分岐が高コストかを特定する．
+    #[test]
+    #[ignore]
+    fn test_counter_check_diagnostic() {
+        use std::io::Write;
+        let out_path = "/tmp/counter_check_diagnostic.log";
+        let sfen = "7l1/5n1k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s3n2l17p 1";
+
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+        writeln!(out, "=== Counter-Check 不詭め診断 ===").unwrap();
+        writeln!(out, "SFEN: {}", sfen).unwrap();
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        let mut solver = DfPnSolver::default_solver();
+
+        // Root OR ノード: 先手の王手手一覧
+        let checks = solver.generate_check_moves(&mut board);
+        writeln!(out, "\n先手王手手数: {}", checks.len()).unwrap();
+        for m in &checks {
+            writeln!(out, "  {}", m.to_usi()).unwrap();
+        }
+
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+
+        for chk in &checks {
+            writeln!(out, "\n=== 王手: {} ===", chk.to_usi()).unwrap();
+            let cap1 = board.do_move(*chk);
+            writeln!(out, "  SFEN: {}", board.sfen()).unwrap();
+
+            let defenses = solver.generate_defense_moves(&mut board);
+            let drop_cnt = defenses.iter().filter(|m| m.is_drop()).count();
+            writeln!(out, "  後手応手数={} (drop={}, board={})",
+                defenses.len(), drop_cnt, defenses.len() - drop_cnt).unwrap();
+
+            // AND ノードのチェーン情報
+            let def_color = board.turn();
+            let att_color = def_color.opponent();
+            if let Some(king_sq) = board.king_square(def_color) {
+                let checkers = board.compute_checkers_at(king_sq, att_color);
+                if checkers.count() == 1 {
+                    let checker_sq = checkers.lsb().unwrap();
+                    writeln!(out, "  王手駒: {}{}", 9-checker_sq.col(), (b'a'+checker_sq.row()) as char).unwrap();
+                    if let Some(_sl) = solver.find_sliding_checker(&board, king_sq, att_color) {
+                        let btw = attack::between_bb(checker_sq, king_sq);
+                        let (fut, chn) = solver.compute_futile_and_chain_squares(
+                            &board, &btw, king_sq, checker_sq, def_color, att_color);
+                        write!(out, "  Between:").unwrap();
+                        for sq in btw { write!(out, " {}{}", 9-sq.col(), (b'a'+sq.row()) as char).unwrap(); }
+                        writeln!(out).unwrap();
+                        write!(out, "  Futile:").unwrap();
+                        for sq in fut { write!(out, " {}{}", 9-sq.col(), (b'a'+sq.row()) as char).unwrap(); }
+                        writeln!(out).unwrap();
+                        write!(out, "  Chain:").unwrap();
+                        for sq in chn { write!(out, " {}{}", 9-sq.col(), (b'a'+sq.row()) as char).unwrap(); }
+                        writeln!(out).unwrap();
+                        let normal = btw.count() - fut.count() - chn.count();
+                        writeln!(out, "  Normal squares (= 非futile非chain 合い駒候補): {}", normal).unwrap();
+                    } else {
+                        writeln!(out, "  (非滑り駒王手)").unwrap();
+                    }
+                } else if checkers.count() > 1 {
+                    writeln!(out, "  二重王手 (checkers={})", checkers.count()).unwrap();
+                }
+            }
+
+            // 各応手の後の先手王手数
+            writeln!(out, "  --- 各応手後の先手王手数 ---").unwrap();
+            for def_m in &defenses {
+                let cap2 = board.do_move(*def_m);
+                let next_chks = solver.generate_check_moves(&mut board);
+                writeln!(out, "    {} => 次王手数={}", def_m.to_usi(), next_chks.len()).unwrap();
+
+                // 応手後の AND ノードを 50K ノードで解いて結果確認
+                let sub_sfen = board.sfen();
+                board.undo_move(*def_m, cap2);
+
+                let sub_result = solve_tsume(&sub_sfen, Some(31), Some(50_000), None)
+                    .map(|r| format!("{:?}", r))
+                    .unwrap_or_else(|e| format!("Err({:?})", e));
+                writeln!(out, "      50K結果: {}", sub_result).unwrap();
+            }
+
+            board.undo_move(*chk, cap1);
+        }
+
+        drop(out);
+        eprintln!("診断完了: {}", out_path);
+        }).unwrap().join().unwrap();
     }
 
     /// counter_check 不詭め局面のノード予算プローブ

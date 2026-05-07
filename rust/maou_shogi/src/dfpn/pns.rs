@@ -1910,12 +1910,26 @@ impl DfPnSolver {
 
             // MID フェーズ: PNS で更新された TT を活用して局所探索
             let remaining_budget2 = total_max_nodes.saturating_sub(self.nodes_searched);
-            let mid_budget = if skip_pns {
-                // PNS スキップ時は MID に多くの予算を配分
-                (remaining_budget2 / 3).max(50_000).min(remaining_budget2)
-            } else {
-                (remaining_budget2 / 4).max(50_000).min(remaining_budget2)
-            };
+
+            if skip_pns {
+                // PNS SKIPPED サイクル: 残余 budget 全量を 1 回の MID に渡して終了する．
+                //
+                // 理由: budget を分割すると各 MID 呼び出しが depth=31 の探索途中で
+                // 予算切れになり，root (ply=0) まで戻れず root TT エントリが更新されない．
+                // root TT が空のまま次の MID が始まるため収束しない．
+                // 残余を全量渡せば MID が完走して root エントリを正しく更新できる．
+                //
+                // retain_proofs() は PNS アリーナが存在しないため不要．
+                self.max_nodes = total_max_nodes;
+                self.path_len = 0;
+                let (r_pn2, r_dn2, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
+                if r_pn2 != 0 && r_dn2 != 0 {
+                    self.mid(board, INF - 1, INF - 1, 0, true);
+                }
+                break;
+            }
+
+            let mid_budget = (remaining_budget2 / 4).max(50_000).min(remaining_budget2);
             self.max_nodes = self.nodes_searched.saturating_add(mid_budget);
             self.path_len = 0;
 
@@ -1930,18 +1944,14 @@ impl DfPnSolver {
                 break;
             }
 
-            // サイクル間 TT 清掃: MID が蓄積した中間エントリを除去し，
+            // サイクル間 TT 清掃: PNS アリーナが破棄される境界でのみ実施する．
+            // PNS を実行したサイクルのみ: MID が蓄積した中間エントリを除去し，
             // 次の PNS サイクルが新鮮な状態でフロンティアを選択できるようにする．
             // 証明(pn=0)と確定反証(dn=0, 非経路依存)は保持する．
             //
             // NOTE (v0.24.45): 当初は `retain_proofs_and_intermediates()` で
             // 非 path-dep intermediate も保持する案を試みたが，
             // `test_no_checkmate_gold_interposition` で soundness 違反が発生した．
-            // Frontier サイクル境界は PNS アリーナが破棄される境界であり，
-            // stale intermediate pn/dn を次サイクルに持ち越すと proof 伝搬に
-            // 影響する．Frontier サイクル境界では従来通り全 intermediate を
-            // 除去する方針を維持する．施策 I (IDS depth 切替時の保持) のみ
-            // 採用．詳細は benchmarks.md §10.2 v0.24.45 参照．
             self.table.retain_proofs();
         }
         self.max_nodes = total_max_nodes;
@@ -2514,7 +2524,8 @@ impl DfPnSolver {
                         cpn = or_pn
                             .saturating_add(edge_cost_and(*m))
                             .saturating_add(sacrifice_check_boost(board, &checks));
-                        cdn = heuristic_or_dn(or_se, nc);
+                        let att_in_check = board.is_in_check(board.turn);
+                        cdn = heuristic_or_dn(or_se, nc, att_in_check);
                         self.store(child_pk, child_hand, cpn, cdn, child_remaining, child_pk as u32);
                     }
                 } else {
