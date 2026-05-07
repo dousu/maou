@@ -1719,21 +1719,23 @@ impl DfPnSolver {
                 // depth < 16: 倍増 (2→4→8→16)
                 // depth ≥ 16: +4 刻みスキップなし (16→20→24→28→32→36→40→...)
                 //
-                // saved_depth ≤ 15: 直接ジャンプ (2→4→saved_depth)
-                //   非常に浅い問題 (remaining ≤ 13) は中間 TT 暖機が不要なため直接ジャンプ．
+                // saved_depth ≤ 17: 直接ジャンプ (2→4→saved_depth)
+                //   浅い問題 (remaining ≤ 15) は depth=16 暖機のコスト (~447K nodes) が
+                //   depth=17 での節約を上回るため直接ジャンプが最効率．
+                //   (実測: ply 24, saved_depth=17 で直接ジャンプ 683K < 段階的 718K)
                 //
-                // saved_depth > 15: 段階的 IDS
+                // saved_depth > 17: 段階的 IDS
                 //   倍増フェーズ (2→4→8→16) + IDS-17 中間ステップ + +4 刻みで
                 //   TT を段階的に構築してから最終深さに到達する．
-                //   saved_depth=17/19 (ply 24/22) は直接ジャンプ廃止で TT 暖機コストを削減．
-                //   (実測: saved_depth=19 で直接ジャンプ時は TT=121 件のみで 9.29M nodes;
-                //    段階的にすると TT=311K 件相当の暖機が得られる見込み)
+                //   saved_depth=19 (ply 22) は直接ジャンプ廃止で TT 暖機コストを削減．
+                //   (実測: saved_depth=19 で直接ジャンプ TT=121件・9.29M nodes
+                //    → 段階的 (2→4→8→16→19) で 7.63M nodes, -19.2%)
                 let next = if ids_depth >= 16 {
                     ids_depth + 4
                 } else {
                     ids_depth.saturating_mul(2).max(ids_depth + 2)
                 };
-                if saved_depth <= 15 && next > 4 && next < saved_depth {
+                if saved_depth <= 17 && next > 4 && next < saved_depth {
                     ids_depth = saved_depth;
                 } else if ids_depth == 16 && next > 17 && saved_depth > 19 && saved_depth <= 26
                     && !self.param_no_ids17
