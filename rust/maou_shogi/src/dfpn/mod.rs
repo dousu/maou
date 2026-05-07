@@ -105,14 +105,19 @@ const WPN_GAMMA_SHIFT: u32 = 6;
 /// その後に合駒の分岐を探索する際，攻め方が合駒を取った後の
 /// 局面が既に証明済みになっていることが多く，高速に証明できる．
 ///
-/// 旧値: INF/2(≈2B)は deferred_children 方式と併用する前提の値であり，
-/// drops を children にそのまま含める現方式では事実上の無限バイアスとなり
-/// 非 drop 子が全て証明されるまで drop が選択されない問題があった．
+/// 旧値 (v0.53.2 以前): 8*PN_UNIT=128．`heuristic_or_dn` が返す値域
+/// [PN_UNIT, 40*PN_UNIT]=[16, 640] に対して不十分であり，
+/// se=0 の非合駒応手(dn=640)が合駒有効 dn(128+128=256)より大きくなり
+/// バイアスが逆転するケースがあった (双玉逆王手局面等)．
 ///
-/// 新値: 8 は king move の初期 dn(1)より十分大きく，
-/// king move が探索されて dn が上昇した後に drop の探索が始まる程度のバイアス．
-/// これにより df-pn の自然な閾値制御で king move → drop の順序が実現される．
-const INTERPOSE_DN_BIAS: u32 = 8 * PN_UNIT;
+/// 新値 (v0.53.3): `heuristic_or_dn` の実用上限 40*PN_UNIT=640 と等値に設定．
+///
+///   非合駒(board move): effective_dn = heuristic_or_dn(se, nc) ∈ [16, 640]
+///   合駒(drop):        effective_dn = heuristic_or_dn(se, nc) + 640 ∈ [656, 1280]
+///
+/// これにより heuristic_or_dn の初期値域全体で board move < drop の順序が保証される．
+/// DFPN の閾値制御により board move の dn が 640 を超えた段階で drop の探索が始まる．
+const INTERPOSE_DN_BIAS: u32 = 40 * PN_UNIT;
 
 // MID ループの dn 閾値フロア(スラッシング防止)は v0.24.41 で
 // `DfPnSolver::param_dn_floor_mult` (デフォルト 100) に移行した．
