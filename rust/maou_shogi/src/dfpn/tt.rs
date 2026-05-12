@@ -79,6 +79,23 @@ const LEAF_CLUSTER_SIZE: usize = 4;
 /// 512K × 4 entries × 16B = 32MB．WorkingTT overflow の remaining≤2 専用バッファ．
 const LEAF_NUM_CLUSTERS: usize = 1 << 19;
 
+/// IDS 引継ぎ時に pn=INF (WPN 飽和 / depth-limited) エントリの pn を
+/// 値落としするキャップ値．
+///
+/// pn=INF のまま引き継ぐと AND ノードで pn が爆発するため (n children × INF)，
+/// heuristic_or_pn の典型値域 (O(512)) に近い小さい値に置き換える．
+/// dn は有限なら保持し，INF の場合のみ同値でキャップする．
+const RETAIN_INF_PN_CAP: u32 = 32 * PN_UNIT;
+
+/// pn=INF エントリを IDS 引継ぎに含める最大 delta_remaining 値．
+///
+/// delta が大きい IDS ステップ (例: 4→17, delta=13) では，
+/// depth=D の pn=INF エントリは depth=D+delta でも依然 INF である可能性が高く，
+/// 未検証のヒントを大量注入して TT を汚染する．
+/// delta が小さい場合 (例: 16→17, delta=1) は「直前の depth 限界に近い」
+/// エントリのみが対象となり，汚染リスクが低い．
+const RETAIN_INF_MAX_DELTA: u16 = 4;
+
 /// LeafDisproofTT のコンパクトエントリ (16B)．
 ///
 /// N-8 (v0.26.0): remaining ≤ 2 の depth-limited disproof を WorkingTT の
@@ -2136,8 +2153,11 @@ impl TranspositionTable {
     /// - path-dependent disproof は常に除去する (GHI 対策)
     /// - depth-limited disproof (dn=0, remaining < INFINITE) も除去する
     ///   (新 depth では無効になる可能性が高い)
-    /// - pn=INF (u32::MAX) は廃棄する: WPN 累積値は depth 依存であり，
-    ///   次 depth での有効な下限値にならない (§4.7 参照)
+    /// - pn=INF (u32::MAX) の intermediate エントリは `delta_remaining <= RETAIN_INF_MAX_DELTA`
+    ///   の場合のみ保持し，pn を `RETAIN_INF_PN_CAP` (= 32 × PN_UNIT) に値落とし (§4.7 参照)．
+    ///   delta が大きいジャンプ (例: 4→17) では未検証のヒントを大量注入して TT を汚染するため除外する．
+    ///   AND ノード pn 爆発を防ぎつつ，有限 dn (depth D での下限情報) を保持する．
+    ///   dn も INF の場合は同値でキャップする．
     /// - 保持後は `working_overflow_since_gc` をリセットする
     pub(super) fn retain_working_intermediates(
         &mut self,
@@ -2156,11 +2176,12 @@ impl TranspositionTable {
             let is_path_dep = entry.path_dependent();
             let is_depth_limited = rem < REMAINING_INFINITE;
             let new_rem = rem.saturating_add(delta_remaining);
-            // pn=INF の intermediate は depth-limited 証明不能であり，
-            // remaining をシフトしても新 depth で同じブロックが再発する．
-            // 保持せず破棄して新 depth での再探索に委ねる．
+            // pn=INF エントリは delta が小さい場合のみ保持する:
+            // delta が大きい IDS ジャンプ (e.g. 4→17) では未検証の
+            // pn=INF ヒントが大量注入されて TT を汚染するため除外する
+            let inf_eligible = entry.pn < u32::MAX || delta_remaining <= RETAIN_INF_MAX_DELTA;
             let keep = is_intermediate
-                && entry.pn < u32::MAX
+                && inf_eligible
                 && !is_path_dep
                 && is_depth_limited
                 && rem >= min_remaining
@@ -2181,7 +2202,14 @@ impl TranspositionTable {
                     };
                     self.diag_retained_dn_dist[db] += 1;
                 }
-                if self.retain_pn_dn_cap < u32::MAX {
+                // pn=INF エントリ: AND ノード爆発を防ぐため値落とし
+                // dn は有限なら保持 (depth D での下限情報として有効)
+                if entry.pn == u32::MAX {
+                    entry.pn = RETAIN_INF_PN_CAP;
+                    if entry.dn == u32::MAX {
+                        entry.dn = RETAIN_INF_PN_CAP;
+                    }
+                } else if self.retain_pn_dn_cap < u32::MAX {
                     entry.pn = entry.pn.min(self.retain_pn_dn_cap);
                     entry.dn = entry.dn.min(self.retain_pn_dn_cap);
                 }

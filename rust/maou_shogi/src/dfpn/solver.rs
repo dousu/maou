@@ -1,6 +1,8 @@
 //! DfPnSolver 構造体と探索コアロジック．
 
 use arrayvec::ArrayVec;
+#[cfg(feature = "visit_diag")]
+use rustc_hash::FxHashMap;
 use rustc_hash::FxHashSet;
 use std::time::{Duration, Instant};
 
@@ -600,6 +602,12 @@ pub struct DfPnSolver {
     /// `mid_fallback` 内で各 IDS depth のMID 完了後，TT 遷移 (retain_working_intermediates
     /// / clear_working) の直前に収集する．(ids_depth, nodes_searched, pn_hist, dn_hist, joint_hist)
     pub(super) pn_dn_per_depth: Vec<(u32, u64, [u64; 32], [u64; 32], Vec<u64>)>,
+    /// 各局面 (board.hash) の MID 訪問回数 (visit_diag feature 時のみ存在)．
+    #[cfg(feature = "visit_diag")]
+    pub(super) visit_counts: FxHashMap<u64, u32>,
+    /// 各局面が初めて訪問された ply (visit_diag feature 時のみ存在)．
+    #[cfg(feature = "visit_diag")]
+    pub(super) visit_first_ply: FxHashMap<u64, u8>,
 }
 
 impl DfPnSolver {
@@ -803,7 +811,93 @@ impl DfPnSolver {
             diag_rem0_provisional: 0,
             pn_dn_snapshot: None,
             pn_dn_per_depth: Vec::new(),
+            #[cfg(feature = "visit_diag")]
+            visit_counts: FxHashMap::default(),
+            #[cfg(feature = "visit_diag")]
+            visit_first_ply: FxHashMap::default(),
         }
+    }
+
+    /// 重複訪問レポートを返す (visit_diag feature 時のみ利用可)．
+    ///
+    /// 各局面の訪問回数分布と上位 `top_n` 局面をまとめた文字列を返す．
+    #[cfg(feature = "visit_diag")]
+    pub fn visit_summary(&self, top_n: usize) -> String {
+        use std::fmt::Write as _;
+        let total_visits: u64 = self.visit_counts.values().map(|&c| c as u64).sum();
+        let unique_positions = self.visit_counts.len();
+        let revisits = total_visits.saturating_sub(unique_positions as u64);
+        let revisit_rate = if total_visits > 0 {
+            100.0 * revisits as f64 / total_visits as f64
+        } else {
+            0.0
+        };
+
+        let mut sorted: Vec<(u64, u32, u8)> = self.visit_counts.iter()
+            .map(|(&h, &cnt)| {
+                let ply = self.visit_first_ply.get(&h).copied().unwrap_or(255);
+                (h, cnt, ply)
+            })
+            .collect();
+        sorted.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+
+        // ply 別集計: (total_visits, unique_positions) per ply
+        let mut ply_total = [0u64; 64];
+        let mut ply_unique = [0u64; 64];
+        for &(_, cnt, ply) in &sorted {
+            if (ply as usize) < 64 {
+                ply_total[ply as usize] += cnt as u64;
+                ply_unique[ply as usize] += 1;
+            }
+        }
+
+        let mut out = String::new();
+        writeln!(out, "=== 重複訪問レポート ===").unwrap();
+        writeln!(out, "総訪問数    : {}", total_visits).unwrap();
+        writeln!(out, "ユニーク局面: {}", unique_positions).unwrap();
+        writeln!(out, "重複訪問数  : {} ({:.1}%)", revisits, revisit_rate).unwrap();
+        writeln!(out).unwrap();
+
+        writeln!(out, "--- ply 別集計 (revisit 率が高い順) ---").unwrap();
+        let mut ply_rows: Vec<(usize, u64, u64)> = ply_total.iter().enumerate()
+            .filter(|(_, &t)| t > 0)
+            .map(|(p, &t)| {
+                let u = ply_unique[p];
+                (p, t, u)
+            })
+            .collect();
+        ply_rows.sort_unstable_by(|a, b| {
+            let ra = a.1.saturating_sub(a.2) * b.2;
+            let rb = b.1.saturating_sub(b.2) * a.2;
+            rb.cmp(&ra)
+        });
+        for (ply, total, unique) in &ply_rows {
+            let rev = total.saturating_sub(*unique);
+            let rate = if *total > 0 { 100.0 * rev as f64 / *total as f64 } else { 0.0 };
+            writeln!(out, "  ply {:2}: total={:8}  unique={:7}  revisits={:7}  rate={:.1}%",
+                ply, total, unique, rev, rate).unwrap();
+        }
+        writeln!(out).unwrap();
+
+        writeln!(out, "--- 上位 {} 局面 (訪問回数順) ---", top_n).unwrap();
+        for (rank, &(hash, cnt, ply)) in sorted.iter().take(top_n).enumerate() {
+            writeln!(out, "  {:3}. hash={:#018x}  count={:6}  first_ply={}", rank + 1, hash, cnt, ply).unwrap();
+        }
+
+        // 訪問回数の分布ヒストグラム
+        writeln!(out).unwrap();
+        writeln!(out, "--- 訪問回数分布 ---").unwrap();
+        let thresholds = [1u32, 2, 5, 10, 20, 50, 100, 500, 1000];
+        let mut prev = 0u32;
+        for &th in &thresholds {
+            let count = sorted.iter().filter(|&&(_, c, _)| c >= prev + 1 && c <= th).count();
+            writeln!(out, "  {}-{} 回: {} 局面", prev + 1, th, count).unwrap();
+            prev = th;
+        }
+        let count_over = sorted.iter().filter(|&&(_, c, _)| c > prev).count();
+        writeln!(out, "  {}+ 回: {} 局面", prev + 1, count_over).unwrap();
+
+        out
     }
 
     /// PNS アリーナの最大ノード数を設定する (v0.25.0)．
@@ -2127,6 +2221,14 @@ impl DfPnSolver {
         }
 
         let full_hash = board.hash;
+        #[cfg(feature = "visit_diag")]
+        {
+            let e = self.visit_counts.entry(full_hash).or_insert(0);
+            if *e == 0 {
+                self.visit_first_ply.insert(full_hash, ply.min(63) as u8);
+            }
+            *e += 1;
+        }
         let pos_key = profile_timed!(self, position_key_ns, position_key_count,
             position_key(board));
         let att_hand = board.hand[self.attacker.index()];
@@ -3086,6 +3188,10 @@ impl DfPnSolver {
         // 前回の子 mid() が消費したノード数(ペナルティ保護・停滞検出用)．
         let mut _prev_nodes_used: u64 = 0;
         let mut stagnation_count: u32 = 0;
+        // 同一子連続選択カウンタ (スラッシング防止用幾何的閾値増幅)．
+        // 同じ best_idx が選ばれるたびにインクリメントし，
+        // STAGNATION_LIMIT 回ごとに閾値を 2 倍する (最大 128 倍)．
+        let mut same_child_iters: u32 = 0;
         loop {
             #[cfg(feature = "verbose")]
             { _loop_iter += 1; }
@@ -3991,11 +4097,33 @@ impl DfPnSolver {
                 (0, 0, 0)
             };
 
+            // 同一子連続選択によるスラッシング防止: 幾何的閾値増幅．
+            //
+            // 同一 best_idx が STAGNATION_LIMIT 回連続するたびに閾値を 2 倍し，
+            // 1 回の mid() 呼び出しで収束に必要な予算を段階的に確保する．
+            // pn/dn が微小変化する "slow-progress thrashing" を防ぐ:
+            //   - 通常の stagnation 検出: pn/dn が完全に変化しない場合のみ発火
+            //   - 本機構: 同一子を繰り返し選択するだけで増幅が発動
+            // 上限 128 倍 (シフト 7 ビット) でメモリ使用量を抑制する．
+            let (final_child_pn_th, final_child_dn_th) = if best_idx == prev_best_idx {
+                same_child_iters = same_child_iters.saturating_add(1);
+                let amp_shift = (same_child_iters / STAGNATION_LIMIT).min(7);
+                if amp_shift > 0 {
+                    let amp = 1u32 << amp_shift;
+                    (child_pn_th.saturating_mul(amp).min(INF - 1),
+                     child_dn_th.saturating_mul(amp).min(INF - 1))
+                } else {
+                    (child_pn_th, child_dn_th)
+                }
+            } else {
+                same_child_iters = 0;
+                (child_pn_th, child_dn_th)
+            };
             let _pre_mid_nodes = self.nodes_searched;
             self.mid(
                 board,
-                child_pn_th,
-                child_dn_th,
+                final_child_pn_th,
+                final_child_dn_th,
                 ply + 1,
                 !or_node,
             );

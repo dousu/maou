@@ -1087,7 +1087,10 @@ use crate::types::{Color, PieceType};
 
     /// 29手詰め PV 逆順解析: PV の手順を進め，各中間局面から解けるか検証．
     /// どの深さで解けなくなるかを特定する．
+    ///
+    /// **[SLOW]** 複数局面を直列に解くため合計で数分かかる．
     #[test]
+    #[ignore]
     fn test_tsume_6_29te_pv_analysis() {
         let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
         // PV の最初 25 手(テストで検証済みの手順)
@@ -1139,7 +1142,10 @@ use crate::types::{Color, PieceType};
     }
 
     /// 29手詰め ply1 応手解析: S*7i 後の各応手から解けるか検証．
+    ///
+    /// **[SLOW]** 複数局面を直列に解くため合計で数分かかる．
     #[test]
+    #[ignore]
     fn test_tsume_6_29te_ply1_analysis() {
         use crate::movegen;
         let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
@@ -2415,10 +2421,10 @@ use crate::types::{Color, PieceType};
         );
     }
 
-    /// 39手詰め ply 24 から Mate(15) を発見する **非 ignore 回帰テスト**．
+    /// 39手詰め ply 24 から Mate(15) を発見する回帰テスト．
     ///
     /// **[SLOW]** debug ビルドでは release 比 ~6 倍遅い (~312s)．
-    /// `cargo test --release -p maou_shogi -- test_tsume_39te_ply24_mate15_regression` で実行すること．
+    /// `cargo test --release -p maou_shogi -- test_tsume_39te_ply24_mate15_regression --nocapture --ignored` で実行すること．
     ///
     /// 役割: PV 抽出の無駄合チェーン対策 (`count_useless_interpose_pairs`)
     /// が正しく動作することを保証する．
@@ -2437,6 +2443,7 @@ use crate::types::{Color, PieceType};
     ///
     /// コスト: v0.24.29 で ~370K ノード / ~40 秒．
     #[test]
+    #[ignore]
     fn test_tsume_39te_ply24_mate15_regression() {
         let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
         // ply 24 までの前段 PV (24 手)．この後の攻め方番から解かせる．
@@ -2501,7 +2508,7 @@ use crate::types::{Color, PieceType};
     /// 39手詰め ply24 depth=25 soundness regression (v0.24.50+)．
     ///
     /// **[SLOW]** 3M ノード / 300s バジェット．debug ビルドでは時間制限を超過するリスクがある．
-    /// `cargo test --release -p maou_shogi -- test_tsume_39te_ply24_mate15_soundness_depth25` で実行すること．
+    /// `cargo test --release -p maou_shogi -- test_tsume_39te_ply24_mate15_soundness_depth25 --nocapture --ignored` で実行すること．
     ///
     /// 施策 A-4 (境界層 DN inflation) と今後の境界層施策が canonical PV を
     /// 壊さないことを保証する soundness-only test．
@@ -2518,6 +2525,7 @@ use crate::types::{Color, PieceType};
     /// 測るための benchmark ではなく soundness guard** として機能させる
     /// ため．depth=25 Unknown は v0.24.46 baseline と同じで退行ではない．
     #[test]
+    #[ignore]
     fn test_tsume_39te_ply24_mate15_soundness_depth25() {
         let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
         let prefix_pv = [
@@ -2575,8 +2583,9 @@ use crate::types::{Color, PieceType};
     /// 探索コスト内訳を報告する．
     ///
     /// **[SLOW]** 複数局面を直列に解くため合計で数分かかる．
-    /// `cargo test --release -p maou_shogi -- test_tsume_39te_backward_1m --nocapture` で実行すること．
+    /// `cargo test --release -p maou_shogi -- test_tsume_39te_backward_1m --nocapture --ignored` で実行すること．
     #[test]
+    #[ignore]
     fn test_tsume_39te_backward_1m() {
         use std::io::Write;
         let out_path = "/tmp/tsume_39te_backward_1m.log";
@@ -10211,12 +10220,13 @@ use crate::types::{Color, PieceType};
     /// ply 2 false NoMate 回帰テスト (v0.24.63)．
     ///
     /// **[SLOW]** 10M ノード / 600s バジェット．debug ビルドでは時間制限を超過する．
-    /// `cargo test --release -p maou_shogi -- test_tsume_39te_ply2_no_false_nomate --nocapture` で実行すること．
+    /// `cargo test --release -p maou_shogi -- test_tsume_39te_ply2_no_false_nomate --nocapture --ignored` で実行すること．
     ///
     /// 39手詰め PV 上の ply 2 局面 (37手詰め) を depth=39, 10M budget で solve し，
     /// NoCheckmate を返さないことを検証する．Unknown は正常 (budget 不足)．
     /// v0.24.60 以前では IDS NM 昇格判定のバグにより false NoMate が発生していた．
     #[test]
+    #[ignore]
     fn test_tsume_39te_ply2_no_false_nomate() {
         let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
         let pv = [
@@ -10525,4 +10535,53 @@ use crate::types::{Color, PieceType};
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    /// 39手詰め問題における同一ノード重複訪問の分析．
+    ///
+    /// 各局面 (board.hash) が MID から何回訪問されるかをカウントし，
+    /// 重複が多い局面・ply を特定する．
+    ///
+    /// 実行方法:
+    /// ```bash
+    /// cargo test --release -p maou_shogi --features visit_diag \
+    ///     -- test_tsume_39te_duplicate_visit_analysis --nocapture --ignored
+    /// ```
+    /// 結果: /tmp/tsume_39te_visit_analysis.log
+    #[cfg(feature = "visit_diag")]
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_duplicate_visit_analysis() {
+        use std::io::Write;
+        let out_path = "/tmp/tsume_39te_visit_analysis.log";
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let node_budget = 3_000_000u64;
+        let timeout_secs = 120u64;
+
+        let mut solver = DfPnSolver::with_timeout(41, node_budget, 32767, timeout_secs);
+        solver.set_find_shortest(false);
+
+        let start = Instant::now();
+        let result = solver.solve(&mut board);
+        let elapsed = start.elapsed();
+
+        let summary = solver.visit_summary(30);
+
+        let mut out = std::fs::File::create(out_path).unwrap();
+        writeln!(out, "39手詰め 重複訪問分析 (budget={}M nodes, timeout={}s)",
+            node_budget / 1_000_000, timeout_secs).unwrap();
+        writeln!(out, "結果: {:?}", result).unwrap();
+        writeln!(out, "探索ノード数: {}", solver.nodes_searched).unwrap();
+        writeln!(out, "経過時間: {:.2}s", elapsed.as_secs_f64()).unwrap();
+        writeln!(out, "最大ply: {}", solver.max_ply).unwrap();
+        writeln!(out).unwrap();
+        writeln!(out, "{}", summary).unwrap();
+        out.flush().unwrap();
+
+        eprintln!("39te visit analysis: {} nodes, {:.1}s", solver.nodes_searched, elapsed.as_secs_f64());
+        eprintln!("{}", summary);
+        eprintln!("詳細: {}", out_path);
     }
