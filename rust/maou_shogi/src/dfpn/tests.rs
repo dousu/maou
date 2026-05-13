@@ -10569,6 +10569,7 @@ use crate::types::{Color, PieceType};
         let elapsed = start.elapsed();
 
         let summary = solver.visit_summary(30);
+        let hotspot = solver.hot_spot_summary(30);
 
         let mut out = std::fs::File::create(out_path).unwrap();
         writeln!(out, "39手詰め 重複訪問分析 (budget={}M nodes, timeout={}s)",
@@ -10579,9 +10580,11 @@ use crate::types::{Color, PieceType};
         writeln!(out, "最大ply: {}", solver.max_ply).unwrap();
         writeln!(out).unwrap();
         writeln!(out, "{}", summary).unwrap();
+        writeln!(out, "{}", hotspot).unwrap();
         out.flush().unwrap();
 
         eprintln!("39te visit analysis: {} nodes, {:.1}s", solver.nodes_searched, elapsed.as_secs_f64());
         eprintln!("{}", summary);
+        eprintln!("{}", hotspot);
         eprintln!("詳細: {}", out_path);
     }

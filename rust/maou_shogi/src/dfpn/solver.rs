@@ -30,6 +30,38 @@ use super::{
 /// path 配列の容量．depth の最大値(41) + マージン．
 const PATH_CAPACITY: usize = 48;
 
+/// 局面ごとの mid() exit 種別内訳 (visit_diag feature)．
+///
+/// 重複訪問の原因分解に使用する:
+/// - `in_path`       : ループ検出で即 return
+/// - `proven_exit`   : TT に proof/disproof が存在して即 return
+/// - `threshold_exit`: TT 値が閾値を超えており即 return
+///   - `th_pn_default`: その際 tt_pn == PN_UNIT (TT ミス相当)
+///   - `th_pn_inf`    : その際 tt_pn == INF
+///   - `th_pn_caused` : pn 側が閾値超えの原因
+///   - `th_dn_caused` : dn 側が閾値超えの原因
+/// - `exploration`   : 実際に子を展開した
+///   - `expl_pn_default`: その際 tt_pn == PN_UNIT (TT ミス相当 → 再探索)
+///   - `expl_pn_first` : 初回 exploration 時の tt_pn
+///   - `expl_pn_last`  : 最新 exploration 時の tt_pn
+///   - `expl_pn_stuck` : 直前の exploration から tt_pn が変化しなかった回数
+#[cfg(feature = "visit_diag")]
+#[derive(Default, Clone)]
+pub(super) struct VisitBreakdown {
+    pub in_path: u32,
+    pub proven_exit: u32,
+    pub threshold_exit: u32,
+    pub th_pn_default: u32,
+    pub th_pn_inf: u32,
+    pub th_pn_caused: u32,
+    pub th_dn_caused: u32,
+    pub exploration: u32,
+    pub expl_pn_default: u32,
+    pub expl_pn_first: u32,
+    pub expl_pn_last: u32,
+    pub expl_pn_stuck: u32,  // tt_pn が前回 exploration と同じだった回数
+}
+
 /// 詰将棋の探索結果．
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TsumeResult {
@@ -608,6 +640,9 @@ pub struct DfPnSolver {
     /// 各局面が初めて訪問された ply (visit_diag feature 時のみ存在)．
     #[cfg(feature = "visit_diag")]
     pub(super) visit_first_ply: FxHashMap<u64, u8>,
+    /// 各局面の mid() exit 種別内訳 (visit_diag feature 時のみ存在)．
+    #[cfg(feature = "visit_diag")]
+    pub(super) visit_breakdown: FxHashMap<u64, VisitBreakdown>,
 }
 
 impl DfPnSolver {
@@ -815,6 +850,8 @@ impl DfPnSolver {
             visit_counts: FxHashMap::default(),
             #[cfg(feature = "visit_diag")]
             visit_first_ply: FxHashMap::default(),
+            #[cfg(feature = "visit_diag")]
+            visit_breakdown: FxHashMap::default(),
         }
     }
 
@@ -897,6 +934,53 @@ impl DfPnSolver {
         let count_over = sorted.iter().filter(|&&(_, c, _)| c > prev).count();
         writeln!(out, "  {}+ 回: {} 局面", prev + 1, count_over).unwrap();
 
+        out
+    }
+
+    /// 上位 `top_n` 局面の exit 種別内訳レポートを返す (visit_diag feature 時のみ利用可)．
+    ///
+    /// 重複訪問の原因を定量的に分解する:
+    /// - `in_path`      : ループ検出 (完全除外)
+    /// - `proven`       : TT proof/disproof 即 return
+    /// - `threshold`    : TT 値が閾値超えで即 return
+    ///   - `th_pn_def`  : その時 tt_pn == PN_UNIT (TT ミス/eviction 相当)
+    ///   - `th_pn_inf`  : その時 tt_pn == INF
+    ///   - `th_pn/dn`   : pn/dn どちらが原因か
+    /// - `exploration`  : 実際に子展開
+    ///   - `expl_pn_def`: その時 tt_pn == PN_UNIT (eviction 後の再探索)
+    #[cfg(feature = "visit_diag")]
+    pub fn hot_spot_summary(&self, top_n: usize) -> String {
+        use std::fmt::Write as _;
+        let mut sorted: Vec<(u64, u32, u8)> = self.visit_counts.iter()
+            .map(|(&h, &c)| {
+                let ply = self.visit_first_ply.get(&h).copied().unwrap_or(255);
+                (h, c, ply)
+            })
+            .collect();
+        sorted.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+
+        let mut out = String::new();
+        writeln!(out, "=== 上位 {} 局面の exit 種別内訳 ===", top_n).unwrap();
+        writeln!(out,
+            "{:>4} {:>20}  {:>6}  {:>6}  {:>6}  {:>8}  {:>6}  {:>6}  {:>6}  {:>8}  {:>8}  {:>8}  {:>6}",
+            "#", "hash", "total", "in_pth", "proven",
+            "thresh", "th_pnD", "th_pnI",
+            "expl", "pn_first", "pn_last", "pn_stuck", "1stPly").unwrap();
+
+        for (rank, &(hash, cnt, ply)) in sorted.iter().take(top_n).enumerate() {
+            let bd = self.visit_breakdown.get(&hash)
+                .cloned().unwrap_or_default();
+            let stuck_pct = if bd.exploration > 1 {
+                100.0 * bd.expl_pn_stuck as f64 / (bd.exploration - 1) as f64
+            } else { 0.0 };
+            writeln!(out,
+                "{:>4}. {:#018x}  {:>6}  {:>6}  {:>6}  {:>8}  {:>6}  {:>6}  {:>8}  {:>8}  {:>8}  {:>7.1}%  {:>6}",
+                rank + 1, hash, cnt,
+                bd.in_path, bd.proven_exit,
+                bd.threshold_exit, bd.th_pn_default, bd.th_pn_inf,
+                bd.exploration, bd.expl_pn_first, bd.expl_pn_last,
+                stuck_pct, ply).unwrap();
+        }
         out
     }
 
@@ -2242,6 +2326,8 @@ impl DfPnSolver {
         if in_path {
             #[cfg(feature = "tt_diag")]
             { self.diag_in_path_exits += 1; }
+            #[cfg(feature = "visit_diag")]
+            { self.visit_breakdown.entry(full_hash).or_default().in_path += 1; }
             return;
         }
 
@@ -2268,6 +2354,8 @@ impl DfPnSolver {
                         ply, tt_pn, tt_dn, remaining);
                 }
             }
+            #[cfg(feature = "visit_diag")]
+            { self.visit_breakdown.entry(full_hash).or_default().proven_exit += 1; }
             return;
         }
         if tt_pn >= pn_threshold || tt_dn >= dn_threshold {
@@ -2279,7 +2367,29 @@ impl DfPnSolver {
                         ply, tt_pn, tt_dn, pn_threshold, dn_threshold);
                 }
             }
+            #[cfg(feature = "visit_diag")]
+            {
+                let bd = self.visit_breakdown.entry(full_hash).or_default();
+                bd.threshold_exit += 1;
+                if tt_pn == PN_UNIT { bd.th_pn_default += 1; }
+                else if tt_pn >= INF { bd.th_pn_inf += 1; }
+                if tt_pn >= pn_threshold { bd.th_pn_caused += 1; }
+                if tt_dn >= dn_threshold { bd.th_dn_caused += 1; }
+            }
             return;
+        }
+        // 実際に子を展開する (exploration)
+        #[cfg(feature = "visit_diag")]
+        {
+            let bd = self.visit_breakdown.entry(full_hash).or_default();
+            if tt_pn == PN_UNIT { bd.expl_pn_default += 1; }
+            if bd.exploration == 0 {
+                bd.expl_pn_first = tt_pn;
+            } else if tt_pn == bd.expl_pn_last {
+                bd.expl_pn_stuck += 1;
+            }
+            bd.expl_pn_last = tt_pn;
+            bd.exploration += 1;
         }
         // TT 診断: ply 35 で terminal exit しなかった場合の TT 状態を出力
         #[cfg(feature = "tt_diag")]
