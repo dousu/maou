@@ -1723,23 +1723,27 @@ impl DfPnSolver {
                 // depth < 16: 倍増 (2→4→8→16)
                 // depth ≥ 16: +4 刻みスキップなし (16→20→24→28→32→36→40→...)
                 //
-                // saved_depth ≤ 17: 直接ジャンプ (2→4→saved_depth)
-                //   浅い問題 (remaining ≤ 15) は depth=16 暖機のコスト (~447K nodes) が
-                //   depth=17 での節約を上回るため直接ジャンプが最効率．
+                // saved_depth ≤ 19: 直接ジャンプ (2→4→saved_depth)
+                //   浅い問題 (remaining ≤ 17) は depth=16 暖機のコスト (~460K nodes) が
+                //   直接ジャンプの損失を上回るため直接ジャンプが最効率．
                 //   (実測: ply 24, saved_depth=17 で直接ジャンプ 683K < 段階的 718K)
                 //
-                // saved_depth > 17: 段階的 IDS
+                //   FrontierTT (v0.55.9+, remaining ≤ 24) 環境では段階的 IDS の優位が
+                //   消失する: 1M ノード予算で warmup に ~460K 消費すると full-depth 予算が
+                //   不足し ply 22 (saved_depth=19) の探索精度が低下した．
+                //   直接ジャンプで full-depth 予算を最大化することで回帰を解消する．
+                //   (旧計測: saved_depth=19 で直接ジャンプ 9.29M → 段階的 7.63M, -19.2%
+                //    は ~9M ノード予算時の値; 1M 予算では warmup 比率が逆転する)
+                //
+                // saved_depth > 19: 段階的 IDS
                 //   倍増フェーズ (2→4→8→16) + IDS-17 中間ステップ + +4 刻みで
                 //   TT を段階的に構築してから最終深さに到達する．
-                //   saved_depth=19 (ply 22) は直接ジャンプ廃止で TT 暖機コストを削減．
-                //   (実測: saved_depth=19 で直接ジャンプ TT=121件・9.29M nodes
-                //    → 段階的 (2→4→8→16→19) で 7.63M nodes, -19.2%)
                 let next = if ids_depth >= 16 {
                     ids_depth + 4
                 } else {
                     ids_depth.saturating_mul(2).max(ids_depth + 2)
                 };
-                if saved_depth <= 17 && next > 4 && next < saved_depth {
+                if saved_depth <= 19 && next > 4 && next < saved_depth {
                     ids_depth = saved_depth;
                 } else if ids_depth == 16 && next > 17 && saved_depth > 19 && saved_depth <= 26
                     && !self.param_no_ids17

@@ -1078,3 +1078,146 @@ v0.25.5 で **default ON** に変更．
 
 ---
 
+#### 6.6.7 FrontierTT — shallow レベル専用プール (案4, v0.55.x)
+
+##### 背景: WorkingTT eviction thrashing
+
+10M ノード探索(39手詰め)での診断で，`remaining ≤ 8` 程度の shallow 中間エントリが
+WorkingTT の eviction により繰り返し失われ，同一ノードを何度も再訪問する現象を確認した．
+
+39手詰め(depth=41)の残り深さ別ノード分布:
+
+| remaining | 相対頻度 | 備考 |
+|-----------|---------|------|
+| 1–8 | 高頻度 | leaf 近傍，合駒 AND ノードが密集 |
+| 9–24 | 中頻度 | 探索中層 |
+| 25–41 | 低頻度 | root 近傍 |
+
+WorkingTT (2M クラスタ×8スロット×32B=512MB) は全 remaining で共有されるため，
+root 近傍の新規エントリが leaf 近傍の蓄積済みエントリを evict するパターンが発生する．
+
+##### FrontierTT の設計
+
+`remaining ≤ FRONTIER_REMAINING_THRESHOLD` の中間エントリを WorkingTT から分離し，
+**専用の FrontierTT** に格納する案(案4):
+
+```rust
+const FRONTIER_REMAINING_THRESHOLD: u16 = 24;  // v0.55.9 採用値
+
+struct TranspositionTable {
+    working:  Vec<TTFlatEntry>,   // 2M clusters × 8 slots = 512 MB
+    frontier: Vec<TTFlatEntry>,   // 2M clusters × 8 slots = 512 MB
+    ...
+}
+```
+
+`store_impl` で `remaining ≤ threshold` かつ中間エントリ (pn>0, dn>0) であれば
+`frontier` ベクタに格納し，`working` を使用しない．
+
+**効果:** `remaining ≤ threshold` の shallow エントリが WorkingTT eviction の影響を受けず保持される．
+
+**メモリ:** FrontierTT は WorkingTT と同一レイアウトで合計 1GB (ProvenTT 384MB と合わせて ~1.4GB)．
+
+##### FRONTIER_REMAINING_THRESHOLD スイープ (v0.55.x)
+
+39手詰め(depth=41)に対して 10M ノード予算でスイープを実施:
+
+| threshold | revisit 率 | unique ノード数 | 時間(s) | 備考 |
+|-----------|-----------|----------------|---------|------|
+| 2 | 49.1% | 4.78M | 78.7 | 効果小 (remaining=1-2 のみ分離) |
+| 8 | 26.1% | 6.79M | 91.9 | 顕著に改善 |
+| 16 | 23.0% | 7.07M | 94.6 | さらに改善 |
+| **24** | **20.0%** | **7.36M** | **87.4** | ← **採用** (unique 最大かつ高速) |
+| 32 | 27.9% | 6.63M | 82.2 | 悪化 (shallow すぎる deep エントリが frontier に詰まる) |
+
+threshold=24 は depth=41 の ~59% (remaining=1..24) をカバーする．
+threshold=32 で悪化するのは，FrontierTT に深い探索の中間エントリが大量流入し
+eviction thrashing が FrontierTT 側で再発するためと推定される．
+
+##### retain_proofs と FrontierTT の soundness 問題 (v0.55.9 修正)
+
+`frontier_variant()` は PNS サイクルと MID サイクルを交互に実行し，
+サイクル間で `retain_proofs()` を呼んで WorkingTT の stale 中間エントリを除去する．
+
+**バグ 1 (v0.55.8): FrontierTT が retain_proofs でクリアされない**
+
+v0.24.45 で `retain_proofs()` を導入した経緯: IDS サイクル間に残存する WorkingTT の
+中間エントリが soundness 違反を引き起こし，`test_no_checkmate_gold_interposition` が
+Unknown になるバグが発生した．`retain_proofs()` は confirmed disproof を保持しつつ
+それ以外の中間エントリを除去することで問題を解決した．
+
+FrontierTT 導入後，`threshold ≥ 19` (= `remaining=19` のエントリが FrontierTT に入る) で
+同テストが再び失敗した．根本原因は **同一の soundness 問題が FrontierTT 側で再発**:
+
+```
+Frontier サイクル 1 → retain_proofs() (WorkingTT のみクリア) → Frontier サイクル 2
+                       ↑ FrontierTT の stale 中間エントリが残存
+                         → サイクル 2 が古い pn/dn を再利用 → 誤判定
+```
+
+**修正: FrontierTT も retain_proofs でクリア:**
+
+```rust
+pub(super) fn retain_proofs(&mut self) {
+    for fe in self.working.iter_mut() {
+        if fe.pos_key == 0 { continue; }
+        if fe.entry.dn == 0 && !fe.entry.path_dependent()
+            && fe.entry.remaining() == REMAINING_INFINITE
+        { continue; }
+        fe.pos_key = 0;
+    }
+    // FrontierTT の stale intermediate も除去 (soundness 保証の対称性)
+    for fe in self.frontier.iter_mut() { fe.pos_key = 0; }
+    self.frontier_overflow_since_gc = 0;
+}
+```
+
+FrontierTT は confirmed disproof を格納しない (remaining ≤ threshold の
+confirmed disproof は REMAINING_INFINITE で threshold を超えないため)，
+全エントリをクリアして良い．
+
+**バグ 2 (v0.55.8): MID 停滞検出が FrontierTT を無視**
+
+`mid_fallback()` の IDS MID チャンクループでは TT 成長停滞を検出してループを打ち切る:
+
+```rust
+// 修正前: WorkingTT のみを見る
+let prev_tt_len = self.table.len();
+...
+let curr_tt_len = self.table.len();
+if curr_tt_len <= prev_tt_len { break; }  // 停滞検出
+
+// 修正後 (v0.55.9): FrontierTT も含めた TT 成長チェック
+let prev_tt_len = self.table.len() + self.table.frontier_len();
+...
+let curr_tt_len = self.table.len() + self.table.frontier_len();
+if curr_tt_len <= prev_tt_len { break; }
+```
+
+`FRONTIER_REMAINING_THRESHOLD > 0` の場合，新しい中間エントリの多くが FrontierTT に
+格納される．WorkingTT のみを監視すると TT 成長ゼロと誤検知し，MID ループが
+早期に終了してしまう．
+
+**修正後のテスト結果:**
+
+| 条件 | threshold=19 | threshold=24 |
+|------|-------------|-------------|
+| バグ 1+2 適用前 | FAIL (Unknown) | FAIL (Unknown) |
+| バグ 1 のみ修正 | FAIL (366K nodes) | FAIL |
+| **バグ 1+2 両方修正** | **PASS (8.83s)** | **PASS (1.90s)** |
+
+**両バグの同時修正が必須**であることが確認された．
+
+##### 設計上の教訓
+
+FrontierTT を新たな TT 層として追加する際は，WorkingTT に関する全ての
+不変条件と GC/retain メカニズムを FrontierTT にも適用する必要がある:
+
+| WorkingTT の不変条件 | FrontierTT への適用 |
+|---------------------|-------------------|
+| `retain_proofs()` でサイクル間クリア | ✓ v0.55.9 で追加 |
+| `frontier_len()` を TT 成長判定に含める | ✓ v0.55.9 で追加 |
+| `clear_working()` (IDS depth 切替時) | FrontierTT はサイクル間でクリア済みのため対象外 |
+
+---
+

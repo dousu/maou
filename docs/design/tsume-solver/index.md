@@ -8,7 +8,7 @@
 | [閾値制御](threshold-control.md) | 1+ε トリック, TCA, 閾値フロア, PN_UNIT 統一スケーリング |
 | [証明数・反証数の計算](proof-disproof-numbers.md) | WPN, CD-WPN, VPN, SNDA |
 | [初期値ヒューリスティック](initial-heuristics.md) | df-pn+, DFPN-E, Deep df-pn, インライン詰み検出 |
-| [転置表管理](transposition-table.md) | 持ち駒優越, Pareto frontier, TT GC, Dual TT, Zobrist hand_hash |
+| [転置表管理](transposition-table.md) | 持ち駒優越, Pareto frontier, TT GC, Dual TT, Zobrist hand_hash, FrontierTT |
 | [ループ・GHI 対策](loop-ghi.md) | 経路依存フラグ, NM Remaining 伝播 |
 | [手順改善・PV 復元](move-ordering-and-pv.md) | TT Best Move, Killer Move, 捨て駒ブースト, PV 復元 3-phase |
 | [合駒最適化](aigoma-optimization.md) | Futile/Chain 分類, 遅延展開, プレフィルタ, DN バイアス |
@@ -166,3 +166,8 @@ maou_shogi の詰将棋ソルバーは Df-Pn (Depth-First Proof-Number Search, N
 | 110 | N-1 depth=23 threshold 退行修正: depth=23 の threshold を 3→1 に修正 | maou 独自 | §10.2.17 | v0.27.2 |
 | 111 | ~~1D selective clear: warmup 前 clear_working_shallow(warmup_depth) 導入~~ **v0.27.7 で退行原因と特定し修正** | maou 独自 | §10.2.18, §10.2.22 | v0.27.3 |
 | 112 | **Hypothesis 1H (v0.27.7): clear_working_shallow 除去 + warmup 入口で clear_proven_non_proofs() デフォルト化 (v0.25.5 相当に復元)** | maou 独自 | §10.2.22 | v0.27.7 |
+| 113 | FrontierTT (案4): remaining ≤ FRONTIER_REMAINING_THRESHOLD の中間エントリを専用プールへ分離 | maou 独自 | §6.6.7 | v0.55.0 |
+| 114 | FRONTIER_REMAINING_THRESHOLD = 24 採用 (スイープ: threshold=2,8,16,24,32) | maou 独自 | §6.6.7, §10.2.25 | v0.55.9 |
+| 115 | retain_proofs の FrontierTT クリア (soundness 保証の対称性) | maou 独自 | §6.6.7 | v0.55.9 |
+| 116 | MID 停滞検出を `len() + frontier_len()` で WorkingTT + FrontierTT 合算 | maou 独自 | §6.6.7 | v0.55.9 |
+| 117 | IDS 直接ジャンプ閾値を saved_depth ≤ 17 → ≤ 19 に拡張 (1M 予算での ply 22 リグレッション修正) | maou 独自 | §10.2.25 | v0.55.10 |

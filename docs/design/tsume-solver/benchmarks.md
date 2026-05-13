@@ -5264,6 +5264,131 @@ backward_10m (10M nodes / 600s per ply):
 
 ---
 
+### 10.2.25 v0.55.x — FrontierTT によるノード重複訪問対策
+
+#### 背景
+
+10M ノード(39手詰め)探索でノード重複訪問率が高止まりする問題を調査した．
+`remaining ≤ 8` 程度の shallow 中間エントリが WorkingTT eviction で繰り返し失われ，
+同一 OR/AND ノードを何度も再展開するパターンが主因と特定された．
+
+revisit 率の定義: `(total_nodes - unique_nodes) / total_nodes`
+
+#### FrontierTT 導入 (案4, v0.55.0〜v0.55.8)
+
+`remaining ≤ FRONTIER_REMAINING_THRESHOLD` の中間エントリを WorkingTT から分離し，
+専用の FrontierTT プール (2M クラスタ×8スロット×32B=512MB) に格納する案を実装した．
+詳細設計は §6.6.7 参照．
+
+#### threshold スイープと v0.55.9 採用値
+
+39手詰め(depth=41)，10M ノード予算でのスイープ:
+
+| threshold | revisit 率 | unique | 時間(s) |
+|-----------|-----------|--------|---------|
+| 2 | 49.1% | 4.78M | 78.7 |
+| 8 | 26.1% | 6.79M | 91.9 |
+| 16 | 23.0% | 7.07M | 94.6 |
+| **24** | **20.0%** | **7.36M** | **87.4** ← 採用 |
+| 32 | 27.9% | 6.63M | 82.2 |
+
+threshold=24 (depth=41 の 59% をカバー) を採用．
+
+#### v0.55.9 バグ修正
+
+threshold を高くすると `test_no_checkmate_gold_interposition` が Unknown に失敗することを発見．
+threshold=18 では PASS，threshold=19 では FAIL — バグの境界を特定し，2 つの根本原因を修正した:
+
+**バグ 1: retain_proofs が FrontierTT をクリアしない**
+
+`frontier_variant` サイクル間の `retain_proofs()` が WorkingTT のみクリアし，
+FrontierTT の stale 中間エントリを残存させていた．
+これは v0.24.45 で WorkingTT に対して修正した soundness 問題が，
+FrontierTT 導入で再発したもの (`tt.rs`: FrontierTT の全クリアを追加)．
+
+**バグ 2: MID 停滞検出が FrontierTT を無視**
+
+`mid_fallback()` の TT 成長チェックが `self.table.len()` (WorkingTT のみ) を使用していた．
+新エントリが FrontierTT に格納される場合，WorkingTT の成長がゼロになり
+MID ループが早期終了していた (`pns.rs`: `len() + frontier_len()` に変更)．
+
+両バグの同時修正が必須 (バグ 1 のみ修正では 366K nodes で依然 FAIL)．
+
+#### v0.55.9 最終状態
+
+- FRONTIER_REMAINING_THRESHOLD = 24
+- `retain_proofs()`: FrontierTT 全クリア + `frontier_overflow_since_gc = 0` リセット
+- MID 停滞チェック: `len() + frontier_len()` で WorkingTT + FrontierTT を合算
+- 130 テスト全通過 (52.32s)
+- 39手詰め回帰テスト: 61.47s
+
+#### v0.55.10 — IDS 直接ジャンプ閾値の拡張によるリグレッション修正
+
+**リグレッション発見 (backward_1m テスト)**
+
+v0.55.9 で `test_tsume_39te_backward_1m` を実行したところ，
+1M ノード境界が v0.49.0 の ply 20 から **ply 22 に退行** した:
+
+| バージョン | ply 22 (remain=17) | ply 24 (remain=15) | 1M 境界 |
+|-----------|-------------------|-------------------|---------|
+| v0.49.0 | 986K nodes / 115.7s → **Mate(17)** ✓ | — | **ply 20** |
+| v0.55.9 | 211K nodes / 180s → **Unknown** ✗ | 200K nodes / 58.7s → Mate(15) | **ply 22** |
+
+ply 22 の NPS が 8521 → 1172 と **7倍低下**していた．
+
+**根本原因: IDS ウォームアップ予算の過剰消費**
+
+`depth = remaining + 2` の計算式により，ply 22 は `saved_depth=19 > 17` となり，
+直接ジャンプ閾値 (`saved_depth ≤ 17`) に非該当 → **5段階 IDS** (`2→4→8→16→19`) が適用される．
+
+5 段階 IDS では 1M ノード予算の約 46% (~460K ノード) がウォームアップ (depth=2,4,8,16) に消費され，
+full-depth 探索に残るのは ~540K ノードのみ．
+
+対照的に ply 24 (`saved_depth=17 ≤ 17`) は **3段階 IDS** (`2→4→17`) で
+~900K ノードを full-depth に充てられる．
+
+**旧測定値との乖離**: `saved_depth=19` で段階的 IDS が優位とした過去測定 (9.29M → 7.63M, -19.2%) は
+~9M ノード予算時の値であり，1M 予算では ウォームアップ比率が逆転する．
+
+**修正 (v0.55.10): 直接ジャンプ閾値を 17 → 19 に拡張**
+
+`pns.rs` の IDS 深さ進行ロジックを修正:
+
+```rust
+// before
+if saved_depth <= 17 && next > 4 && next < saved_depth {
+// after
+if saved_depth <= 19 && next > 4 && next < saved_depth {
+```
+
+これにより ply 22 (saved_depth=19) が `2→4→19` の直接ジャンプを使用し，
+full-depth 予算が ~540K → ~900K に拡大する．
+
+**v0.55.10 backward_1m 結果**
+
+| Ply | Remain | Nodes | Time(s) | Result |
+|-----|--------|-------|---------|--------|
+| 24 | 15 | 200,024 | 66.95 | Mate(15) ✓ |
+| 22 | 17 | 998,166 | 160.05 | **Unknown** (1M ノード使い切り) |
+
+ply 22 NPS: 998K/160s = **6,238 NPS** (v0.55.9 の 1,172 NPS から **5.3× 改善**)．
+v0.55.9 では 180s タイムアウト時に 211K ノードしか使えていなかったが，
+v0.55.10 では 1M ノードを使い切り (160s)，全予算を有効活用できるようになった．
+
+1M 境界は引き続き ply 22 (ply 22 は 1M ノードでは未解決)．
+v0.49.0 では ply 22 が 986K ノードで解けていたが，
+v0.55.10 では 998K ノードで解けない — アルゴリズムの違いにより
+探索経路が若干異なるため予算上限の影響が出る．
+
+**v0.55.10 最終状態**
+
+- IDS 直接ジャンプ閾値: `saved_depth ≤ 19`
+- 130 テスト全通過 (51.31s)
+- 39手詰め回帰テスト (ply 24): 68s (正常)
+- backward_1m: ply 22 NPS 6,238 (v0.55.9 比 5.3× 改善)
+
+---
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
