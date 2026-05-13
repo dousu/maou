@@ -1692,6 +1692,7 @@ use crate::types::{Color, PieceType};
         solver.nodes_searched = 0;
         solver.max_ply = 0;
         solver.path_len = 0;
+        solver.path_set.clear();
         solver.killer_table.clear();
         solver.check_cache.clear();
         solver.start_time = Instant::now();
@@ -6824,6 +6825,7 @@ use crate::types::{Color, PieceType};
             solver.nodes_searched = 0;
             solver.max_ply = 0;
             solver.path_len = 0;
+            solver.path_set.clear();
             solver.killer_table.clear();
             solver.check_cache.clear();
             solver.start_time = Instant::now();
@@ -8519,6 +8521,7 @@ use crate::types::{Color, PieceType};
             s.nodes_searched = 0;
             s.max_ply = 0;
             s.path_len = 0;
+            s.path_set.clear();
             s.killer_table.clear();
             s.check_cache.clear();
             s.start_time = Instant::now();
@@ -8825,6 +8828,7 @@ use crate::types::{Color, PieceType};
             s.nodes_searched = 0;
             s.max_ply = 0;
             s.path_len = 0;
+            s.path_set.clear();
             s.killer_table.clear();
             s.check_cache.clear();
             s.start_time = std::time::Instant::now();
@@ -10472,18 +10476,22 @@ use crate::types::{Color, PieceType};
             // IDS 深さ別ノード数内訳
             writeln!(out, "").unwrap();
             writeln!(out, "IDS per-depth breakdown (from collect_pn_dn_dist_per_depth):").unwrap();
-            writeln!(out, "  {:<10} {:<16} {:<16} {:<10}",
-                "ids_depth", "cumul_nodes", "incr_nodes", "TT_work").unwrap();
+            writeln!(out, "  {:<10} {:<16} {:<16} {:<10} {:>10}",
+                "ids_depth", "cumul_nodes", "incr_nodes", "TT_work", "NPS(K)").unwrap();
 
             let snapshots = solver.collect_pn_dn_dist_per_depth();
             let mut prev_nodes: u64 = 0;
-            for (ids_dep, nodes, pn_hist, dn_hist, _joint) in snapshots {
+            let mut prev_elapsed: f64 = 0.0;
+            for (ids_dep, nodes, elapsed, pn_hist, _dn_hist, _joint) in snapshots {
                 let incr = nodes - prev_nodes;
+                let dt = elapsed - prev_elapsed;
+                let nps_k = if dt > 0.0 { (incr as f64 / dt) / 1000.0 } else { 0.0 };
                 // TT working entries = 非ゼロ bucket の合計 (pn_hist は working TT の分布)
                 let working_entries: u64 = pn_hist.iter().sum();
-                writeln!(out, "  {:<10} {:<16} {:<16} {:<10}",
-                    ids_dep, nodes, incr, working_entries).unwrap();
+                writeln!(out, "  {:<10} {:<16} {:<16} {:<10} {:>10.1}",
+                    ids_dep, nodes, incr, working_entries, nps_k).unwrap();
                 prev_nodes = *nodes;
+                prev_elapsed = *elapsed;
             }
             // フルデプスのコスト (スナップショットなし = 最後の反復)
             let final_incr = solver.nodes_searched - prev_nodes;
@@ -10531,6 +10539,260 @@ use crate::types::{Color, PieceType};
         writeln!(out, "{}", "=".repeat(80)).unwrap();
         writeln!(out, "診断完了: {}", out_path).unwrap();
         eprintln!("診断完了: {}", out_path);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// IDS depth ごとの NPS 一様性を検証する (path_set O(1) 最適化確認)．
+    ///
+    /// path_set 最適化前は path[..path_len].contains() が O(depth) だったため，
+    /// IDS の depth が深くなるほど NPS が低下していた．
+    /// 最適化後は O(1) になり，深さによらず NPS が一定のはず．
+    ///
+    /// ply 24 局面 (残り15手，saved_depth=17，~60s) を使用して
+    /// IDS depth 別の NPS テーブルを出力する．
+    ///
+    /// **[SLOW]** `cargo test --release -p maou_shogi -- test_ids_depth_nps_uniformity --nocapture --ignored`
+    #[test]
+    #[ignore]
+    fn test_ids_depth_nps_uniformity() {
+        use std::io::Write;
+        let out_path = "/tmp/ids_depth_nps_uniformity.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        // ply 24 局面へ進める
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for i in 0..24 {
+            let m = board.move_from_usi(pv[i]).unwrap();
+            board.do_move(m);
+        }
+        let saved_depth = 17u32; // remaining=15, depth=(15+2).min(41)=17
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " IDS depth 別 NPS 一様性テスト (ply 24, saved_depth={})", saved_depth).unwrap();
+        writeln!(out, " path_set O(1) 最適化後: depth によらず NPS が一定なはず").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, "SFEN: {}", board.sfen()).unwrap();
+        writeln!(out, "").unwrap();
+
+        let mut solver = DfPnSolver::with_timeout(saved_depth, 10_000_000, 32767, 300);
+        solver.set_find_shortest(false);
+
+        let start = Instant::now();
+        let result = solver.solve(&mut board);
+        let total_elapsed = start.elapsed().as_secs_f64();
+
+        let result_str = match &result {
+            TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+            TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+            TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+            TsumeResult::Unknown { .. } => "Unknown".to_string(),
+        };
+        let total_nps_k = (solver.nodes_searched as f64 / total_elapsed) / 1000.0;
+
+        writeln!(out, "Result: {}  nodes={}  time={:.2}s  NPS(K)={:.1}",
+            result_str, solver.nodes_searched, total_elapsed, total_nps_k).unwrap();
+        writeln!(out, "").unwrap();
+
+        // IDS depth 別 NPS テーブル
+        writeln!(out, "IDS depth 別 NPS (スナップショットは各 depth 完了直後に記録):").unwrap();
+        writeln!(out, "  {:<10} {:<14} {:<10} {:<10}  NPS(K)",
+            "ids_depth", "incr_nodes", "dt(s)", "cumul_t(s)").unwrap();
+        writeln!(out, "  {}", "-".repeat(60)).unwrap();
+
+        let snapshots = solver.collect_pn_dn_dist_per_depth();
+        let mut prev_nodes: u64 = 0;
+        let mut prev_elapsed: f64 = 0.0;
+        for (ids_dep, nodes, elapsed, _pn, _dn, _joint) in snapshots {
+            let incr = nodes - prev_nodes;
+            let dt = elapsed - prev_elapsed;
+            let nps_k = if dt > 0.0 { (incr as f64 / dt) / 1000.0 } else { 0.0 };
+            writeln!(out, "  {:<10} {:<14} {:<10.2} {:<10.2}  {:.1}",
+                ids_dep, incr, dt, elapsed, nps_k).unwrap();
+            prev_nodes = *nodes;
+            prev_elapsed = *elapsed;
+        }
+        // 最後の depth (スナップショットなし = フルデプス完了分)
+        {
+            let final_incr = solver.nodes_searched - prev_nodes;
+            let dt = total_elapsed - prev_elapsed;
+            let nps_k = if dt > 0.0 { (final_incr as f64 / dt) / 1000.0 } else { 0.0 };
+            writeln!(out, "  {:<10} {:<14} {:<10.2} {:<10.2}  {:.1}  ← final depth",
+                saved_depth, final_incr, dt, total_elapsed, nps_k).unwrap();
+        }
+        writeln!(out, "  {}", "-".repeat(60)).unwrap();
+        writeln!(out, "  total: nodes={}  time={:.2}s  NPS(K)={:.1}",
+            solver.nodes_searched, total_elapsed, total_nps_k).unwrap();
+
+        // === ply 20 (saved_depth=21, IDS: 2→4→8→16→17→21, 1M ノード打ち切り) ===
+        writeln!(out, "").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        let saved_depth_20 = 21u32; // remaining=19, depth=(19+2).min(41)=21
+        writeln!(out, " ply 20 (saved_depth={}, IDS多段: 2→4→8→16→17→21)",
+            saved_depth_20).unwrap();
+        writeln!(out, " 1M ノード打ち切りで多段 IDS の NPS 変化を観測する").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+        let mut board20 = Board::new();
+        board20.set_sfen(sfen).unwrap();
+        for i in 0..20 {
+            let m = board20.move_from_usi(pv[i]).unwrap();
+            board20.do_move(m);
+        }
+        writeln!(out, "SFEN: {}", board20.sfen()).unwrap();
+        writeln!(out, "").unwrap();
+
+        let mut solver20 = DfPnSolver::with_timeout(saved_depth_20, 1_000_000, 32767, 120);
+        solver20.set_find_shortest(false);
+
+        let start20 = Instant::now();
+        let result20 = solver20.solve(&mut board20);
+        let total_elapsed20 = start20.elapsed().as_secs_f64();
+
+        let result_str20 = match &result20 {
+            TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+            TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+            TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+            TsumeResult::Unknown { .. } => "Unknown (予算切れ)".to_string(),
+        };
+        let total_nps_k20 = (solver20.nodes_searched as f64 / total_elapsed20) / 1000.0;
+
+        writeln!(out, "Result: {}  nodes={}  time={:.2}s  NPS(K)={:.1}",
+            result_str20, solver20.nodes_searched, total_elapsed20, total_nps_k20).unwrap();
+        writeln!(out, "").unwrap();
+
+        writeln!(out, "IDS depth 別 NPS:").unwrap();
+        writeln!(out, "  {:<10} {:<14} {:<10} {:<10}  NPS(K)",
+            "ids_depth", "incr_nodes", "dt(s)", "cumul_t(s)").unwrap();
+        writeln!(out, "  {}", "-".repeat(60)).unwrap();
+
+        let snapshots20 = solver20.collect_pn_dn_dist_per_depth();
+        let mut prev_nodes20: u64 = 0;
+        let mut prev_elapsed20: f64 = 0.0;
+        for (ids_dep, nodes, elapsed, _pn, _dn, _joint) in snapshots20 {
+            let incr = nodes - prev_nodes20;
+            let dt = elapsed - prev_elapsed20;
+            let nps_k = if dt > 0.0 { (incr as f64 / dt) / 1000.0 } else { 0.0 };
+            writeln!(out, "  {:<10} {:<14} {:<10.2} {:<10.2}  {:.1}",
+                ids_dep, incr, dt, elapsed, nps_k).unwrap();
+            prev_nodes20 = *nodes;
+            prev_elapsed20 = *elapsed;
+        }
+        {
+            let final_incr20 = solver20.nodes_searched - prev_nodes20;
+            let dt20 = total_elapsed20 - prev_elapsed20;
+            let nps_k20 = if dt20 > 0.0 { (final_incr20 as f64 / dt20) / 1000.0 } else { 0.0 };
+            writeln!(out, "  {:<10} {:<14} {:<10.2} {:<10.2}  {:.1}  ← final/cutoff depth",
+                saved_depth_20, final_incr20, dt20, total_elapsed20, nps_k20).unwrap();
+        }
+        writeln!(out, "  {}", "-".repeat(60)).unwrap();
+        writeln!(out, "  total: nodes={}  time={:.2}s  NPS(K)={:.1}",
+            solver20.nodes_searched, total_elapsed20, total_nps_k20).unwrap();
+
+        out.flush().unwrap();
+        eprintln!("結果: {}", out_path);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// ply 0 (ルート局面, saved_depth=41) の IDS depth 別 NPS 計測．
+    ///
+    /// 全 IDS 段階で NPS が一定であることを確認する (path_set O(1) 最適化確認)．
+    /// 1M ノード打ち切りで複数 IDS depth をカバーする．
+    ///
+    /// **[SLOW]** `cargo test --release -p maou_shogi -- test_ids_depth_nps_uniformity_ply0 --nocapture --include-ignored`
+    #[test]
+    #[ignore]
+    fn test_ids_depth_nps_uniformity_ply0() {
+        use std::io::Write;
+        let out_path = "/tmp/ids_depth_nps_uniformity_ply0.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let saved_depth_0 = 41u32;
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " ply 0 ルート局面 IDS depth 別 NPS (saved_depth={}, 1M nodes/120s)",
+            saved_depth_0).unwrap();
+        writeln!(out, " path_set O(1) 最適化: 深い IDS depth でも NPS が劣化しないはず").unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, "SFEN: {}", sfen).unwrap();
+        writeln!(out, "").unwrap();
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::with_timeout(saved_depth_0, 1_000_000, 32767, 120);
+        solver.set_find_shortest(false);
+
+        let start = Instant::now();
+        let result = solver.solve(&mut board);
+        let total_elapsed = start.elapsed().as_secs_f64();
+
+        let result_str = match &result {
+            TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+            TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+            TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+            TsumeResult::Unknown { .. } => "Unknown (予算切れ)".to_string(),
+        };
+        let total_nps_k = (solver.nodes_searched as f64 / total_elapsed) / 1000.0;
+
+        writeln!(out, "Result: {}  nodes={}  time={:.2}s  NPS(K)={:.1}",
+            result_str, solver.nodes_searched, total_elapsed, total_nps_k).unwrap();
+        writeln!(out, "").unwrap();
+
+        writeln!(out, "IDS depth 別 NPS:").unwrap();
+        writeln!(out, "  {:<10} {:<14} {:<10} {:<10}  NPS(K)",
+            "ids_depth", "incr_nodes", "dt(s)", "cumul_t(s)").unwrap();
+        writeln!(out, "  {}", "-".repeat(60)).unwrap();
+
+        let snapshots = solver.collect_pn_dn_dist_per_depth();
+        let mut prev_nodes: u64 = 0;
+        let mut prev_elapsed: f64 = 0.0;
+        for (ids_dep, nodes, elapsed, _pn, _dn, _joint) in snapshots {
+            let incr = nodes - prev_nodes;
+            let dt = elapsed - prev_elapsed;
+            let nps_k = if dt > 0.0 { (incr as f64 / dt) / 1000.0 } else { 0.0 };
+            writeln!(out, "  {:<10} {:<14} {:<10.2} {:<10.2}  {:.1}",
+                ids_dep, incr, dt, elapsed, nps_k).unwrap();
+            prev_nodes = *nodes;
+            prev_elapsed = *elapsed;
+        }
+        {
+            let final_incr = solver.nodes_searched - prev_nodes;
+            let dt = total_elapsed - prev_elapsed;
+            let nps_k = if dt > 0.0 { (final_incr as f64 / dt) / 1000.0 } else { 0.0 };
+            writeln!(out, "  {:<10} {:<14} {:<10.2} {:<10.2}  {:.1}  ← final/cutoff",
+                saved_depth_0, final_incr, dt, total_elapsed, nps_k).unwrap();
+        }
+        writeln!(out, "  {}", "-".repeat(60)).unwrap();
+        writeln!(out, "  total: nodes={}  time={:.2}s  NPS(K)={:.1}",
+            solver.nodes_searched, total_elapsed, total_nps_k).unwrap();
+
+        out.flush().unwrap();
+        eprintln!("結果: {}", out_path);
             })
             .unwrap()
             .join()

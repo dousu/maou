@@ -1415,6 +1415,7 @@ impl DfPnSolver {
             self.depth = ids_depth;
             self.table.current_ids_depth = ids_depth;
             self.path_len = 0;
+            self.path_set.clear();
             let remaining = ids_depth as u16;
             let (root_pn, _, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
             verbose_eprintln!("[ids] depth={}/{} root_pn={} nodes={} time={:.1}s",
@@ -1780,8 +1781,9 @@ impl DfPnSolver {
             // TT 遷移 (retain_working_intermediates / clear_working) の直前であり，
             // この depth での探索が完了した時点の完全な分布が得られる．
             {
+                let elapsed_secs = self.start_time.elapsed().as_secs_f64();
                 let (pd_pn, pd_dn, pd_joint) = self.table.collect_working_pn_dn_dist();
-                self.pn_dn_per_depth.push((prev_ids_depth, self.nodes_searched, pd_pn, pd_dn, pd_joint));
+                self.pn_dn_per_depth.push((prev_ids_depth, self.nodes_searched, elapsed_secs, pd_pn, pd_dn, pd_joint));
             }
 
             if ids_depth > prev_ids_depth {
@@ -1934,6 +1936,7 @@ impl DfPnSolver {
                 // retain_proofs() は PNS アリーナが存在しないため不要．
                 self.max_nodes = total_max_nodes;
                 self.path_len = 0;
+                self.path_set.clear();
                 let (r_pn2, r_dn2, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
                 if r_pn2 != 0 && r_dn2 != 0 {
                     self.mid(board, INF - 1, INF - 1, 0, true);
@@ -1944,6 +1947,7 @@ impl DfPnSolver {
             let mid_budget = (remaining_budget2 / 4).max(50_000).min(remaining_budget2);
             self.max_nodes = self.nodes_searched.saturating_add(mid_budget);
             self.path_len = 0;
+            self.path_set.clear();
 
             let (r_pn2, r_dn2, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
             if r_pn2 == 0 || r_dn2 == 0 {
@@ -3120,6 +3124,7 @@ pub fn solve_tsume_with_timeout(
 /// - pn_hist: pn 値の log2 ヒストグラム (32 バケット)
 /// - dn_hist: dn 値の log2 ヒストグラム (32 バケット)
 /// - joint_hist: (pn バケット × dn バケット) の 2D ヒストグラム (32×32 = 1024 要素)
+/// - per_depth: IDS 各 depth の `(ids_depth, nodes, elapsed_secs, pn_hist, dn_hist, joint)`
 pub fn solve_tsume_and_collect_pn_dn_dist(
     sfen: &str,
     depth: Option<u32>,
@@ -3135,7 +3140,7 @@ pub fn solve_tsume_and_collect_pn_dn_dist(
         [u64; 32],
         [u64; 32],
         Vec<u64>,
-        Vec<(u32, u64, [u64; 32], [u64; 32], Vec<u64>)>,
+        Vec<(u32, u64, f64, [u64; 32], [u64; 32], Vec<u64>)>,
     ),
     crate::board::SfenError,
 > {

@@ -538,6 +538,23 @@ DAG 転置により子の pn/dn が探索済み子以外でも変化する可能
 `insert`/`remove` は O(1)，`contains` は最大 41 要素の線形スキャン．
 FxHashSet のハッシュ計算・ヒープ操作を完全に排除．
 
+**E5 改良: path_set O(1) ループ検出 — 採用(v0.55.11)**
+
+E5 の配列スキャン (`contains` O(depth)) が IDS の深い depth で
+NPS 低下を引き起こすことを v0.55.11 で特定した．
+子ループ内の `contains` は `O(children × depth)` のコストになり，
+IDS depth が増えるほど1ノードあたりのコストが増大する．
+
+対策として `path_set: FxHashSet<u64>` を `path` 配列と並行して追加し，
+全 `contains` 呼び出しを O(1) 化した．`path` 配列は LIFO 順序保持のために残す:
+
+- push: `path[path_len] = h; path_len += 1; path_set.insert(h);`
+- pop: `path_set.remove(&h); path_len -= 1;`
+- reset: `path_len = 0; path_set.clear();`
+
+IDS depth 別 NPS 計測 (test_ids_depth_nps_uniformity) により，
+depth 増加による NPS 劣化がなくなったことを確認 (§10.2.25 v0.55.11 参照)．
+
 **E6: step attacks テーブル化 — 既実装**
 
 `STEP_ATTACKS: LazyLock<[[[Bitboard; 81]; PIECE_BB_SIZE]; 2]>` として

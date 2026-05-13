@@ -236,6 +236,10 @@ pub struct DfPnSolver {
     /// ProvenTT の祖先チェックに使用する．
     pub(super) path_hand: [[u8; HAND_KINDS]; PATH_CAPACITY],
     pub(super) path_len: usize,
+    /// path 配列の高速ルックアップ用 HashSet．
+    /// ループ検出の O(depth) 線形スキャンを O(1) に改善する．
+    /// path[0..path_len] と常に同期する．
+    pub(super) path_set: FxHashSet<u64>,
     /// 探索開始時刻．
     pub(super) start_time: Instant,
     /// タイムアウトしたかどうか．
@@ -627,8 +631,9 @@ pub struct DfPnSolver {
     /// IDS 各 depth 反復終了時点の WorkingTT pn/dn 分布スナップショット列 (分析用)．
     ///
     /// `mid_fallback` 内で各 IDS depth のMID 完了後，TT 遷移 (retain_working_intermediates
-    /// / clear_working) の直前に収集する．(ids_depth, nodes_searched, pn_hist, dn_hist, joint_hist)
-    pub(super) pn_dn_per_depth: Vec<(u32, u64, [u64; 32], [u64; 32], Vec<u64>)>,
+    /// / clear_working) の直前に収集する．
+    /// `(ids_depth, nodes_searched, elapsed_secs, pn_hist, dn_hist, joint_hist)`
+    pub(super) pn_dn_per_depth: Vec<(u32, u64, f64, [u64; 32], [u64; 32], Vec<u64>)>,
     /// 各局面 (board.hash) の MID 訪問回数 (visit_diag feature 時のみ存在)．
     #[cfg(feature = "visit_diag")]
     pub(super) visit_counts: FxHashMap<u64, u32>,
@@ -711,6 +716,7 @@ impl DfPnSolver {
             path_pos_key: [0u64; PATH_CAPACITY],
             path_hand: [[0u8; HAND_KINDS]; PATH_CAPACITY],
             path_len: 0,
+            path_set: FxHashSet::default(),
             start_time: Instant::now(),
             timed_out: false,
             attacker: Color::Black,
@@ -1175,8 +1181,8 @@ impl DfPnSolver {
     /// IDS 各 depth 反復終了時点の WorkingTT pn/dn 分布スナップショット列を返す (分析用)．
     ///
     /// `mid_fallback` 内で各 IDS depth のMID 完了後，TT 遷移前に収集する．
-    /// 返り値: `(ids_depth, nodes_searched, pn_hist, dn_hist, joint_hist)` のスライス
-    pub fn collect_pn_dn_dist_per_depth(&self) -> &[(u32, u64, [u64; 32], [u64; 32], Vec<u64>)] {
+    /// 返り値: `(ids_depth, nodes_searched, elapsed_secs, pn_hist, dn_hist, joint_hist)` のスライス
+    pub fn collect_pn_dn_dist_per_depth(&self) -> &[(u32, u64, f64, [u64; 32], [u64; 32], Vec<u64>)] {
         &self.pn_dn_per_depth
     }
 
@@ -1562,6 +1568,7 @@ impl DfPnSolver {
         self.max_ply = 0;
         self.ply_nodes = [0; 64];
         self.path_len = 0;
+        self.path_set.clear();
         self.killer_table.clear();
         self.check_cache.clear();
         self.refutable_check_failed.clear();
@@ -2319,7 +2326,7 @@ impl DfPnSolver {
 
         // ループ検出: フルハッシュで判定(持ち駒込みの完全一致)
         let in_path = profile_timed!(self, loop_detect_ns, loop_detect_count,
-            self.path[..self.path_len].contains(&full_hash));
+            self.path_set.contains(&full_hash));
         if in_path {
             #[cfg(feature = "tt_diag")]
             { self.diag_in_path_exits += 1; }
@@ -3035,6 +3042,7 @@ impl DfPnSolver {
         self.path_pos_key[self.path_len] = pos_key;
         self.path_hand[self.path_len] = att_hand;
         self.path_len += 1;
+        self.path_set.insert(full_hash);
 
         // --- チェーン合駒の DN バイアス用玉位置 ---
         // children 内のドロップ子がチェーンマスへのドロップなら，
@@ -3091,6 +3099,7 @@ impl DfPnSolver {
             }
             debug_assert_eq!(self.path[self.path_len - 1], full_hash);
             self.alpha_x_filter_active = save_alpha_x;
+            self.path_set.remove(&full_hash);
             self.path_len -= 1;
             return;
         }
@@ -3132,7 +3141,7 @@ impl DfPnSolver {
                 // ループ検出: 子がパス上にある場合は (INF, 0) として扱い，
                 // mid() を呼ばず即座にループ NM として処理する．
                 // GHI 対策: ループ子の NM は path_dependent として store される(下流)．
-                let is_loop_child = self.path[..self.path_len].contains(&child_fh);
+                let is_loop_child = self.path_set.contains(&child_fh);
                 let (cpn, cdn, _csrc) = if is_loop_child {
                     (INF, 0, 0)
                 } else {
@@ -3244,6 +3253,7 @@ impl DfPnSolver {
             }
             debug_assert_eq!(self.path[self.path_len - 1], full_hash);
             self.alpha_x_filter_active = save_alpha_x;
+            self.path_set.remove(&full_hash);
             self.path_len -= 1;
             #[cfg(feature = "tt_diag")]
             { self.diag_single_child_exits += 1; }
@@ -3379,7 +3389,7 @@ impl DfPnSolver {
                     children.iter().enumerate()
                 {
                     let (cpn, cdn, csrc) =
-                        if self.path[..self.path_len].contains(&child_fh) {
+                        if self.path_set.contains(&child_fh) {
                             loop_child_count += 1;
                             (INF, 0, 0)
                         } else {
@@ -3436,7 +3446,7 @@ impl DfPnSolver {
                         ).map(|(r, _)| r).unwrap_or(0);
                         or_nm_min_remaining = or_nm_min_remaining.min(child_nm_rem);
                         // GHI 伝播: 子の反証が経路依存なら親も経路依存
-                        if !self.path[..self.path_len].contains(&child_fh)
+                        if !self.path_set.contains(&child_fh)
                             && self.table.has_path_dependent_disproof(
                                 child_pk, child_hand,
                             )
@@ -3477,6 +3487,7 @@ impl DfPnSolver {
                 if proved_or_disproved {
                     debug_assert_eq!(self.path[self.path_len - 1], full_hash);
                     self.alpha_x_filter_active = save_alpha_x;
+                    self.path_set.remove(&full_hash);
                     self.path_len -= 1;
                     return;
                 }
@@ -3524,6 +3535,7 @@ impl DfPnSolver {
                     }
                     debug_assert_eq!(self.path[self.path_len - 1], full_hash);
                     self.alpha_x_filter_active = save_alpha_x;
+                    self.path_set.remove(&full_hash);
                     self.path_len -= 1;
                     return;
                 }
@@ -3575,7 +3587,7 @@ impl DfPnSolver {
                 for (i, &(ref m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
                 {
-                    let is_loop_child = self.path[..self.path_len].contains(&child_fh);
+                    let is_loop_child = self.path_set.contains(&child_fh);
                     let (cpn, cdn, csrc) =
                         if is_loop_child {
                             (INF, 0, 0)
@@ -3777,6 +3789,7 @@ impl DfPnSolver {
                     { self.diag_loop_break_proved += 1; }
                     debug_assert_eq!(self.path[self.path_len - 1], full_hash);
                     self.alpha_x_filter_active = save_alpha_x;
+                    self.path_set.remove(&full_hash);
                     self.path_len -= 1;
                     return;
                 }
@@ -3849,6 +3862,7 @@ impl DfPnSolver {
                     }
                     debug_assert_eq!(self.path[self.path_len - 1], full_hash);
                     self.alpha_x_filter_active = save_alpha_x;
+                    self.path_set.remove(&full_hash);
                     self.path_len -= 1;
                     return;
                 }
@@ -4573,6 +4587,7 @@ impl DfPnSolver {
         // パスから除去
         debug_assert_eq!(self.path[self.path_len - 1], full_hash);
         self.alpha_x_filter_active = save_alpha_x;
+        self.path_set.remove(&full_hash);
         self.path_len -= 1;
     }
 

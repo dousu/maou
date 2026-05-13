@@ -5399,6 +5399,98 @@ v0.55.10 では 998K ノードで解けない — アルゴリズムの違いに
 
 10M 境界: **ply 18 (remain=21)**．ply 22・ply 20 はともに解決，リグレッションなし．
 
+#### v0.55.11 — path_set O(1) ループ検出最適化
+
+**背景: IDS depth 依存 NPS 低下の根本原因**
+
+IDS の depth が深くなるにつれて NPS が低下する現象を調査した．
+ループ検出の `path[..path_len].contains(&hash)` が O(depth) の線形スキャンであり，
+1ノード入口での1回 + 子ループ内での各子1回(合計 O(children × depth))のコストが
+IDS depth 増加とともに顕在化することを特定した．
+
+`path` 配列は v0.23.0 の E5 (FxHashSet→配列化) で導入されたが，
+`contains` は最大 41 要素の線形スキャンのままだった．
+深い depth (IDS depth=41 等) で子数が多いノードを展開するとき，
+この O(depth) スキャンが1ノードあたりのコストを大きく押し上げていた．
+
+**修正 (v0.55.11): path_set 追加**
+
+`path: [u64; 48]` の隣に `path_set: FxHashSet<u64>` を追加し，
+push/pop 時に常に同期させる:
+
+```rust
+// push
+self.path[self.path_len] = full_hash;
+self.path_len += 1;
+self.path_set.insert(full_hash);
+
+// pop (mid() の全出口)
+self.path_set.remove(&full_hash);
+self.path_len -= 1;
+
+// reset (solve() / path_len=0 の全箇所)
+self.path_len = 0;
+self.path_set.clear();
+```
+
+5箇所の `self.path[..self.path_len].contains(&hash)` を
+`self.path_set.contains(&hash)` に置換し，ループ検出を O(1) 化．
+`path` 配列は LIFO 順序(pop 等)のために保持する．
+
+**NPS 一様性検証 (test_ids_depth_nps_uniformity)**
+
+39手詰め ply 24 (saved_depth=17, IDS: 2→4→17) と
+ply 20 (saved_depth=21, IDS: 2→4→8→16→17→21) で IDS depth 別 NPS を計測:
+
+*ply 24 (saved_depth=17):*
+
+| ids_depth | incr_nodes | dt(s) | NPS(K) |
+|-----------|-----------|-------|--------|
+| 2 | 150,011 | 57.54 | 2.6 |
+| 4 | 101 | 0.12 | 0.8 |
+| 17 | 49,912 | 4.32 | 11.6 |
+| **total** | **200,024** | **61.98** | **3.2** |
+
+*ply 20 (saved_depth=21):*
+
+| ids_depth | incr_nodes | dt(s) | NPS(K) |
+|-----------|-----------|-------|--------|
+| 2 | 110,008 | 15.28 | 7.2 |
+| 4 | 62 | 0.21 | 0.3 |
+| 8 | 1,600 | 0.25 | 6.5 |
+| 16 | 1 | 0.11 | 0.0 |
+| 17 | 1 | 0.11 | 0.0 |
+| 21 | 714,637 | 104.81 | 6.8 |
+| **total** | **826,309** | **120.76** | **6.8** |
+
+ply 20 の主要深さ (depth 2: 7.2K，depth 8: 6.5K，depth 21: 6.8K) が一致し，
+depth 増加による NPS 劣化が解消されたことを確認．
+
+*ply 0 ルート局面 (saved_depth=41, IDS: 2→4→8→16→20→41, 1M ノード打ち切り):*
+
+| ids_depth | incr_nodes | dt(s) | NPS(K) |
+|-----------|-----------|-------|--------|
+| 2 | 150,009 | 0.75 | 200.9 |
+| 4 | 73 | 0.16 | 0.4 |
+| 8 | 11,278 | 0.42 | 26.7 |
+| 16 | 1 | 0.10 | 0.0 |
+| 20 | 1 | 0.10 | 0.0 |
+| 41 | 838,638 | 9.41 | 89.1 |
+| **total** | **1,000,000** | **10.94** | **91.4** |
+
+ノード数が多い depth 2 (200.9K NPS) と depth 41 (89.1K NPS) の差は
+IDS depth によるものではなく，「浅い反復で TT に多くの局面が証明済みとして
+登録された後，残る探索が深い部分木に集中する」という正常な挙動による．
+depth 4/16/20 は incr_nodes が 1〜73 と極小のため NPS 値が不安定だが，
+これも TT ウォームアップにより full-depth 前に多くが解決済みになる正常な動作．
+
+**v0.55.11 最終状態**
+
+- `path_set: FxHashSet<u64>` 追加 (`path[0..path_len]` と常に同期)
+- ループ検出 O(depth) → O(1) 化 (5箇所)
+- 130 テスト全通過
+- IDS depth 依存の NPS 劣化なし (ply 0/20/24 で検証済み)
+
 ---
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較

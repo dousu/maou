@@ -425,7 +425,7 @@ fn solve_tsume_pn_dn_dist(
     find_shortest: bool,
     pv_nodes_per_child: u64,
     tt_gc_threshold: usize,
-) -> PyResult<(TsumeResult, Vec<u64>, Vec<u64>, Vec<u64>, Vec<(u32, u64, Vec<u64>, Vec<u64>, Vec<u64>)>)> {
+) -> PyResult<(TsumeResult, Vec<u64>, Vec<u64>, Vec<u64>, Vec<(u32, u64, f64, Vec<u64>, Vec<u64>, Vec<u64>)>)> {
     let sfen_owned = sfen.to_owned();
     let result = py.detach(move || {
         dfpn::solve_tsume_and_collect_pn_dn_dist(
@@ -466,11 +466,12 @@ fn solve_tsume_pn_dn_dist(
         },
     };
 
-    let per_depth_py: Vec<(u32, u64, Vec<u64>, Vec<u64>, Vec<u64>)> = per_depth
+    let per_depth_py: Vec<(u32, u64, f64, Vec<u64>, Vec<u64>, Vec<u64>)> = per_depth
         .into_iter()
-        .map(|(d, n, pn, dn, joint)| (d, n, pn.to_vec(), dn.to_vec(), joint))
+        .map(|(d, n, elapsed, pn, dn, joint)| (d, n, elapsed, pn.to_vec(), dn.to_vec(), joint))
         .collect();
 
+    // per_depth 型: Vec<(ids_depth: u32, nodes: u64, elapsed_secs: f64, pn_hist, dn_hist, joint)>
     Ok((py_result, pn_hist.to_vec(), dn_hist.to_vec(), joint_hist, per_depth_py))
 }
 
