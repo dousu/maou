@@ -96,6 +96,35 @@ const RETAIN_INF_PN_CAP: u32 = 32 * PN_UNIT;
 /// エントリのみが対象となり，汚染リスクが低い．
 const RETAIN_INF_MAX_DELTA: u16 = 4;
 
+/// FrontierTT: remaining ≤ この値の intermediate エントリを専用プールに格納する (案4, v0.55.7)．
+///
+/// 0 = 無効 (専用プール未使用): FRONTIER_INITIAL_AMOUNT ブーストで代替する．
+/// 2 以上を設定すると専用プールへのルーティングが有効になる．
+///
+/// **現在は 0 (無効)**: 別プールへのルーティングは look_up_best_move など
+/// WorkingTT を直接参照するコードパスとの整合性が複雑になるため，
+/// v0.55.7 では初期 amount ブーストのみで eviction thrashing を緩和する．
+const FRONTIER_REMAINING_THRESHOLD: u16 = 0;
+
+/// FrontierTT の 1 クラスタあたりのエントリ数．
+const FRONTIER_CLUSTER_SIZE: usize = 8;
+
+/// FrontierTT のクラスタ数 (FRONTIER_REMAINING_THRESHOLD = 0 の場合は最小値)．
+/// プールが無効の場合は 4 クラスタ (1KB) のみ確保する．
+const FRONTIER_NUM_CLUSTERS: usize = 4;
+
+/// remaining ≤ この値の intermediate 新規エントリに付与する初期 amount ブースト値 (案4, v0.55.7)．
+///
+/// WorkingTT eviction thrashing 対策:
+/// biased-default TT miss により amount=0 で格納された remaining≤2 エントリ (depth=41 の ply=39)
+/// が remaining>2 エントリのクラスタ書き込みで即座に eviction される問題を緩和する．
+/// 初期 amount=FRONTIER_INITIAL_AMOUNT により，amount=0 の remaining>2 エントリより
+/// eviction 耐性が高くなる．
+const FRONTIER_INITIAL_AMOUNT: u8 = 32;
+
+/// 初期 amount ブーストを付与する remaining 閾値 (FRONTIER_REMAINING_THRESHOLD とは独立)．
+const FRONTIER_INITIAL_AMOUNT_THRESHOLD: u16 = 2;
+
 /// LeafDisproofTT のコンパクトエントリ (16B)．
 ///
 /// N-8 (v0.26.0): remaining ≤ 2 の depth-limited disproof を WorkingTT の
@@ -320,6 +349,16 @@ pub(super) struct TranspositionTable {
     pub(super) diag_leaf_inserts: u64,
     /// (N-8, v0.26.0) LeafDisproofTT からのヒット数 (look_up_working からの atomic カウント)．
     pub(super) diag_leaf_hits: std::sync::atomic::AtomicU64,
+    /// FrontierTT: remaining ≤ FRONTIER_REMAINING_THRESHOLD の intermediate 専用テーブル (案4, v0.55.7)．
+    ///
+    /// WorkingTT クラスタ overflow による eviction から保護するため，
+    /// フロンティアノード (remaining が小さい = ply が深い) の intermediate を分離する．
+    /// 256K clusters × 8 × 32B = 64MB．
+    frontier: Vec<TTFlatEntry>,
+    /// FrontierTT の `num_clusters - 1`(高速 modulo 用ビットマスク)．
+    frontier_mask: usize,
+    /// FrontierTT のクラスタ overflow 累積カウンタ．
+    frontier_overflow_since_gc: u64,
 }
 
 impl TranspositionTable {
@@ -335,13 +374,16 @@ impl TranspositionTable {
         let proven_total = proven_clusters * PROVEN_CLUSTER_SIZE;
         let working_total = working_clusters * WORKING_CLUSTER_SIZE;
         let leaf_total = LEAF_NUM_CLUSTERS * LEAF_CLUSTER_SIZE;
+        let frontier_total = FRONTIER_NUM_CLUSTERS * FRONTIER_CLUSTER_SIZE;
         TranspositionTable {
             proven: vec![TTFlatProvenEntry::EMPTY; proven_total],
             working: vec![TTFlatEntry::EMPTY; working_total],
             leaf_disproofs: vec![TTLeafEntry::EMPTY; leaf_total],
+            frontier: vec![TTFlatEntry::EMPTY; frontier_total],
             proven_mask: proven_clusters - 1,
             working_mask: working_clusters - 1,
             leaf_mask: LEAF_NUM_CLUSTERS - 1,
+            frontier_mask: FRONTIER_NUM_CLUSTERS - 1,
             hint_ply: 0,
             current_ids_depth: 0,
             working_overflow_since_gc: 0,
@@ -398,6 +440,7 @@ impl TranspositionTable {
             diag_disproof_threshold_skip: 0,
             diag_leaf_inserts: 0,
             diag_leaf_hits: std::sync::atomic::AtomicU64::new(0),
+            frontier_overflow_since_gc: 0,
         }
     }
 
@@ -527,6 +570,16 @@ impl TranspositionTable {
         ((mixed as usize) & self.leaf_mask) * LEAF_CLUSTER_SIZE
     }
 
+    /// FrontierTT のクラスタ開始インデックス (案4, v0.55.7)．
+    ///
+    /// WorkingTT と同じ fc_hand_hash を使用し，frontier_mask でクラスタを選択する．
+    /// pos_key は呼び出し元で safe_key 適用済みであること．
+    #[inline(always)]
+    fn frontier_cluster_start(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> usize {
+        let mixed = pos_key ^ Self::fc_hand_hash(hand);
+        ((mixed as usize) & self.frontier_mask) * FRONTIER_CLUSTER_SIZE
+    }
+
     /// WorkingTT のクラスタ開始インデックス．
     ///
     /// (v0.24.69) forward-chain 正規化 hand hash を使用する:
@@ -617,6 +670,31 @@ impl TranspositionTable {
         neighbor_scan: bool,
     ) -> (u32, u32, u32) {
         let pos_key = Self::safe_key(pos_key);
+
+        // 案4 (v0.55.7): FrontierTT を優先チェック (remaining ≤ FRONTIER_REMAINING_THRESHOLD)．
+        // WorkingTT eviction thrashing を受けない専用プールの intermediate を先に探す．
+        if remaining <= FRONTIER_REMAINING_THRESHOLD {
+            let f_start = self.frontier_cluster_start(pos_key, hand);
+            let f_cluster = &self.frontier[f_start..f_start + FRONTIER_CLUSTER_SIZE];
+            let mut f_exact: Option<(u32, u32, u32)> = None;
+            let mut f_fc: Option<(u32, u32, u32)> = None;
+            for fe in f_cluster {
+                if fe.pos_key != pos_key { continue; }
+                let e = &fe.entry;
+                if e.pn != 0 && e.dn != 0 {
+                    if e.pn == u32::MAX && e.remaining() < remaining { continue; }
+                    if e.hand == *hand {
+                        f_exact = Some((e.pn, e.dn, e.source));
+                    } else if f_fc.is_none() && hand_gte_forward_chain(hand, &e.hand) {
+                        f_fc = Some((e.pn, e.dn, e.source));
+                    }
+                }
+            }
+            if let Some(m) = f_exact { return m; }
+            if let Some(m) = f_fc { return m; }
+            // FrontierTT ミス: disproof は WorkingTT / LeafDisproofTT で継続探索
+        }
+
         let working = self.working_cluster(pos_key, hand);
         let mut exact_match: Option<(u32, u32, u32)> = None;
         // (v0.24.69) fc-dominated intermediate: hand_q ≥_fc hand_e なら
@@ -1639,6 +1717,12 @@ impl TranspositionTable {
         best_move: u16,
         #[cfg(feature = "verbose")] rem_idx: usize,
     ) {
+        // 案4 (v0.55.7): remaining ≤ threshold の intermediate は FrontierTT へ
+        if remaining <= FRONTIER_REMAINING_THRESHOLD {
+            self.store_frontier_intermediate(pos_key, hand, pn, dn, remaining, source, best_move);
+            return;
+        }
+
         let w_start = self.working_cluster_start(pos_key, &hand);
         let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
 
@@ -1667,7 +1751,11 @@ impl TranspositionTable {
         }
 
         // 新規エントリを追加
-        let new_entry = DfPnEntry::new(source, pn, dn, hand, remaining, false, best_move, 0);
+        // 案4 (v0.55.7): remaining ≤ FRONTIER_INITIAL_AMOUNT_THRESHOLD のエントリに初期 amount ブーストを付与．
+        // biased-default TT miss により amount=0 で格納された直後に eviction される問題を緩和する．
+        let initial_amount =
+            if remaining <= FRONTIER_INITIAL_AMOUNT_THRESHOLD { FRONTIER_INITIAL_AMOUNT } else { 0 };
+        let new_entry = DfPnEntry::new(source, pn, dn, hand, remaining, false, best_move, initial_amount);
         if let Some(slot) = w_cluster.iter_mut().find(|fe| fe.is_empty()) {
             slot.pos_key = pos_key;
             slot.entry = new_entry;
@@ -1729,6 +1817,58 @@ impl TranspositionTable {
         }
     }
 
+    /// FrontierTT に intermediate エントリを挿入する (案4, v0.55.7)．
+    ///
+    /// pos_key は呼び出し元で safe_key 適用済みであること．
+    /// WorkingTT と同様の update-or-insert-or-evict ロジックを使用する．
+    fn store_frontier_intermediate(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; HAND_KINDS],
+        pn: u32,
+        dn: u32,
+        remaining: u16,
+        source: u32,
+        best_move: u16,
+    ) {
+        let f_start = self.frontier_cluster_start(pos_key, &hand);
+
+        // 同一持ち駒の既存エントリを更新
+        for fe in self.frontier[f_start..f_start + FRONTIER_CLUSTER_SIZE].iter_mut() {
+            if fe.pos_key != pos_key { continue; }
+            let e = &mut fe.entry;
+            if e.hand == hand {
+                if e.dn == 0 && (e.remaining() >= remaining || e.path_dependent()) {
+                    return;
+                }
+                e.pn = pn;
+                e.dn = dn;
+                e.set_remaining(remaining);
+                e.source = source;
+                e.clear_path_dependent();
+                e.amount = e.amount.saturating_add(1);
+                if best_move != 0 {
+                    e.best_move = best_move;
+                }
+                return;
+            }
+        }
+
+        // 新規エントリを追加
+        let new_entry = DfPnEntry::new(source, pn, dn, hand, remaining, false, best_move, 0);
+        if let Some(slot) = self.frontier[f_start..f_start + FRONTIER_CLUSTER_SIZE]
+            .iter_mut()
+            .find(|fe| fe.is_empty())
+        {
+            slot.pos_key = pos_key;
+            slot.entry = new_entry;
+        } else {
+            self.frontier_overflow_since_gc += 1;
+            let f_cluster = &mut self.frontier[f_start..f_start + FRONTIER_CLUSTER_SIZE];
+            Self::replace_weakest_in(f_cluster, pos_key, new_entry);
+        }
+    }
+
     /// 指定エントリの amount を更新する．
     /// GC 前に指定局面の WorkingTT エントリの amount を最大値に引き上げる．
     ///
@@ -1748,10 +1888,20 @@ impl TranspositionTable {
                 return;
             }
         }
+        // 案4: FrontierTT エントリも保護
+        let f_start = self.frontier_cluster_start(pos_key, hand);
+        let f_cluster = &mut self.frontier[f_start..f_start + FRONTIER_CLUSTER_SIZE];
+        for fe in f_cluster.iter_mut() {
+            if fe.pos_key != pos_key { continue; }
+            if fe.entry.hand == *hand {
+                fe.entry.amount = 255;
+                return;
+            }
+        }
     }
 
     /// mid() からの帰還時に呼ばれ，探索投資量を記録する．
-    /// WorkingTT のみスキャン(intermediate エントリ対象)．
+    /// WorkingTT + FrontierTT をスキャン(intermediate エントリ対象)．
     pub(super) fn update_amount(
         &mut self,
         pos_key: u64,
@@ -1762,6 +1912,16 @@ impl TranspositionTable {
         let start = self.working_cluster_start(pos_key, hand);
         let cluster = &mut self.working[start..start + WORKING_CLUSTER_SIZE];
         for fe in cluster.iter_mut() {
+            if fe.pos_key != pos_key { continue; }
+            if fe.entry.hand == *hand {
+                fe.entry.amount = fe.entry.amount.saturating_add(nodes_spent.min(255) as u8);
+                return;
+            }
+        }
+        // 案4: FrontierTT エントリの amount も更新
+        let f_start = self.frontier_cluster_start(pos_key, hand);
+        let f_cluster = &mut self.frontier[f_start..f_start + FRONTIER_CLUSTER_SIZE];
+        for fe in f_cluster.iter_mut() {
             if fe.pos_key != pos_key { continue; }
             if fe.entry.hand == *hand {
                 fe.entry.amount = fe.entry.amount.saturating_add(nodes_spent.min(255) as u8);
@@ -2120,7 +2280,10 @@ impl TranspositionTable {
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
         // N-8: LeafDisproofTT も同時にクリア
         for le in self.leaf_disproofs.iter_mut() { le.pos_key = 0; }
+        // 案4: FrontierTT もクリア
+        for fe in self.frontier.iter_mut() { fe.pos_key = 0; }
         self.working_overflow_since_gc = 0;
+        self.frontier_overflow_since_gc = 0;
     }
 
     /// IDS depth 切替時に WorkingTT から intermediate エントリを選択的に保持する (v0.24.45)．
@@ -2236,17 +2399,85 @@ impl TranspositionTable {
             delta_remaining, kept,
             rem_dist[0], rem_dist[1], rem_dist[2], rem_dist[3], rem_dist[4], rem_dist[5],
         );
+
+        // 案4: FrontierTT エントリの IDS 引継ぎ処理
+        //
+        // new_rem ≤ FRONTIER_REMAINING_THRESHOLD: frontier 内で remaining を更新して保持
+        // new_rem > FRONTIER_REMAINING_THRESHOLD: WorkingTT へ昇格 (新 depth での lookup に使えるように)
+        // keep=false: 廃棄
+        //
+        // frontier エントリは min_remaining フィルタなしで全て対象とする．
+        // (frontier は重要フロンティアノードのみを格納するため，全て価値があると仮定)
+        let mut frontier_to_promote: Vec<(u64, [u8; HAND_KINDS], u32, u32, u16, u32, u16)> =
+            Vec::new();
+        for fe in self.frontier.iter_mut() {
+            if fe.pos_key == 0 { continue; }
+            let entry = &mut fe.entry;
+            let rem = entry.remaining();
+            let is_intermediate = entry.pn > 0 && entry.dn > 0;
+            let is_path_dep = entry.path_dependent();
+            let is_depth_limited = rem < REMAINING_INFINITE;
+            let new_rem = rem.saturating_add(delta_remaining);
+            let inf_eligible = entry.pn < u32::MAX || delta_remaining <= RETAIN_INF_MAX_DELTA;
+            let keep = is_intermediate
+                && inf_eligible
+                && !is_path_dep
+                && is_depth_limited
+                && new_rem < REMAINING_INFINITE;
+            if keep {
+                let mut pn = entry.pn;
+                let mut dn = entry.dn;
+                if pn == u32::MAX {
+                    pn = RETAIN_INF_PN_CAP;
+                    if dn == u32::MAX { dn = RETAIN_INF_PN_CAP; }
+                } else if self.retain_pn_dn_cap < u32::MAX {
+                    pn = pn.min(self.retain_pn_dn_cap);
+                    dn = dn.min(self.retain_pn_dn_cap);
+                }
+                if new_rem <= FRONTIER_REMAINING_THRESHOLD {
+                    // FrontierTT 内で remaining を更新して保持
+                    entry.set_remaining(new_rem);
+                    entry.pn = pn;
+                    entry.dn = dn;
+                    kept += 1;
+                } else {
+                    // WorkingTT へ昇格: new_rem > threshold なので store_working_intermediate が
+                    // frontier ルーティングを取らずに WorkingTT へ書き込む
+                    frontier_to_promote.push((
+                        fe.pos_key, entry.hand, pn, dn, new_rem, entry.source, entry.best_move,
+                    ));
+                    fe.pos_key = 0;
+                    kept += 1;
+                }
+            } else {
+                fe.pos_key = 0;
+            }
+        }
+        self.frontier_overflow_since_gc = 0;
+
+        // 昇格エントリを WorkingTT へ書き込む (フロンティアループ終了後，borrow 解放済み)
+        // pos_key は frontier 格納時に safe_key 適用済みなので store_working_intermediate へ
+        // 直接渡す (store_working_intermediate は safe_key を適用しない)．
+        for (pk, hand, pn, dn, new_rem, source, best_move) in frontier_to_promote {
+            debug_assert!(new_rem > FRONTIER_REMAINING_THRESHOLD);
+            self.store_working_intermediate(
+                pk, hand, pn, dn, new_rem, source, best_move,
+                #[cfg(feature = "verbose")] (new_rem as usize).min(31),
+            );
+        }
+
         kept
     }
 
-    /// WorkingTT の overflow カウンタを取得しリセットする．
+    /// WorkingTT + FrontierTT の overflow カウンタを取得しリセットする．
     ///
     /// 前回の drain/GC/clear 以降に発生したクラスタ overflow の累積回数を返す．
     /// 呼び出し側はこの値をもとに GC の必要性を判断する．
     #[inline]
     pub(super) fn drain_working_overflow(&mut self) -> u64 {
-        let count = self.working_overflow_since_gc;
+        let count = self.working_overflow_since_gc + self.frontier_overflow_since_gc;
         self.working_overflow_since_gc = 0;
+        self.frontier_overflow_since_gc = 0;
         count
     }
 
@@ -2488,11 +2719,43 @@ impl TranspositionTable {
     /// GC 除去率(サンプリングした中のこの割合以下の amount を除去)．
     const GC_REMOVAL_RATIO: f64 = 0.2;
 
-    /// WorkingTT の GC（overflow トリガ）．
+    /// WorkingTT + FrontierTT の GC（overflow トリガ）．
     /// obsolete intermediate の除去のみ実行（disproof は保護）．
     /// disproof を除去すると再生成→再overflow→再GC のサイクルに陥るため．
     pub(super) fn gc_working_overflow(&mut self) -> usize {
-        self.gc_working_sampling(false)
+        self.gc_working_sampling(false) + self.gc_frontier_overflow()
+    }
+
+    /// FrontierTT の GC: ProvenTT に解決済みエントリの intermediate を除去する (案4, v0.55.7)．
+    fn gc_frontier_overflow(&mut self) -> usize {
+        self.frontier_overflow_since_gc = 0;
+        let proven_mask = self.proven_mask;
+        let initial = self.frontier.iter().filter(|fe| fe.pos_key != 0).count();
+        for fe in self.frontier.iter_mut() {
+            if fe.pos_key == 0 { continue; }
+            if fe.entry.pn == 0 || fe.entry.dn == 0 { continue; } // intermediate のみ
+            if fe.entry.amount >= 255 { continue; } // パス保護エントリは除外
+            let pk = fe.pos_key;
+            let hand = fe.entry.hand;
+            let hh = Self::hand_hash(&hand);
+            let p_start = ((pk ^ hh) as usize & proven_mask) * PROVEN_CLUSTER_SIZE;
+            let mut is_resolved = false;
+            for pfe in &self.proven[p_start..p_start + PROVEN_CLUSTER_SIZE] {
+                if pfe.pos_key != pk { continue; }
+                if pfe.entry.is_proof() && hand_gte_forward_chain(&hand, &pfe.entry.hand) {
+                    is_resolved = true;
+                    break;
+                }
+                if !pfe.entry.is_proof() && hand_gte_forward_chain(&pfe.entry.hand, &hand) {
+                    is_resolved = true;
+                    break;
+                }
+            }
+            if is_resolved {
+                fe.pos_key = 0;
+            }
+        }
+        initial - self.frontier.iter().filter(|fe| fe.pos_key != 0).count()
     }
 
     /// サンプリングベースの WorkingTT GC (KomoringHeights 方式)．
