@@ -4119,6 +4119,29 @@ impl DfPnSolver {
                 same_child_iters = 0;
                 (child_pn_th, child_dn_th)
             };
+            // 案B: TT 事前チェック — mid() を呼ぶ前に子の TT 値を確認し，
+            // 既に閾値を超えていればノードカウントを消費せずにスキップする．
+            // mid() 内部の threshold exit (line ~2273) と同等だが，
+            // nodes_searched を消費しない点が重要．
+            // WorkingTT eviction 後の再発見サイクル (pn=INF → evict → 再探索)
+            // を短絡させ，無駄な 1-node 消費を排除する．
+            {
+                let child_pk = children[best_idx].2;
+                let child_rem = remaining.saturating_sub(1);
+                let (pre_pn, pre_dn, _) =
+                    self.look_up_pn_dn(child_pk, &children[best_idx].3, child_rem);
+                if pre_pn >= final_child_pn_th || pre_dn >= final_child_dn_th {
+                    board.undo_move(m, captured);
+                    if remaining > 4 {
+                        zero_progress_count += 1;
+                        if zero_progress_count >= ZERO_PROGRESS_LIMIT {
+                            break;
+                        }
+                    }
+                    prev_best_idx = best_idx;
+                    continue;
+                }
+            }
             let _pre_mid_nodes = self.nodes_searched;
             self.mid(
                 board,
