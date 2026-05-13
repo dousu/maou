@@ -98,20 +98,21 @@ const RETAIN_INF_MAX_DELTA: u16 = 4;
 
 /// FrontierTT: remaining ≤ この値の intermediate エントリを専用プールに格納する (案4, v0.55.7)．
 ///
-/// 0 = 無効 (専用プール未使用): FRONTIER_INITIAL_AMOUNT ブーストで代替する．
-/// 2 以上を設定すると専用プールへのルーティングが有効になる．
+/// WorkingTT のクラスタ overflow による eviction から保護するため，
+/// 探索フロンティア (ply が深く remaining が小さいノード) の intermediate を別プールに格納する．
+/// ply=39 (depth=41, remaining=2) の 84K 回重複訪問を引き起こす eviction thrashing を解消する．
 ///
-/// **現在は 0 (無効)**: 別プールへのルーティングは look_up_best_move など
-/// WorkingTT を直接参照するコードパスとの整合性が複雑になるため，
-/// v0.55.7 では初期 amount ブーストのみで eviction thrashing を緩和する．
-const FRONTIER_REMAINING_THRESHOLD: u16 = 0;
+/// 0 = 無効 (専用プール未使用)
+const FRONTIER_REMAINING_THRESHOLD: u16 = 2;
 
 /// FrontierTT の 1 クラスタあたりのエントリ数．
 const FRONTIER_CLUSTER_SIZE: usize = 8;
 
-/// FrontierTT のクラスタ数 (FRONTIER_REMAINING_THRESHOLD = 0 の場合は最小値)．
-/// プールが無効の場合は 4 クラスタ (1KB) のみ確保する．
-const FRONTIER_NUM_CLUSTERS: usize = 4;
+/// FrontierTT のクラスタ数 (WorkingTT と同数 = 2M クラスタ)．
+/// 2M × 8 × 32B = 512MB．
+/// WorkingTT と同数にすることで pos_key のクラスタ分散が同一となり，
+/// remaining≤2 エントリが remaining>2 エントリのクラスタ衝突を受けない．
+const FRONTIER_NUM_CLUSTERS: usize = DEFAULT_NUM_CLUSTERS;
 
 /// remaining ≤ この値の intermediate 新規エントリに付与する初期 amount ブースト値 (案4, v0.55.7)．
 ///
@@ -122,8 +123,6 @@ const FRONTIER_NUM_CLUSTERS: usize = 4;
 /// eviction 耐性が高くなる．
 const FRONTIER_INITIAL_AMOUNT: u8 = 32;
 
-/// 初期 amount ブーストを付与する remaining 閾値 (FRONTIER_REMAINING_THRESHOLD とは独立)．
-const FRONTIER_INITIAL_AMOUNT_THRESHOLD: u16 = 2;
 
 /// LeafDisproofTT のコンパクトエントリ (16B)．
 ///
@@ -673,7 +672,25 @@ impl TranspositionTable {
 
         // 案4 (v0.55.7): FrontierTT を優先チェック (remaining ≤ FRONTIER_REMAINING_THRESHOLD)．
         // WorkingTT eviction thrashing を受けない専用プールの intermediate を先に探す．
+        //
+        // v0.55.8 修正: disproof は WorkingTT に格納されるため，frontier intermediate より優先する．
+        // store_working_disproof は WorkingTT の同 pos_key intermediate を除去するが frontier は
+        // 触らない — frontier に stale intermediate が残ると disproof を見落とす．
+        // 対策: frontier intermediate ヒット前に WorkingTT disproof を確認し，あれば優先返却．
         if remaining <= FRONTIER_REMAINING_THRESHOLD {
+            // Step 1: WorkingTT で disproof を先に確認 (frontier の stale intermediate より優先)
+            let w_start = self.working_cluster_start(pos_key, hand);
+            for fe in &self.working[w_start..w_start + WORKING_CLUSTER_SIZE] {
+                if fe.pos_key != pos_key { continue; }
+                let e = &fe.entry;
+                if e.dn == 0
+                    && hand_gte_forward_chain(&e.hand, hand)
+                    && (e.remaining() >= remaining || e.path_dependent())
+                {
+                    return (e.pn, 0, e.source);
+                }
+            }
+            // Step 2: FrontierTT で intermediate を確認
             let f_start = self.frontier_cluster_start(pos_key, hand);
             let f_cluster = &self.frontier[f_start..f_start + FRONTIER_CLUSTER_SIZE];
             let mut f_exact: Option<(u32, u32, u32)> = None;
@@ -726,6 +743,32 @@ impl TranspositionTable {
                 }
             }
         }
+
+        // 案4 (v0.55.8): remaining > FRONTIER_REMAINING_THRESHOLD の lookup でも，
+        // frontier に残る remaining≤threshold エントリを保守的推定 fallback として使用．
+        // baseline では remaining≤2 エントリが WorkingTT に存在し，remaining>2 の lookup で
+        // 保守的推定として返っていた．frontier 導入後は WorkingTT に存在しないため補完する．
+        // pn=INF エントリは常にスキップ (frontier remaining ≤ threshold < remaining であり，
+        // baseline の `e.remaining() < remaining` スキップ条件と等価)．
+        if FRONTIER_REMAINING_THRESHOLD > 0
+            && remaining > FRONTIER_REMAINING_THRESHOLD
+            && exact_match.is_none()
+        {
+            let f_start = self.frontier_cluster_start(pos_key, hand);
+            for fe in &self.frontier[f_start..f_start + FRONTIER_CLUSTER_SIZE] {
+                if fe.pos_key != pos_key { continue; }
+                let e = &fe.entry;
+                if e.pn != 0 && e.dn != 0 && e.pn != u32::MAX {
+                    if e.hand == *hand {
+                        exact_match = Some((e.pn, e.dn, e.source));
+                        break;
+                    } else if fc_match.is_none() && hand_gte_forward_chain(hand, &e.hand) {
+                        fc_match = Some((e.pn, e.dn, e.source));
+                    }
+                }
+            }
+        }
+
         if let Some(m) = exact_match {
             #[cfg(feature = "verbose")]
             { WORKING_DIAG[0].fetch_add(1, Ordering::Relaxed); }
@@ -1149,6 +1192,15 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
     ) -> u16 {
         let pos_key = Self::safe_key(pos_key);
+        // FrontierTT (案4): remaining ≤ FRONTIER_REMAINING_THRESHOLD の intermediate を先にチェック
+        if FRONTIER_REMAINING_THRESHOLD > 0 {
+            let f_start = self.frontier_cluster_start(pos_key, hand);
+            for fe in &self.frontier[f_start..f_start + FRONTIER_CLUSTER_SIZE] {
+                if fe.pos_key == pos_key && fe.entry.hand == *hand && fe.entry.best_move != 0 {
+                    return fe.entry.best_move;
+                }
+            }
+        }
         // WorkingTT (intermediate entries have best_move)
         for fe in self.working_cluster(pos_key, hand) {
             if fe.pos_key == pos_key && fe.entry.hand == *hand && fe.entry.best_move != 0 {
@@ -1750,12 +1802,8 @@ impl TranspositionTable {
             }
         }
 
-        // 新規エントリを追加
-        // 案4 (v0.55.7): remaining ≤ FRONTIER_INITIAL_AMOUNT_THRESHOLD のエントリに初期 amount ブーストを付与．
-        // biased-default TT miss により amount=0 で格納された直後に eviction される問題を緩和する．
-        let initial_amount =
-            if remaining <= FRONTIER_INITIAL_AMOUNT_THRESHOLD { FRONTIER_INITIAL_AMOUNT } else { 0 };
-        let new_entry = DfPnEntry::new(source, pn, dn, hand, remaining, false, best_move, initial_amount);
+        // 新規エントリを追加 (remaining ≤ FRONTIER_REMAINING_THRESHOLD は store_frontier_intermediate でブースト付き)
+        let new_entry = DfPnEntry::new(source, pn, dn, hand, remaining, false, best_move, 0);
         if let Some(slot) = w_cluster.iter_mut().find(|fe| fe.is_empty()) {
             slot.pos_key = pos_key;
             slot.entry = new_entry;
@@ -1854,8 +1902,10 @@ impl TranspositionTable {
             }
         }
 
-        // 新規エントリを追加
-        let new_entry = DfPnEntry::new(source, pn, dn, hand, remaining, false, best_move, 0);
+        // 新規エントリを追加 (初期 amount ブースト付き)
+        let new_entry = DfPnEntry::new(
+            source, pn, dn, hand, remaining, false, best_move, FRONTIER_INITIAL_AMOUNT,
+        );
         if let Some(slot) = self.frontier[f_start..f_start + FRONTIER_CLUSTER_SIZE]
             .iter_mut()
             .find(|fe| fe.is_empty())
