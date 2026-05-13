@@ -32,19 +32,11 @@ const PATH_CAPACITY: usize = 48;
 
 /// 局面ごとの mid() exit 種別内訳 (visit_diag feature)．
 ///
-/// 重複訪問の原因分解に使用する:
-/// - `in_path`       : ループ検出で即 return
-/// - `proven_exit`   : TT に proof/disproof が存在して即 return
-/// - `threshold_exit`: TT 値が閾値を超えており即 return
-///   - `th_pn_default`: その際 tt_pn == PN_UNIT (TT ミス相当)
-///   - `th_pn_inf`    : その際 tt_pn == INF
-///   - `th_pn_caused` : pn 側が閾値超えの原因
-///   - `th_dn_caused` : dn 側が閾値超えの原因
-/// - `exploration`   : 実際に子を展開した
-///   - `expl_pn_default`: その際 tt_pn == PN_UNIT (TT ミス相当 → 再探索)
-///   - `expl_pn_first` : 初回 exploration 時の tt_pn
-///   - `expl_pn_last`  : 最新 exploration 時の tt_pn
-///   - `expl_pn_stuck` : 直前の exploration から tt_pn が変化しなかった回数
+/// TT miss (biased default) か TT hit (stored value) かの区別:
+///   biased default は `(biased_pn, PN_UNIT, 0)` を返すため tt_dn == PN_UNIT．
+///   TT hit の場合 tt_dn は子の dn から計算された値であり，PN_UNIT と一致する
+///   のは極めてまれ．よって exploration 時の `tt_dn == PN_UNIT` が TT miss の
+///   実用的なシグナルとなる．
 #[cfg(feature = "visit_diag")]
 #[derive(Default, Clone)]
 pub(super) struct VisitBreakdown {
@@ -56,10 +48,13 @@ pub(super) struct VisitBreakdown {
     pub th_pn_caused: u32,
     pub th_dn_caused: u32,
     pub exploration: u32,
-    pub expl_pn_default: u32,
-    pub expl_pn_first: u32,
-    pub expl_pn_last: u32,
-    pub expl_pn_stuck: u32,  // tt_pn が前回 exploration と同じだった回数
+    pub expl_pn_first: u32,    // 初回 exploration 時の tt_pn
+    pub expl_dn_first: u32,    // 初回 exploration 時の tt_dn
+    pub expl_pn_last: u32,     // 最新 exploration 時の tt_pn
+    pub expl_dn_last: u32,     // 最新 exploration 時の tt_dn
+    pub expl_pn_stuck: u32,    // tt_pn が前回 exploration と同じだった回数
+    pub expl_tt_miss: u32,     // tt_dn == PN_UNIT (biased default = TT miss シグナル)
+    pub expl_tt_hit: u32,      // tt_dn != PN_UNIT (TT に格納済みの値)
 }
 
 /// 詰将棋の探索結果．
@@ -961,25 +956,27 @@ impl DfPnSolver {
 
         let mut out = String::new();
         writeln!(out, "=== 上位 {} 局面の exit 種別内訳 ===", top_n).unwrap();
+        // tt_miss = tt_dn==PN_UNIT (biased default シグナル = TT eviction)
+        // tt_hit  = tt_dn!=PN_UNIT (WorkingTT に格納済みの値を読んだ)
         writeln!(out,
-            "{:>4} {:>20}  {:>6}  {:>6}  {:>6}  {:>8}  {:>6}  {:>6}  {:>6}  {:>8}  {:>8}  {:>8}  {:>6}",
-            "#", "hash", "total", "in_pth", "proven",
-            "thresh", "th_pnD", "th_pnI",
-            "expl", "pn_first", "pn_last", "pn_stuck", "1stPly").unwrap();
+            "{:>4} {:>20}  {:>6}  {:>6}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>6}",
+            "#", "hash", "total", "thresh",
+            "expl", "tt_miss", "tt_hit", "miss%",
+            "pn_1st", "dn_1st", "1stPly").unwrap();
 
         for (rank, &(hash, cnt, ply)) in sorted.iter().take(top_n).enumerate() {
             let bd = self.visit_breakdown.get(&hash)
                 .cloned().unwrap_or_default();
-            let stuck_pct = if bd.exploration > 1 {
-                100.0 * bd.expl_pn_stuck as f64 / (bd.exploration - 1) as f64
+            let miss_pct = if bd.exploration > 0 {
+                100.0 * bd.expl_tt_miss as f64 / bd.exploration as f64
             } else { 0.0 };
             writeln!(out,
-                "{:>4}. {:#018x}  {:>6}  {:>6}  {:>6}  {:>8}  {:>6}  {:>6}  {:>8}  {:>8}  {:>8}  {:>7.1}%  {:>6}",
+                "{:>4}. {:#018x}  {:>6}  {:>6}  {:>8}  {:>8}  {:>8}  {:>7.1}%  {:>8}  {:>8}  {:>6}",
                 rank + 1, hash, cnt,
-                bd.in_path, bd.proven_exit,
-                bd.threshold_exit, bd.th_pn_default, bd.th_pn_inf,
-                bd.exploration, bd.expl_pn_first, bd.expl_pn_last,
-                stuck_pct, ply).unwrap();
+                bd.threshold_exit,
+                bd.exploration, bd.expl_tt_miss, bd.expl_tt_hit, miss_pct,
+                bd.expl_pn_first, bd.expl_dn_first,
+                ply).unwrap();
         }
         out
     }
@@ -2382,13 +2379,22 @@ impl DfPnSolver {
         #[cfg(feature = "visit_diag")]
         {
             let bd = self.visit_breakdown.entry(full_hash).or_default();
-            if tt_pn == PN_UNIT { bd.expl_pn_default += 1; }
+            // TT miss シグナル: biased default は (biased_pn, PN_UNIT, 0) を返す
+            // ため tt_dn == PN_UNIT == 16 ならば TT miss (eviction) と判断する．
+            // TT hit の場合 tt_dn は子の dn 集計値であり，PN_UNIT と一致することは稀．
+            if tt_dn == PN_UNIT {
+                bd.expl_tt_miss += 1;
+            } else {
+                bd.expl_tt_hit += 1;
+            }
             if bd.exploration == 0 {
                 bd.expl_pn_first = tt_pn;
+                bd.expl_dn_first = tt_dn;
             } else if tt_pn == bd.expl_pn_last {
                 bd.expl_pn_stuck += 1;
             }
             bd.expl_pn_last = tt_pn;
+            bd.expl_dn_last = tt_dn;
             bd.exploration += 1;
         }
         // TT 診断: ply 35 で terminal exit しなかった場合の TT 状態を出力
