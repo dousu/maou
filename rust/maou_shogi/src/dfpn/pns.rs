@@ -1478,7 +1478,11 @@ impl DfPnSolver {
                 // チャンクサイズ: 1M (TT 停滞の早期検出のため固定)
                 let chunk_size: u64 = 1_000_000;
                 let mid_deadline = self.nodes_searched.saturating_add(mid_max_budget);
-                let mut prev_tt_len = self.table.len();
+                // 案4 (v0.55.9): FrontierTT も含めた TT 成長チェック．
+                // FRONTIER_REMAINING_THRESHOLD > 0 の場合，remaining ≤ threshold の
+                // intermediate は WorkingTT ではなく FrontierTT に格納されるため，
+                // WorkingTT のみを見る `len()` では停滞を誤検知する．
+                let mut prev_tt_len = self.table.len() + self.table.frontier_len();
 
                 while self.nodes_searched < mid_deadline && !self.timed_out {
                     let chunk_end = (self.nodes_searched + chunk_size).min(mid_deadline);
@@ -1499,7 +1503,7 @@ impl DfPnSolver {
                     // エントリを削除した場合も curr_tt_len < prev_tt_len となり
                     // Frontier 遷移がトリガーされる．GC は TT 容量 80% 超過時
                     // のみ発火するため，TT 圧迫下での Frontier 遷移は合理的．
-                    let curr_tt_len = self.table.len();
+                    let curr_tt_len = self.table.len() + self.table.frontier_len();
                     if curr_tt_len <= prev_tt_len {
                         verbose_eprintln!("[ids] MID stagnation: TT {} → {}, shifting to Frontier",
                             prev_tt_len, curr_tt_len);

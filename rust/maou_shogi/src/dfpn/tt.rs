@@ -103,7 +103,7 @@ const RETAIN_INF_MAX_DELTA: u16 = 4;
 /// ply=39 (depth=41, remaining=2) の 84K 回重複訪問を引き起こす eviction thrashing を解消する．
 ///
 /// 0 = 無効 (専用プール未使用)
-const FRONTIER_REMAINING_THRESHOLD: u16 = 2;
+const FRONTIER_REMAINING_THRESHOLD: u16 = 24;
 
 /// FrontierTT の 1 クラスタあたりのエントリ数．
 const FRONTIER_CLUSTER_SIZE: usize = 8;
@@ -2303,6 +2303,11 @@ impl TranspositionTable {
     /// Frontier サイクル間で呼ばれ，WorkingTT の confirmed disproof
     /// (!path_dep, REMAINING_INFINITE) のみ保持する．
     /// 中間エントリ・depth-limited disproof・path-dep disproof は全て除去．
+    ///
+    /// 案4 (v0.55.9): FrontierTT も同時にクリアする．
+    /// `retain_proofs_and_intermediates()` で non-path-dep intermediate を保持した際に
+    /// `test_no_checkmate_gold_interposition` で soundness 違反が発生した (v0.24.45)．
+    /// FrontierTT intermediate も同様に IDS ステップ間で stale になりうるため除去する．
     pub(super) fn retain_proofs(&mut self) {
         for fe in self.working.iter_mut() {
             if fe.pos_key == 0 { continue; }
@@ -2312,6 +2317,9 @@ impl TranspositionTable {
             { continue; }
             fe.pos_key = 0;
         }
+        // FrontierTT の stale intermediate も除去 (WorkingTT と同様の soundness 保証)
+        for fe in self.frontier.iter_mut() { fe.pos_key = 0; }
+        self.frontier_overflow_since_gc = 0;
     }
 
     /// WorkingTT の confirmed disproof (dn=0, !path_dep, remaining=INF) の数を返す．
@@ -2590,6 +2598,11 @@ impl TranspositionTable {
     /// WorkingTT の非空エントリ数を返す(`len` のエイリアス)．
     pub(super) fn working_len(&self) -> usize {
         self.len()
+    }
+
+    /// FrontierTT の非空エントリ数を返す (案4, v0.55.9)．
+    pub(super) fn frontier_len(&self) -> usize {
+        self.frontier.iter().filter(|fe| fe.pos_key != 0).count()
     }
 
     /// TT の使用中エントリ数を返す(ProvenTT + WorkingTT 合計)．
