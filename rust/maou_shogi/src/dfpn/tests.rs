@@ -2676,6 +2676,18 @@ use crate::types::{Color, PieceType};
                     overflow_rate,
                     solver.profile_stats.tt_overflow_no_victim_count,
                     solver.profile_stats.tt_max_entries_per_position).unwrap();
+                // ProvenTT overflow 時の同一 pos_key エントリ数ヒストグラム
+                let hist = &solver.profile_stats.tt_proven_overflow_same_key_hist;
+                let htotal: u64 = hist.iter().sum();
+                if htotal > 0 {
+                    let mut hist_str = format!("       proven_overflow_same_key_hist (total={}):", htotal);
+                    for (k, &cnt) in hist.iter().enumerate() {
+                        if cnt > 0 {
+                            hist_str.push_str(&format!(" [{}]={:.1}%", k, cnt as f64 / htotal as f64 * 100.0));
+                        }
+                    }
+                    writeln!(out, "{}", hist_str).unwrap();
+                }
             }
 
             #[cfg(feature = "tt_diag")]

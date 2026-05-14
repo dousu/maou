@@ -921,7 +921,10 @@ impl DfPnSolver {
                             .nodes_searched
                             .saturating_add(self.pv_nodes_per_child)
                             .min(saved);
+                        let _snda_pns1 = self.prev_attacker_move;
+                        self.prev_attacker_move = Move(0);
                         self.mid(&mut board_clone, INF - 1, INF - 1, ply + 1, false);
+                        self.prev_attacker_move = _snda_pns1;
                         self.max_nodes = saved;
 
                         if self.look_up_board(&board_clone).0 == 0 {
@@ -1492,7 +1495,10 @@ impl DfPnSolver {
                     if root_pn == 0 || root_dn == 0 {
                         break; // 証明/反証完了
                     }
+                    let _snda_pns2 = self.prev_attacker_move;
+                    self.prev_attacker_move = Move(0);
                     self.mid(board, INF - 1, INF - 1, 0, true);
+                    self.prev_attacker_move = _snda_pns2;
 
                     let (r_pn, r_dn, _) = self.look_up_pn_dn(pk, &att_hand, remaining);
                     if r_pn == 0 || r_dn == 0 {
@@ -1533,7 +1539,10 @@ impl DfPnSolver {
                         ids_depth, root_pn, root_dn, self.nodes_searched);
                     #[cfg(feature = "profile")]
                     let _mid_wall_start = Instant::now();
+                    let _snda_pns3 = self.prev_attacker_move;
+                    self.prev_attacker_move = Move(0);
                     self.mid(board, INF - 1, INF - 1, 0, true);
+                    self.prev_attacker_move = _snda_pns3;
                     verbose_eprintln!("[ids] MID returned: depth={} nodes={} time={:.1}s",
                         ids_depth, self.nodes_searched, self.start_time.elapsed().as_secs_f64());
                     #[cfg(feature = "profile")]
@@ -1939,7 +1948,10 @@ impl DfPnSolver {
                 self.path_set.clear();
                 let (r_pn2, r_dn2, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
                 if r_pn2 != 0 && r_dn2 != 0 {
+                    let _snda_pns4 = self.prev_attacker_move;
+                    self.prev_attacker_move = Move(0);
                     self.mid(board, INF - 1, INF - 1, 0, true);
+                    self.prev_attacker_move = _snda_pns4;
                 }
                 break;
             }
@@ -1953,7 +1965,10 @@ impl DfPnSolver {
             if r_pn2 == 0 || r_dn2 == 0 {
                 break;
             }
+            let _snda_pns5 = self.prev_attacker_move;
+            self.prev_attacker_move = Move(0);
             self.mid(board, INF - 1, INF - 1, 0, true);
+            self.prev_attacker_move = _snda_pns5;
 
             let (r_pn3, r_dn3, _) = self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
             if r_pn3 == 0 || r_dn3 == 0 {

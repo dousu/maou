@@ -117,6 +117,8 @@ pub struct ProfileStats {
     pub tt_overflow_no_victim_count: u64,
     /// TT エントリ数の最大値(1局面あたり)．
     pub tt_max_entries_per_position: usize,
+    /// ProvenTT overflow 時の同一 pos_key エントリ数ヒストグラム．
+    pub tt_proven_overflow_same_key_hist: [u64; 9],
 }
 
 #[cfg(feature = "profile")]

@@ -510,6 +510,10 @@ pub struct DfPnSolver {
     /// スキップする (v0.24.75)．PNS の arena-limited false NM を防止．
     /// MID 探索では false (refutable disproof を通常の NM として使用)．
     pub(super) skip_refutable_disproof: bool,
+    /// SNDA (Sequential Non-capturing Drop Avoidance): 直前の OR ノードで
+    /// 攻め方が選んだ手．`Move(0)` は「前手なし」を表す．
+    /// OR ノードで同駒種の非捕獲打ちを他マスで抑制するために使用する．
+    pub(super) prev_attacker_move: Move,
     /// Hypothesis IDS-17 無効化フラグ (v0.27.4)．
     /// true にすると saved_depth 20-26 での depth=16→17 挿入をスキップする (IDS-17 導入前の挙動)．
     /// デフォルト false = IDS-17 有効 (depth=17 を明示的に経由)．
@@ -785,6 +789,7 @@ impl DfPnSolver {
             diag_alpha_x_filter_applied: 0,
             alpha_x_filter_active: false,
             skip_refutable_disproof: false,
+            prev_attacker_move: Move(0),
             param_no_ids17: false,
             param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
             param_refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
@@ -1236,6 +1241,8 @@ impl DfPnSolver {
             self.table.overflow_no_victim_count;
         self.profile_stats.tt_max_entries_per_position =
             self.table.max_entries_per_position;
+        self.profile_stats.tt_proven_overflow_same_key_hist =
+            self.table.proven_overflow_same_key_hist;
     }
 
     /// タイムアウトしたかどうかを返す．
@@ -1602,6 +1609,7 @@ impl DfPnSolver {
             self.table.set_disproof_remaining_threshold(eff);
         }
         self.alpha_x_filter_active = false;
+        self.prev_attacker_move = Move(0);
         /// 施策 A-6 再評価: 境界層 PNS 責任転嫁の呼出数グローバル上限．
         /// 10 回 × 5K ノード/回 = 50K ノード相当の追加予算 (solve の小さな一部)．
         const A6_BOUNDARY_PNS_MAX_CALLS: u32 = 10;
@@ -2490,6 +2498,24 @@ impl DfPnSolver {
                 self.generate_defense_moves(board))
         };
 
+        // SNDA (Sequential Non-capturing Drop Avoidance):
+        // 直前の OR ノード手が非捕獲打ちなら，同駒種の非捕獲打ちを他マスで抑制する．
+        // 根拠: path (sq1→def→sq2) と (sq2→def'→sq1) は同一局面に到達する
+        // ため，後者は前者を探索した際に既にカバーされている．
+        if or_node {
+            let prev = self.prev_attacker_move;
+            if prev.is_drop() {
+                if let Some(prev_pt) = prev.drop_piece_type() {
+                    let prev_to = prev.to_sq();
+                    moves.retain(|m| {
+                        !(m.is_drop()
+                          && m.drop_piece_type() == Some(prev_pt)
+                          && m.to_sq() != prev_to)
+                    });
+                }
+            }
+        }
+
         let save_alpha_x = self.alpha_x_filter_active;
 
         // 施策 α (boundary chain drop filter, v0.24.47-72): PNS→MID サイクル
@@ -3254,7 +3280,14 @@ impl DfPnSolver {
 
                 let captured = profile_timed!(self, do_move_ns, do_move_count,
                     board.do_move(m));
+                // SNDA: OR ノードなら prev_attacker_move を現在の手に設定して伝播する
+                let _snda_saved_sc = if or_node {
+                    let s = self.prev_attacker_move;
+                    self.prev_attacker_move = m;
+                    s
+                } else { Move(0) };
                 self.mid(board, pn_threshold, dn_threshold, ply + 1, !or_node);
+                if or_node { self.prev_attacker_move = _snda_saved_sc; }
                 profile_timed!(self, undo_move_ns, undo_move_count,
                     board.undo_move(m, captured));
 
@@ -4307,6 +4340,12 @@ impl DfPnSolver {
                 }
             }
             let _pre_mid_nodes = self.nodes_searched;
+            // SNDA: OR ノードなら prev_attacker_move を現在の手に設定して伝播する
+            let _snda_saved_ml = if or_node {
+                let s = self.prev_attacker_move;
+                self.prev_attacker_move = m;
+                s
+            } else { Move(0) };
             self.mid(
                 board,
                 final_child_pn_th,
@@ -4314,6 +4353,7 @@ impl DfPnSolver {
                 ply + 1,
                 !or_node,
             );
+            if or_node { self.prev_attacker_move = _snda_saved_ml; }
             _prev_nodes_used = self.nodes_searched - _pre_mid_nodes;
 
             // 子エントリの amount を更新(ノード消費があった場合のみ)

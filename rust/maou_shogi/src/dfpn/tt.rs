@@ -296,6 +296,10 @@ pub(super) struct TranspositionTable {
     /// 1 クラスタあたりのエントリ数の最大値．
     #[cfg(feature = "profile")]
     pub(super) max_entries_per_position: usize,
+    /// ProvenTT overflow 時の同一 pos_key エントリ数のヒストグラム．
+    /// [k] = overflow 発生時にクラスタ内に同一 pos_key が k 件あった回数 (k = 0..=8)．
+    #[cfg(feature = "profile")]
+    pub(super) proven_overflow_same_key_hist: [u64; 9],
     // --- TT 増加診断カウンタ (verbose feature でのみ使用) ---
     #[cfg(feature = "verbose")]
     pub(super) diag_proof_inserts: u64,
@@ -403,6 +407,8 @@ impl TranspositionTable {
             overflow_no_victim_count: 0,
             #[cfg(feature = "profile")]
             max_entries_per_position: 0,
+            #[cfg(feature = "profile")]
+            proven_overflow_same_key_hist: [0; 9],
             #[cfg(feature = "verbose")]
             diag_proof_inserts: 0,
             #[cfg(feature = "verbose")]
@@ -1153,6 +1159,12 @@ impl TranspositionTable {
             }
         }
         // Phase 2: 最弱の eviction (eviction priority 最小の entry と置換)
+        #[cfg(feature = "profile")]
+        {
+            self.proven_overflow_count += 1;
+            let same_key = p_cluster.iter().filter(|fe| fe.pos_key == pos_key).count();
+            self.proven_overflow_same_key_hist[same_key.min(8)] += 1;
+        }
         let mut min_idx: usize = 0;
         let mut min_prio = u8::MAX;
         for (i, fe) in p_cluster.iter().enumerate() {
@@ -1369,7 +1381,12 @@ impl TranspositionTable {
         }
         // 満杯 → ProvenTT 専用の replace
         #[cfg(feature = "profile")]
-        { self.proven_overflow_count += 1; }
+        {
+            self.proven_overflow_count += 1;
+            let same_key = p_cluster.iter().filter(|fe| fe.pos_key == pos_key).count();
+            let idx = same_key.min(8);
+            self.proven_overflow_same_key_hist[idx] += 1;
+        }
         if Self::replace_weakest_proven(p_cluster, pos_key, new_entry) {
             #[cfg(feature = "verbose")] {
                 if is_proof { self.diag_proof_inserts += 1; }
@@ -1450,7 +1467,11 @@ impl TranspositionTable {
         }
         // 満杯 → 最弱エントリを置換
         #[cfg(feature = "profile")]
-        { self.proven_overflow_count += 1; }
+        {
+            self.proven_overflow_count += 1;
+            let same_key = p_cluster.iter().filter(|fe| fe.pos_key == pos_key).count();
+            self.proven_overflow_same_key_hist[same_key.min(8)] += 1;
+        }
         if Self::replace_weakest_proven(p_cluster, pos_key, new_entry) {
             #[cfg(feature = "tt_diag")]
             { self.diag_disproof_refutable += 1; }
@@ -2462,6 +2483,25 @@ impl TranspositionTable {
             eprintln!("No victim found:  {}", self.overflow_no_victim_count);
             eprintln!("Total overflow:   {}", self.overflow_count);
             eprintln!("Max entries/pos:  {}", self.max_entries_per_position);
+            // ProvenTT overflow 時の同一 pos_key エントリ数ヒストグラム
+            // [k] = overflow 時にクラスタ内に同一 pos_key が k 件あった回数
+            let hist = &self.proven_overflow_same_key_hist;
+            let total: u64 = hist.iter().sum();
+            if total > 0 {
+                eprint!("ProvenTT overflow same-key hist (total={}):", total);
+                for (k, &cnt) in hist.iter().enumerate() {
+                    if cnt > 0 {
+                        eprint!(" [{}]={} ({:.1}%)", k, cnt, cnt as f64 / total as f64 * 100.0);
+                    }
+                }
+                eprintln!();
+                // k=8 なら全スロットが同一 pos_key → アンチチェーン>8 が問題
+                // k=0〜1 ならハッシュ衝突が主因
+                let dominated_by_antichain = hist[5] + hist[6] + hist[7] + hist[8];
+                eprintln!("  same-key>=5 (likely antichain full): {} ({:.1}%)",
+                    dominated_by_antichain,
+                    dominated_by_antichain as f64 / total as f64 * 100.0);
+            }
         }
         eprintln!("Working peak cluster fill: {}", self.working_peak_cluster_fill);
 
@@ -2937,6 +2977,7 @@ impl TranspositionTable {
         self.working_overflow_count = 0;
         self.overflow_no_victim_count = 0;
         self.max_entries_per_position = 0;
+        self.proven_overflow_same_key_hist = [0; 9];
     }
 
     /// 指定 pos_key のエントリイテレータ(verbose 診断用)．

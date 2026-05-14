@@ -5707,6 +5707,60 @@ ply 24: v0.55.14 計測なし，v0.55.13 の 19.5K NPS から 40.0K NPS へ +2×
 - `test_tsume_39te_ply2_no_false_nomate`: Unknown (10M, 77秒) ← 回帰なし
 - `test_tsume_39te_backward_1m`: 通過 (199秒)
 
+#### v0.55.16 — 真の手レベル SNDA (Sequential Non-capturing Drop Avoidance)
+
+**動機**
+
+v0.55.15 の既存 `snda_dedup()` は TT レベルの DAG 重複除去 (source hash でグループ化し最大 pn/dn を維持) であり，
+手生成レベルの枝刈りではなかった．真の SNDA は OR ノード (攻め方) で:
+
+> 直前の攻め方手が非捕獲打ち (駒打ち，取り駒なし) の駒種 P ならば，
+> 同駒種 P の非捕獲打ちを **同一マス以外** でスキップする．
+
+根拠: path (sq1→def→sq2) と (sq2→def'→sq1) は同一局面に到達するため，
+一方を探索済みなら他方は冗長．
+
+**実装 (v0.55.16)**
+
+`DfPnSolver` に `prev_attacker_move: Move` フィールドを追加:
+
+```rust
+// mid() 内 OR ノード手生成直後
+if or_node {
+    let prev = self.prev_attacker_move;
+    if prev.is_drop() {
+        if let Some(prev_pt) = prev.drop_piece_type() {
+            let prev_to = prev.to_sq();
+            moves.retain(|m| {
+                !(m.is_drop()
+                  && m.drop_piece_type() == Some(prev_pt)
+                  && m.to_sq() != prev_to)
+            });
+        }
+    }
+}
+```
+
+各再帰呼び出し (OR ノード→AND ノード) の前後で `prev_attacker_move` を設定・復元する．
+PNS→MID 境界ではリセット (Move(0) = フィルタなし)．
+
+**backward_1m 結果 (v0.55.16)**
+
+| Ply | 残り | ノード数 | 時間(s) | v0.55.15比 | 結果 |
+|-----|------|---------|---------|------------|------|
+| 24 | 15 | 151,973 | 3.63 | ≈同等 | Mate(15) |
+| 22 | 17 | 910,443 | 104.09 | +8% (遅化) | Mate(17) |
+| 20 | 19 | 1,000,000 | 35.99 | **−32%** | Unknown |
+
+ply 20 Unknown: 同一ノード数で 56s → 36s (NPS 17.8K → 27.8K)．
+ply 22 Mate(17): 101s → 104s (微小遅化，許容範囲)．
+
+**検証**
+
+- 全 130 テスト通過
+- `test_tsume_39te_ply2_no_false_nomate`: 通過 (79秒) ← 回帰なし
+- `test_tsume_39te_ply24_mate15_regression`: 通過 (4.4秒) ← PV 正確性確認
+
 ---
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
