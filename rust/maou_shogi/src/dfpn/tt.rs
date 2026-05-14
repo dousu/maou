@@ -2129,6 +2129,45 @@ impl TranspositionTable {
         *hand
     }
 
+    /// ProvenTT から反証駒 (disproof hand) を取得する．
+    /// `get_proof_hand` の反証版: DH_stored ≥ query_hand となる反証エントリを返す．
+    /// 自クラスタ + 持ち駒+1の近傍クラスタ(±1限定)を走査する．
+    /// 見つからない場合は *hand を返す (= att_hand，現状と同等のフォールバック)．
+    pub(super) fn get_disproof_hand(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> [u8; HAND_KINDS] {
+        let pos_key = Self::safe_key(pos_key);
+        for fe in self.proven_cluster(pos_key, hand) {
+            if fe.pos_key == pos_key
+                && !fe.entry.is_proof()
+                && hand_gte_forward_chain(&fe.entry.hand, hand)
+            {
+                return fe.entry.hand;
+            }
+        }
+        // 近傍クラスタ (hand+1 方向): DH_stored > att_hand の反証エントリを探す．
+        // has_path_dependent_disproof() の working TT 版と同じパターン．
+        let base_hh = Self::hand_hash(hand);
+        for k in 0..HAND_KINDS {
+            let max_k = PieceType::MAX_HAND_COUNT[k];
+            if hand[k] >= max_k { continue; }
+            let diff = Self::hand_hash_diff(k, hand[k], hand[k] + 1);
+            let start = self.proven_cluster_start_from_hash(pos_key, base_hh ^ diff);
+            let cluster = &self.proven[start..start + PROVEN_CLUSTER_SIZE];
+            for fe in cluster {
+                if fe.pos_key == pos_key
+                    && !fe.entry.is_proof()
+                    && hand_gte_forward_chain(&fe.entry.hand, hand)
+                {
+                    return fe.entry.hand;
+                }
+            }
+        }
+        *hand
+    }
+
     /// 反証エントリが経路依存かどうかを返す．
     /// path-dep disproof は WorkingTT に格納される．
     /// 自クラスタ + 持ち駒1枚増の近傍クラスタを走査する．

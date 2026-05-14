@@ -2581,7 +2581,6 @@ impl DfPnSolver {
                 return;
             }
             // AND ノードで子が即座に反証 → 親を反証して終了
-            // att_hand で保存(TT ヒット率最大化)
             if !or_node && cdn == 0 {
                 arena[node_idx as usize].pn = INF;
                 arena[node_idx as usize].dn = 0;
@@ -2590,7 +2589,10 @@ impl DfPnSolver {
                     child_pk, &child_hand, child_remaining,
                 ).map(|(r, _)| r).unwrap_or(0);
                 let prop_rem = propagate_nm_remaining(child_rem, remaining);
-                self.store(pos_key, att_hand, INF, 0, prop_rem, pos_key as u32);
+                // 反証駒最適化: 子の ProvenTT 反証駒 (DH_C ≥ att_hand) を AND-node に伝播．
+                // AND-node では守備側着手で att_hand 不変 (child_hand = att_hand)．
+                let dh = self.table.get_disproof_hand(child_pk, &child_hand);
+                self.store(pos_key, dh, INF, 0, prop_rem, pos_key as u32);
                 return;
             }
             // OR ノードで子が反証済み → 子を追加せずスキップ

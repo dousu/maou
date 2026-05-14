@@ -5600,6 +5600,52 @@ MID フェーズでは full limit=10,000 を引き続き使用するため sound
 - 130 テスト全通過 (test-threads=1)
 - ply 24 NPS: 3.2K → 18.5K (+5.8x)
 
+#### v0.55.14 — AND-node 反証駒 (disproof hand) 伝播
+
+**動機**
+
+v0.55.13 以前，AND-node (守備側着手) の反証時は `att_hand` (現在の持ち駒) をそのまま
+ProvenTT に保存していた．ProvenTT の反証エントリは `hand_gte_forward_chain(DH_stored, H)` が
+成立するとき，クエリ H でヒットする (H ≤ DH_stored → 反証として返る)．
+
+AND-node では守備側着手で攻め方の持ち駒は変化しないため `child_hand = att_hand`．
+子ノードの ProvenTT に `DH_child ≥ att_hand` の反証エントリが存在する場合，
+AND-node の反証駒として `DH_child` を保存することで，将来 `H ≤ DH_child` のクエリ全てが
+TT ヒット → 再探索を回避できる．
+
+**実装 (v0.55.14)**
+
+`tt.rs` に `get_disproof_hand()` を追加 (`get_proof_hand()` の反証版):
+- 自クラスタ + 持ち駒+1方向の近傍クラスタを走査
+- `hand_gte_forward_chain(entry.hand, query_hand)` かつ `!entry.is_proof()` を検索
+- 見つかった場合 `entry.hand` (DH_stored) を返す，なければ `*hand` (フォールバック)
+
+solver.rs の AND-node 反証 3 箇所 + pns.rs の PNS AND-node 反証 1 箇所を修正:
+- `store(pos_key, att_hand, INF, 0, ...)` → `store(pos_key, dh, INF, 0, ...)` where `dh = get_disproof_hand(child_pk, child_hand)`
+- chain_bb 遅延反証パスでは `init_and_disproof_child_pk/hand` 変数を追加して子情報を保存
+- path_dep (経路依存) 反証パスは `att_hand` のまま (安全寄り)
+
+**NPS 測定結果 (test_ids_depth_nps_uniformity)**
+
+| 局面 | v0.55.13 NPS | v0.55.14 NPS | 変化 |
+|------|-------------|-------------|------|
+| ply 24 total | 18.5K | **19.5K** | +5% |
+| ply 24 PNS (depth=2) | 24.1K | 25.0K | +4% |
+| ply 24 MID (depth=17) | 11.1K | 12.0K | +8% |
+| ply 20 total | 7.4K | **7.7K** | +4% |
+| ply 20 PNS (depth=2) | 89.1K | 86.3K | ±3% (ノイズ) |
+| ply 20 MID (depth=21) | 6.6K | 6.9K | +5% |
+| ply 0 total | 85.8K | **93.9K** | +9% |
+
+全局面で概ねプラス，特に ply 0 (+9%) と ply 24 MID (+8%)．
+改善は小幅だが，長時間探索で TT 知識が蓄積するほど効果が増幅する見込み．
+
+**検証**
+
+- 全 130 テスト通過 (test-threads=1)
+- `test_tsume_39te_ply2_no_false_nomate`: Unknown (10M, 67秒) ← 回帰なし
+- `test_tsume_39te_backward_1m`: 通過 (97秒)
+
 ---
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較

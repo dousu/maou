@@ -2578,6 +2578,9 @@ impl DfPnSolver {
         let mut init_and_disproof_found = false;
         let mut init_and_disproof_remaining: u16 = 0;
         let mut init_and_disproof_path_dep = false;
+        // 反証駒伝播用: 反証を引き起こした子の pos_key と hand を保存
+        let mut init_and_disproof_child_pk: u64 = 0;
+        let mut init_and_disproof_child_hand = [0u8; HAND_KINDS];
         let mut init_prefiltered_count: u32 = 0;
         // DFPN-E: OR ノードのエッジコスト計算用に守備側玉の位置を取得
         let defender_king_sq = if or_node {
@@ -2803,6 +2806,9 @@ impl DfPnSolver {
                     // チェーン合駒コンテキスト: 反証情報を記録して継続
                     if !init_and_disproof_found {
                         init_and_disproof_found = true;
+                        // 反証駒伝播用に子の pos_key と hand を保存
+                        init_and_disproof_child_pk = child_pk;
+                        init_and_disproof_child_hand = child_hand;
                         // lookup と同じ条件でマッチする反証の情報を取得する
                         let (child_nm_rem, child_pd) = self.table
                             .get_effective_disproof_info(
@@ -2852,7 +2858,11 @@ impl DfPnSolver {
                         parent_nm_remaining, pos_key as u32, true,
                     );
                 } else {
-                    self.store(pos_key, att_hand, INF, 0,
+                    // 反証駒最適化: 子の ProvenTT 反証駒 (DH_C ≥ att_hand) を AND-node に伝播．
+                    // AND-node では守備側着手で att_hand 不変 → child_hand = att_hand．
+                    // DH_C を保存することで将来 H ≤ DH_C のクエリが TT ヒット → 再探索削減．
+                    let dh = self.table.get_disproof_hand(child_pk, &child_hand);
+                    self.store(pos_key, dh, INF, 0,
                         parent_nm_remaining, pos_key as u32);
                 }
                 #[cfg(feature = "tt_diag")]
@@ -3016,7 +3026,11 @@ impl DfPnSolver {
                     init_and_disproof_remaining, pos_key as u32, true,
                 );
             } else {
-                self.store(pos_key, att_hand, INF, 0,
+                // 反証駒最適化: 子の ProvenTT 反証駒 (DH_C ≥ att_hand) を AND-node に伝播．
+                let dh = self.table.get_disproof_hand(
+                    init_and_disproof_child_pk, &init_and_disproof_child_hand,
+                );
+                self.store(pos_key, dh, INF, 0,
                     init_and_disproof_remaining, pos_key as u32);
             }
             #[cfg(feature = "tt_diag")]
@@ -3619,9 +3633,7 @@ impl DfPnSolver {
 
                     if cdn == 0 {
                         // 子が反証済み → AND ノード反証
-                        // att_hand で保存(TT ヒット率最大化)
-                        // AND ノードでは守備側が着手するため att_hand は不変．
-                        //
+                        // AND ノードでは守備側が着手するため att_hand は不変 (child_hand = att_hand)．
                         let child_nm_rem = self.table.get_effective_disproof_info(
                             child_pk, child_hand,
                             remaining.saturating_sub(1),
@@ -3638,8 +3650,11 @@ impl DfPnSolver {
                                 parent_nm_remaining, csrc, true,
                             );
                         } else {
+                            // 反証駒最適化: 子の ProvenTT 反証駒 (DH_C ≥ att_hand) を AND-node に伝播．
+                            // DH_C を保存することで将来 H ≤ DH_C のクエリが TT ヒット → 再探索削減．
+                            let dh = self.table.get_disproof_hand(child_pk, child_hand);
                             self.store(
-                                pos_key, att_hand, INF, 0,
+                                pos_key, dh, INF, 0,
                                 parent_nm_remaining, csrc,
                             );
                         }
