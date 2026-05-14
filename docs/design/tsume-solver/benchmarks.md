@@ -5646,6 +5646,67 @@ solver.rs の AND-node 反証 3 箇所 + pns.rs の PNS AND-node 反証 1 箇所
 - `test_tsume_39te_ply2_no_false_nomate`: Unknown (10M, 67秒) ← 回帰なし
 - `test_tsume_39te_backward_1m`: 通過 (97秒)
 
+#### v0.55.15 — ProvenTT pos_key-only インデックス化
+
+**動機**
+
+v0.55.14 の AND-node 反証駒伝播が 5-9% の改善にとどまった根本原因は，
+ProvenTT のクラスタインデックスが `pos_key XOR hand_hash(hand)` であることにあった．
+同一局面・異なる持ち駒のエントリが全く別のクラスタに格納されるため，
+hand dominance による TT ヒットは ±1 枚の近傍スキャンでしか機能しなかった．
+
+**実装 (v0.55.15)**
+
+`proven_cluster_start()` の hand 引数を除去し，`pos_key` のみでクラスタを決定する:
+
+```rust
+fn proven_cluster_start(&self, pos_key: u64) -> usize {
+    (pos_key as usize & self.proven_mask) * PROVEN_CLUSTER_SIZE
+}
+```
+
+これにより同一局面の全手駒バリアントが同一クラスタ (8 スロット) に集約され，
+`hand_gte_forward_chain` が枚数差に関係なく機能する．
+
+合わせて以下を変更:
+- `proven_cluster_start_from_hash()` を削除
+- `look_up_proven_impl()` の Pass 1b (証明-1枚近傍) と Pass 2b (歩+1枚近傍) を削除
+- `has_proof()`, `get_proof_hand()`, `get_disproof_hand()` の近傍スキャンを削除
+- `get_disproof_remaining()`, `get_effective_disproof_info()` の ProvenTT 近傍スキャンを削除
+- `look_up_proven_subset()` を単一クラスタスキャンに簡略化
+- 全呼び出し元の `proven_cluster(pos_key, hand)` → `proven_cluster(pos_key)` 更新
+
+**NPS 測定結果 (test_ids_depth_nps_uniformity)**
+
+| 局面 | v0.55.14 NPS | v0.55.15 NPS | 変化 |
+|------|-------------|-------------|------|
+| ply 24 total | 19.5K | **40.0K** | **+2.1×** |
+| ply 24 PNS (depth=2) | 25.0K | 153.5K | +6.1× |
+| ply 24 MID (depth=17) | 12.0K | 14.2K | +18% |
+| ply 20 total | 7.7K | **17.6K** | **+2.3×** |
+| ply 20 PNS (depth=2) | 86.3K | 116.3K | +35% |
+| ply 20 MID (depth=21) | 6.9K | 16.0K | +2.3× |
+| ply 0 total | 93.9K | **98.2K** | +5% |
+
+ply 24 の総ノード数: 200,081 → **151,950 (−24%)** で詰み発見．PNS フェーズが
+同一局面の証明を cross-hand で再利用できるようになったため大幅な効率改善．
+
+**backward_1m 結果 (v0.55.15)**
+
+| Ply | 残り | ノード数 | 時間(s) | 結果 |
+|-----|------|---------|---------|------|
+| 24 | 15 | 151,950 | 3.54 | Mate(15) |
+| 22 | 17 | 910,443 | 101.38 | Mate(17) |
+| 20 | 19 | 1,000,000 | 56.13 | Unknown |
+
+ply 24: v0.55.14 計測なし，v0.55.13 の 19.5K NPS から 40.0K NPS へ +2×．
+
+**検証**
+
+- 全 130 テスト通過 (test-threads=1)
+- `test_tsume_39te_ply2_no_false_nomate`: Unknown (10M, 77秒) ← 回帰なし
+- `test_tsume_39te_backward_1m`: 通過 (199秒)
+
 ---
 
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
