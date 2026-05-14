@@ -1995,7 +1995,9 @@ impl DfPnSolver {
             self.param_pns_arena_max.min(PNS_INIT_CAPACITY_CAP),
         );
         self.skip_refutable_disproof = true;
+        self.in_initial_pns_phase = true;
         let result = self.pns_main_with_arena(board, &mut arena);
+        self.in_initial_pns_phase = false;
         self.skip_refutable_disproof = false;
         result
     }

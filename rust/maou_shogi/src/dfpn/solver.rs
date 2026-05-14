@@ -518,6 +518,12 @@ pub struct DfPnSolver {
     pub(super) param_refutable_depth: u32,
     /// refutable check の呼び出し回数上限 (デフォルト 10,000)．
     pub(super) param_refutable_call_limit: u32,
+    /// PNS 初期フェーズ専用の refutable call limit (デフォルト 500)．
+    /// MID では param_refutable_call_limit (=10,000) を使用する．
+    pub(super) param_pns_refutable_call_limit: u32,
+    /// pns_main() 実行中のみ true．depth_limit_all_checks_refutable が
+    /// PNS 専用 limit を使うかどうかを制御する．
+    pub(super) in_initial_pns_phase: bool,
     /// 施策 A-6 (v0.24.54, v0.24.71 で施策α に置き換え後 v0.24.72 で無効化):
     /// 境界層 PNS 責任転嫁の残り呼出予算．施策 α が refutable disproof
     /// 機構で代替されたため再有効化の予定なし．dead code (削除候補)．
@@ -782,6 +788,8 @@ impl DfPnSolver {
             param_no_ids17: false,
             param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
             param_refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
+            param_pns_refutable_call_limit: 500,
+            in_initial_pns_phase: false,
             a6_boundary_pns_calls_remaining: 0,
             #[cfg(feature = "tt_diag")]
             diag_deferred_not_ready: 0,
@@ -1114,6 +1122,13 @@ impl DfPnSolver {
     pub fn set_refutable_params(&mut self, depth: u32, call_limit: u32) -> &mut Self {
         self.param_refutable_depth = depth;
         self.param_refutable_call_limit = call_limit;
+        self
+    }
+
+    /// PNS 初期フェーズ専用の refutable call limit を設定する (v0.55.13)．
+    /// デフォルト 500．MID の param_refutable_call_limit (=10,000) とは独立．
+    pub fn set_pns_refutable_call_limit(&mut self, limit: u32) -> &mut Self {
+        self.param_pns_refutable_call_limit = limit;
         self
     }
 
@@ -1941,10 +1956,14 @@ impl DfPnSolver {
         board: &mut Board,
         checks: &[Move],
     ) -> bool {
+        let limit = if self.in_initial_pns_phase {
+            self.param_pns_refutable_call_limit
+        } else {
+            self.param_refutable_call_limit
+        };
         let mut calls: u32 = 0;
         self.all_checks_refutable_recursive(
-            board, checks, self.effective_refutable_depth(), &mut calls,
-            self.param_refutable_call_limit,
+            board, checks, self.effective_refutable_depth(), &mut calls, limit,
         )
     }
 
