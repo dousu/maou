@@ -11555,3 +11555,160 @@ use crate::types::{Color, PieceType};
             .join()
             .unwrap();
     }
+
+    /// **[SLOW]** ply 7 AND ノード防御手難度診断．
+    ///
+    /// N*1e (ply 6 攻め手) 後の全防御手を列挙し，
+    /// 各防御手サブ問題 (remaining=31) の難度 (ノード数) を計測する．
+    /// ProvenTT なし vs ply 38→8 ウォームアップ後を比較することで
+    /// ply 6 ボトルネックの原因を特定する．
+    ///
+    /// ```bash
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_ply7_defense_difficulty --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_ply7_defense_difficulty() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_usi = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+
+                // ply 6 局面を構築 (6手進める)
+                let mut b6 = board.clone();
+                for m_usi in &pv_usi[..6] {
+                    let m = b6.move_from_usi(m_usi).unwrap();
+                    b6.do_move(m);
+                }
+
+                // ply 7 攻め手 N*1e を適用 → AND ノード局面
+                let attack_n1e = b6.move_from_usi("N*1e").unwrap();
+                b6.do_move(attack_n1e);
+
+                // AND ノードの全合法防御手を列挙
+                let defenses = movegen::generate_legal_moves(&mut b6);
+                let pv_def_str = pv_usi[7]; // "2c3b"
+
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" ply 7 AND ノード防御手難度診断 (N*1e 後)");
+                eprintln!(" 防御手数: {}", defenses.len());
+                eprintln!("{}", "=".repeat(80));
+
+                // Phase 1: ply 38→8 ウォームアップ (300s/50M nodes)
+                let mut positions_all: Vec<(usize, Board)> = Vec::new();
+                {
+                    let mut sub = board.clone();
+                    positions_all.push((0, sub.clone()));
+                    for i in (0..38).step_by(2) {
+                        let m1 = sub.move_from_usi(pv_usi[i]).unwrap();
+                        sub.do_move(m1);
+                        let m2 = sub.move_from_usi(pv_usi[i + 1]).unwrap();
+                        sub.do_move(m2);
+                        positions_all.push((i + 2, sub.clone()));
+                    }
+                    positions_all.reverse();
+                }
+
+                let mut warmup_solver = DfPnSolver::with_timeout(41, 50_000_000, 32767, 300);
+                warmup_solver.set_find_shortest(false);
+                warmup_solver.set_preserve_proven_tt(true);
+                for (ply, pos) in &positions_all {
+                    if *ply < 8 { continue; }
+                    let remaining = (39 - ply) as u32;
+                    let depth = (remaining + 2).min(41);
+                    warmup_solver.depth = depth;
+                    let mut b = pos.clone();
+                    warmup_solver.solve(&mut b);
+                }
+                let (warmup_pm, warmup_pt) = warmup_solver.table.clone_proven_map();
+                eprintln!("[warmup] ply 38→8 完了: ProvenTT={} エントリ", warmup_pt);
+
+                eprintln!("\n{:<12} {:>12} {:>12} {:>12} {:>10} {}",
+                    "defense", "nodes_no_tt", "nodes_with_tt", "speedup", "result", "PV?");
+                eprintln!("{}", "-".repeat(80));
+
+                // 各防御手についてノード数を計測
+                let budget = 5_000_000u64;
+                let depth31: u32 = 33;
+
+                let mut total_no_tt = 0u64;
+                let mut total_with_tt = 0u64;
+                let mut hard_defenses = Vec::new();
+
+                for def_move in &defenses {
+                    let def_usi = def_move.to_usi_string();
+                    let is_pv = def_usi == pv_def_str;
+
+                    let mut b_after = b6.clone();
+                    b_after.do_move(*def_move);
+
+                    // (a) ProvenTT なし
+                    let mut solver_no_tt = DfPnSolver::with_timeout(depth31, budget, 32767, 60);
+                    solver_no_tt.set_find_shortest(false);
+                    let mut ba = b_after.clone();
+                    let res_no_tt = solver_no_tt.solve(&mut ba);
+                    let nodes_no = solver_no_tt.nodes_searched;
+
+                    // (b) ウォームアップ ProvenTT あり
+                    let mut solver_with_tt = DfPnSolver::with_timeout(depth31, budget, 32767, 60);
+                    solver_with_tt.set_find_shortest(false);
+                    solver_with_tt.set_preserve_proven_tt(true);
+                    solver_with_tt.table.set_proven_map(warmup_pm.clone(), warmup_pt);
+                    let mut bb = b_after.clone();
+                    let res_with_tt = solver_with_tt.solve(&mut bb);
+                    let nodes_with = solver_with_tt.nodes_searched;
+
+                    let speedup = if nodes_with == 0 {
+                        f64::INFINITY
+                    } else {
+                        nodes_no as f64 / nodes_with as f64
+                    };
+
+                    let res_str = |r: &TsumeResult| match r {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+
+                    let solved_with = matches!(&res_with_tt,
+                        TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. });
+                    if !solved_with {
+                        hard_defenses.push(def_usi.clone());
+                    }
+
+                    total_no_tt += nodes_no;
+                    total_with_tt += nodes_with;
+
+                    eprintln!("{:<12} {:>12} {:>12} {:>11.1}x {:>10} {}",
+                        def_usi,
+                        nodes_no,
+                        nodes_with,
+                        speedup,
+                        res_str(&res_with_tt),
+                        if is_pv { "<<PV" } else { "" });
+                }
+
+                eprintln!("{}", "-".repeat(80));
+                eprintln!("{:<12} {:>12} {:>12}",
+                    "TOTAL", total_no_tt, total_with_tt);
+                eprintln!("\n未解決防御手 (budget={}M): {:?}", budget / 1_000_000, hard_defenses);
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
