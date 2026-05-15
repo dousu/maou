@@ -10862,3 +10862,350 @@ use crate::types::{Color, PieceType};
         eprintln!("{}", hotspot);
         eprintln!("詳細: {}", out_path);
     }
+
+    /// ply 20 各守備手コスト診断 (仮説 A / B 計測)．
+    ///
+    /// ply 20 局面 (残り 19 手) から PV の攻め手 "P*1f" を進めた AND ノードで，
+    /// 各守備手のノード数・結果・cross_deduce 統計を個別計測する．
+    ///
+    /// **仮説 A**: ply 20 の困難さが 1–2 の守備手に集中しているか確認．
+    /// **仮説 B**: cross_deduce_hits vs cd_no_siblings の比率を確認．
+    ///
+    /// **[SLOW]** 1手あたり 500K nodes × 守備手数 = 総計数十M ノード規模．
+    ///
+    /// 実行方法:
+    /// ```bash
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_ply20_per_move_breakdown --nocapture --ignored
+    /// ```
+    /// または profile 版 (TT overflow 統計を追加出力):
+    /// ```bash
+    /// cargo test --release --features profile -p maou_shogi -- \
+    ///     test_ply20_per_move_breakdown --nocapture --ignored
+    /// ```
+    /// 結果: /tmp/ply20_per_move_breakdown.log
+    #[test]
+    #[ignore]
+    fn test_ply20_per_move_breakdown() {
+        use std::io::Write;
+        let out_path = "/tmp/ply20_per_move_breakdown.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        // PV の最初 20 手 (ply 0 → ply 20)
+        let pv_first20 = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e",
+        ];
+        // ply 20 の PV 攻め手
+        let attack_usi = "P*1f";
+        // ply 21 の PV 守備手 (比較用マーカー)
+        let pv_defense_usi = "1e1f";
+
+        // ply 20 局面を構築
+        let mut board20 = Board::new();
+        board20.set_sfen(sfen).unwrap();
+        for usi in &pv_first20 {
+            let m = board20.move_from_usi(usi).unwrap();
+            board20.do_move(m);
+        }
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " ply 20 per-move 診断 (残り 19 手) — 仮説 A / B").unwrap();
+        writeln!(out, " SFEN[ply20]: {}", board20.sfen()).unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+        // 攻め手を適用 → ply 21 AND ノード
+        let attack_move = board20.move_from_usi(attack_usi).unwrap();
+        let mut board21 = board20.clone();
+        board21.do_move(attack_move);
+        writeln!(out, "\n攻め手: {} → AND ノード (ply 21, 残り 18 手)", attack_usi).unwrap();
+        writeln!(out, "SFEN[ply21]: {}", board21.sfen()).unwrap();
+
+        // 守備手一覧
+        let mut setup_solver = DfPnSolver::default_solver();
+        let defenses = setup_solver.generate_defense_moves(&mut board21);
+        writeln!(out, "守備手数: {}\n", defenses.len()).unwrap();
+
+        // ヘッダ
+        writeln!(out, "{:<14} {:<12} {:<8} {:<10} {}",
+            "Move", "Nodes", "Time(s)", "TT_ent", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(70)).unwrap();
+
+        let per_move_budget: u64 = 500_000;
+        let per_move_timeout: u64 = 120;
+
+        let mut unknown_count = 0usize;
+        let mut solved_count = 0usize;
+        let mut total_nodes: u64 = 0;
+
+        for def_mv in &defenses {
+            let mut after_def = board21.clone();
+            after_def.do_move(*def_mv);
+
+            // remaining: 18(after attack) - 1(defense) = 17
+            let remaining = 17u32;
+            let depth = (remaining + 2).min(41);
+
+            let mut sub_solver = DfPnSolver::with_timeout(
+                depth, per_move_budget, 32767, per_move_timeout,
+            );
+            sub_solver.set_find_shortest(false);
+
+            let sub_start = Instant::now();
+            let sub_result = sub_solver.solve(&mut after_def);
+            let elapsed = sub_start.elapsed();
+
+            let result_str = match &sub_result {
+                TsumeResult::Checkmate { moves, .. } => {
+                    solved_count += 1;
+                    format!("Mate({})", moves.len())
+                },
+                TsumeResult::CheckmateNoPv { .. } => {
+                    solved_count += 1;
+                    "MateNoPV".to_string()
+                },
+                TsumeResult::NoCheckmate { .. } => {
+                    solved_count += 1;
+                    "NoMate".to_string()
+                },
+                TsumeResult::Unknown { .. } => {
+                    unknown_count += 1;
+                    "Unknown".to_string()
+                },
+            };
+
+            total_nodes += sub_solver.nodes_searched;
+            let pv_marker = if def_mv.to_usi() == pv_defense_usi { " ← PV" } else { "" };
+
+            writeln!(out, "{:<14} {:<12} {:<8.2} {:<10} {}{}",
+                def_mv.to_usi(),
+                sub_solver.nodes_searched,
+                elapsed.as_secs_f64(),
+                sub_solver.table.len(),
+                result_str,
+                pv_marker,
+            ).unwrap();
+
+            // tt_diag feature が有効な場合のみ cross_deduce カウンタを出力
+            #[cfg(feature = "tt_diag")]
+            {
+                writeln!(out, "  cd_hits={} cd_no_siblings={} cd_entered_main={}",
+                    sub_solver.diag_cross_deduce_hits,
+                    sub_solver.diag_cd_no_siblings,
+                    sub_solver.diag_cd_entered_main,
+                ).unwrap();
+            }
+
+            #[cfg(feature = "profile")]
+            {
+                sub_solver.sync_tt_profile();
+                let ps = &sub_solver.profile_stats;
+                writeln!(out, "  overflow: total={} proven={} working={} no_victim={}",
+                    ps.tt_overflow_count,
+                    ps.tt_proven_overflow_count,
+                    ps.tt_working_overflow_count,
+                    ps.tt_overflow_no_victim_count,
+                ).unwrap();
+            }
+        }
+
+        writeln!(out, "{}", "-".repeat(90)).unwrap();
+        writeln!(out, "合計ノード数: {}  (solved={}, unknown={})",
+            total_nodes, solved_count, unknown_count).unwrap();
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, "仮説 A: Unknown 手数={}/{}", unknown_count, defenses.len()).unwrap();
+        writeln!(out, "仮説 B: cd_hits/cd_nosib 比率は各行を参照").unwrap();
+        writeln!(out, "ログ: {}", out_path).unwrap();
+
+        eprintln!("結果: {}", out_path);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// ply 20 OR ノード攻め手分析 (仮説 A 補完: なぜ ply 20 が ply 22 より 100× 重いか)．
+    ///
+    /// ply 20 位置 (攻め番) の全王手手を列挙し，各王手に対する守備手数と
+    /// 少数ノード (10K) での探索コストを計測する．
+    ///
+    /// **動機**: ply 22 サブ問題は 910K nodes で解けるが，ply 20 は 100M+ nodes 必要．
+    /// ply 21 AND node の守備手は 1手 (1e1f) のみなので，残りの 99M+ nodes は
+    /// ply 20 OR node の **non-PV 王手** への探索に費やされていると仮定する．
+    ///
+    /// 実行方法:
+    /// ```bash
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_ply20_attack_analysis --nocapture --ignored
+    /// ```
+    /// 結果: /tmp/ply20_attack_analysis.log
+    #[test]
+    #[ignore]
+    fn test_ply20_attack_analysis() {
+        use std::io::Write;
+        let out_path = "/tmp/ply20_attack_analysis.log";
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        let mut out = std::fs::File::create(out_path).unwrap();
+
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_first20 = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e",
+        ];
+
+        let mut board20 = Board::new();
+        board20.set_sfen(sfen).unwrap();
+        for usi in &pv_first20 {
+            let m = board20.move_from_usi(usi).unwrap();
+            board20.do_move(m);
+        }
+
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+        writeln!(out, " ply 20 OR ノード攻め手分析 (残り 19 手)").unwrap();
+        writeln!(out, " SFEN: {}", board20.sfen()).unwrap();
+        writeln!(out, "{}", "=".repeat(80)).unwrap();
+
+        // 全王手手を列挙
+        let attacks = DfPnSolver::default_solver().generate_check_moves(&mut board20);
+        writeln!(out, "王手数: {}\n", attacks.len()).unwrap();
+
+        // 各王手について守備手数 + 少予算での探索コストを計測
+        writeln!(out, "{:<14} {:<8} {:<12} {:<10} {:<10} {}",
+            "Attack", "DefMvs", "Nodes(10K)", "Time(s)", "TT_ent", "Result").unwrap();
+        writeln!(out, "{}", "-".repeat(70)).unwrap();
+
+        let quick_budget: u64 = 10_000;
+        let quick_timeout: u64 = 60;
+
+        let mut pv_found = false;
+
+        for atk in &attacks {
+            let mut after_atk = board20.clone();
+            after_atk.do_move(*atk);
+
+            // 守備手数カウント
+            let defenses = DfPnSolver::default_solver().generate_defense_moves(&mut after_atk);
+
+            // 少予算で探索コストを確認
+            let remaining = 17u32; // 19 - attack - defense ~ 17
+            let depth = (remaining + 2).min(41);
+            let mut sub_solver = DfPnSolver::with_timeout(
+                depth, quick_budget, 32767, quick_timeout,
+            );
+            sub_solver.set_find_shortest(false);
+
+            let sub_start = Instant::now();
+            let sub_result = sub_solver.solve(&mut after_atk);
+            let elapsed = sub_start.elapsed();
+
+            let result_str = match &sub_result {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+
+            let pv_marker = if atk.to_usi() == "P*1f" {
+                pv_found = true;
+                " ← PV"
+            } else { "" };
+
+            writeln!(out, "{:<14} {:<8} {:<12} {:<10.3} {:<10} {}{}",
+                atk.to_usi(),
+                defenses.len(),
+                sub_solver.nodes_searched,
+                elapsed.as_secs_f64(),
+                sub_solver.table.len(),
+                result_str,
+                pv_marker,
+            ).unwrap();
+        }
+
+        writeln!(out, "\n{}", "=".repeat(80)).unwrap();
+        writeln!(out, "PV手 P*1f が見つかった: {}", pv_found).unwrap();
+        writeln!(out, "王手総数: {}", attacks.len()).unwrap();
+        writeln!(out, "\n考察: 守備手数が多い王手や Unknown のままの王手が").unwrap();
+        writeln!(out, "ply 20 の 100M+ ノード消費の原因と推定する．").unwrap();
+        writeln!(out, "ログ: {}", out_path).unwrap();
+
+        eprintln!("結果: {}", out_path);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// ply 20 単独バジェット探索テスト．
+    ///
+    /// backward_1m では 1M ノードで ply 20 が Unknown だが，
+    /// ply 22 サブ問題は 910K nodes 必要．IDS warm-up 込みで
+    /// ~1.1-1.5M 程度必要なら 2M で解けるはずという仮説を検証．
+    ///
+    /// 実行方法:
+    /// ```bash
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_ply20_budget_probe --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_ply20_budget_probe() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_first20 = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e",
+        ];
+
+        let mut board20 = Board::new();
+        board20.set_sfen(sfen).unwrap();
+        for usi in &pv_first20 {
+            let m = board20.move_from_usi(usi).unwrap();
+            board20.do_move(m);
+        }
+
+        let _result = std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+        for budget in [1_500_000u64, 2_000_000, 3_000_000, 5_000_000] {
+            let remaining = 19u32;
+            let depth = (remaining + 2).min(41);
+            let mut solver = DfPnSolver::with_timeout(depth, budget, 32767, 600);
+            solver.set_find_shortest(false);
+
+            let mut board = board20.clone();
+            let start = Instant::now();
+            let result = solver.solve(&mut board);
+            let elapsed = start.elapsed();
+
+            let result_str = match &result {
+                TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                TsumeResult::Unknown { .. } => "Unknown".to_string(),
+            };
+
+            eprintln!("[ply20_budget] budget={}K nodes={} time={:.1}s NPS={:.0}K result={}",
+                budget / 1000,
+                solver.nodes_searched,
+                elapsed.as_secs_f64(),
+                solver.nodes_searched as f64 / elapsed.as_secs_f64() / 1000.0,
+                result_str);
+
+            if result_str != "Unknown" { break; }
+        }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
