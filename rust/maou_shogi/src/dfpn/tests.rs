@@ -11447,3 +11447,111 @@ use crate::types::{Color, PieceType};
             .join()
             .unwrap();
     }
+
+    /// **[SLOW]** ply 6 (remaining=33) 大バジェットプローブ．
+    ///
+    /// TT 共有 backward 解析で ply 8 まで解いた後に ProvenTT を引き継ぎ
+    /// ply 6 を大バジェットで試みる．解けた場合は Mate(33) を期待．
+    ///
+    /// ```
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_ply6_large_budget --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_ply6_large_budget() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_usi = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+
+                // 全局面を構築
+                let mut positions: Vec<(usize, Board)> = Vec::new();
+                let mut sub = board.clone();
+                positions.push((0, sub.clone()));
+                for i in (0..38).step_by(2) {
+                    let m1 = sub.move_from_usi(pv_usi[i]).unwrap();
+                    sub.do_move(m1);
+                    let m2 = sub.move_from_usi(pv_usi[i + 1]).unwrap();
+                    sub.do_move(m2);
+                    positions.push((i + 2, sub.clone()));
+                }
+                positions.reverse(); // 終盤から逆順
+
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" ply 6 大バジェット解析 (TT 共有で ply 38→8 先行)");
+                eprintln!("{}", "=".repeat(80));
+
+                // Phase 1: ply 38→8 を TT 共有で解く (ProvenTT 蓄積)
+                let mut solver = DfPnSolver::with_timeout(41, 50_000_000, 32767, 60);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+
+                for (ply, pos) in &positions {
+                    if *ply < 8 { continue; } // ply 8 以上のみ
+                    let remaining = (39 - ply) as u32;
+                    let depth = (remaining + 2).min(41);
+                    solver.depth = depth;
+                    let mut b = pos.clone();
+                    let result = solver.solve(&mut b);
+                    let solved = matches!(&result,
+                        TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. });
+                    if !solved {
+                        eprintln!("[warmup] ply {} 未解決, 続行", ply);
+                    }
+                }
+
+                let proven_after_warmup = solver.table.proven_len();
+                eprintln!("[warmup] ply 38→8 完了: ProvenTT={} エントリ",
+                    proven_after_warmup);
+
+                // Phase 2: ply 6 を大バジェットで解く
+                let ply6_pos = &positions.iter().find(|(p, _)| *p == 6).unwrap().1;
+                solver.depth = (33u32 + 2).min(41);
+                solver.max_nodes = 500_000_000; // 5億ノード
+                // timeout は 3600s (1時間) に設定
+                let mut solver6 = DfPnSolver::with_timeout(
+                    (33u32 + 2).min(41), 500_000_000, 32767, 3600,
+                );
+                solver6.set_find_shortest(false);
+                solver6.set_preserve_proven_tt(true);
+                // Phase 1 の ProvenTT を注入
+                let (pm, pt) = solver.table.clone_proven_map();
+                solver6.table.set_proven_map(pm, pt);
+
+                eprintln!("[ply6] ProvenTT 注入: {} エントリ, 探索開始...", pt);
+                let t6 = Instant::now();
+                let mut b6 = ply6_pos.clone();
+                let result6 = solver6.solve(&mut b6);
+                let elapsed6 = t6.elapsed();
+
+                let res6_str = match &result6 {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+
+                eprintln!("[ply6] nodes={} time={:.1}s NPS={:.0}K result={}",
+                    solver6.nodes_searched,
+                    elapsed6.as_secs_f64(),
+                    solver6.nodes_searched as f64 / elapsed6.as_secs_f64() / 1000.0,
+                    res6_str);
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
