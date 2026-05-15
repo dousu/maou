@@ -11791,9 +11791,9 @@ use crate::types::{Color, PieceType};
                 eprintln!("{}", "-".repeat(60));
 
                 // 各防御手を TT 蓄積しながら順次プリソルブ
-                solver.depth = (33u32 + 2).min(41); // remaining=31
-                solver.max_nodes = 200_000_000;     // 2億ノード/defense
-                // timeout は 1800s (30 分)/defense
+                // 大バジェットテスト(500M nodes)が失敗したため，各防御手に 500M nodes を割り当て
+                let presolve_budget = 500_000_000u64;
+                let presolve_timeout = 3600u64; // 1時間/defense
 
                 for def_move in &defenses {
                     let def_usi = def_move.to_usi();
@@ -11804,7 +11804,7 @@ use crate::types::{Color, PieceType};
                     // timeout 延長のため新しいソルバーに ProvenTT を引き継ぐ
                     let (cur_pm, cur_pt) = solver.table.clone_proven_map();
                     let mut sub = DfPnSolver::with_timeout(
-                        (33u32 + 2).min(41), 200_000_000, 32767, 1800,
+                        (33u32 + 2).min(41), presolve_budget, 32767, presolve_timeout,
                     );
                     sub.set_find_shortest(false);
                     sub.set_preserve_proven_tt(true);
