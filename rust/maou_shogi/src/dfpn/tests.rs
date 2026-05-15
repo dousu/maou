@@ -11649,7 +11649,7 @@ use crate::types::{Color, PieceType};
                 let mut hard_defenses = Vec::new();
 
                 for def_move in &defenses {
-                    let def_usi = def_move.to_usi_string();
+                    let def_usi = def_move.to_usi();
                     let is_pv = def_usi == pv_def_str;
 
                     let mut b_after = b6.clone();
@@ -11706,6 +11706,164 @@ use crate::types::{Color, PieceType};
                 eprintln!("{:<12} {:>12} {:>12}",
                     "TOTAL", total_no_tt, total_with_tt);
                 eprintln!("\n未解決防御手 (budget={}M): {:?}", budget / 1_000_000, hard_defenses);
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// **[SLOW]** ply 7 全防御手プリソルブ → ply 6 挑戦．
+    ///
+    /// N*1e 後の 5 手の防御手を TT 蓄積で順次証明し，
+    /// 全証明が ProvenTT に蓄積された状態で ply 6 を試みる．
+    /// backward ply 38→8 + ply 7 全防御手プリソルブで ProvenTT を最大化する．
+    ///
+    /// ```bash
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_ply6_presolve_ply7_defenses --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_ply6_presolve_ply7_defenses() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_usi = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+
+                // 全局面を構築
+                let mut positions_all: Vec<(usize, Board)> = Vec::new();
+                {
+                    let mut sub = board.clone();
+                    positions_all.push((0, sub.clone()));
+                    for i in (0..38).step_by(2) {
+                        let m1 = sub.move_from_usi(pv_usi[i]).unwrap();
+                        sub.do_move(m1);
+                        let m2 = sub.move_from_usi(pv_usi[i + 1]).unwrap();
+                        sub.do_move(m2);
+                        positions_all.push((i + 2, sub.clone()));
+                    }
+                    positions_all.reverse();
+                }
+
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" ply 6 プリソルブ戦略: backward 38→8 + ply 7 全防御手証明");
+                eprintln!("{}", "=".repeat(80));
+
+                // Phase 1: backward ply 38→8 (300s / 50M nodes, TT 共有)
+                let mut solver = DfPnSolver::with_timeout(41, 50_000_000, 32767, 300);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                let t_warmup = Instant::now();
+                for (ply, pos) in &positions_all {
+                    if *ply < 8 { continue; }
+                    let remaining = (39 - ply) as u32;
+                    let depth = (remaining + 2).min(41);
+                    solver.depth = depth;
+                    let mut b = pos.clone();
+                    solver.solve(&mut b);
+                }
+                eprintln!("[warmup] ply 38→8 完了: ProvenTT={} エントリ, t={:.1}s",
+                    solver.table.proven_len(), t_warmup.elapsed().as_secs_f64());
+
+                // Phase 2: N*1e 後の全防御手をプリソルブ (TT 蓄積)
+                let ply6_pos = positions_all.iter().find(|(p, _)| *p == 6).unwrap().1.clone();
+                let mut b_n1e = ply6_pos.clone();
+                let n1e = b_n1e.move_from_usi("N*1e").unwrap();
+                b_n1e.do_move(n1e);
+                let defenses = movegen::generate_legal_moves(&mut b_n1e);
+
+                eprintln!("[presolve] N*1e 後防御手: {} 手", defenses.len());
+                eprintln!("{:<12} {:>12} {:>10} {:>12} {:>10}",
+                    "defense", "nodes", "time(s)", "ProvenTT", "result");
+                eprintln!("{}", "-".repeat(60));
+
+                // 各防御手を TT 蓄積しながら順次プリソルブ
+                solver.depth = (33u32 + 2).min(41); // remaining=31
+                solver.max_nodes = 200_000_000;     // 2億ノード/defense
+                // timeout は 1800s (30 分)/defense
+
+                for def_move in &defenses {
+                    let def_usi = def_move.to_usi();
+                    let is_pv = def_usi == pv_usi[7];
+                    let mut b_def = b_n1e.clone();
+                    b_def.do_move(*def_move);
+
+                    // timeout 延長のため新しいソルバーに ProvenTT を引き継ぐ
+                    let (cur_pm, cur_pt) = solver.table.clone_proven_map();
+                    let mut sub = DfPnSolver::with_timeout(
+                        (33u32 + 2).min(41), 200_000_000, 32767, 1800,
+                    );
+                    sub.set_find_shortest(false);
+                    sub.set_preserve_proven_tt(true);
+                    sub.table.set_proven_map(cur_pm, cur_pt);
+
+                    let t_sub = Instant::now();
+                    let res = sub.solve(&mut b_def);
+                    let elapsed_sub = t_sub.elapsed();
+                    let nodes_sub = sub.nodes_searched;
+                    let proven_sub = sub.table.proven_len();
+
+                    // 蓄積した ProvenTT をメインソルバーに戻す
+                    let (new_pm, new_pt) = sub.table.clone_proven_map();
+                    solver.table.set_proven_map(new_pm, new_pt);
+
+                    let res_str = match &res {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+
+                    eprintln!("{:<12} {:>12} {:>10.1} {:>12} {:>10} {}",
+                        def_usi, nodes_sub, elapsed_sub.as_secs_f64(),
+                        proven_sub, res_str,
+                        if is_pv { "<<PV" } else { "" });
+                }
+
+                let total_proven = solver.table.proven_len();
+                eprintln!("{}", "-".repeat(60));
+                eprintln!("[presolve] 全防御手完了: ProvenTT={} エントリ", total_proven);
+
+                // Phase 3: ply 6 を全プリソルブ済み ProvenTT で挑戦
+                let (final_pm, final_pt) = solver.table.clone_proven_map();
+                let mut solver6 = DfPnSolver::with_timeout(
+                    (33u32 + 2).min(41), 500_000_000, 32767, 3600,
+                );
+                solver6.set_find_shortest(false);
+                solver6.set_preserve_proven_tt(true);
+                solver6.table.set_proven_map(final_pm, final_pt);
+
+                eprintln!("\n[ply6] ProvenTT={} エントリで挑戦開始...", final_pt);
+                let t6 = Instant::now();
+                let mut b6 = ply6_pos.clone();
+                let result6 = solver6.solve(&mut b6);
+                let elapsed6 = t6.elapsed();
+
+                let res6_str = match &result6 {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+
+                eprintln!("[ply6] nodes={} time={:.1}s NPS={:.0}K result={}",
+                    solver6.nodes_searched,
+                    elapsed6.as_secs_f64(),
+                    solver6.nodes_searched as f64 / elapsed6.as_secs_f64() / 1000.0,
+                    res6_str);
                 eprintln!("{}", "=".repeat(80));
             })
             .unwrap()
