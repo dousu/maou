@@ -5922,8 +5922,31 @@ ply 38→8 まで全 OR ノード解決 (合計ノード数: 48.2M)．
 新ボトルネック: **ply 6 (remaining=33)**，47M ノードで未解．
 
 ply 8→ply 6 の節点増加率: >400× (ply 24→22 より大きい)．
-ply 7 AND ノードの非 PV 応手 (N*1e 以外への応答) が ProvenTT に
-未収録のため，それらのサブ問題をゼロから探索する．
+
+**ply 7 AND ノード防御手難度診断** (`test_ply7_defense_difficulty`, v0.55.18, 2026-05-15):
+
+N*1e 後の全 5 防御手を列挙し，remaining=31 サブ問題の難度を計測．
+ProvenTT = ply 38→8 backward 解析後の 5663 エントリ．
+
+| 防御手 | no_TT nodes | with_TT nodes | speedup | 結果 |
+|-------|------------|--------------|---------|------|
+| 2c1b | 2,352,661 | 118,190 | 19.9× | Mate(25) ✓ |
+| **2c1d** | **>5M (budget)** | **>5M (budget)** | **1.0×** | **Unknown ✗** |
+| 2c2b | >5M (budget) | 138,191 | 36.2× | Mate(25) ✓ |
+| 2c3b (PV) | >5M (budget) | 118,190 | 42.3× | Mate(31) ✓ |
+| **2c3d** | **>5M (budget)** | **>5M (budget)** | **1.0×** | **Unknown ✗** |
+
+**ボトルネック特定**: `2c1d` と `2c3d` の 2 手が未解決．
+ply 38→8 backward ProvenTT がこの 2 手のサブ問題に **全く役立っていない** (1.0× speedup)．
+PV 近傍 3 手 (2c1b/2c2b/2c3b) は ProvenTT で 20〜42× 高速化され 118〜138K nodes で解決．
+
+**考察**: 2c1d (玉→1d) と 2c3d (玉→3d) は PV 経路とサブ問題を共有しない
+異なる証明木を持つ．ply 38→8 backward 解析は PV 経路の局面のみ蓄積するため，
+これら 2 手のサブ問題 (remaining=31) はゼロから探索が必要．
+
+**対策 — プリソルブ戦略** (`test_ply6_presolve_ply7_defenses`):
+N*1e 後の 5 防御手を TT 蓄積で順次プリソルブしてから ply 6 を試みる．
+各防御手の証明が ProvenTT に積まれることで，ply 6 ソルバーが高速に検証できる．
 
 ---
 
