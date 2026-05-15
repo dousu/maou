@@ -518,6 +518,10 @@ pub struct DfPnSolver {
     /// true にすると saved_depth 20-26 での depth=16→17 挿入をスキップする (IDS-17 導入前の挙動)．
     /// デフォルト false = IDS-17 有効 (depth=17 を明示的に経由)．
     pub(super) param_no_ids17: bool,
+    /// solve() 呼び出し間で ProvenTT を保持するフラグ．
+    /// true のとき，solve() 冒頭でWorkingTT のみクリアし ProvenTT を引き継ぐ．
+    /// 逐次 backward 解析で前のソルブの ProvenTT を再利用する際に使用する．
+    pub(super) preserve_proven_tt: bool,
     /// refutable check の再帰深さ (デフォルト 5)．
     pub(super) param_refutable_depth: u32,
     /// refutable check の呼び出し回数上限 (デフォルト 10,000)．
@@ -860,6 +864,7 @@ impl DfPnSolver {
             diag_rem0_provisional: 0,
             pn_dn_snapshot: None,
             pn_dn_per_depth: Vec::new(),
+            preserve_proven_tt: false,
             #[cfg(feature = "visit_diag")]
             visit_counts: FxHashMap::default(),
             #[cfg(feature = "visit_diag")]
@@ -867,6 +872,13 @@ impl DfPnSolver {
             #[cfg(feature = "visit_diag")]
             visit_breakdown: FxHashMap::default(),
         }
+    }
+
+    /// solve() 呼び出し間で ProvenTT を引き継ぐフラグを設定する．
+    /// true にすると solve() 冒頭で WorkingTT のみクリアし ProvenTT を保持する．
+    pub fn set_preserve_proven_tt(&mut self, preserve: bool) -> &mut Self {
+        self.preserve_proven_tt = preserve;
+        self
     }
 
     /// 重複訪問レポートを返す (visit_diag feature 時のみ利用可)．
@@ -1584,7 +1596,11 @@ impl DfPnSolver {
     /// Phase 2: PNS がアリーナ上限に達した場合，残りの予算で
     ///          IDS-dfpn (MID) にフォールバックする．
     pub fn solve(&mut self, board: &mut Board) -> TsumeResult {
-        self.table.clear();
+        if self.preserve_proven_tt {
+            self.table.clear_working_only();
+        } else {
+            self.table.clear();
+        }
         self.nodes_searched = 0;
         self.pn_dn_per_depth.clear();
         self.max_ply = 0;

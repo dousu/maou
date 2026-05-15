@@ -1936,6 +1936,13 @@ impl TranspositionTable {
         self.working_overflow_since_gc = 0;
     }
 
+    /// ProvenTT を保持したまま WorkingTT のみクリアする．
+    /// TT 共有を有効にして複数局面を連続解析するときに使用する．
+    pub(super) fn clear_working_only(&mut self) {
+        for fe in self.working.iter_mut() { fe.pos_key = 0; }
+        self.working_overflow_since_gc = 0;
+    }
+
     /// 証明エントリ(pn=0)のみを保持する．
     /// Dual TT: WorkingTT を全クリア + ProvenTT の confirmed disproof を除去．
     pub(super) fn retain_proofs_only(&mut self) {
@@ -2237,6 +2244,26 @@ impl TranspositionTable {
     /// ProvenTT の非空エントリ数を返す．
     pub(super) fn proven_len(&self) -> usize {
         self.proven_total_entries
+    }
+
+    /// ProvenTT マップのクローンを返す (TT 共有診断用)．
+    #[cfg(test)]
+    pub(super) fn clone_proven_map(
+        &self,
+    ) -> (FxHashMap<u64, Vec<ProvenEntry>>, usize) {
+        (self.proven_map.clone(), self.proven_total_entries)
+    }
+
+    /// ProvenTT マップを置き換える (TT 共有診断用)．
+    /// 既存エントリは全て破棄されるため，探索開始前のみ呼ぶこと．
+    #[cfg(test)]
+    pub(super) fn set_proven_map(
+        &mut self,
+        map: FxHashMap<u64, Vec<ProvenEntry>>,
+        total_entries: usize,
+    ) {
+        self.proven_map = map;
+        self.proven_total_entries = total_entries;
     }
 
     /// WorkingTT の非空エントリ数を返す(`len` のエイリアス)．

@@ -5868,7 +5868,40 @@ ply 22 の backward 解が 910K nodes なのに ply 20 が未解決な理由:
 1. IDS warm-up (depth=2) で 110K nodes 消費
 2. 残り 888K で depth=21 の main solve → P*1f → ply 22 サブ問題 (910K 必要) に届かず
 
-**2M 予算テスト** (budget_probe) の結果: 後日追記予定
+**バジェットプローブ結果** (`test_ply20_budget_probe`, v0.55.17, 2026-05-15):
+
+| バジェット | ノード数 | 時間 | NPS | 結果 |
+|----------|---------|------|-----|------|
+| 1.5M | 1,500,000 | 43.5s | 34K | Unknown |
+| 2M | 2,000,000 | 58.9s | 34K | Unknown |
+| 3M | 3,000,000 | 69.1s | 43K | Unknown |
+| 5M | 5,000,000 | 86.4s | 58K | Unknown |
+
+**5M ノードでも Unknown** (ply 22 の 910K から 5× 以上増加)．
+NPS が 34–58K と通常比 (190K) より大幅に低い原因として:
+- fresh TT (ProvenTT 未共有) → ply 22 サブ問題を毎回ゼロから再証明
+- IDS が depth=2 → depth=21 の 2 段構成で warm-up 効果が薄い
+
+**TT 共有実験結果** (`test_ply20_tt_sharing`, v0.55.18, 2026-05-15):
+
+| 条件 | ノード数 | 時間 | 結果 |
+|-----|---------|------|------|
+| ply 22 単体先行解 | 3,042,094 | 34.8s | Mate(17) ✓ |
+| ply 20 TT なし | 9,725,155 | 120s (timeout) | Unknown |
+| ply 20 TT 共有 (ply 22 ProvenTT 注入) | **3** | 1.3s | **Mate(19)** ✓ |
+
+**削減率: 3,241,718× (9.7M ノード → 3 ノード)**
+
+ProvenTT に ply 22 ルート局面の Mate(17) エントリが存在し，ply 20 ソルバーが
+P*1f → 1e1f 後の局面でこれを即座にヒットする．
+
+**根本原因**: 従来の backward 解析は各 ply で DfPnSolver を fresh 生成し
+ProvenTT を廃棄していたため，全サブ問題を毎回 0 から再証明していた．
+`preserve_proven_tt=true` フラグ (v0.55.18) で ProvenTT を引き継ぐことで
+ply 20 が 3 ノードで解ける．
+
+**次のステップ**: backward 解析 (ply 38→0) 全体に TT 共有を適用すれば
+39 手詰めが現実的な時間で解ける見通し．
 
 ---
 

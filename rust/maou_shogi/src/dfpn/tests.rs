@@ -11209,3 +11209,241 @@ use crate::types::{Color, PieceType};
             .join()
             .unwrap();
     }
+
+    /// **[SLOW]** ProvenTT 共有による ply 20 節点削減効果の診断テスト．
+    ///
+    /// ply 22 を先に解いて ProvenTT を取得し，そのエントリを ply 20 ソルバーに
+    /// 注入することで節点数がどれだけ減るかを計測する．
+    ///
+    /// 仮説: ply 20 の主たるボトルネックは「P*1f → 1e1f → ply 22 サブ問題」を
+    /// 最初から再証明する必要があること．TT 共有により，ply 22 サブ問題は
+    /// 即座に TT ヒットし，節点数が 100–1000x 削減される見込み．
+    ///
+    /// ```
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_ply20_tt_sharing --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_ply20_tt_sharing() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        // ply 0..19 = 攻め手10手 + 玉方10手
+        let pv_first20: &[&str] = &[
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e",
+        ];
+        // ply 20..21 = P*1f (攻め), 1e1f (玉方)
+        let pv_22_extra: &[&str] = &["P*1f", "1e1f"];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                // --- ply 20 位置 ---
+                let mut board20 = Board::new();
+                board20.set_sfen(sfen).unwrap();
+                for usi in pv_first20 {
+                    let m = board20.move_from_usi(usi).unwrap();
+                    board20.do_move(m);
+                }
+
+                // --- ply 22 位置 ---
+                let mut board22 = board20.clone();
+                for usi in pv_22_extra {
+                    let m = board22.move_from_usi(usi).unwrap();
+                    board22.do_move(m);
+                }
+
+                eprintln!("\n{}", "=".repeat(72));
+                eprintln!(" ProvenTT 共有効果診断 (ply 20)");
+                eprintln!("{}", "=".repeat(72));
+
+                // --- Step 1: ply 22 を解いて ProvenTT を取得 ---
+                let remaining22 = 17u32;
+                let depth22 = (remaining22 + 2).min(41);
+                let mut solver22 = DfPnSolver::with_timeout(depth22, 10_000_000, 32767, 120);
+                solver22.set_find_shortest(false);
+                let mut b22 = board22.clone();
+                let t22 = Instant::now();
+                let res22 = solver22.solve(&mut b22);
+                let elapsed22 = t22.elapsed();
+                let res22_str = match &res22 {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+                eprintln!("[ply22] nodes={} time={:.1}s NPS={:.0}K result={}",
+                    solver22.nodes_searched,
+                    elapsed22.as_secs_f64(),
+                    solver22.nodes_searched as f64 / elapsed22.as_secs_f64() / 1000.0,
+                    res22_str);
+
+                let (proven_map, proven_total) = solver22.table.clone_proven_map();
+                eprintln!("[ply22] ProvenTT: {} unique keys, {} entries",
+                    proven_map.len(), proven_total);
+
+                // --- Step 2: ply 20 をベースライン (TT なし) で解く ---
+                let remaining20 = 19u32;
+                let depth20 = (remaining20 + 2).min(41);
+                let mut solver20_base = DfPnSolver::with_timeout(depth20, 10_000_000, 32767, 120);
+                solver20_base.set_find_shortest(false);
+                let mut b20 = board20.clone();
+                let t_base = Instant::now();
+                let res_base = solver20_base.solve(&mut b20);
+                let elapsed_base = t_base.elapsed();
+                let res_base_str = match &res_base {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+                eprintln!("[ply20 no-TT] nodes={} time={:.1}s NPS={:.0}K result={}",
+                    solver20_base.nodes_searched,
+                    elapsed_base.as_secs_f64(),
+                    solver20_base.nodes_searched as f64 / elapsed_base.as_secs_f64() / 1000.0,
+                    res_base_str);
+
+                // --- Step 3: ply 20 を ProvenTT 注入して解く ---
+                // preserve_proven_tt=true により solve() が WorkingTT のみクリアし
+                // 注入した ProvenTT を保持する．
+                let mut solver20_tt = DfPnSolver::with_timeout(depth20, 10_000_000, 32767, 120);
+                solver20_tt.set_find_shortest(false);
+                solver20_tt.set_preserve_proven_tt(true);
+                solver20_tt.table.set_proven_map(proven_map, proven_total);
+                let mut b20 = board20.clone();
+                let t_tt = Instant::now();
+                let res_tt = solver20_tt.solve(&mut b20);
+                let elapsed_tt = t_tt.elapsed();
+                let res_tt_str = match &res_tt {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+                eprintln!("[ply20 with-TT] nodes={} time={:.1}s NPS={:.0}K result={}",
+                    solver20_tt.nodes_searched,
+                    elapsed_tt.as_secs_f64(),
+                    solver20_tt.nodes_searched as f64 / elapsed_tt.as_secs_f64() / 1000.0,
+                    res_tt_str);
+
+                let base_nodes = solver20_base.nodes_searched.max(1);
+                let tt_nodes = solver20_tt.nodes_searched.max(1);
+                eprintln!("\n削減率: {:.1}x  ({} → {} ノード)",
+                    base_nodes as f64 / tt_nodes as f64,
+                    base_nodes, tt_nodes);
+                eprintln!("{}", "=".repeat(72));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// **[SLOW]** ProvenTT 共有を用いた 39 手詰め backward 解析．
+    ///
+    /// ply 38 → ply 36 → ... → ply 0 の順で各 OR ノード局面を解き，
+    /// 各 solve 後に ProvenTT を次の solve へ引き継ぐことで
+    /// サブ問題の再証明を省略する (v0.55.18 新機能検証)．
+    ///
+    /// **期待値**: ply 22 以降の各 ply が数十ノード以内で解ける．
+    ///
+    /// ```
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_tsume_39te_backward_shared_tt --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_backward_shared_tt() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_usi = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+
+                // PV の偶数ステップ局面 (攻め番=ORノード) を前から構築
+                let mut positions: Vec<(usize, Board)> = Vec::new();
+                let mut sub = board.clone();
+                positions.push((0, sub.clone()));
+                for i in (0..38).step_by(2) {
+                    let m1 = sub.move_from_usi(pv_usi[i]).unwrap();
+                    sub.do_move(m1);
+                    let m2 = sub.move_from_usi(pv_usi[i + 1]).unwrap();
+                    sub.do_move(m2);
+                    positions.push((i + 2, sub.clone()));
+                }
+                // 終盤から逆順
+                positions.reverse();
+
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 39手詰め backward解析 (ProvenTT 共有)");
+                eprintln!("{}", "=".repeat(80));
+                eprintln!("{:<6} {:<6} {:<14} {:<10} {:<10} {}",
+                    "Ply", "Rem", "Nodes", "Time(s)", "NPS(K)", "Result");
+
+                // ProvenTT を共有するソルバー (最大 depth=41)
+                let mut solver = DfPnSolver::with_timeout(41, 50_000_000, 32767, 300);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+
+                let mut total_nodes: u64 = 0;
+                let mut all_solved = true;
+
+                for (ply, pos) in &positions {
+                    let remaining = (39 - ply) as u32;
+                    let depth = (remaining + 2).min(41);
+                    solver.depth = depth;
+
+                    let mut b = pos.clone();
+                    let t = Instant::now();
+                    let result = solver.solve(&mut b);
+                    let elapsed = t.elapsed();
+
+                    let result_str = match &result {
+                        TsumeResult::Checkmate { moves, .. } =>
+                            format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    let solved = matches!(&result,
+                        TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. });
+
+                    let nps = if elapsed.as_secs_f64() > 0.001 {
+                        solver.nodes_searched as f64 / elapsed.as_secs_f64() / 1000.0
+                    } else { 0.0 };
+
+                    eprintln!("{:<6} {:<6} {:<14} {:<10.2} {:<10.0} {}",
+                        ply, remaining, solver.nodes_searched,
+                        elapsed.as_secs_f64(), nps, result_str);
+
+                    total_nodes += solver.nodes_searched;
+
+                    if !solved {
+                        eprintln!("  *** ply {} 未解決 (remaining={}) ***", ply, remaining);
+                        all_solved = false;
+                        break;
+                    }
+                }
+
+                let proven_len = solver.table.proven_len();
+                eprintln!("\n合計ノード数: {}", total_nodes);
+                eprintln!("最終 ProvenTT: {} エントリ", proven_len);
+                eprintln!("全解決: {}", all_solved);
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
