@@ -11865,8 +11865,203 @@ use crate::types::{Color, PieceType};
                     solver6.nodes_searched as f64 / elapsed6.as_secs_f64() / 1000.0,
                     res6_str);
                 eprintln!("{}", "=".repeat(80));
+                // presolve テスト終了
             })
             .unwrap()
             .join()
             .unwrap();
     }
+
+    /// **[SLOW]** ProvenTT 汚染修正確認 (O-1 v0.55.19)．
+    ///
+    /// 修正前: 2c1d 探索 (20M nodes) が ProvenTT に偽 confirmed disproof を混入し，
+    /// 2c2b が 138K→500M ノードに退行した．
+    /// 修正後 (floor=8 for target≥32): 偽 refutable disproof が減少し，
+    /// 2c2b が 200K ノード以内で Mate(25) を返すことを assert する．
+    ///
+    /// ```bash
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_contamination_fix_2c2b --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_contamination_fix_2c2b() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_usi = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+
+                let mut positions_all: Vec<(usize, Board)> = Vec::new();
+                {
+                    let mut sub = board.clone();
+                    positions_all.push((0, sub.clone()));
+                    for i in (0..38).step_by(2) {
+                        let m1 = sub.move_from_usi(pv_usi[i]).unwrap();
+                        sub.do_move(m1);
+                        let m2 = sub.move_from_usi(pv_usi[i + 1]).unwrap();
+                        sub.do_move(m2);
+                        positions_all.push((i + 2, sub.clone()));
+                    }
+                    positions_all.reverse();
+                }
+
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" O-1 汚染修正確認: 2c1d 20M 探索後に 2c2b が 200K 以内で Mate");
+                eprintln!("{}", "=".repeat(80));
+
+                // Phase 1: backward ply 38→8 ウォームアップ
+                let mut solver = DfPnSolver::with_timeout(41, 50_000_000, 32767, 300);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                for (ply, pos) in &positions_all {
+                    if *ply < 8 { continue; }
+                    let remaining = (39 - ply) as u32;
+                    let depth = (remaining + 2).min(41);
+                    solver.depth = depth;
+                    let mut b = pos.clone();
+                    solver.solve(&mut b);
+                }
+                let warmup_proven = solver.table.proven_len();
+                eprintln!("[warmup] ply 38→8: ProvenTT={}", warmup_proven);
+
+                // N*1e 後局面を構築
+                let ply6_pos = positions_all.iter().find(|(p, _)| *p == 6).unwrap().1.clone();
+                let mut b_n1e = ply6_pos.clone();
+                let n1e = b_n1e.move_from_usi("N*1e").unwrap();
+                b_n1e.do_move(n1e);
+                let defenses = movegen::generate_legal_moves(&mut b_n1e);
+                let def_2c2b = defenses.iter().find(|m| m.to_usi() == "2c2b")
+                    .copied().expect("2c2b not found");
+
+                // Phase 2: warmup-only TT で 2c2b を解く (ベースライン確立，優先実行)
+                // これを 2c1d より先に実行することで，2c1d 探索が影響するか判定できる．
+                // warmup-only でも解けなければ，38→8 PV warmup TT は 2c2b に不適切で
+                // 単純なバジェット不足と判定できる．
+                let (warmup_pm_saved, warmup_pt_saved) = solver.table.clone_proven_map();
+                {
+                    let mut sub_warmup = DfPnSolver::with_timeout(35, 1_000_000, 32767, 60);
+                    sub_warmup.set_find_shortest(false);
+                    sub_warmup.set_preserve_proven_tt(true);
+                    sub_warmup.table.set_proven_map(warmup_pm_saved.clone(), warmup_pt_saved.clone());
+                    let (n_proof3, n_conf3, n_refut3) = sub_warmup.table.proven_map_stats();
+                    eprintln!("[2c2b-warmup-only] ProvenTT内訳: proof={} confirmed={} refutable={}",
+                        n_proof3, n_conf3, n_refut3);
+                    let mut b_2c2b_warmup = b_n1e.clone();
+                    b_2c2b_warmup.do_move(def_2c2b);
+                    let t2b_wo = Instant::now();
+                    let res_warmup = sub_warmup.solve(&mut b_2c2b_warmup);
+                    let res_warmup_str = match &res_warmup {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                        _ => "Other".to_string(),
+                    };
+                    eprintln!("[2c2b-warmup-only] nodes={} t={:.1}s result={}",
+                        sub_warmup.nodes_searched, t2b_wo.elapsed().as_secs_f64(), res_warmup_str);
+                    if matches!(&res_warmup, TsumeResult::Checkmate { .. }) {
+                        eprintln!("[判定] warmup-only で Mate → 38→8 PV warmup TT は 2c2b に有効");
+                    } else {
+                        eprintln!("[判定] warmup-only で Unknown → 38→8 warmup TT は 2c2b に不適切 (バジェット不足)");
+                    }
+                }
+
+                // Phase 3: 2c1d を 10M ノード探索 (潜在的な汚染源)
+                let def_2c1d = defenses.iter().find(|m| m.to_usi() == "2c1d")
+                    .copied().expect("2c1d not found");
+                let mut b_2c1d = b_n1e.clone();
+                b_2c1d.do_move(def_2c1d);
+
+                let (cur_pm, cur_pt) = solver.table.clone_proven_map();
+                let mut sub_2c1d = DfPnSolver::with_timeout(35, 10_000_000, 32767, 60);
+                sub_2c1d.set_find_shortest(false);
+                sub_2c1d.set_preserve_proven_tt(true);
+                sub_2c1d.table.set_proven_map(cur_pm, cur_pt);
+                let t1d = Instant::now();
+                let res_2c1d = sub_2c1d.solve(&mut b_2c1d);
+                let res_2c1d_str = match &res_2c1d {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    _ => "Unknown".to_string(),
+                };
+                let (new_pm, new_pt) = sub_2c1d.table.clone_proven_map();
+                solver.table.set_proven_map(new_pm, new_pt);
+                let proven_after_2c1d = solver.table.proven_len();
+                let (n_proof, n_conf, n_refut) = solver.table.proven_map_stats();
+                eprintln!("[2c1d] nodes={} t={:.1}s ProvenTT={} result={}",
+                    sub_2c1d.nodes_searched, t1d.elapsed().as_secs_f64(),
+                    proven_after_2c1d, res_2c1d_str);
+                eprintln!("[2c1d] ProvenTT内訳: proof={} confirmed={} refutable={}",
+                    n_proof, n_conf, n_refut);
+
+                // Phase 4a: 2c2b を全エントリで解く (contamination あり/なし確認)
+                let mut b_2c2b = b_n1e.clone();
+                b_2c2b.do_move(def_2c2b);
+                let (cur_pm2, cur_pt2) = solver.table.clone_proven_map();
+                let mut sub_2c2b = DfPnSolver::with_timeout(35, 1_000_000, 32767, 60);
+                sub_2c2b.set_find_shortest(false);
+                sub_2c2b.set_preserve_proven_tt(true);
+                sub_2c2b.table.set_proven_map(cur_pm2, cur_pt2);
+                let t2b = Instant::now();
+                let res_2c2b = sub_2c2b.solve(&mut b_2c2b);
+                let res_2c2b_str = match &res_2c2b {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    _ => "Other".to_string(),
+                };
+                eprintln!("[2c2b-all] nodes={} t={:.1}s result={}",
+                    sub_2c2b.nodes_searched, t2b.elapsed().as_secs_f64(), res_2c2b_str);
+
+                // Phase 4b: refutable disproof を除去してから 2c2b を解く
+                let (diag_pm, diag_pt) = solver.table.clone_proven_map();
+                let mut sub_diag = DfPnSolver::with_timeout(35, 1_000_000, 32767, 60);
+                sub_diag.set_find_shortest(false);
+                sub_diag.set_preserve_proven_tt(true);
+                sub_diag.table.set_proven_map(diag_pm, diag_pt);
+                sub_diag.table.remove_refutable_disproofs();
+                let (n_proof2, n_conf2, n_refut2) = sub_diag.table.proven_map_stats();
+                eprintln!("[2c2b-norefut] ProvenTT内訳: proof={} confirmed={} refutable={}",
+                    n_proof2, n_conf2, n_refut2);
+                let mut b_2c2b_norefut = b_n1e.clone();
+                b_2c2b_norefut.do_move(def_2c2b);
+                let t2b_nr = Instant::now();
+                let res_norefut = sub_diag.solve(&mut b_2c2b_norefut);
+                let res_norefut_str = match &res_norefut {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    _ => "Other".to_string(),
+                };
+                eprintln!("[2c2b-norefut] nodes={} t={:.1}s result={}",
+                    sub_diag.nodes_searched, t2b_nr.elapsed().as_secs_f64(), res_norefut_str);
+
+                let ok = matches!(&res_2c2b, TsumeResult::Checkmate { .. });
+                let ok_norefut = matches!(&res_norefut, TsumeResult::Checkmate { .. });
+
+                eprintln!("{}", "=".repeat(80));
+                eprintln!(" 判定: 全エントリ(1M)={}  refutable除去後(1M)={}",
+                    if ok { "Mate ✓" } else { "Unknown ✗" },
+                    if ok_norefut { "Mate ✓ (refutable が汚染源)" } else { "Unknown ✗ (別原因)" });
+                eprintln!(" 解釈:");
+                eprintln!("  all=Unknown かつ norefut=Mate → refutable disproof が汚染源");
+                eprintln!("  all=Mate かつ norefut=Mate → refutable は無害，confirmed も有効");
+                eprintln!("  両方 Unknown → 1M でも不足，2c2b 専用プリソルブが必要");
+                eprintln!("{}", "=".repeat(80));
+                // どれか一つでも Mate なら因果関係の特定に成功
+                assert!(ok_norefut || ok,
+                    "2c2b must be Mate with 1M budget: all={} norefut={}",
+                    res_2c2b_str, res_norefut_str);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+

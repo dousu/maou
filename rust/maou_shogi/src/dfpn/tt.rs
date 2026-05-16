@@ -1845,9 +1845,11 @@ impl TranspositionTable {
     ) -> u16 {
         let pos_key = Self::safe_key(pos_key);
         // ProvenTT: HashMap で全バリアントが同一エントリリストに集約される
+        // Q-1 (v0.55.20): refutable disproof は REMAINING_INFINITE を返さない
         if let Some(vec) = self.proven_map.get(&pos_key) {
             for e in vec {
                 if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
+                    if e.is_refutable_disproof() { continue; }
                     return REMAINING_INFINITE;
                 }
             }
@@ -1892,9 +1894,12 @@ impl TranspositionTable {
     ) -> Option<(u16, bool)> {
         let pos_key = Self::safe_key(pos_key);
         // ProvenTT: HashMap で全バリアントが同一エントリリストに集約される
+        // Q-1 (v0.55.20): refutable disproof は深さ制限付きで絶対知識ではないため
+        // REMAINING_INFINITE 伝播の根拠に使わない．confirmed disproof のみ返す．
         if let Some(vec) = self.proven_map.get(&pos_key) {
             for e in vec {
                 if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
+                    if e.is_refutable_disproof() { continue; }
                     return Some((REMAINING_INFINITE, false));
                 }
             }
@@ -2252,6 +2257,38 @@ impl TranspositionTable {
         &self,
     ) -> (FxHashMap<u64, Vec<ProvenEntry>>, usize) {
         (self.proven_map.clone(), self.proven_total_entries)
+    }
+
+    /// ProvenTT エントリ種別カウントを返す (診断用)．
+    /// 戻り値: (proof_count, confirmed_disproof_count, refutable_disproof_count)
+    #[cfg(test)]
+    pub(super) fn proven_map_stats(&self) -> (usize, usize, usize) {
+        let mut proofs = 0usize;
+        let mut confirmed = 0usize;
+        let mut refutable = 0usize;
+        for vec in self.proven_map.values() {
+            for e in vec {
+                if e.is_proof() {
+                    proofs += 1;
+                } else if e.is_refutable_disproof() {
+                    refutable += 1;
+                } else {
+                    confirmed += 1;
+                }
+            }
+        }
+        (proofs, confirmed, refutable)
+    }
+
+    /// ProvenTT から refutable disproof エントリを除去する (診断用)．
+    /// 残るのは proof と confirmed disproof のみ．
+    #[cfg(test)]
+    pub(super) fn remove_refutable_disproofs(&mut self) {
+        self.proven_map.retain(|_, vec| {
+            vec.retain(|e| e.is_proof() || !e.is_refutable_disproof());
+            !vec.is_empty()
+        });
+        self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
     }
 
     /// ProvenTT マップを置き換える (TT 共有診断用)．

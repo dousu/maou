@@ -792,7 +792,7 @@ impl DfPnSolver {
             #[cfg(feature = "tt_diag")]
             diag_alpha_x_filter_applied: 0,
             alpha_x_filter_active: false,
-            skip_refutable_disproof: false,
+            skip_refutable_disproof: true, // Q-1 (v0.55.20): MID も refutable disproof をスキップ
             prev_attacker_move: Move(0),
             param_no_ids17: false,
             param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
@@ -2015,6 +2015,14 @@ impl DfPnSolver {
     /// - target=24-31: depth_floor=**6** (N-2 緩和)
     /// - target=32+:   depth_floor=3 → log_val(≥6) が dominates
     ///
+    /// **O-1 (v0.55.19)**: target ≥ 32 の depth_floor を 3→8 に戻す．
+    /// N-2 で target=32+ の floor を緩和しなかった (floor=3, log_val が支配 → d=6)
+    /// が，39 手詰め問題 (target=35) で ProvenTT 共有時に偽 confirmed disproof が
+    /// 発生する現象を確認 (ply 7 防御手プリソルブで 2c2b が 138K→500M に退行)．
+    /// M-A と同様の根本原因 (d=6 が浅すぎて非 NM 局面を refutable disproof と誤判定)
+    /// のため floor=8 に統一する．
+    /// - target=32+: depth_floor=**8** (O-1 修正)
+    ///
     /// 式: d = max(target.ilog2() + 1, depth_floor(target)).min(10)
     #[inline]
     fn effective_refutable_depth(&self) -> u32 {
@@ -2030,11 +2038,15 @@ impl DfPnSolver {
             return 3;
         }
         let log_val = (target as u32).ilog2() + 1;
-        // N-2 (v0.26.0): target 24-31 のみ floor を緩和．target ≥ 32 では log_val ≥ 6．
+        // P-1 (v0.55.20): target≥32 の floor は 3 に戻す．
+        // O-1 (v0.55.19) で floor=8 にしたが，d=8 が ProvenTT を 551K→GC まで膨張させ
+        // NPS を低下させた．根本原因は floor ではなく all_checks_refutable_by_tt が
+        // refutable disproof を REMAINING_INFINITE 昇格に使用していたことであり，
+        // P-1 で look_up_skip_refutable に変更して修正済み．
         let depth_floor: u32 = match target {
             0..=23 => if target >= 20 { 8 } else { 3 },
             24..=31 => 6, // N-2 (v0.26.0): floor 緩和
-            _ => 3,
+            _ => 3,       // P-1 (v0.55.20): O-1 revert (floor=8 は bloat の原因)
         };
         log_val.max(depth_floor).min(10)
     }
@@ -2044,12 +2056,17 @@ impl DfPnSolver {
 
     /// TT ベースの NM 昇格判定(MID depth boundary 用)．
     ///
-    /// 各王手後の AND ノードが ProvenTT に disproof として格納されているかを
-    /// 確認する．`look_up` は confirmed / refutable 両方の disproof を返す
-    /// (TT レベルではエントリ種別を区別しない)ため，MID 経路では
-    /// refutable disproof も含めて NM 昇格の根拠として使用される．
-    /// do_move + TT ルックアップのみで判定するため極めて高速
-    /// (~2μs/王手)．TT にエントリがない場合は保守的に false を返す．
+    /// 各王手後の AND ノードが ProvenTT に **confirmed** disproof として格納
+    /// されているかを確認する．`look_up_skip_refutable` を使用するため
+    /// refutable disproof (深さ制限付き) は無視される．
+    ///
+    /// # P-1 (v0.55.20): refutable disproof を REMAINING_INFINITE 昇格に使わない
+    ///
+    /// `look_up` (skip_refutable=false) を使うと，浅い d で生成された
+    /// refutable disproof が `all_checks_refutable_by_tt=true` を引き起こし，
+    /// 深さ制限ファストパスで REMAINING_INFINITE confirmed disproof が格納される．
+    /// これが ProvenTT 汚染 (偽不詰) の根本原因だった．confirmed disproof のみを
+    /// 参照することで，REMAINING_INFINITE 昇格の根拠を絶対知識に限定する．
     pub(super) fn all_checks_refutable_by_tt(
         &mut self,
         board: &mut Board,
@@ -2059,10 +2076,9 @@ impl DfPnSolver {
             let captured = board.do_move(*check);
             let pk = position_key(board);
             let att_hand = board.hand[self.attacker.index()];
-            // look_up は confirmed/refutable disproof 両方を返す
-            // (TT レベルでは種別を区別しない; PNS 側のみ
-            // skip_refutable_disproof で refutable を除外する)
-            let (_, dn, _) = self.table.look_up(pk, &att_hand, REMAINING_INFINITE, false);
+            // P-1 (v0.55.20): refutable disproof はスキップし，confirmed disproof のみ参照する
+            // (refutable は深さ制限付きで REMAINING_INFINITE 昇格の根拠に使えない)
+            let (_, dn, _) = self.table.look_up_skip_refutable(pk, &att_hand, REMAINING_INFINITE, false);
             board.undo_move(*check, captured);
             if dn != 0 {
                 return false;
