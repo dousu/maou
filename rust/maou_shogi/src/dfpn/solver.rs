@@ -1661,7 +1661,6 @@ impl DfPnSolver {
         self.diag_root_hand = att_hand;
         let (root_pn_after_pns, root_dn_after_pns, _) =
             self.look_up_pn_dn(pk, &att_hand, self.depth as u16);
-
         // PNS で未解決 + 残り予算あり → MID フォールバック
         if root_pn_after_pns != 0 && root_dn_after_pns != 0
             && self.nodes_searched < self.max_nodes
@@ -1681,7 +1680,6 @@ impl DfPnSolver {
 
         let (root_pn, root_dn) = self.look_up_board(board);
         verbose_eprintln!("[solve] root_pn={} root_dn={} nodes={}", root_pn, root_dn, self.nodes_searched);
-
         if root_pn == 0 {
             // PNS アリーナから PV を抽出できた場合はそちらを優先
             // (TT ベースの extract_pv は PNS 証明パスが不完全になりうる)
@@ -2067,24 +2065,41 @@ impl DfPnSolver {
     /// 深さ制限ファストパスで REMAINING_INFINITE confirmed disproof が格納される．
     /// これが ProvenTT 汚染 (偽不詰) の根本原因だった．confirmed disproof のみを
     /// 参照することで，REMAINING_INFINITE 昇格の根拠を絶対知識に限定する．
+    /// K-M 有効なら `(true, Some(cycle_root))`，絶対反証のみなら `(true, None)`，
+    /// いずれかの check が未反証なら `(false, _)` を返す．
     pub(super) fn all_checks_refutable_by_tt(
         &mut self,
         board: &mut Board,
         checks: &[Move],
-    ) -> bool {
+    ) -> (bool, Option<u32>) {
+        let mut km_cycle_root: Option<u32> = None;
         for check in checks {
             let captured = board.do_move(*check);
             let pk = position_key(board);
             let att_hand = board.hand[self.attacker.index()];
-            // P-1 (v0.55.20): refutable disproof はスキップし，confirmed disproof のみ参照する
-            // (refutable は深さ制限付きで REMAINING_INFINITE 昇格の根拠に使えない)
+            // P-1 (v0.55.20): confirmed disproof のみ参照する
             let (_, dn, _) = self.table.look_up_skip_refutable(pk, &att_hand, REMAINING_INFINITE, false);
+            let refuted = if dn == 0 {
+                true
+            } else if let Some(cr) = self.table.get_km_disproof_cycle_root(
+                pk, &att_hand, &self.path[..self.path_len],
+            ) {
+                // K-M (v0.55.23): cycle_root ∈ 現在パスなら path_dep 反証も有効
+                km_cycle_root = Some(match km_cycle_root {
+                    None => cr,
+                    Some(prev) if prev == cr => cr,
+                    _ => 0,
+                });
+                true
+            } else {
+                false
+            };
             board.undo_move(*check, captured);
-            if dn != 0 {
-                return false;
+            if !refuted {
+                return (false, None);
             }
         }
-        true
+        (true, km_cycle_root)
     }
 
     /// TT ベースの NM 昇格判定(PNS refutable check fast path 用, v0.24.75)．
@@ -2491,21 +2506,27 @@ impl DfPnSolver {
                     { self.diag_boundary_or_no_checks += 1; }
                     self.store(pos_key, att_hand, INF, 0,
                         REMAINING_INFINITE, pos_key as u32);
-                } else if self.all_checks_refutable_by_tt(board, &checks) {
-                    #[cfg(feature = "tt_diag")]
-                    {
-                        self.diag_boundary_or_refutable += 1;
-                        self.diag_boundary_or_checks_sum += checks.len() as u64;
-                    }
-                    self.store(pos_key, att_hand, INF, 0,
-                        REMAINING_INFINITE, pos_key as u32);
                 } else {
-                    // rem=0 の仮反証は TT に store しない
-                    // (クラスタの 64.7% を占め overflow の主因)
-                    #[cfg(feature = "tt_diag")]
-                    {
-                        self.diag_boundary_or_not_refutable += 1;
-                        self.diag_boundary_or_checks_sum += checks.len() as u64;
+                    let (refuted, km_cr) = self.all_checks_refutable_by_tt(board, &checks);
+                    if refuted {
+                        #[cfg(feature = "tt_diag")]
+                        {
+                            self.diag_boundary_or_refutable += 1;
+                            self.diag_boundary_or_checks_sum += checks.len() as u64;
+                        }
+                        if let Some(cr) = km_cr {
+                            self.store_path_dep(pos_key, att_hand, INF, 0, REMAINING_INFINITE, cr, true);
+                        } else {
+                            self.store(pos_key, att_hand, INF, 0, REMAINING_INFINITE, pos_key as u32);
+                        }
+                    } else {
+                        // rem=0 の仮反証は TT に store しない
+                        // (クラスタの 64.7% を占め overflow の主因)
+                        #[cfg(feature = "tt_diag")]
+                        {
+                            self.diag_boundary_or_not_refutable += 1;
+                            self.diag_boundary_or_checks_sum += checks.len() as u64;
+                        }
                     }
                 }
             } else {
@@ -2628,6 +2649,9 @@ impl DfPnSolver {
         // (OR ノードの反証は att_hand で保存するため反証駒蓄積は不要)
         // GHI 伝播: init ループ中に反証済み子の path_dependent を蓄積
         let mut init_or_path_dep = false;
+        // K-M (v0.55.23): init フェーズで蓄積した OR 子の共通 cycle_root
+        // None=未設定, Some(0)=boolean path_dep, Some(r)=K-M タグ
+        let mut init_or_km_cycle_root: Option<u32> = None;
         // init フェーズでの OR 子 NM remaining の最小値
         let mut init_or_nm_min_remaining: u16 = REMAINING_INFINITE;
         // AND ノードの init フェーズ用: TT プレフィルタで証明済み合駒の証明駒蓄積
@@ -2686,12 +2710,11 @@ impl DfPnSolver {
                     if !or_node {
                         // AND 親の子 = OR 局面: 王手の有無で REMAINING_INFINITE 判定
                         let checks = self.generate_check_moves_cached(board);
-                        let dl_rem = if checks.is_empty() {
-                            REMAINING_INFINITE
-                        } else if self.all_checks_refutable_by_tt(board, &checks) {
-                            REMAINING_INFINITE
+                        let (dl_rem, dl_km_cr) = if checks.is_empty() {
+                            (REMAINING_INFINITE, None)
                         } else {
-                            0
+                            let (ok, cr) = self.all_checks_refutable_by_tt(board, &checks);
+                            if ok { (REMAINING_INFINITE, cr) } else { (0u16, None) }
                         };
                         // REMAINING_INFINITE(真の不詰)のみ store する．
                         // rem=0 の仮反証は TT に store しない:
@@ -2699,7 +2722,11 @@ impl DfPnSolver {
                         // - クラスタの 64.7% を占め overflow の主因
                         // - ローカル変数 cpn/cdn で解決チェック可能
                         if dl_rem == REMAINING_INFINITE {
-                            self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk as u32);
+                            if let Some(cr) = dl_km_cr {
+                                self.store_path_dep(child_pk, child_hand, INF, 0, dl_rem, cr, true);
+                            } else {
+                                self.store(child_pk, child_hand, INF, 0, dl_rem, child_pk as u32);
+                            }
                         }
                     }
                     // rem=0 は TT に store せず，ローカル変数のみで処理
@@ -2964,12 +2991,17 @@ impl DfPnSolver {
                 // 古いエントリ(低 remaining)を返して NM 伝播を汚染する．
                 let child_nm_rem = self.table.get_effective_disproof_info(
                     child_pk, &child_hand, child_remaining,
-                ).map(|(r, _)| r).unwrap_or(0);
+                ).map(|(r, _)| r).unwrap_or(child_remaining);
                 init_or_nm_min_remaining = init_or_nm_min_remaining.min(child_nm_rem);
-                // GHI 伝播: 子の反証が経路依存なら蓄積
-                init_or_path_dep |= self.table.has_path_dependent_disproof(
-                    child_pk, &child_hand,
-                );
+                // GHI 伝播: 子の反証が経路依存なら蓄積 (K-M: cycle_root も追跡)
+                if let Some(cr) = self.table.get_path_dep_cycle_root(child_pk, &child_hand) {
+                    init_or_path_dep = true;
+                    init_or_km_cycle_root = Some(match init_or_km_cycle_root {
+                        None => cr,
+                        Some(prev) if prev == cr => cr,
+                        _ => 0,  // 異なる cycle_root → boolean path_dep に格下げ
+                    });
+                }
                 continue;
             }
 
@@ -3032,8 +3064,20 @@ impl DfPnSolver {
                 let checks = self.generate_check_moves_cached(board);
                 if checks.is_empty() {
                     parent_nm_remaining = REMAINING_INFINITE;
-                } else if self.all_checks_refutable_by_tt(board, &checks) {
-                    parent_nm_remaining = REMAINING_INFINITE;
+                } else {
+                    let (refuted, km_cr) = self.all_checks_refutable_by_tt(board, &checks);
+                    if refuted {
+                        parent_nm_remaining = REMAINING_INFINITE;
+                        // K-M 反証を使った場合，親の反証も経路依存にする
+                        if let Some(cr) = km_cr {
+                            init_or_path_dep = true;
+                            init_or_km_cycle_root = Some(match init_or_km_cycle_root {
+                                None => cr,
+                                Some(prev) if prev == cr => cr,
+                                _ => 0,
+                            });
+                        }
+                    }
                 }
             }
             //
@@ -3042,9 +3086,11 @@ impl DfPnSolver {
             // 実際の持ち駒で不詰が確定しているため，att_hand で登録すれば
             // hand dominance によるカバー範囲が最大になる．
             if init_or_path_dep {
+                // K-M (v0.55.23): 共通 cycle_root を伝播
+                let cr = init_or_km_cycle_root.unwrap_or(0);
                 self.store_path_dep(
                     pos_key, att_hand, INF, 0,
-                    parent_nm_remaining, pos_key as u32, true,
+                    parent_nm_remaining, cr, true,
                 );
             } else {
                 self.store(
@@ -3241,10 +3287,9 @@ impl DfPnSolver {
                         remaining.saturating_sub(1),
                     )
                 };
-                if cpn >= pn_threshold || cdn >= dn_threshold {
-                    self.store(pos_key, att_hand, cpn, cdn, remaining, pos_key as u32);
-                    break;
-                }
+                // 終端チェックを閾値チェックより先に行う (v0.55.24 fix):
+                // cpn=INF かつ cdn=0 のとき閾値チェックが INF >= INF-1 で先に発火し，
+                // remaining をそのまま store してしまうバグを修正する．
                 if cpn == 0 || cdn == 0 {
                     // 子の証明/反証 → 親に伝播
                     if or_node {
@@ -3264,33 +3309,64 @@ impl DfPnSolver {
                         } else {
                             // cdn == 0: 唯一の子が反証 → OR 反証
                             // att_hand で保存(TT ヒット率最大化)
-                            let child_path_dep = is_loop_child
-                                || self.table.has_path_dependent_disproof(
-                                    child_pk, child_hand,
-                                );
-                            if child_path_dep {
+                            // K-M (v0.55.23): cycle_root = child_fh as u32 (直接ループ)
+                            //                 または子の cycle_root を伝播
+                            let cycle_root: Option<u32> = if is_loop_child {
+                                Some(child_fh as u32)
+                            } else {
+                                self.table.get_path_dep_cycle_root(child_pk, child_hand)
+                            };
+                            if let Some(cr) = cycle_root {
+                                // path_dep 反証: remaining をそのまま使用
                                 self.store_path_dep(
                                     pos_key, att_hand, INF, 0,
-                                    remaining, pos_key as u32, true,
+                                    remaining, cr, true,
                                 );
                             } else {
-                                self.store(pos_key, att_hand, INF, 0, remaining, pos_key as u32);
+                                // 絶対反証: 子の nm_remaining を伝播 (v0.55.24 fix)
+                                let child_nm_rem = self.table
+                                    .get_effective_disproof_info(
+                                        child_pk, child_hand,
+                                        remaining.saturating_sub(1),
+                                    )
+                                    .map(|(r, _)| r)
+                                    .unwrap_or(remaining.saturating_sub(1));
+                                let parent_nm_remaining =
+                                    propagate_nm_remaining(child_nm_rem, remaining);
+                                self.store(pos_key, att_hand, INF, 0,
+                                    parent_nm_remaining, pos_key as u32);
                             }
                         }
                     } else {
                         if cdn == 0 {
-                            // AND 反証: att_hand で保存(TT ヒット率最大化)
-                            let child_path_dep = is_loop_child
-                                || self.table.has_path_dependent_disproof(
-                                    child_pk, child_hand,
-                                );
-                            if child_path_dep {
+                            // AND 反証: 反証駒最適化 + nm_remaining 伝播 (v0.55.24 fix)
+                            // K-M (v0.55.23): cycle_root = child_fh as u32 (直接ループ)
+                            //                 または子の cycle_root を伝播
+                            let cycle_root: Option<u32> = if is_loop_child {
+                                Some(child_fh as u32)
+                            } else {
+                                self.table.get_path_dep_cycle_root(child_pk, child_hand)
+                            };
+                            if let Some(cr) = cycle_root {
+                                // path_dep 反証: remaining をそのまま使用
                                 self.store_path_dep(
                                     pos_key, att_hand, INF, 0,
-                                    remaining, if is_loop_child { 0 } else { pos_key as u32 }, true,
+                                    remaining, cr, true,
                                 );
                             } else {
-                                self.store(pos_key, att_hand, INF, 0, remaining, pos_key as u32);
+                                // 絶対反証: 子の nm_remaining を伝播 + 反証駒最適化 (v0.55.24 fix)
+                                let child_nm_rem = self.table
+                                    .get_effective_disproof_info(
+                                        child_pk, child_hand,
+                                        remaining.saturating_sub(1),
+                                    )
+                                    .map(|(r, _)| r)
+                                    .unwrap_or(remaining.saturating_sub(1));
+                                let parent_nm_remaining =
+                                    propagate_nm_remaining(child_nm_rem, remaining);
+                                let dh = self.table.get_disproof_hand(child_pk, child_hand);
+                                self.store(pos_key, dh, INF, 0,
+                                    parent_nm_remaining, pos_key as u32);
                             }
                         } else {
                             // cpn == 0: 唯一の子が証明 → AND 証明
@@ -3307,6 +3383,10 @@ impl DfPnSolver {
                             }
                         }
                     }
+                    break;
+                }
+                if cpn >= pn_threshold || cdn >= dn_threshold {
+                    self.store(pos_key, att_hand, cpn, cdn, remaining, pos_key as u32);
                     break;
                 }
 
@@ -3466,6 +3546,8 @@ impl DfPnSolver {
 
             // TCA: OR ノードでのループ子ノード数
             let mut loop_child_count: u32 = 0;
+            // K-M (v0.55.23): main loop で蓄積した OR 子の共通 cycle_root
+            let mut or_km_cycle_root: Option<u32> = None;
             // OR NM remaining 伝播: 全子 NM の remaining の最小値を追跡
             let mut or_nm_min_remaining: u16;
 
@@ -3489,6 +3571,13 @@ impl DfPnSolver {
                     let (cpn, cdn, csrc) =
                         if self.path_set.contains(&child_fh) {
                             loop_child_count += 1;
+                            // K-M (v0.55.23): 直接ループ → cycle_root = child_fh as u32
+                            let cr = child_fh as u32;
+                            or_km_cycle_root = Some(match or_km_cycle_root {
+                                None => cr,
+                                Some(prev) if prev == cr => cr,
+                                _ => 0,
+                            });
                             (INF, 0, 0)
                         } else {
                             self.look_up_pn_dn(
@@ -3543,13 +3632,18 @@ impl DfPnSolver {
                             remaining.saturating_sub(1),
                         ).map(|(r, _)| r).unwrap_or(0);
                         or_nm_min_remaining = or_nm_min_remaining.min(child_nm_rem);
-                        // GHI 伝播: 子の反証が経路依存なら親も経路依存
-                        if !self.path_set.contains(&child_fh)
-                            && self.table.has_path_dependent_disproof(
+                        // GHI 伝播: 子の反証が経路依存なら親も経路依存 (K-M: cycle_root も追跡)
+                        if !self.path_set.contains(&child_fh) {
+                            if let Some(cr) = self.table.get_path_dep_cycle_root(
                                 child_pk, child_hand,
-                            )
-                        {
-                            loop_child_count += 1; // path_dependent として扱う
+                            ) {
+                                loop_child_count += 1;
+                                or_km_cycle_root = Some(match or_km_cycle_root {
+                                    None => cr,
+                                    Some(prev) if prev == cr => cr,
+                                    _ => 0,
+                                });
+                            }
                         }
                     }
 
@@ -3601,9 +3695,20 @@ impl DfPnSolver {
                         let checks = self.generate_check_moves_cached(board);
                         if checks.is_empty() {
                             parent_nm_remaining = REMAINING_INFINITE;
-                        } else if self.all_checks_refutable_by_tt(board, &checks)
-                        {
-                            parent_nm_remaining = REMAINING_INFINITE;
+                        } else {
+                            let (refuted, km_cr) = self.all_checks_refutable_by_tt(board, &checks);
+                            if refuted {
+                                parent_nm_remaining = REMAINING_INFINITE;
+                                // K-M 反証を使った場合，親の反証も経路依存にする
+                                if let Some(cr) = km_cr {
+                                    loop_child_count = loop_child_count.max(1);
+                                    or_km_cycle_root = Some(match or_km_cycle_root {
+                                        None => cr,
+                                        Some(prev) if prev == cr => cr,
+                                        _ => 0,
+                                    });
+                                }
+                            }
                         }
                     }
                     //
@@ -3612,10 +3717,14 @@ impl DfPnSolver {
                     // も考慮する(init で反証済みの子が MID ループには残らないため)．
                     // OR ノード反証: att_hand で保存(TT ヒット率最大化)
                     if loop_child_count > 0 || init_or_path_dep {
+                        // K-M (v0.55.23): main loop と init フェーズの cycle_root をマージ
+                        let cr = or_km_cycle_root
+                            .or(init_or_km_cycle_root)
+                            .unwrap_or(0);
                         self.store_path_dep(
                             pos_key, att_hand,
                             INF, 0,
-                            parent_nm_remaining, pos_key as u32, true,
+                            parent_nm_remaining, cr, true,
                         );
                     } else {
                         self.store(
@@ -3705,14 +3814,16 @@ impl DfPnSolver {
                         ).map(|(r, _)| r).unwrap_or(0);
                         let parent_nm_remaining = propagate_nm_remaining(
                             child_nm_rem, remaining);
-                        let child_path_dep = is_loop_child
-                            || self.table.has_path_dependent_disproof(
-                                child_pk, child_hand,
-                            );
-                        if child_path_dep {
+                        // K-M (v0.55.23): AND 反証の cycle_root を子から取得・伝播
+                        let cycle_root: Option<u32> = if is_loop_child {
+                            Some(child_fh as u32)
+                        } else {
+                            self.table.get_path_dep_cycle_root(child_pk, child_hand)
+                        };
+                        if let Some(cr) = cycle_root {
                             self.store_path_dep(
                                 pos_key, att_hand, INF, 0,
-                                parent_nm_remaining, csrc, true,
+                                parent_nm_remaining, cr, true,
                             );
                         } else {
                             // 反証駒最適化: 子の ProvenTT 反証駒 (DH_C ≥ att_hand) を AND-node に伝播．

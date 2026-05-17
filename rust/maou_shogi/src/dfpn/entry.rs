@@ -28,9 +28,13 @@ const REMAINING_MASK: u16 = 0x7FFF;
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub(super) struct DfPnEntry {
-    /// SNDA (Kishimoto 2010) のソースノードハッシュ(上位 32 bit 切り捨て)．
+    /// SNDA ソースノードハッシュ または K-M cycle_root ハッシュ(上位 32 bit 切り捨て)．
     ///
-    /// SNDA 衝突確率は 2^{-32} であり，TT キャッシュの用途では十分．
+    /// - `path_dependent = false`: SNDA ソースノードハッシュ (Kishimoto 2010)．
+    ///   SNDA 衝突確率は 2^{-32} であり，TT キャッシュの用途では十分．
+    /// - `path_dependent = true, source ≠ 0`: K-M cycle_root (child full_hash as u32)．
+    ///   現在のサーチパスにこのハッシュが含まれる場合，cross-branch で反証を再利用可能．
+    /// - `path_dependent = true, source = 0`: boolean path_dep (cross-branch 再利用不可)．
     pub(super) source: u32,
     pub(super) pn: u32,
     pub(super) dn: u32,

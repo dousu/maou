@@ -1797,19 +1797,29 @@ impl TranspositionTable {
 
     /// 反証エントリが経路依存かどうかを返す．
     /// path-dep disproof は WorkingTT に格納される．
-    /// 自クラスタ + 持ち駒1枚増の近傍クラスタを走査する．
-    pub(super) fn has_path_dependent_disproof(
+    /// path_dependent 反証の K-M cycle_root を返す(±1近傍走査付き)．
+    ///
+    /// - `None`: WorkingTT に反証なし，または反証は path_dep=false (絶対知識)
+    /// - `Some(0)`: path_dep=true だが cycle_root 未設定 (boolean path_dep, cross-branch 再利用不可)
+    /// - `Some(r)`: path_dep=true かつ cycle_root=r (K-M タグ付き)
+    ///
+    /// `has_path_dependent_disproof` の上位互換 (v0.55.23+)．
+    pub(super) fn get_path_dep_cycle_root(
         &self,
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
-    ) -> bool {
+    ) -> Option<u32> {
         let pos_key = Self::safe_key(pos_key);
         for fe in self.working_cluster(pos_key, hand) {
             if fe.pos_key == pos_key
                 && fe.entry.dn == 0
                 && hand_gte_forward_chain(&fe.entry.hand, hand)
             {
-                return fe.entry.path_dependent();
+                return if fe.entry.path_dependent() {
+                    Some(fe.entry.source)  // source = cycle_root when path_dep=true
+                } else {
+                    None  // 絶対知識の反証 → path_dep でない
+                };
             }
         }
         // 持ち駒+1の近傍(±1限定)
@@ -1825,11 +1835,73 @@ impl TranspositionTable {
                     && fe.entry.dn == 0
                     && hand_gte_forward_chain(&fe.entry.hand, hand)
                 {
-                    return fe.entry.path_dependent();
+                    return if fe.entry.path_dependent() {
+                        Some(fe.entry.source)
+                    } else {
+                        None
+                    };
                 }
             }
         }
-        false
+        None
+    }
+
+    /// K-M dual TT: サイクルルートを考慮した path_dep 反証の有効性チェック．
+    ///
+    /// K-M dual TT: path_dep 反証の cycle_root を返す(有効な場合のみ)．
+    ///
+    /// WorkingTT 内の path_dep=true の反証エントリについて，
+    /// `cycle_root ≠ 0` かつ `cycle_root ∈ path` (lower 32 bit 比較) の場合に
+    /// `Some(cycle_root)` を返す．
+    ///
+    /// path は `solver.path[..solver.path_len]` の full_hash 配列 (u64)．
+    /// cycle_root = `child_fh as u32` (full_hash の下位 32 bit) で格納されている．
+    ///
+    /// 絶対知識の反証 (path_dep=false) や cycle_root がパスにない場合は None を返す．
+    /// 返された cycle_root は呼び出し元が NM の path_dep 状態を決定するために使用する．
+    pub(super) fn get_km_disproof_cycle_root(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        path: &[u64],
+    ) -> Option<u32> {
+        let pos_key_safe = Self::safe_key(pos_key);
+        // 自クラスタ
+        for fe in self.working_cluster(pos_key_safe, hand) {
+            if fe.pos_key == pos_key_safe
+                && fe.entry.dn == 0
+                && hand_gte_forward_chain(&fe.entry.hand, hand)
+                && fe.entry.path_dependent()
+            {
+                let cr = fe.entry.source;
+                if cr != 0 && path.iter().any(|&fh| fh as u32 == cr) {
+                    return Some(cr);
+                }
+                return None;  // 最初にマッチした反証: cycle_root が path にない
+            }
+        }
+        // 持ち駒+1の近傍(±1限定)
+        let base_hh = Self::hand_hash(hand);
+        for k in 0..HAND_KINDS {
+            let max_k = PieceType::MAX_HAND_COUNT[k];
+            if hand[k] >= max_k { continue; }
+            let diff = Self::hand_hash_diff(k, hand[k], hand[k] + 1);
+            let start = self.working_cluster_start_from_hash(pos_key_safe, base_hh ^ diff);
+            for fe in &self.working[start..start + WORKING_CLUSTER_SIZE] {
+                if fe.pos_key == pos_key_safe
+                    && fe.entry.dn == 0
+                    && hand_gte_forward_chain(&fe.entry.hand, hand)
+                    && fe.entry.path_dependent()
+                {
+                    let cr = fe.entry.source;
+                    if cr != 0 && path.iter().any(|&fh| fh as u32 == cr) {
+                        return Some(cr);
+                    }
+                    return None;
+                }
+            }
+        }
+        None
     }
 
     /// 反証エントリの remaining を返す(±1近傍走査付き)．

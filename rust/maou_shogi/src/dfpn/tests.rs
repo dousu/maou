@@ -8414,8 +8414,10 @@ use crate::types::{Color, PieceType};
             child_board.do_move(defense);
 
             // depth=33 (残り 39-8=31 手 + margin 2), budget=1M
+            // PNS アリーナを 100K に制限: 5M (デフォルト) だと ~500MB 確保してメモリ枯渇の恐れ
             let mut solver = DfPnSolver::with_timeout(33, 1_000_000, 32767, 60);
             solver.set_find_shortest(false);
+            solver.param_pns_arena_max = 100_000;
             let start = Instant::now();
             let result = solver.solve(&mut child_board);
             let elapsed = start.elapsed();
@@ -8444,47 +8446,1036 @@ use crate::types::{Color, PieceType};
             }
         }
 
-        // ── 2c1d 後の各王手を 1M budget で個別ソルブ ──
-        verbose_eprintln!("\n--- 2c1d 後の各王手候補 (budget=1M, depth=33) ---\n");
-        verbose_eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}",
-            "#", "Check", "Type", "Nodes", "Time(s)", "Result");
-        verbose_eprintln!("{}", "-".repeat(55));
+        // ── 2c1d 後の各王手の AND 子を 1 手展開して各 OR 孫ノードを個別ソルブ ──
+        //
+        // mid_fallback を AND ルートに直接適用すると IDS 外側ループの
+        // generate_check_moves_cached が board.turn=White (守備方) の王手を数え
+        // 黒玉が存在しないため checks=0 → 即 REMAINING_INFINITE NM になる誤動作が起きる．
+        // (mid_fallback は OR ルート専用設計)
+        //
+        // 修正: AND 子ノード (王手後 White 番) の守備方回避手を列挙し，
+        //       各 OR 孫ノード (回避後 Black 番) を solve() で個別解析する．
+        //       solve() は board.turn=Black=attacker で正しく動作する．
+        verbose_eprintln!("\n--- 2c1d 後の各王手候補: AND 子展開 → OR 孫 solve (budget/孫=500K, depth=31) ---");
+        verbose_eprintln!("(全 OR 孫が MATE → その王手は有望; いずれかが NM → その回避で不詰)");
 
+        let mut helper2 = DfPnSolver::default_solver();
         for (i, &check) in checks.iter().enumerate() {
-            let mut child_board = board.clone();
-            child_board.do_move(check);
+            let mut and_board = board.clone();
+            and_board.do_move(check);
+            // and_board.turn == White (AND ノード)
 
-            let mut solver = DfPnSolver::with_timeout(33, 1_000_000, 32767, 60);
-            solver.set_find_shortest(false);
-            let start = Instant::now();
-            let result = solver.solve(&mut child_board);
-            let elapsed = start.elapsed();
-
+            let defenses = helper2.generate_defense_moves(&mut and_board);
             let check_type = if check.is_drop() { "drop" } else { "move" };
-            let (result_str, nodes) = match &result {
-                TsumeResult::Checkmate { moves, nodes_searched } =>
-                    (format!("MATE({})", moves.len()), *nodes_searched),
-                TsumeResult::CheckmateNoPv { nodes_searched } =>
-                    ("MATE(nopv)".into(), *nodes_searched),
-                TsumeResult::NoCheckmate { nodes_searched } =>
-                    ("NM".into(), *nodes_searched),
-                TsumeResult::Unknown { nodes_searched } =>
-                    ("UNK".into(), *nodes_searched),
-            };
 
-            verbose_eprintln!("{:>3} {:>8} {:>5} {:>10} {:>8.1} {:>10}",
-                i + 1, check.to_usi(), check_type, nodes,
-                elapsed.as_secs_f64(), result_str);
+            verbose_eprintln!("\n  [{}] {} ({}) → {} 回避手",
+                i + 1, check.to_usi(), check_type, defenses.len());
+            verbose_eprintln!("  {:>8} {:>5} {:>10} {:>8} {:>8}",
+                "Defense", "Type", "Nodes", "Time(s)", "Result");
+            verbose_eprintln!("  {}", "-".repeat(45));
 
-            if let TsumeResult::Checkmate { moves, .. } = &result {
-                let pv: Vec<String> = moves.iter().take(10).map(|m| m.to_usi()).collect();
-                let suffix = if moves.len() > 10 { " ..." } else { "" };
-                verbose_eprintln!("    PV: {}{}", pv.join(" "), suffix);
+            let mut all_mate = true;
+            let mut has_nm = false;
+            let mut total_nodes: u64 = 0;
+            for &defense in &defenses {
+                let mut or_board = and_board.clone();
+                or_board.do_move(defense);
+                // or_board.turn == Black (OR ノード) — solve() で正しく解析可能
+
+                let mut solver = DfPnSolver::with_timeout(31, 500_000, 32767, 30);
+                solver.set_find_shortest(false);
+                solver.param_pns_arena_max = 50_000;
+                let start = Instant::now();
+                let result = solver.solve(&mut or_board);
+                let elapsed = start.elapsed();
+
+                let def_type = if defense.is_drop() { "drop" } else { "move" };
+                let (res_str, nodes) = match &result {
+                    TsumeResult::Checkmate { moves, nodes_searched } =>
+                        (format!("MATE({})", moves.len()), *nodes_searched),
+                    TsumeResult::CheckmateNoPv { nodes_searched } =>
+                        ("MATE(?)".into(), *nodes_searched),
+                    TsumeResult::NoCheckmate { nodes_searched } => {
+                        has_nm = true;
+                        all_mate = false;
+                        ("NM".into(), *nodes_searched)
+                    },
+                    TsumeResult::Unknown { nodes_searched } => {
+                        all_mate = false;
+                        ("UNK".into(), *nodes_searched)
+                    },
+                };
+                total_nodes += nodes;
+                let heavy = if nodes >= 500_000 { " <<<" } else { "" };
+                verbose_eprintln!("  {:>8} {:>5} {:>10} {:>8.1} {:>8}{}",
+                    defense.to_usi(), def_type, nodes,
+                    elapsed.as_secs_f64(), res_str, heavy);
             }
+
+            let summary = if has_nm {
+                "NM存在 → 誤王手"
+            } else if all_mate {
+                "全MATE → 有望!"
+            } else {
+                "UNK残り → 要解析"
+            };
+            verbose_eprintln!("  → {} (孫合計 {} nodes)", summary, total_nodes);
         }
     }
 
+    /// 2c1d → 9c8d 後のインタポーズ深掘り分析．
+    ///
+    /// **[SLOW]** `9c8d` (+R 対角移動でランク4王手) 後の全回避手を 5M budget + ProvenTT 共有で解析する．
+    /// - 王手なし回避手(1d1e, 1d2e): 素早く MATE(7)
+    /// - ランク4インタポーズ (X*3d〜X*7d): 500K では全 UNK → 5M + TT 共有で再挑戦
+    #[test]
+    #[ignore]
+    fn test_2c1d_9c8d_interpose_breakdown() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        // 9手進めて N*1e → 2c1d → 9c8d 後の局面 (AND ノード: 守備方番)
+        let pv_to_9c8d = [
+            "7b6b", "5b4c", "8b9c", "4c3d",
+            "1b2c", "3d2c", "N*1e", "2c1d", "9c8d",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv_to_9c8d {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        // AND ノード: 守備方番
+        assert_eq!(board.turn, Color::White);
+
+        let mut helper = DfPnSolver::default_solver();
+        let defenses = helper.generate_defense_moves(&mut board);
+
+        eprintln!("\n{}", "=".repeat(80));
+        eprintln!(" 2c1d → 9c8d インタポーズ深掘り (budget/局面=5M, depth=31, TT共有)");
+        eprintln!(" 局面: {} (9手後)", board.sfen());
+        eprintln!(" 回避手数: {}", defenses.len());
+        eprintln!("{}", "=".repeat(80));
+
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                // 王手手移動回避 (1d1e, 1d2e) を先に解き ProvenTT を蓄積
+                // その後インタポーズ回避を TT 共有で解く
+
+                // depth = 39 - 9 = 30 手残り + margin 3
+                let mut solver = DfPnSolver::with_timeout(33, 5_000_000, 32767, 120);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.param_pns_arena_max = 200_000;
+
+                eprintln!("\n{:>3} {:>8} {:>5} {:>12} {:>8} {:>10}",
+                    "#", "Defense", "Type", "Nodes", "Time(s)", "Result");
+                eprintln!("{}", "-".repeat(55));
+
+                // 王手手移動回避を先 (ProvenTT 種まき)
+                let mut sorted_defenses: Vec<_> = defenses.iter().enumerate().collect();
+                sorted_defenses.sort_by_key(|(_, m)| if m.is_drop() { 1 } else { 0 });
+
+                let mut all_mate = true;
+                let mut has_nm = false;
+                let mut total_nodes: u64 = 0;
+
+                for (i, &defense) in &sorted_defenses {
+                    let mut or_board = board.clone();
+                    or_board.do_move(defense);
+                    // or_board.turn == Black (OR ノード)
+                    assert_eq!(or_board.turn, Color::Black);
+
+                    let def_type = if defense.is_drop() { "drop" } else { "move" };
+                    let start = std::time::Instant::now();
+                    let result = solver.solve(&mut or_board);
+                    let elapsed = start.elapsed();
+
+                    let (res_str, nodes) = match &result {
+                        TsumeResult::Checkmate { moves, nodes_searched } =>
+                            (format!("MATE({})", moves.len()), *nodes_searched),
+                        TsumeResult::CheckmateNoPv { nodes_searched } =>
+                            ("MATE(?)".into(), *nodes_searched),
+                        TsumeResult::NoCheckmate { nodes_searched } => {
+                            has_nm = true;
+                            all_mate = false;
+                            ("NM".into(), *nodes_searched)
+                        },
+                        TsumeResult::Unknown { nodes_searched } => {
+                            all_mate = false;
+                            ("UNK".into(), *nodes_searched)
+                        },
+                    };
+                    total_nodes += nodes;
+                    let heavy = if nodes >= 1_000_000 { " <<<" } else { "" };
+                    eprintln!("{:>3} {:>8} {:>5} {:>12} {:>8.1} {:>10}{}",
+                        i + 1, defense.to_usi(), def_type, nodes,
+                        elapsed.as_secs_f64(), res_str, heavy);
+
+                    if let TsumeResult::Checkmate { moves, .. } = &result {
+                        let pv: Vec<String> = moves.iter().take(8).map(|m| m.to_usi()).collect();
+                        let suffix = if moves.len() > 8 { " ..." } else { "" };
+                        eprintln!("    PV: {}{}", pv.join(" "), suffix);
+                    }
+                }
+
+                let proven_len = solver.table.proven_len();
+                let summary = if has_nm {
+                    "NM存在 → 9c8d は誤王手"
+                } else if all_mate {
+                    "全MATE → 9c8d が正着!"
+                } else {
+                    "UNK残り → さらに解析必要"
+                };
+                eprintln!("\n→ {} (合計 {} nodes)", summary, total_nodes);
+                eprintln!("最終 ProvenTT: {} エントリ", proven_len);
+                eprintln!("{}", "=".repeat(80));
+
+                // NM がなければテスト自体は通す (assert しない: 診断目的)
+                assert!(!has_nm, "9c8d 後に NoMate が発見された — 誤王手の可能性");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// 2c1d → 9c8d インタポーズ エスカレーター診断テスト
+    ///
+    /// **[SLOW]** 各インタポーズ後の「飛車取り」危機を段階的に診断する．
+    ///
+    /// ## 判明した根本原因仮説
+    /// - 3d 系インタポーズ (L*3d,N*3d,S*3d,G*3d,B*3d) の場合:
+    ///   `9c8d → X*3d → 8d3d (飛車 3d へ)` 後に White の 3c 歩が `3c3d` で飛車取り可能!
+    /// - 各レベルを個別ソルブして詰みの存否を確認する．
+    ///
+    /// ## テスト構成
+    /// - L0: L*3d → 8d3d 後 (AND, +R@3d, king@1d, White pawn@3c can capture +R!)
+    /// - L1: L*3d → 8d3d → 3c3d 後 (AND, White 歩が+R取り, Black 飛車なし)
+    ///   Black が飛車なしで詰みを証明できるか?
+    #[test]
+    #[ignore]
+    fn test_2c1d_escalator_diagnostic() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        // 9c8d 後の局面へ (AND ノード: 守備方番)
+        let pv_to_9c8d = [
+            "7b6b", "5b4c", "8b9c", "4c3d",
+            "1b2c", "3d2c", "N*1e", "2c1d", "9c8d",
+        ];
+
+        let mut board_9c8d = Board::new();
+        board_9c8d.set_sfen(sfen).unwrap();
+        for usi in &pv_to_9c8d {
+            let m = board_9c8d.move_from_usi(usi).unwrap();
+            board_9c8d.do_move(m);
+        }
+        assert_eq!(board_9c8d.turn, Color::White);
+
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                let mut helper = DfPnSolver::default_solver();
+
+                // ── L0: L*3d → 8d3d 後の AND ノード ──
+                // White drops Lance at 3d (interpose, nifu-free unlike pawn)
+                // Black captures: 8d3d (+R now at 3d, still checking king at 1d)
+                // CRITICAL: White's existing pawn at 3c can now capture +R via 3c3d!
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 飛車取り診断: 2c1d → 9c8d → L*3d → 8d3d 後の AND ノード");
+                eprintln!(" (White pawn@3c can counter-capture +R@3d via 3c3d)");
+                eprintln!("{}", "=".repeat(80));
+
+                let mut board_l0 = board_9c8d.clone();
+                let l3d = board_l0.move_from_usi("L*3d").unwrap();
+                board_l0.do_move(l3d);
+                let b8d3d = board_l0.move_from_usi("8d3d").unwrap();
+                board_l0.do_move(b8d3d);
+                assert_eq!(board_l0.turn, Color::White);
+
+                eprintln!(" L0 局面 SFEN: {}", board_l0.sfen());
+                let l0_defs = helper.generate_defense_moves(&mut board_l0);
+                eprintln!(" L0 回避手数: {} (3c3d が含まれるはず)", l0_defs.len());
+                for m in &l0_defs {
+                    eprintln!("   {}", m.to_usi());
+                }
+
+                let has_3c3d = l0_defs.iter().any(|m| m.to_usi() == "3c3d");
+                eprintln!(" 3c3d (飛車取り) 存在: {}", if has_3c3d { "YES" } else { "NO" });
+
+                // ── L0 各回避手を OR 孫ソルブ (2M budget + TT共有) ──
+                let mut solver = DfPnSolver::with_timeout(31, 2_000_000, 32767, 60);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.param_pns_arena_max = 200_000;
+
+                eprintln!("\n  {:>10} {:>5} {:>12} {:>8} {:>10}",
+                    "Defense", "Type", "Nodes", "Time(s)", "Result");
+                eprintln!("  {}", "-".repeat(50));
+
+                // king moves (non-drop) first to seed ProvenTT
+                let mut sorted: Vec<_> = l0_defs.iter().collect();
+                sorted.sort_by_key(|m| if m.is_drop() { 1 } else { 0 });
+
+                let mut l0_all_mate = true;
+                for &def in &sorted {
+                    let mut or_board = board_l0.clone();
+                    or_board.do_move(*def);
+                    assert_eq!(or_board.turn, Color::Black);
+
+                    let start = std::time::Instant::now();
+                    let result = solver.solve(&mut or_board);
+                    let elapsed = start.elapsed();
+
+                    let def_type = if def.is_drop() { "drop" } else { "move" };
+                    match &result {
+                        TsumeResult::Checkmate { moves, nodes_searched } => {
+                            let pv: Vec<String> = moves.iter().take(10).map(|m| m.to_usi()).collect();
+                            let suffix = if moves.len() > 10 { " ..." } else { "" };
+                            eprintln!("  {:>10} {:>5} {:>12} {:>8.1}  MATE({}) PV: {}{}",
+                                def.to_usi(), def_type, nodes_searched, elapsed.as_secs_f64(),
+                                moves.len(), pv.join(" "), suffix);
+                        },
+                        TsumeResult::CheckmateNoPv { nodes_searched } =>
+                            eprintln!("  {:>10} {:>5} {:>12} {:>8.1} MATE(nopv)",
+                                def.to_usi(), def_type, nodes_searched, elapsed.as_secs_f64()),
+                        TsumeResult::NoCheckmate { nodes_searched } => {
+                            l0_all_mate = false;
+                            eprintln!("  {:>10} {:>5} {:>12} {:>8.1} NM !!!",
+                                def.to_usi(), def_type, nodes_searched, elapsed.as_secs_f64());
+                        },
+                        TsumeResult::Unknown { nodes_searched } => {
+                            l0_all_mate = false;
+                            eprintln!("  {:>10} {:>5} {:>12} {:>8.1} UNK <<<",
+                                def.to_usi(), def_type, nodes_searched, elapsed.as_secs_f64());
+                        },
+                    };
+                }
+                eprintln!(" L0 ProvenTT: {} エントリ", solver.table.proven_len());
+
+                // ── L1: L*3d → 8d3d → 3c3d 後 (White pawn captured +R!) ──
+                // 最重要: 白歩が飛車を取った後の局面. Black の飛車なし状態.
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" L1 (飛車取り後): 9c8d → L*3d → 8d3d → 3c3d 後の OR ノード");
+                eprintln!(" (Black 飛車なし! +B, R@8g, N@1e で詰みを模索)");
+                eprintln!("{}", "=".repeat(80));
+
+                let m3c3d = board_l0.move_from_usi("3c3d").unwrap();
+                let mut board_l1 = board_l0.clone();
+                board_l1.do_move(m3c3d);
+                assert_eq!(board_l1.turn, Color::Black);
+
+                eprintln!(" L1 局面 SFEN: {}", board_l1.sfen());
+
+                // List Black's checks from this position
+                let checks_l1 = helper.generate_check_moves(&mut board_l1);
+                eprintln!(" Black の王手候補数: {}", checks_l1.len());
+                for c in checks_l1.iter().take(10) {
+                    eprintln!("   {}", c.to_usi());
+                }
+                if checks_l1.len() > 10 {
+                    eprintln!("   ... and {} more", checks_l1.len() - 10);
+                }
+
+                // Solve the L1 OR grandchild with 5M budget
+                let (pm, pt) = solver.table.clone_proven_map();
+                let mut solver_l1 = DfPnSolver::with_timeout(27, 5_000_000, 32767, 120);
+                solver_l1.set_find_shortest(false);
+                solver_l1.set_preserve_proven_tt(true);
+                solver_l1.param_pns_arena_max = 200_000;
+                solver_l1.table.set_proven_map(pm, pt);
+
+                let start = std::time::Instant::now();
+                let result_l1 = solver_l1.solve(&mut board_l1);
+                let elapsed_l1 = start.elapsed();
+
+                match &result_l1 {
+                    TsumeResult::Checkmate { moves, nodes_searched } => {
+                        let pv: Vec<String> = moves.iter().take(12).map(|m| m.to_usi()).collect();
+                        let suffix = if moves.len() > 12 { " ..." } else { "" };
+                        eprintln!(" L1 結果: MATE({}) in {} nodes ({:.1}s)",
+                            moves.len(), nodes_searched, elapsed_l1.as_secs_f64());
+                        eprintln!(" L1 PV: {}{}", pv.join(" "), suffix);
+                    },
+                    TsumeResult::CheckmateNoPv { nodes_searched } =>
+                        eprintln!(" L1 結果: MATE(nopv) in {} nodes ({:.1}s)", nodes_searched, elapsed_l1.as_secs_f64()),
+                    TsumeResult::NoCheckmate { nodes_searched } =>
+                        eprintln!(" L1 結果: NoMate in {} nodes ({:.1}s) → 9c8d は誤王手候補!", nodes_searched, elapsed_l1.as_secs_f64()),
+                    TsumeResult::Unknown { nodes_searched } =>
+                        eprintln!(" L1 結果: Unknown in {} nodes ({:.1}s) → さらに探索必要", nodes_searched, elapsed_l1.as_secs_f64()),
+                }
+                eprintln!(" L1 ProvenTT: {} エントリ", solver_l1.table.proven_len());
+
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" まとめ:");
+                eprintln!("   L0 (L*3d → 8d3d 後) 全詰み: {}", if l0_all_mate { "YES ✓" } else { "NO (UNK/NM あり)" });
+                eprintln!("   L1 (→ 3c3d 飛車取り後) 詰み: {}", match &result_l1 {
+                    TsumeResult::Checkmate { moves, .. } => format!("YES MATE({})", moves.len()),
+                    TsumeResult::NoCheckmate { .. } => "NO (不詰 → 9c8d は L*3d に対して誤王手)".to_string(),
+                    _ => "UNK".to_string(),
+                });
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// 2c1d 後の全王手手診断: どの Black 王手が詰みを証明できるか？
+    ///
+    /// **[SLOW]** `N*1e → 2c1d` 後の Black 番で，全王手候補を列挙して
+    /// 各手の詰み可能性を診断する．
+    ///
+    /// 目的: `9c8d` が `L*3d → 8d3d → 3c3d` で詰み不能なら，
+    /// 別の王手手 (`4f2d`, `4f1c` 等) が正解か調査する．
+    #[test]
+    #[ignore]
+    fn test_2c1d_black_checks_diagnostic() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        // 2c1d までの手順
+        let pv_to_2c1d = [
+            "7b6b", "5b4c", "8b9c", "4c3d",
+            "1b2c", "3d2c", "N*1e", "2c1d",
+        ];
+
+        let mut board_2c1d = Board::new();
+        board_2c1d.set_sfen(sfen).unwrap();
+        for usi in &pv_to_2c1d {
+            let m = board_2c1d.move_from_usi(usi).unwrap();
+            board_2c1d.do_move(m);
+        }
+        assert_eq!(board_2c1d.turn, Color::Black);
+
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 2c1d 後の Black 王手手診断");
+                eprintln!(" SFEN: {}", board_2c1d.sfen());
+                eprintln!("{}", "=".repeat(80));
+
+                let helper = DfPnSolver::default_solver();
+                let checks = helper.generate_check_moves(&mut board_2c1d.clone());
+                eprintln!(" 王手候補数: {}", checks.len());
+
+                // PV 手 (9c8d) を先頭に, その他をソート
+                let mut sorted: Vec<_> = checks.iter().collect();
+                sorted.sort_by_key(|m| {
+                    let usi = m.to_usi();
+                    if usi == "9c8d" { 0 }
+                    else if usi.starts_with("4f") { 1 }
+                    else if usi.starts_with("N*") { 2 }
+                    else { 3 }
+                });
+
+                eprintln!("\n  {:>10} {:>5} {:>12} {:>8} {:>12}",
+                    "Check", "Type", "Nodes", "Time(s)", "Result");
+                eprintln!("  {}", "-".repeat(55));
+
+                // 各王手に 2M nodes / 30s を割り当て, ProvenTT 共有
+                let mut solver = DfPnSolver::with_timeout(33, 2_000_000, 32767, 30);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.param_pns_arena_max = 200_000;
+
+                for &chk in &sorted {
+                    let mut b = board_2c1d.clone();
+                    b.do_move(*chk);
+                    assert_eq!(b.turn, Color::White);
+
+                    let start = std::time::Instant::now();
+                    let result = solver.solve(&mut b);
+                    let elapsed = start.elapsed();
+
+                    let chk_type = if chk.is_drop() { "drop" } else { "move" };
+                    match &result {
+                        TsumeResult::Checkmate { moves, nodes_searched } =>
+                            eprintln!("  {:>10} {:>5} {:>12} {:>8.1}  MATE({})",
+                                chk.to_usi(), chk_type, nodes_searched, elapsed.as_secs_f64(), moves.len()),
+                        TsumeResult::CheckmateNoPv { nodes_searched } =>
+                            eprintln!("  {:>10} {:>5} {:>12} {:>8.1}  MATE(nopv)",
+                                chk.to_usi(), chk_type, nodes_searched, elapsed.as_secs_f64()),
+                        TsumeResult::NoCheckmate { nodes_searched } =>
+                            eprintln!("  {:>10} {:>5} {:>12} {:>8.1}  NM !!!",
+                                chk.to_usi(), chk_type, nodes_searched, elapsed.as_secs_f64()),
+                        TsumeResult::Unknown { nodes_searched } =>
+                            eprintln!("  {:>10} {:>5} {:>12} {:>8.1}  UNK",
+                                chk.to_usi(), chk_type, nodes_searched, elapsed.as_secs_f64()),
+                    };
+                }
+
+                eprintln!(" ProvenTT: {} エントリ", solver.table.proven_len());
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// L1 不詰判定診断: 9c8d→L*3d→8d3d→3c3d 後局面の詰み可能性を大バジェットで検証
+    ///
+    /// **[SLOW]** +R消滅後の局面 (L1) が「不詰」か「詰みあり(探索不足)」かを判定する．
+    /// Unknown ではなく Mate/NoMate が返れば正常; Unknown が続くなら探索バグの可能性あり．
+    ///
+    /// ## 仮説
+    /// - L1 は不詰 (9c8d が L*3d に対して誤王手) → 正しい攻め手を探す必要あり
+    /// - L1 は詰みあり (探索不足) → より大きなバジェットで証明可能
+    /// - L1 が Unknown のまま → ソルバーの不詰証明ロジックにバグあり
+    #[test]
+    #[ignore]
+    fn test_l1_nomate_diagnosis() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_to_l1 = [
+            "7b6b", "5b4c", "8b9c", "4c3d",
+            "1b2c", "3d2c", "N*1e", "2c1d", "9c8d",
+            "L*3d", "8d3d", "3c3d",
+        ];
+
+        let mut board_l1 = Board::new();
+        board_l1.set_sfen(sfen).unwrap();
+        for usi in &pv_to_l1 {
+            let m = board_l1.move_from_usi(usi).unwrap();
+            board_l1.do_move(m);
+        }
+        assert_eq!(board_l1.turn, Color::Black);
+
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" L1 不詰判定診断: 9c8d→L*3d→8d3d→3c3d 後の OR ノード");
+                eprintln!(" SFEN: {}", board_l1.sfen());
+                eprintln!("{}", "=".repeat(80));
+
+                let mut helper = DfPnSolver::default_solver();
+                let checks = helper.generate_check_moves(&mut board_l1.clone());
+                eprintln!(" Black の王手候補数: {}", checks.len());
+                for c in &checks {
+                    eprintln!("   {}", c.to_usi());
+                }
+
+                // 各王手候補について White の応手を確認
+                eprintln!("\n--- 各王手 → White の応答 ---");
+                for chk in &checks {
+                    let mut b = board_l1.clone();
+                    b.do_move(*chk);
+                    let defs = helper.generate_defense_moves(&mut b);
+                    eprintln!(" {} → {} defenses: {:?}",
+                        chk.to_usi(), defs.len(),
+                        defs.iter().take(8).map(|m| m.to_usi()).collect::<Vec<_>>());
+                }
+
+                // L1 を OR ノード (Black 番) として直接ソルブ: 20M budget
+                eprintln!("\n--- L1 直接ソルブ (20M nodes, depth=27, 180s) ---");
+                let mut solver = DfPnSolver::with_timeout(27, 20_000_000, 32767, 180);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.param_pns_arena_max = 200_000;
+
+                let start = std::time::Instant::now();
+                let result = solver.solve(&mut board_l1.clone());
+                let elapsed = start.elapsed();
+
+                match &result {
+                    TsumeResult::Checkmate { moves, nodes_searched } => {
+                        let pv: Vec<String> = moves.iter().take(15).map(|m| m.to_usi()).collect();
+                        eprintln!(" MATE({}) in {} nodes ({:.1}s)", moves.len(), nodes_searched, elapsed.as_secs_f64());
+                        eprintln!(" PV: {}", pv.join(" "));
+                    },
+                    TsumeResult::CheckmateNoPv { nodes_searched } =>
+                        eprintln!(" MATE(nopv) in {} nodes ({:.1}s)", nodes_searched, elapsed.as_secs_f64()),
+                    TsumeResult::NoCheckmate { nodes_searched } =>
+                        eprintln!(" NoMate in {} nodes ({:.1}s) → L*3d で 9c8d は誤王手!", nodes_searched, elapsed.as_secs_f64()),
+                    TsumeResult::Unknown { nodes_searched } =>
+                        eprintln!(" Unknown in {} nodes ({:.1}s) → ソルバーバグ疑い", nodes_searched, elapsed.as_secs_f64()),
+                }
+                eprintln!(" ProvenTT: {} エントリ", solver.table.proven_len());
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// 4f2d 単独ライン診断: 2c1d → 4f2d → 1d2d 後の OR ノードを直接ソルブ
+    ///
+    /// **[SLOW]** `4f2d` (角が2dへ) は White の応手が `1d2d` のみ (強制手).
+    /// 1d2d 後の OR ノード (Black 番, 角消滅後) を大バジェットで調査する.
+    ///
+    /// 診断目的: なぜこの強制手順でも詰みが証明できないのかを確認する.
+    ///   MATE → 4f2d が 2c1d の解 (9c8d は誤手だった)
+    ///   NoMate → 4f2d も不詰 → 別の手を探す必要
+    ///   Unknown → ソルバーバグ疑い (不詰なら証明が速いはず)
+    #[test]
+    #[ignore]
+    fn test_2c1d_4f2d_forced_line_diagnosis() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        // 2c1d → 4f2d → 1d2d (forced) までの手順
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d",
+            "1b2c", "3d2c", "N*1e", "2c1d",
+            "4f2d", "1d2d",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        assert_eq!(board.turn, Color::Black);
+
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 4f2d 強制手順診断: 2c1d → 4f2d → 1d2d 後の OR ノード");
+                eprintln!(" (角消滅, 玉@2d, Black 番)");
+                eprintln!(" SFEN: {}", board.sfen());
+                eprintln!("{}", "=".repeat(80));
+
+                let mut helper = DfPnSolver::default_solver();
+                let checks = helper.generate_check_moves(&mut board.clone());
+                eprintln!(" Black の王手候補数: {}", checks.len());
+                for c in checks.iter().take(12) {
+                    let mut b = board.clone();
+                    b.do_move(*c);
+                    let defs = helper.generate_defense_moves(&mut b);
+                    eprintln!("   {} → {} defenses",
+                        c.to_usi(), defs.len());
+                }
+                if checks.len() > 12 {
+                    eprintln!("   ... and {} more checks", checks.len() - 12);
+                }
+
+                // 直接ソルブ (50M nodes, depth=25, 300s)
+                eprintln!("\n--- OR ノード直接ソルブ (50M nodes, depth=25, 300s) ---");
+                let mut solver = DfPnSolver::with_timeout(25, 50_000_000, 32767, 300);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.param_pns_arena_max = 200_000;
+
+                let start = std::time::Instant::now();
+                let result = solver.solve(&mut board.clone());
+                let elapsed = start.elapsed();
+
+                match &result {
+                    TsumeResult::Checkmate { moves, nodes_searched } => {
+                        let pv: Vec<String> = moves.iter().take(15).map(|m| m.to_usi()).collect();
+                        eprintln!(" MATE({}) in {} nodes ({:.1}s)", moves.len(), nodes_searched, elapsed.as_secs_f64());
+                        eprintln!(" PV: {}", pv.join(" "));
+                    },
+                    TsumeResult::CheckmateNoPv { nodes_searched } =>
+                        eprintln!(" MATE(nopv) in {} nodes ({:.1}s)", nodes_searched, elapsed.as_secs_f64()),
+                    TsumeResult::NoCheckmate { nodes_searched } =>
+                        eprintln!(" NoMate in {} nodes ({:.1}s) → 4f2d は不詰!", nodes_searched, elapsed.as_secs_f64()),
+                    TsumeResult::Unknown { nodes_searched } =>
+                        eprintln!(" Unknown in {} nodes ({:.1}s) → 探索不足またはバグ", nodes_searched, elapsed.as_secs_f64()),
+                }
+                eprintln!(" ProvenTT: {} エントリ", solver.table.proven_len());
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// N*2f 応手別詰み診断: 2c1d → N*2f の2応手を個別ソルブ
+    ///
+    /// **[SLOW]** `N*2f` は応手2手のみ (1d1e, 1d2e)．各応手後の OR ノードを
+    /// 個別に大バジェットでソルブし，両方詰みなら N*2f が 2c1d の正解．
+    ///
+    /// ## 補足
+    /// 各応手後に生成される王手候補も列挙して探索の見通しを確認する．
+    #[test]
+    #[ignore]
+    fn test_2c1d_n2f_defenses_diagnosis() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_to_2c1d = [
+            "7b6b", "5b4c", "8b9c", "4c3d",
+            "1b2c", "3d2c", "N*1e", "2c1d",
+        ];
+
+        let mut board_2c1d = Board::new();
+        board_2c1d.set_sfen(sfen).unwrap();
+        for usi in &pv_to_2c1d {
+            let m = board_2c1d.move_from_usi(usi).unwrap();
+            board_2c1d.do_move(m);
+        }
+        // N*2f を指す (White 番)
+        let n2f = board_2c1d.move_from_usi("N*2f").unwrap();
+        let mut board_n2f = board_2c1d.clone();
+        board_n2f.do_move(n2f);
+        assert_eq!(board_n2f.turn, Color::White);
+
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" N*2f 応手別詰み診断");
+                eprintln!(" N*2f 後 SFEN: {}", board_n2f.sfen());
+                eprintln!("{}", "=".repeat(80));
+
+                let mut helper = DfPnSolver::default_solver();
+                let defenses = helper.generate_defense_moves(&mut board_n2f.clone());
+                eprintln!(" 応手数: {} (期待: 2)", defenses.len());
+                for d in &defenses {
+                    eprintln!("   {}", d.to_usi());
+                }
+
+                // 各応手後の OR ノードを個別ソルブ
+                let mut solver = DfPnSolver::with_timeout(31, 20_000_000, 32767, 120);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.param_pns_arena_max = 200_000;
+
+                let mut all_mate = true;
+                for &def in &defenses {
+                    let mut b = board_n2f.clone();
+                    b.do_move(def);
+                    assert_eq!(b.turn, Color::Black);
+
+                    eprintln!("\n--- 応手: {} 後の OR ノード (Black 番) ---", def.to_usi());
+                    eprintln!(" SFEN: {}", b.sfen());
+
+                    let checks = helper.generate_check_moves(&mut b.clone());
+                    eprintln!(" Black 王手候補数: {}", checks.len());
+                    for c in checks.iter().take(8) {
+                        let mut bc = b.clone();
+                        bc.do_move(*c);
+                        let defs2 = helper.generate_defense_moves(&mut bc);
+                        eprintln!("   {} → {} defenses", c.to_usi(), defs2.len());
+                    }
+                    if checks.len() > 8 {
+                        eprintln!("   ... and {} more", checks.len() - 8);
+                    }
+
+                    let start = std::time::Instant::now();
+                    let result = solver.solve(&mut b);
+                    let elapsed = start.elapsed();
+
+                    match &result {
+                        TsumeResult::Checkmate { moves, nodes_searched } => {
+                            let pv: Vec<String> = moves.iter().take(12).map(|m| m.to_usi()).collect();
+                            eprintln!(" → MATE({}) in {} nodes ({:.1}s)", moves.len(), nodes_searched, elapsed.as_secs_f64());
+                            eprintln!("   PV: {}", pv.join(" "));
+                        },
+                        TsumeResult::CheckmateNoPv { nodes_searched } =>
+                            eprintln!(" → MATE(nopv) in {} nodes ({:.1}s)", nodes_searched, elapsed.as_secs_f64()),
+                        TsumeResult::NoCheckmate { nodes_searched } => {
+                            all_mate = false;
+                            eprintln!(" → NoMate in {} nodes ({:.1}s) → N*2f は不詰!", nodes_searched, elapsed.as_secs_f64());
+                        },
+                        TsumeResult::Unknown { nodes_searched } => {
+                            all_mate = false;
+                            eprintln!(" → Unknown in {} nodes ({:.1}s)", nodes_searched, elapsed.as_secs_f64());
+                        },
+                    }
+                    eprintln!(" ProvenTT: {} エントリ", solver.table.proven_len());
+                }
+
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" N*2f 結論: {}", if all_mate { "MATE ← 2c1d の正解候補!" } else { "不完全 (UNK or NM あり)" });
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// N*2f→1d1e→P*1f 応手別詰み診断
+    ///
+    /// **[SLOW]** `N*2f→1d1e→P*1f` 後の3応手を個別ソルブ．
+    /// P*1f は3応手のみで最も制約が強い．各応手後の OR ノードを
+    /// 大バジェットで解き，全て詰みなら N*2f が 2c1d の正解候補である．
+    #[test]
+    #[ignore]
+    fn test_2c1d_n2f_1e_p1f_defenses_diagnosis() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_to_p1f = [
+            // 2c1d まで
+            "7b6b", "5b4c", "8b9c", "4c3d",
+            "1b2c", "3d2c", "N*1e", "2c1d",
+            // N*2f (Black check), 1d1e (White), P*1f (Black check)
+            "N*2f", "1d1e", "P*1f",
+        ];
+
+        let mut board_and = Board::new();
+        board_and.set_sfen(sfen).unwrap();
+        for usi in &pv_to_p1f {
+            let m = board_and.move_from_usi(usi).unwrap();
+            board_and.do_move(m);
+        }
+        assert_eq!(board_and.turn, Color::White, "P*1f 後は White 番 (AND ノード)");
+
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" N*2f→1d1e→P*1f 応手別詰み診断 (最制約3応手)");
+                eprintln!(" AND ノード SFEN: {}", board_and.sfen());
+                eprintln!("{}", "=".repeat(80));
+
+                let mut helper = DfPnSolver::default_solver();
+                let defenses = helper.generate_defense_moves(&mut board_and.clone());
+                eprintln!(" P*1f 後の応手数: {} (期待: 3)", defenses.len());
+                for d in &defenses {
+                    eprintln!("   {}", d.to_usi());
+                }
+
+                let mut solver = DfPnSolver::with_timeout(33, 50_000_000, 32767, 300);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.param_pns_arena_max = 200_000;
+
+                let mut all_mate = true;
+                for &def in &defenses {
+                    let mut b = board_and.clone();
+                    b.do_move(def);
+                    assert_eq!(b.turn, Color::Black, "応手後は Black 番 (OR ノード)");
+
+                    eprintln!("\n--- 応手: {} 後の OR ノード (Black 番) ---", def.to_usi());
+                    eprintln!(" SFEN: {}", b.sfen());
+
+                    let checks = helper.generate_check_moves(&mut b.clone());
+                    eprintln!(" Black 王手候補数: {}", checks.len());
+                    for c in checks.iter().take(10) {
+                        let mut bc = b.clone();
+                        bc.do_move(*c);
+                        let defs2 = helper.generate_defense_moves(&mut bc);
+                        eprintln!("   {} → {} defenses", c.to_usi(), defs2.len());
+                    }
+                    if checks.len() > 10 {
+                        eprintln!("   ... and {} more", checks.len() - 10);
+                    }
+
+                    let start = std::time::Instant::now();
+                    let result = solver.solve(&mut b);
+                    let elapsed = start.elapsed();
+
+                    match &result {
+                        TsumeResult::Checkmate { moves, nodes_searched } => {
+                            let pv: Vec<String> = moves.iter().take(16).map(|m| m.to_usi()).collect();
+                            eprintln!(" → MATE({}) in {} nodes ({:.1}s)", moves.len(), nodes_searched, elapsed.as_secs_f64());
+                            eprintln!("   PV: {}", pv.join(" "));
+                        },
+                        TsumeResult::CheckmateNoPv { nodes_searched } =>
+                            eprintln!(" → MATE(nopv) in {} nodes ({:.1}s)", nodes_searched, elapsed.as_secs_f64()),
+                        TsumeResult::NoCheckmate { nodes_searched } => {
+                            all_mate = false;
+                            eprintln!(" → NoMate in {} nodes ({:.1}s) → P*1f はこの応手で不詰!", nodes_searched, elapsed.as_secs_f64());
+                        },
+                        TsumeResult::Unknown { nodes_searched } => {
+                            all_mate = false;
+                            eprintln!(" → Unknown in {} nodes ({:.1}s)", nodes_searched, elapsed.as_secs_f64());
+                        },
+                    }
+                    eprintln!(" ProvenTT: {} エントリ", solver.table.proven_len());
+                }
+
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" P*1f 結論: {}", if all_mate { "MATE ← N*2f の 1d1e 応手を解決!" } else { "不完全 (UNK or NM あり)" });
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// N*2f→1d1e→4f2d 応手別詰み診断
+    ///
+    /// **[SLOW]** `N*2f→1d1e→4f2d` 後の各応手を個別ソルブ．
+    /// P*1f は 1e1f (王が歩取り) で NoMate 確定のため，
+    /// もう一つの3応手候補 `4f2d` (王手) を検証する．
+    #[test]
+    #[ignore]
+    fn test_2c1d_n2f_1e_4f2d_defenses_diagnosis() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_to_4f2d = [
+            "7b6b", "5b4c", "8b9c", "4c3d",
+            "1b2c", "3d2c", "N*1e", "2c1d",
+            "N*2f", "1d1e", "4f2d",
+        ];
+
+        let mut board_and = Board::new();
+        board_and.set_sfen(sfen).unwrap();
+        for usi in &pv_to_4f2d {
+            let m = board_and.move_from_usi(usi).unwrap();
+            board_and.do_move(m);
+        }
+        assert_eq!(board_and.turn, Color::White, "4f2d 後は White 番 (AND ノード)");
+
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" N*2f→1d1e→4f2d 応手別詰み診断");
+                eprintln!(" AND ノード SFEN: {}", board_and.sfen());
+                eprintln!("{}", "=".repeat(80));
+
+                let mut helper = DfPnSolver::default_solver();
+                let defenses = helper.generate_defense_moves(&mut board_and.clone());
+                eprintln!(" 4f2d 後の応手数: {} (期待: 3)", defenses.len());
+                for d in &defenses {
+                    eprintln!("   {}", d.to_usi());
+                }
+
+                let mut solver = DfPnSolver::with_timeout(33, 50_000_000, 32767, 300);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.param_pns_arena_max = 200_000;
+
+                let mut all_mate = true;
+                for &def in &defenses {
+                    let mut b = board_and.clone();
+                    b.do_move(def);
+                    assert_eq!(b.turn, Color::Black, "応手後は Black 番 (OR ノード)");
+
+                    eprintln!("\n--- 応手: {} 後の OR ノード (Black 番) ---", def.to_usi());
+                    eprintln!(" SFEN: {}", b.sfen());
+
+                    let checks = helper.generate_check_moves(&mut b.clone());
+                    eprintln!(" Black 王手候補数: {}", checks.len());
+                    for c in checks.iter().take(10) {
+                        let mut bc = b.clone();
+                        bc.do_move(*c);
+                        let defs2 = helper.generate_defense_moves(&mut bc);
+                        eprintln!("   {} → {} defenses", c.to_usi(), defs2.len());
+                    }
+                    if checks.len() > 10 {
+                        eprintln!("   ... and {} more", checks.len() - 10);
+                    }
+
+                    let start = std::time::Instant::now();
+                    let result = solver.solve(&mut b);
+                    let elapsed = start.elapsed();
+
+                    match &result {
+                        TsumeResult::Checkmate { moves, nodes_searched } => {
+                            let pv: Vec<String> = moves.iter().take(16).map(|m| m.to_usi()).collect();
+                            eprintln!(" → MATE({}) in {} nodes ({:.1}s)", moves.len(), nodes_searched, elapsed.as_secs_f64());
+                            eprintln!("   PV: {}", pv.join(" "));
+                        },
+                        TsumeResult::CheckmateNoPv { nodes_searched } =>
+                            eprintln!(" → MATE(nopv) in {} nodes ({:.1}s)", nodes_searched, elapsed.as_secs_f64()),
+                        TsumeResult::NoCheckmate { nodes_searched } => {
+                            all_mate = false;
+                            eprintln!(" → NoMate in {} nodes ({:.1}s) → 4f2d はこの応手で不詰!", nodes_searched, elapsed.as_secs_f64());
+                        },
+                        TsumeResult::Unknown { nodes_searched } => {
+                            all_mate = false;
+                            eprintln!(" → Unknown in {} nodes ({:.1}s)", nodes_searched, elapsed.as_secs_f64());
+                        },
+                    }
+                    eprintln!(" ProvenTT: {} エントリ", solver.table.proven_len());
+                }
+
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 4f2d 結論: {}", if all_mate { "MATE ← N*2f→1d1e の解決!" } else { "不完全 (UNK or NM あり)" });
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// TT 診断テスト: 指定 ply の指定手で TT エントリの変化をモニタリングする．
+    /// 2c1d → 4f1c 応手確認 + 個別ソルブ
+    ///
+    /// **[SLOW]** `4f1c` は 2c1d での新候補手．
+    /// L1 では `4f1c→3応手 [1d1c, 1d1e, 1d2e]` だったが，
+    /// 2c1d では +R が 9c に残っているため `1d1c` は rank c 攻撃で無効．
+    /// 実際の応手数を確認し，各応手後の OR ノードを個別ソルブする．
+    #[test]
+    #[ignore]
+    fn test_2c1d_4f1c_defenses_diagnosis() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_to_4f1c = [
+            "7b6b", "5b4c", "8b9c", "4c3d",
+            "1b2c", "3d2c", "N*1e", "2c1d",
+            "4f1c",
+        ];
+
+        let mut board_and = Board::new();
+        board_and.set_sfen(sfen).unwrap();
+        for usi in &pv_to_4f1c {
+            let m = board_and.move_from_usi(usi).unwrap();
+            board_and.do_move(m);
+        }
+        assert_eq!(board_and.turn, Color::White, "4f1c 後は White 番 (AND ノード)");
+
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 2c1d → 4f1c 応手確認 + 個別ソルブ");
+                eprintln!(" AND ノード SFEN: {}", board_and.sfen());
+                eprintln!("{}", "=".repeat(80));
+
+                let mut helper = DfPnSolver::default_solver();
+                let defenses = helper.generate_defense_moves(&mut board_and.clone());
+                eprintln!(" 4f1c 後の応手数: {} (L1では3, 2c1dでは+Rにより1d1c無効→期待2)", defenses.len());
+                for d in &defenses {
+                    eprintln!("   {}", d.to_usi());
+                }
+
+                let mut solver = DfPnSolver::with_timeout(35, 100_000_000, 32767, 600);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.param_pns_arena_max = 200_000;
+
+                let mut all_mate = true;
+                for &def in &defenses {
+                    let mut b = board_and.clone();
+                    b.do_move(def);
+                    assert_eq!(b.turn, Color::Black, "応手後は Black 番 (OR ノード)");
+
+                    eprintln!("\n--- 応手: {} 後の OR ノード (Black 番) ---", def.to_usi());
+                    eprintln!(" SFEN: {}", b.sfen());
+
+                    let checks = helper.generate_check_moves(&mut b.clone());
+                    eprintln!(" Black 王手候補数: {}", checks.len());
+                    for c in checks.iter().take(10) {
+                        let mut bc = b.clone();
+                        bc.do_move(*c);
+                        let defs2 = helper.generate_defense_moves(&mut bc);
+                        eprintln!("   {} → {} defenses", c.to_usi(), defs2.len());
+                    }
+                    if checks.len() > 10 {
+                        eprintln!("   ... and {} more", checks.len() - 10);
+                    }
+
+                    let start = std::time::Instant::now();
+                    let result = solver.solve(&mut b);
+                    let elapsed = start.elapsed();
+
+                    match &result {
+                        TsumeResult::Checkmate { moves, nodes_searched } => {
+                            let pv: Vec<String> = moves.iter().take(20).map(|m| m.to_usi()).collect();
+                            eprintln!(" → MATE({}) in {} nodes ({:.1}s)", moves.len(), nodes_searched, elapsed.as_secs_f64());
+                            eprintln!("   PV: {}", pv.join(" "));
+                        },
+                        TsumeResult::CheckmateNoPv { nodes_searched } =>
+                            eprintln!(" → MATE(nopv) in {} nodes ({:.1}s)", nodes_searched, elapsed.as_secs_f64()),
+                        TsumeResult::NoCheckmate { nodes_searched } => {
+                            all_mate = false;
+                            eprintln!(" → NoMate in {} nodes ({:.1}s) → 4f1c はこの応手で不詰!", nodes_searched, elapsed.as_secs_f64());
+                        },
+                        TsumeResult::Unknown { nodes_searched } => {
+                            all_mate = false;
+                            eprintln!(" → Unknown in {} nodes ({:.1}s)", nodes_searched, elapsed.as_secs_f64());
+                        },
+                    }
+                    eprintln!(" ProvenTT: {} エントリ", solver.table.proven_len());
+                }
+
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 4f1c 結論: {}", if all_mate { "MATE ← 2c1d の正解候補!" } else { "不完全 (UNK or NM あり)" });
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     ///
     /// `--features tt_diag` でビルドし `cargo test --features tt_diag -- --nocapture` で実行．
     /// stderr に `[tt_diag]` プレフィックスのログが出力される．
