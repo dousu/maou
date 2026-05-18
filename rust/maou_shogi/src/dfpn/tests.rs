@@ -13498,7 +13498,8 @@ use crate::types::{Color, PieceType};
                 ];
 
                 // 共有 ProvenTT (初期値 = warmup)
-                let mut shared_solver = DfPnSolver::with_timeout(41, 50_000_000, 32767, 60);
+                // shared_solver は TT 蓄積専用なので budget は小さくてよい
+                let mut shared_solver = DfPnSolver::with_timeout(41, 1_000_000, 32767, 5);
                 shared_solver.set_find_shortest(false);
                 shared_solver.set_preserve_proven_tt(true);
                 shared_solver.table.set_proven_map(wu_pm.clone(), wu_pt);
@@ -13508,8 +13509,11 @@ use crate::types::{Color, PieceType};
                     let mut b_or = Board::new();
                     b_or.set_sfen(or_sfen).unwrap();
 
-                    // OR ノード全合法手 = 全王手 (詰将棋の性質)
-                    let checks = movegen::generate_legal_moves(&mut b_or);
+                    // OR ノードの実際の王手手のみを列挙
+                    let checks = {
+                        let mut tmp = DfPnSolver::default_solver();
+                        tmp.generate_check_moves(&mut b_or)
+                    };
                     let n_checks = checks.len();
                     let mut n_defenses_total = 0usize;
                     let mut n_sub = 0usize;
@@ -13532,7 +13536,7 @@ use crate::types::{Color, PieceType};
                             let sub_depth = (sub_remaining + 2).min(41);
                             let (cur_pm, cur_pt) = shared_solver.table.clone_proven_map();
                             let mut sub = DfPnSolver::with_timeout(
-                                sub_depth, 50_000_000, 32767, 60,
+                                sub_depth, 10_000_000, 32767, 30,
                             );
                             sub.set_find_shortest(false);
                             sub.set_preserve_proven_tt(true);
@@ -13608,6 +13612,165 @@ use crate::types::{Color, PieceType};
                     }
                     eprintln!();
                 }
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// **[SLOW]** 1d1e サブツリー構造診断 (v0.55.26)．
+    ///
+    /// 分岐プリソルブが 1d1e に効かない根本原因を定量調査する:
+    /// 1. (check, defense) ペア数カウント
+    /// 2. サブポジション個別の解決率 (100K / 500K / 1M)
+    /// 3. 1d1e 直接探索 ProvenTT 成長曲線 (oscillation 確認)
+    ///
+    /// ```bash
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_1d1e_subtree_diagnosis --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_1d1e_subtree_diagnosis() {
+        let sfen_1d1e = "9/3+N1P3/+R5p1+B/9/8k/9/1R2S4/3p5/9 b NPb4g3s2n4l14p 11";
+        let remaining_1d1e: u32 = 29;
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 1d1e サブツリー構造診断");
+                eprintln!("{}", "=".repeat(80));
+
+                // --- Phase 1: ツリー構造カウント ---
+                let mut b_or = Board::new();
+                b_or.set_sfen(sfen_1d1e).unwrap();
+                let checks = {
+                    let mut tmp = DfPnSolver::default_solver();
+                    tmp.generate_check_moves(&mut b_or)
+                };
+                let n_checks = checks.len();
+
+                let mut total_pairs = 0usize;
+                let mut check_info: Vec<(String, usize)> = Vec::new();
+                for check in &checks {
+                    let cap_ck = b_or.do_move(*check);
+                    let defenses = {
+                        let mut tmp = DfPnSolver::default_solver();
+                        tmp.generate_defense_moves(&mut b_or)
+                    };
+                    let n_def = defenses.len();
+                    total_pairs += n_def;
+                    check_info.push((check.to_usi(), n_def));
+                    b_or.undo_move(*check, cap_ck);
+                }
+
+                eprintln!("[Phase1] checks={} total_(check,defense)_pairs={}", n_checks, total_pairs);
+                eprintln!("  {:<12} {:>8}", "check", "#defenses");
+                eprintln!("  {}", "-".repeat(22));
+                for (mv, nd) in &check_info {
+                    eprintln!("  {:<12} {:>8}", mv, nd);
+                }
+
+                // --- Phase 2: サブポジション個別難易度サンプリング ---
+                eprintln!("\n[Phase2] サブポジション難易度サンプリング (先頭 20 ペア, rem={})", remaining_1d1e - 2);
+                eprintln!("  {:<12} {:<12}  {:<12} / {:<12} / {:<12}",
+                    "check", "defense", "100K", "500K", "1M");
+                eprintln!("  {}", "-".repeat(68));
+
+                let budgets: &[u64] = &[100_000, 500_000, 1_000_000];
+                let mut sample_count = 0usize;
+                let max_sample = 20;
+                let mut solved_counts = [0usize; 3];
+                let sub_rem = remaining_1d1e.saturating_sub(2);
+                let sub_depth = (sub_rem + 2).min(41);
+
+                'outer: for check in &checks {
+                    let cap_ck = b_or.do_move(*check);
+                    let defenses = {
+                        let mut tmp = DfPnSolver::default_solver();
+                        tmp.generate_defense_moves(&mut b_or)
+                    };
+                    for defense in &defenses {
+                        if sample_count >= max_sample { break 'outer; }
+                        let cap_def = b_or.do_move(*defense);
+
+                        let mut result_strs = Vec::new();
+                        for (i, &budget) in budgets.iter().enumerate() {
+                            let mut b_sub = b_or.clone();
+                            let mut sub = DfPnSolver::with_timeout(sub_depth, budget, 32767, 30);
+                            sub.set_find_shortest(false);
+                            sub.set_preserve_proven_tt(true);
+                            let res = sub.solve(&mut b_sub);
+                            let r = match &res {
+                                TsumeResult::Checkmate { moves, .. } =>
+                                    format!("Mate({})", moves.len()),
+                                TsumeResult::CheckmateNoPv { .. } => "MateNoPV".into(),
+                                TsumeResult::NoCheckmate { .. } => "NoMate".into(),
+                                TsumeResult::Unknown { nodes_searched } =>
+                                    format!("Unk(n={})", nodes_searched),
+                            };
+                            if !r.starts_with("Unk") { solved_counts[i] += 1; }
+                            result_strs.push(r);
+                        }
+
+                        eprintln!("  {:<12} {:<12}  {:<12} / {:<12} / {:<12}",
+                            check.to_usi(), defense.to_usi(),
+                            result_strs[0], result_strs[1], result_strs[2]);
+
+                        b_or.undo_move(*defense, cap_def);
+                        sample_count += 1;
+                    }
+                    b_or.undo_move(*check, cap_ck);
+                }
+
+                eprintln!("\n  [solve rate @{} samples]", sample_count);
+                for (i, &budget) in budgets.iter().enumerate() {
+                    eprintln!("    {:>9} nodes : {}/{} = {:.0}%",
+                        budget, solved_counts[i], sample_count,
+                        solved_counts[i] as f64 / sample_count.max(1) as f64 * 100.0);
+                }
+
+                // --- Phase 3: 1d1e ProvenTT 成長曲線 (oscillation 検証) ---
+                eprintln!("\n[Phase3] 1d1e ProvenTT 成長曲線 (冷スタート, preserve=true, 累積)");
+                eprintln!("  {:>12} {:>12} {:>10}", "cumul_nodes", "ProvenTT", "result");
+                eprintln!("  {}", "-".repeat(38));
+
+                let checkpoints: &[u64] = &[
+                    500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000, 20_000_000,
+                ];
+                let mut cumul_solver = DfPnSolver::with_timeout(35, 500_000, 32767, 120);
+                cumul_solver.set_find_shortest(false);
+                cumul_solver.set_preserve_proven_tt(true);
+                let mut cumul_nodes: u64 = 0;
+
+                for &cp in checkpoints {
+                    let add_budget = cp - cumul_nodes;
+                    let (pm, pt) = cumul_solver.table.clone_proven_map();
+                    let mut solver = DfPnSolver::with_timeout(35, add_budget, 32767, 120);
+                    solver.set_find_shortest(false);
+                    solver.set_preserve_proven_tt(true);
+                    solver.table.set_proven_map(pm, pt);
+                    let mut b = Board::new();
+                    b.set_sfen(sfen_1d1e).unwrap();
+                    let res = solver.solve(&mut b);
+                    let n = solver.nodes_searched;
+                    let (new_pm, new_pt) = solver.table.clone_proven_map();
+                    cumul_solver.table.set_proven_map(new_pm, new_pt);
+                    cumul_nodes += n;
+
+                    let proven = cumul_solver.table.proven_len();
+                    let res_str = match &res {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".into(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".into(),
+                        TsumeResult::Unknown { .. } => "Unknown".into(),
+                    };
+                    eprintln!("  {:>12} {:>12} {:>10}", cumul_nodes, proven, res_str);
+                    if res_str != "Unknown" { break; }
+                }
+
                 eprintln!("{}", "=".repeat(80));
             })
             .unwrap()
