@@ -14242,6 +14242,41 @@ use crate::types::{Color, PieceType};
             .unwrap();
     }
 
+    /// `gc_proofs()` が proof 以外のエントリを除去しないことを確認する (v0.55.35 Step 1)．
+    ///
+    /// proof が PROOF_MAP_GC_CAPACITY (2M) を下回る場合は何も除去しない．
+    /// confirmed と refutable は gc_proofs() で絶対に除去されない．
+    #[test]
+    fn test_gc_proofs_preserves_all_when_below_threshold() {
+        let sfen_1d1e = "9/3+N1P3/+R5p1+B/9/8k/9/1R2S4/3p5/9 b NPb4g3s2n4l14p 11";
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut b = Board::new();
+                b.set_sfen(sfen_1d1e).unwrap();
+                let mut solver = DfPnSolver::with_timeout(35, 1_000_000, 32767, 30);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.solve(&mut b);
+
+                let (p_before, c_before, r_before) = solver.table.proven_map_stats();
+                eprintln!("[before gc_proofs] proofs={} confirmed={} refutable={}", p_before, c_before, r_before);
+
+                // proof < PROOF_MAP_GC_CAPACITY (2M) → gc_proofs() は何も除去しない
+                let removed = solver.table.gc_proofs();
+                let (p_after, c_after, r_after) = solver.table.proven_map_stats();
+                eprintln!("[after  gc_proofs] proofs={} confirmed={} refutable={} removed={}", p_after, c_after, r_after, removed);
+
+                assert_eq!(removed, 0, "gc_proofs must not remove anything when proof < threshold");
+                assert_eq!(p_after, p_before, "gc_proofs must not remove proofs when below threshold");
+                assert_eq!(c_after, c_before, "gc_proofs must not remove confirmed disproofs");
+                assert_eq!(r_after, r_before, "gc_proofs must not remove refutable disproofs");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// 累積 ProvenTT で confirmed disproof が減少する現象の診断 (v0.55.28)
     ///
     /// Step 1 → Step 2 の solver 境界で confirmed が 105K → 42K に減少する。
@@ -14295,6 +14330,119 @@ use crate::types::{Color, PieceType};
                     let (pt, ct, rt) = s_test.table.proven_map_stats();
                     eprintln!("[clear_below({})] proofs={} confirmed={} refutable={}", min_depth, pt, ct, rt);
                 }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    // ======================================================================
+    // Step 2: 1d1e 全ペア ProvenTT ヒット診断 (v0.55.35)
+    // ======================================================================
+
+    /// 1d1e の全 (check, defense) ペアの ProvenTT ヒット状況を診断する (v0.55.35 Step 2)．
+    ///
+    /// 10M ノードの累積探索後に全ペアを ProvenTT でプローブし，
+    /// 証明済み / 未知 / 反証済みを集計することでボトルネックを特定する．
+    /// また proof GC (gc_proofs, v0.55.35) の動作確認も兼ねる．
+    ///
+    /// **[SLOW]** release ビルド必須:
+    /// `cargo test --release -p maou_shogi -- test_1d1e_branch_status_diagnosis --nocapture --ignored`
+    #[test]
+    #[ignore]
+    fn test_1d1e_branch_status_diagnosis() {
+        let sfen_1d1e = "9/3+N1P3/+R5p1+B/9/8k/9/1R2S4/3p5/9 b NPb4g3s2n4l14p 11";
+        let remaining_1d1e: u16 = 29;
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 1d1e 全ペア ProvenTT ヒット診断 (v0.55.35 Step 2)");
+                eprintln!("{}", "=".repeat(80));
+
+                // --- Phase 1: 10M ノード ProvenTT 構築 ---
+                let t_start = Instant::now();
+                let (pm, pt) = {
+                    let mut b = Board::new();
+                    b.set_sfen(sfen_1d1e).unwrap();
+                    let mut s = DfPnSolver::with_timeout(41, 10_000_000, 32767, 1800);
+                    s.set_find_shortest(false);
+                    s.set_preserve_proven_tt(true);
+                    s.solve(&mut b);
+                    let (p, c, r) = s.table.proven_map_stats();
+                    eprintln!("[10M warmup] proofs={} confirmed={} refutable={} proof_entries={} elapsed={:.1}s",
+                        p, c, r, s.table.proven_proof_len(), t_start.elapsed().as_secs_f64());
+                    s.table.clone_proven_map()
+                };
+
+                // --- Phase 2: 全ペアプローブ ---
+                let mut probe_solver = DfPnSolver::with_timeout(41, 1, 32767, 1);
+                probe_solver.set_preserve_proven_tt(true);
+                probe_solver.table.set_proven_map(pm, pt);
+
+                let mut b_or = Board::new();
+                b_or.set_sfen(sfen_1d1e).unwrap();
+                let checks = {
+                    let tmp = DfPnSolver::default_solver();
+                    tmp.generate_check_moves(&mut b_or)  // b_or は黒番 OR ノード
+                };
+
+                let sub_rem = remaining_1d1e.saturating_sub(2);
+
+                let mut proved = 0usize;
+                let mut disproved = 0usize;
+                let mut unknown = 0usize;
+                let mut total_pairs = 0usize;
+
+                eprintln!("\n[Phase2] 全 (check, defense) ペアの ProvenTT ヒット状況 (remaining={})", sub_rem);
+                eprintln!("  {:<12} {:<12}  {:>8}  {:>6}  status", "check", "defense", "pn", "dn");
+                eprintln!("  {}", "-".repeat(56));
+
+                for check in &checks {
+                    let cap_ck = b_or.do_move(*check);
+                    let defenses = {
+                        let mut tmp = DfPnSolver::default_solver();
+                        tmp.generate_defense_moves(&mut b_or)
+                    };
+                    for defense in &defenses {
+                        let cap_def = b_or.do_move(*defense);
+
+                        let pk = position_key(&b_or);
+                        let att_hand = b_or.hand[probe_solver.attacker.index()];
+                        let (pn, dn, _) = probe_solver.look_up_pn_dn(pk, &att_hand, sub_rem);
+
+                        let status = if pn == 0 {
+                            proved += 1;
+                            "Proved"
+                        } else if dn == 0 {
+                            disproved += 1;
+                            "Disproved"
+                        } else {
+                            unknown += 1;
+                            "Unknown"
+                        };
+
+                        if status != "Unknown" {
+                            eprintln!("  {:<12} {:<12}  {:>8}  {:>6}  {}",
+                                check.to_usi(), defense.to_usi(), pn, dn, status);
+                        }
+
+                        total_pairs += 1;
+                        b_or.undo_move(*defense, cap_def);
+                    }
+                    b_or.undo_move(*check, cap_ck);
+                }
+
+                eprintln!("\n[Summary @ 10M nodes]");
+                eprintln!("  total_pairs={} proved={} disproved={} unknown={}",
+                    total_pairs, proved, disproved, unknown);
+                eprintln!("  proved%={:.1}%  hit%={:.1}%  elapsed={:.1}s",
+                    proved as f64 / total_pairs.max(1) as f64 * 100.0,
+                    (proved + disproved) as f64 / total_pairs.max(1) as f64 * 100.0,
+                    t_start.elapsed().as_secs_f64());
+
+                eprintln!("{}", "=".repeat(80));
             })
             .unwrap()
             .join()

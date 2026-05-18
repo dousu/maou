@@ -37,9 +37,16 @@ pub(super) static WORKING_DIAG: [AtomicU64; 2] = [
     AtomicU64::new(0), AtomicU64::new(0),
 ];
 
-/// ProvenTT HashMap の GC トリガー閾値 (エントリ総数)．
+/// ProvenTT HashMap の GC トリガー閾値 (refutable エントリ数)．
 /// この値を超えると gc_proven() が呼ばれる．
 const PROVEN_MAP_GC_CAPACITY: usize = 500_000;
+
+/// ProvenTT proof エントリの GC トリガー閾値 (NPS 保護)．
+/// proof がこの値を超えると gc_proofs() が amount 昇順で evict を行う．
+const PROOF_MAP_GC_CAPACITY: usize = 2_000_000;
+
+/// gc_proofs() 後の proof エントリ目標数 (PROOF_MAP_GC_CAPACITY の 60%)．
+const PROOF_MAP_GC_TARGET: usize = 1_200_000;
 
 /// WorkingTT の 1 クラスタあたりのエントリ数．
 ///
@@ -213,6 +220,9 @@ pub(super) struct TranspositionTable {
     proven_total_entries: usize,
     /// ProvenTT の confirmed disproof エントリ数 (GC 容量判定から除外するため別管理)．
     proven_confirmed_entries: usize,
+    /// ProvenTT の proof エントリ数 (GC 容量判定から除外するため別管理)．
+    /// refutable のみが GC 対象: proven_len_for_gc() = total - confirmed - proof = refutable．
+    proven_proof_entries: usize,
     /// WorkingTT: GC 対象エントリ(intermediate + depth-limited disproof)．
     working: Vec<TTFlatEntry>,
     /// LeafDisproofTT: remaining ≤ 2 の overflow 専用 compact テーブル (N-8, v0.26.0)．
@@ -342,6 +352,7 @@ impl TranspositionTable {
             proven_map: FxHashMap::default(),
             proven_total_entries: 0,
             proven_confirmed_entries: 0,
+            proven_proof_entries: 0,
             working: vec![TTFlatEntry::EMPTY; working_total],
             leaf_disproofs: vec![TTLeafEntry::EMPTY; leaf_total],
             frontier: vec![TTFlatEntry::EMPTY; frontier_total],
@@ -1239,9 +1250,11 @@ impl TranspositionTable {
             });
             let removed = before - vec.len();
             self.proven_total_entries -= removed;
+            self.proven_proof_entries -= removed; // 除去されたのは全て proof
             if dominated { return; }
             vec.push(new_entry);
             self.proven_total_entries += 1;
+            self.proven_proof_entries += 1;
         } else {
             // WorkingTT の同一 pos_key エントリを積極的に除去(proof 以外)．
             let w_start = self.working_cluster_start(pos_key, &hand);
@@ -2017,6 +2030,7 @@ impl TranspositionTable {
         self.proven_map.clear();
         self.proven_total_entries = 0;
         self.proven_confirmed_entries = 0;
+        self.proven_proof_entries = 0;
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
         self.working_overflow_since_gc = 0;
     }
@@ -2036,6 +2050,24 @@ impl TranspositionTable {
     /// Refutable disproof (`all_checks_refutable_recursive` 由来) のみ除去する．
     ///
     /// WorkingTT の `retain_proofs()` が confirmed disproof を保持するのと同様の方針．
+    /// proven_map から proven_total/confirmed/proof カウンタを再計算する．
+    /// proven_map を直接変更した後に必ず呼ぶこと．
+    fn recalculate_proven_counters(&mut self) {
+        self.proven_total_entries = 0;
+        self.proven_confirmed_entries = 0;
+        self.proven_proof_entries = 0;
+        for vec in self.proven_map.values() {
+            for e in vec {
+                self.proven_total_entries += 1;
+                if e.is_proof() {
+                    self.proven_proof_entries += 1;
+                } else if !e.is_refutable_disproof() {
+                    self.proven_confirmed_entries += 1;
+                }
+            }
+        }
+    }
+
     pub(super) fn retain_proofs_only(&mut self) {
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
         self.proven_map.retain(|_, vec| {
@@ -2043,16 +2075,7 @@ impl TranspositionTable {
             vec.retain(|e| e.is_proof() || !e.is_refutable_disproof());
             !vec.is_empty()
         });
-        self.proven_total_entries = 0;
-        self.proven_confirmed_entries = 0;
-        for vec in self.proven_map.values() {
-            for e in vec {
-                self.proven_total_entries += 1;
-                if !e.is_proof() && !e.is_refutable_disproof() {
-                    self.proven_confirmed_entries += 1;
-                }
-            }
-        }
+        self.recalculate_proven_counters();
     }
 
     /// WorkingTT の confirmed disproof を保持し，他を除去する．
@@ -2338,16 +2361,7 @@ impl TranspositionTable {
             });
             !vec.is_empty()
         });
-        self.proven_total_entries = 0;
-        self.proven_confirmed_entries = 0;
-        for vec in self.proven_map.values() {
-            for e in vec {
-                self.proven_total_entries += 1;
-                if !e.is_proof() && !e.is_refutable_disproof() {
-                    self.proven_confirmed_entries += 1;
-                }
-            }
-        }
+        self.recalculate_proven_counters();
     }
 
     /// WorkingTT の非空エントリ数を返す．
@@ -2360,10 +2374,23 @@ impl TranspositionTable {
         self.proven_total_entries
     }
 
-    /// GC トリガー判定用: proofs と refutable のみのエントリ数を返す (O(1))．
-    /// confirmed disproof は永続エントリのため GC 容量カウントから除外する．
+    /// GC トリガー判定用: refutable のみのエントリ数を返す (O(1))．
+    /// confirmed disproof と proof は永続エントリのため GC 容量カウントから除外する．
+    /// refutable = total - confirmed - proof．
     pub(super) fn proven_len_for_gc(&self) -> usize {
-        self.proven_total_entries.saturating_sub(self.proven_confirmed_entries)
+        self.proven_total_entries
+            .saturating_sub(self.proven_confirmed_entries)
+            .saturating_sub(self.proven_proof_entries)
+    }
+
+    /// proof エントリ数を返す (O(1))．
+    pub(super) fn proven_proof_len(&self) -> usize {
+        self.proven_proof_entries
+    }
+
+    /// proof GC が必要かどうかを返す (O(1))．
+    pub(super) fn proof_gc_needed(&self) -> bool {
+        self.proven_proof_entries > PROOF_MAP_GC_CAPACITY
     }
 
     /// ProvenTT マップのクローンを返す (TT 共有診断用)．
@@ -2403,7 +2430,7 @@ impl TranspositionTable {
             vec.retain(|e| e.is_proof() || !e.is_refutable_disproof());
             !vec.is_empty()
         });
-        self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
+        self.recalculate_proven_counters();
     }
 
     /// ProvenTT マップを置き換える (TT 共有診断用)．
@@ -2415,12 +2442,8 @@ impl TranspositionTable {
         total_entries: usize,
     ) {
         self.proven_map = map;
-        self.proven_total_entries = total_entries;
-        // proven_confirmed_entries を再計算する
-        self.proven_confirmed_entries = self.proven_map.values()
-            .flat_map(|v| v.iter())
-            .filter(|e| !e.is_proof() && !e.is_refutable_disproof())
-            .count();
+        self.recalculate_proven_counters();
+        let _ = total_entries; // recalculate_proven_counters() が正確な値を計算する
     }
 
     /// WorkingTT の非空エントリ数を返す(`len` のエイリアス)．
@@ -2723,52 +2746,70 @@ impl TranspositionTable {
     ///
     /// 返り値: 除去されたエントリ数．
     pub(super) fn gc_proven(&mut self) -> usize {
-        let initial = self.proven_total_entries;
-        let target = initial * 6 / 10;
-        if initial <= target {
-            return 0;
-        }
+        // proof と confirmed disproof は永続エントリのため GC 対象外．
+        // GC は refutable disproof のみを除去する (v0.55.34 バグ#4 根本修正)．
+        // proven_len_for_gc() = refutable のみ返すため，refutable が大量の
+        // 時のみ GC がトリガーされ，proof が誤って削除されることはない．
+        let initial_total = self.proven_total_entries;
 
-        // Phase 1: refutable disproof を全て除去 (confirmed は永遠に保護)
+        // Phase 1 のみ: refutable disproof を全除去 (confirmed・proof は保護)
         self.proven_map.retain(|_, vec| {
             vec.retain(|e| e.is_proof() || !e.is_refutable_disproof());
             !vec.is_empty()
         });
         self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
-        if self.proven_total_entries <= target {
-            return initial - self.proven_total_entries;
-        }
+        // refutable を除去したので proven_confirmed と proven_proof は変化なし
+        initial_total - self.proven_total_entries
+    }
 
-        // Phase 2: filter-dependent proof を amount 昇順で除去
-        // amount: filter-dependent=48, absolute=64, mate=128-191
-        for threshold in [0u8, 16, 32, 48] {
-            self.proven_map.retain(|_, vec| {
-                vec.retain(|e| {
-                    !e.is_proof()  // confirmed はそのまま
-                        || e.proof_tag() == super::entry::PROOF_TAG_ABSOLUTE
-                        || e.amount() > threshold
-                });
-                !vec.is_empty()
-            });
-            self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
-            if self.proven_total_entries <= target {
-                return initial - self.proven_total_entries;
+    /// proof エントリを amount 昇順で evict し，NPS 低下を防ぐ (Step 1, v0.55.35)．
+    ///
+    /// proof が PROOF_MAP_GC_CAPACITY を超えた場合，amount の小さいエントリから
+    /// 順に除去して PROOF_MAP_GC_TARGET まで削減する．
+    /// - amount=48  (non-ABSOLUTE proof)  → 最初に除去
+    /// - amount=64  (ABSOLUTE, no-dist)   → 次に除去
+    /// - amount=128..191 (ABSOLUTE, dist=0..63) → dist 昇順で除去 (短い詰みから)
+    ///
+    /// confirmed disproof は絶対に除去しない．
+    /// 返り値: 除去されたエントリ数．
+    pub(super) fn gc_proofs(&mut self) -> usize {
+        let proof_count = self.proven_proof_entries;
+        let target = PROOF_MAP_GC_TARGET;
+        if proof_count <= target {
+            return 0;
+        }
+        let to_remove = proof_count - target;
+
+        // Step 1: proof エントリの amount ヒストグラム (256 buckets)
+        let mut hist = [0usize; 256];
+        for vec in self.proven_map.values() {
+            for e in vec {
+                if e.is_proof() {
+                    hist[e.amount() as usize] += 1;
+                }
             }
         }
 
-        // Phase 3: absolute proof を amount 昇順で除去 (confirmed は引き続き保護)
-        for threshold in [0u8, 16, 32, 48, 64, 128, 192] {
-            self.proven_map.retain(|_, vec| {
-                vec.retain(|e| !e.is_proof() || e.amount() > threshold);
-                !vec.is_empty()
-            });
-            self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
-            if self.proven_total_entries <= target {
-                return initial - self.proven_total_entries;
+        // Step 2: 除去対象 amount の閾値を決定
+        // amount <= evict_threshold のエントリを全除去する
+        let mut cumulative = 0usize;
+        let mut evict_threshold = 0u8;
+        for a in 0u8..=255u8 {
+            cumulative = cumulative.saturating_add(hist[a as usize]);
+            if cumulative >= to_remove {
+                evict_threshold = a;
+                break;
             }
         }
 
-        initial - self.proven_total_entries
+        // Step 3: retain pass (proof のみ絞り込み; confirmed は無条件保持)
+        let before_total = self.proven_total_entries;
+        self.proven_map.retain(|_, vec| {
+            vec.retain(|e| !e.is_proof() || e.amount() > evict_threshold);
+            !vec.is_empty()
+        });
+        self.recalculate_proven_counters();
+        before_total - self.proven_total_entries
     }
 
     /// 指定局面のエントリ数を返す(診断用)．

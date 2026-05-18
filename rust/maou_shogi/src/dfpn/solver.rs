@@ -2354,6 +2354,14 @@ impl DfPnSolver {
                             removed, self.table.proven_len(), proven_cap);
                     }
                 }
+                // proof GC: NPS 保護のため proof 上限を PROOF_MAP_GC_CAPACITY に制限する
+                if self.table.proof_gc_needed() {
+                    let removed = self.table.gc_proofs();
+                    if removed > 0 {
+                        eprintln!("[proof_gc] removed={} proof={} total={}",
+                            removed, self.table.proven_proof_len(), self.table.proven_len());
+                    }
+                }
             }
         }
         // Periodic progress: every 1M nodes
