@@ -14116,3 +14116,186 @@ use crate::types::{Color, PieceType};
             .join()
             .unwrap();
     }
+
+    /// 1d1e 30分以内解決可能性測定: 300M ノード直接探索 (v0.55.28)
+    ///
+    /// Bug #1+#2 修正後に 300M ノードで 1d1e が解けるか検証する．
+    /// 1800s (30分) 以内に Mate(N) が返るかを確認する．
+    ///
+    /// **[SLOW]** release ビルド必須:
+    /// `cargo test --release -p maou_shogi -- test_1d1e_300m_solve_attempt --nocapture --ignored`
+    #[test]
+    #[ignore]
+    fn test_1d1e_300m_solve_attempt() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let sfen_1d1e = "9/3+N1P3/+R5p1+B/9/8k/9/1R2S4/3p5/9 b NPb4g3s2n4l14p 11";
+
+                eprintln!("{}", "=".repeat(80));
+                eprintln!(" 1d1e 300M ノード直接探索 (v0.55.28 bug#1+#2 修正後)");
+                eprintln!("{}", "=".repeat(80));
+
+                let checkpoints: &[u64] = &[
+                    50_000_000, 100_000_000, 150_000_000, 200_000_000, 250_000_000, 300_000_000,
+                ];
+
+                eprintln!("\n  {:>12}  {:>8}  {:>8}  {:>8}  {:>10}  {:>10}",
+                    "nodes", "total", "proofs", "conf", "result", "elapsed_s");
+
+                let mut cumul_pm: Option<_> = None;
+                let mut cumul_pt = 0usize;
+                let mut cumul_nodes: u64 = 0;
+                let start = std::time::Instant::now();
+
+                for &budget in checkpoints {
+                    let step = budget - cumul_nodes;
+                    let mut b = Board::new();
+                    b.set_sfen(sfen_1d1e).unwrap();
+                    let mut s = DfPnSolver::with_timeout(41, step, 32767, 1800);
+                    s.set_find_shortest(false);
+                    s.set_preserve_proven_tt(true);
+                    if let Some(pm) = cumul_pm.take() {
+                        s.table.set_proven_map(pm, cumul_pt);
+                    }
+                    let r = s.solve(&mut b);
+                    cumul_nodes += s.nodes_searched;
+                    let (p, c, _) = s.table.proven_map_stats();
+                    let (new_pm, new_pt) = s.table.clone_proven_map();
+                    cumul_pm = Some(new_pm);
+                    cumul_pt = new_pt;
+
+                    let rs = match &r {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".into(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".into(),
+                        TsumeResult::Unknown { .. } => "Unknown".into(),
+                    };
+                    let elapsed = start.elapsed().as_secs_f64();
+                    eprintln!("  {:>12}  {:>8}  {:>8}  {:>8}  {:>10}  {:>10.1}",
+                        cumul_nodes, p + c, p, c, rs, elapsed);
+
+                    if rs != "Unknown" {
+                        eprintln!("  *** SOLVED in {:.1}s ***", elapsed);
+                        break;
+                    }
+                }
+
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// `gc_proven()` が confirmed disproof を保護するか確認する
+    /// (v0.55.29 バグ #3 修正の単体テスト)
+    ///
+    /// GC は refutable disproof を最初に除去し，confirmed disproof は後回しにすること．
+    #[test]
+    fn test_gc_proven_preserves_confirmed_disproofs() {
+        let sfen_1d1e = "9/3+N1P3/+R5p1+B/9/8k/9/1R2S4/3p5/9 b NPb4g3s2n4l14p 11";
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                // 1M nodes で ProvenTT を構築 (confirmed disproof が含まれる程度)
+                let mut b = Board::new();
+                b.set_sfen(sfen_1d1e).unwrap();
+                let mut solver = DfPnSolver::with_timeout(35, 1_000_000, 32767, 30);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.solve(&mut b);
+
+                let (p_before, c_before, r_before) = solver.table.proven_map_stats();
+                eprintln!(
+                    "[before gc] proofs={} confirmed={} refutable={}",
+                    p_before, c_before, r_before
+                );
+
+                // GC を直接実行
+                let removed = solver.table.gc_proven();
+                let (p_after, c_after, r_after) = solver.table.proven_map_stats();
+                eprintln!(
+                    "[after  gc] proofs={} confirmed={} refutable={} removed={}",
+                    p_after, c_after, r_after, removed
+                );
+
+                // GC 後も confirmed は保持される
+                // (refutable が十分あれば confirmed は 1 つも減らないはず)
+                if r_before > 0 {
+                    // refutable があれば，confirmed は保護されているはず
+                    assert_eq!(
+                        c_after, c_before,
+                        "gc_proven must not remove confirmed disproofs when refutable exist"
+                    );
+                    assert!(
+                        r_after < r_before,
+                        "gc_proven must remove refutable disproofs first"
+                    );
+                } else {
+                    eprintln!("  (refutable=0, confirmed GC phase の検証はスキップ)");
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// 累積 ProvenTT で confirmed disproof が減少する現象の診断 (v0.55.28)
+    ///
+    /// Step 1 → Step 2 の solver 境界で confirmed が 105K → 42K に減少する。
+    /// retain_proofs_only() 前後の stats を詳細に記録する。
+    ///
+    /// **[SLOW]** release ビルド必須:
+    /// `cargo test --release -p maou_shogi -- test_1d1e_confirmed_decrease_diag --nocapture --ignored`
+    #[test]
+    #[ignore]
+    fn test_1d1e_confirmed_decrease_diag() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let sfen_1d1e = "9/3+N1P3/+R5p1+B/9/8k/9/1R2S4/3p5/9 b NPb4g3s2n4l14p 11";
+
+                eprintln!("=== confirmed decrease 診断 ===");
+
+                // Step 1: 50M nodes
+                let mut b1 = Board::new();
+                b1.set_sfen(sfen_1d1e).unwrap();
+                let mut s1 = DfPnSolver::with_timeout(41, 50_000_000, 32767, 1800);
+                s1.set_find_shortest(false);
+                s1.set_preserve_proven_tt(true);
+                s1.solve(&mut b1);
+                let (p1, c1, r1) = s1.table.proven_map_stats();
+                eprintln!("[after step1 solve] proofs={} confirmed={} refutable={}", p1, c1, r1);
+
+                let (pm1, pt1) = s1.table.clone_proven_map();
+
+                // Step 2 開始: ProvenTT をロードして retain_proofs_only 前後を記録
+                let mut b2 = Board::new();
+                b2.set_sfen(sfen_1d1e).unwrap();
+                let mut s2 = DfPnSolver::with_timeout(41, 1, 32767, 1); // dummy solve でretain_proofs_only を起動
+                s2.set_find_shortest(false);
+                s2.set_preserve_proven_tt(true);
+                s2.table.set_proven_map(pm1.clone(), pt1);
+                let (p2a, c2a, r2a) = s2.table.proven_map_stats();
+                eprintln!("[after set_proven_map] proofs={} confirmed={} refutable={}", p2a, c2a, r2a);
+
+                // retain_proofs_only() を直接呼ぶ (mid_fallback の代わり)
+                s2.table.retain_proofs_only();
+                let (p2b, c2b, r2b) = s2.table.proven_map_stats();
+                eprintln!("[after retain_proofs_only] proofs={} confirmed={} refutable={}", p2b, c2b, r2b);
+
+                // clear_proven_disproofs_below (IDS 各遷移でのシミュレーション)
+                for min_depth in [1u32, 2, 4, 8, 16, 20] {
+                    let mut s_test = DfPnSolver::with_timeout(41, 1, 32767, 1);
+                    s_test.table.set_proven_map(pm1.clone(), pt1);
+                    s_test.table.retain_proofs_only();
+                    s_test.table.clear_proven_disproofs_below(min_depth);
+                    let (pt, ct, rt) = s_test.table.proven_map_stats();
+                    eprintln!("[clear_below({})] proofs={} confirmed={} refutable={}", min_depth, pt, ct, rt);
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }

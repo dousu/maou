@@ -2677,10 +2677,11 @@ impl TranspositionTable {
     /// ProvenTT の独立 GC．
     ///
     /// ProvenTT の充填率に基づいてエントリを除去する．
-    /// confirmed disproof を優先的に除去し，proof は最後まで保護する．
-    /// Phase 1: confirmed disproof のうち amount が低いものから除去
-    /// Phase 2: 全 confirmed disproof を除去
-    /// Phase 3: proof のうち amount が低いものから除去
+    /// refutable disproof を最初に除去し，confirmed disproof は後回し，proof は最後まで保護する．
+    /// Phase 1: refutable disproof を全て除去 (confirmed は保護)
+    /// Phase 2: confirmed disproof のうち amount が低いものから除去
+    /// Phase 3: 全 confirmed disproof を除去
+    /// Phase 4: proof のうち amount が低いものから除去
     ///
     /// 返り値: 除去されたエントリ数．
     pub(super) fn gc_proven(&mut self) -> usize {
@@ -2690,7 +2691,17 @@ impl TranspositionTable {
             return 0;
         }
 
-        // Phase 1: confirmed disproof のうち amount が低いものから除去
+        // Phase 1: refutable disproof を全て除去 (confirmed disproof は保護)
+        self.proven_map.retain(|_, vec| {
+            vec.retain(|e| e.is_proof() || !e.is_refutable_disproof());
+            !vec.is_empty()
+        });
+        self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
+        if self.proven_total_entries <= target {
+            return initial - self.proven_total_entries;
+        }
+
+        // Phase 2: confirmed disproof のうち amount が低いものから除去
         for threshold in [0u8, 16, 32, 64, 128] {
             self.proven_map.retain(|_, vec| {
                 vec.retain(|e| e.is_proof() || e.amount() > threshold);
@@ -2702,7 +2713,7 @@ impl TranspositionTable {
             }
         }
 
-        // Phase 2: 全 confirmed/refutable disproof を除去
+        // Phase 3: 全 confirmed disproof を除去
         self.proven_map.retain(|_, vec| {
             vec.retain(|e| e.is_proof());
             !vec.is_empty()
@@ -2712,7 +2723,7 @@ impl TranspositionTable {
             return initial - self.proven_total_entries;
         }
 
-        // Phase 3: proof のうち amount が低いものから除去
+        // Phase 4: proof のうち amount が低いものから除去
         for threshold in [0u8, 16, 32, 64, 128, 192] {
             self.proven_map.retain(|_, vec| {
                 vec.retain(|e| !e.is_proof() || e.amount() > threshold);
