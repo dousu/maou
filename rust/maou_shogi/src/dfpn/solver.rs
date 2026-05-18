@@ -2343,8 +2343,9 @@ impl DfPnSolver {
             }
 
             // 1M ノードごとに ProvenTT 充填率 GC
+            // confirmed disproof は永続エントリのため GC 容量判定から除外する．
             if self.nodes_searched % 1_000_000 == 0 {
-                let proven_size = self.table.proven_len();
+                let proven_size = self.table.proven_len_for_gc();
                 let proven_cap = self.table.proven_capacity();
                 if proven_size > proven_cap * 7 / 10 {
                     let removed = self.table.gc_proven();

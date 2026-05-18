@@ -211,6 +211,8 @@ pub(super) struct TranspositionTable {
     proven_map: FxHashMap<u64, Vec<ProvenEntry>>,
     /// ProvenTT のエントリ総数 (O(1) カウンタ)．
     proven_total_entries: usize,
+    /// ProvenTT の confirmed disproof エントリ数 (GC 容量判定から除外するため別管理)．
+    proven_confirmed_entries: usize,
     /// WorkingTT: GC 対象エントリ(intermediate + depth-limited disproof)．
     working: Vec<TTFlatEntry>,
     /// LeafDisproofTT: remaining ≤ 2 の overflow 専用 compact テーブル (N-8, v0.26.0)．
@@ -339,6 +341,7 @@ impl TranspositionTable {
         TranspositionTable {
             proven_map: FxHashMap::default(),
             proven_total_entries: 0,
+            proven_confirmed_entries: 0,
             working: vec![TTFlatEntry::EMPTY; working_total],
             leaf_disproofs: vec![TTLeafEntry::EMPTY; leaf_total],
             frontier: vec![TTFlatEntry::EMPTY; frontier_total],
@@ -1252,11 +1255,15 @@ impl TranspositionTable {
             // ProvenTT HashMap: 同一 hand の disproof を置換
             let vec = self.proven_map.entry(pos_key).or_default();
             let before = vec.len();
+            let confirmed_before = vec.iter().filter(|e| !e.is_proof() && !e.is_refutable_disproof() && e.hand == hand).count();
             vec.retain(|e| e.is_proof() || e.hand != hand);
             let removed = before - vec.len();
             self.proven_total_entries -= removed;
+            self.proven_confirmed_entries -= confirmed_before;
             vec.push(new_entry);
             self.proven_total_entries += 1;
+            // new_disproof は confirmed disproof (refutable ではない)
+            self.proven_confirmed_entries += 1;
         }
 
         #[cfg(feature = "verbose")] {
@@ -2009,6 +2016,7 @@ impl TranspositionTable {
     pub(super) fn clear(&mut self) {
         self.proven_map.clear();
         self.proven_total_entries = 0;
+        self.proven_confirmed_entries = 0;
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
         self.working_overflow_since_gc = 0;
     }
@@ -2035,7 +2043,16 @@ impl TranspositionTable {
             vec.retain(|e| e.is_proof() || !e.is_refutable_disproof());
             !vec.is_empty()
         });
-        self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
+        self.proven_total_entries = 0;
+        self.proven_confirmed_entries = 0;
+        for vec in self.proven_map.values() {
+            for e in vec {
+                self.proven_total_entries += 1;
+                if !e.is_proof() && !e.is_refutable_disproof() {
+                    self.proven_confirmed_entries += 1;
+                }
+            }
+        }
     }
 
     /// WorkingTT の confirmed disproof を保持し，他を除去する．
@@ -2321,7 +2338,16 @@ impl TranspositionTable {
             });
             !vec.is_empty()
         });
-        self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
+        self.proven_total_entries = 0;
+        self.proven_confirmed_entries = 0;
+        for vec in self.proven_map.values() {
+            for e in vec {
+                self.proven_total_entries += 1;
+                if !e.is_proof() && !e.is_refutable_disproof() {
+                    self.proven_confirmed_entries += 1;
+                }
+            }
+        }
     }
 
     /// WorkingTT の非空エントリ数を返す．
@@ -2332,6 +2358,12 @@ impl TranspositionTable {
     /// ProvenTT の非空エントリ数を返す．
     pub(super) fn proven_len(&self) -> usize {
         self.proven_total_entries
+    }
+
+    /// GC トリガー判定用: proofs と refutable のみのエントリ数を返す (O(1))．
+    /// confirmed disproof は永続エントリのため GC 容量カウントから除外する．
+    pub(super) fn proven_len_for_gc(&self) -> usize {
+        self.proven_total_entries.saturating_sub(self.proven_confirmed_entries)
     }
 
     /// ProvenTT マップのクローンを返す (TT 共有診断用)．
@@ -2384,6 +2416,11 @@ impl TranspositionTable {
     ) {
         self.proven_map = map;
         self.proven_total_entries = total_entries;
+        // proven_confirmed_entries を再計算する
+        self.proven_confirmed_entries = self.proven_map.values()
+            .flat_map(|v| v.iter())
+            .filter(|e| !e.is_proof() && !e.is_refutable_disproof())
+            .count();
     }
 
     /// WorkingTT の非空エントリ数を返す(`len` のエイリアス)．
