@@ -2020,12 +2020,19 @@ impl TranspositionTable {
         self.working_overflow_since_gc = 0;
     }
 
-    /// 証明エントリ(pn=0)のみを保持する．
-    /// Dual TT: WorkingTT を全クリア + ProvenTT の confirmed disproof を除去．
+    /// 証明エントリ(pn=0)と confirmed disproof を保持する．
+    ///
+    /// WorkingTT を全クリアし，ProvenTT から refutable disproof のみを除去する．
+    /// Confirmed disproof (dn=0, remaining=REMAINING_INFINITE) は深さ非依存の
+    /// 永続エントリであり，IDS depth 遷移を超えて有効なため保持する．
+    /// Refutable disproof (`all_checks_refutable_recursive` 由来) のみ除去する．
+    ///
+    /// WorkingTT の `retain_proofs()` が confirmed disproof を保持するのと同様の方針．
     pub(super) fn retain_proofs_only(&mut self) {
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
         self.proven_map.retain(|_, vec| {
-            vec.retain(|e| e.is_proof());
+            // proof (pn=0) と confirmed disproof を保持; refutable disproof のみ除去
+            vec.retain(|e| e.is_proof() || !e.is_refutable_disproof());
             !vec.is_empty()
         });
         self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
@@ -2272,15 +2279,16 @@ impl TranspositionTable {
         count
     }
 
-    /// ProvenTT の ephemeral エントリ (confirmed disproof + non-ABSOLUTE proof)
+    /// ProvenTT の ephemeral エントリ (refutable disproof + non-ABSOLUTE proof)
     /// を選択的に除去する．
     ///
-    /// IDS depth 切り替え時に呼び出す．2 種のエントリを一括管理する:
+    /// IDS depth 切り替え時に呼び出す．2 種のエントリを除去する:
     ///
-    /// 1. **confirmed disproof** (is_proof=0): 浅い IDS depth で REMAINING_INFINITE
-    ///    として格納された confirmed disproof が深い depth の探索を汚染する
-    ///    のを防ぐ (NoMate バグ対策)．`disproof_depth() < min_depth` のエントリ
-    ///    のみ除去し，`min_depth` 以上のものは保持する．
+    /// 1. **refutable disproof** (is_refutable_disproof=true): `all_checks_refutable_recursive`
+    ///    由来の heuristic disproof．浅い depth で格納されたものが深い探索を
+    ///    汚染するのを防ぐ．`disproof_depth() < min_depth` のエントリのみ除去．
+    ///    confirmed disproof (remaining=REMAINING_INFINITE) は深さ非依存の
+    ///    永続エントリのため絶対に除去しない (v0.55.28 バグ#2 修正)．
     ///
     /// 2. **non-ABSOLUTE proof** (is_proof=1 かつ proof_tag != ABSOLUTE)
     ///    (施策 X, v0.24.53+): heuristic filter 下で生成された FILTER_DEPENDENT /
@@ -2305,7 +2313,10 @@ impl TranspositionTable {
                     e.proof_tag() == super::entry::PROOF_TAG_ABSOLUTE
                         || e.tag_depth() >= min_depth
                 } else {
-                    e.disproof_depth() >= min_depth
+                    // confirmed disproof (remaining=REMAINING_INFINITE) は深さ非依存の
+                    // 永続エントリ: IDS depth に関係なく保持する．
+                    // refutable disproof のみ min_depth でフィルタ．
+                    !e.is_refutable_disproof() || e.disproof_depth() >= min_depth
                 }
             });
             !vec.is_empty()

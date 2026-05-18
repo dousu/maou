@@ -1808,12 +1808,10 @@ impl DfPnSolver {
                 self.table.clear_working();
             }
 
-            // ProvenTT の浅い confirmed disproof を選択的に除去:
-            // 次の IDS depth の半分未満で確認された disproof のみ除去し，
-            // それ以上の depth で確認された disproof は保持する．
-            // 例: IDS 2→4→8→16→32→41 で depth 8→16 に進行する場合，
-            // threshold=8 で depth<8 (depth=2,4) の disproof を除去，
-            // depth=8 の disproof は保持する．
+            // ProvenTT の浅い refutable disproof を選択的に除去する．
+            // confirmed disproof (remaining=REMAINING_INFINITE) は深さ非依存の
+            // 永続エントリのため除去しない (v0.55.28 バグ#2 修正)．
+            // refutable disproof のみ次の IDS depth の半分未満のものを除去．
             self.table.clear_proven_disproofs_below(ids_depth / 2);
 
             prev_root_pn = root_pn2;

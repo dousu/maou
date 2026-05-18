@@ -386,6 +386,14 @@ pub struct DfPnSolver {
     /// `pns_main_with_arena` の出口で `pns_store_to_tt` の戻り値が格納される．
     /// Frontier Variant の zero-proof early skip 判定に使用する．
     pub(super) last_pns_proof_stores: u64,
+    /// K-M dual TT: all_checks_refutable_by_tt 呼び出し回数(K-M 拡張含む)．
+    pub(super) diag_km_calls: u64,
+    /// K-M dual TT: all_checks_refutable_by_tt で K-M cycle_root 判定が成功した回数．
+    /// (confirmed disproof では refuted されず，K-M 経路で refuted された回数)
+    pub(super) diag_km_hits: u64,
+    /// K-M dual TT: all_checks_refutable_by_tt 全体の成功回数
+    /// (K-M 経由 + confirmed disproof 経由の合計)．
+    pub(super) diag_km_total_refuted: u64,
     /// 診断: PNS 空回り(pn/dn 不変)イテレーション数．
     ///
     /// 500M 予算テスト等で予算が有効に使われているかを確認する．
@@ -737,6 +745,9 @@ impl DfPnSolver {
             #[cfg(feature = "profile")]
             profile_stats: ProfileStats::default(),
             last_pns_proof_stores: 0,
+            diag_km_calls: 0,
+            diag_km_hits: 0,
+            diag_km_total_refuted: 0,
             #[cfg(feature = "verbose")]
             dbg_pns_spin_iters: 0,
             #[cfg(feature = "verbose")]
@@ -1602,6 +1613,9 @@ impl DfPnSolver {
             self.table.clear();
         }
         self.nodes_searched = 0;
+        self.diag_km_calls = 0;
+        self.diag_km_hits = 0;
+        self.diag_km_total_refuted = 0;
         self.pn_dn_per_depth.clear();
         self.max_ply = 0;
         self.ply_nodes = [0; 64];
@@ -2072,7 +2086,9 @@ impl DfPnSolver {
         board: &mut Board,
         checks: &[Move],
     ) -> (bool, Option<u32>) {
+        self.diag_km_calls += 1;
         let mut km_cycle_root: Option<u32> = None;
+        let mut km_used = false;
         for check in checks {
             let captured = board.do_move(*check);
             let pk = position_key(board);
@@ -2090,6 +2106,7 @@ impl DfPnSolver {
                     Some(prev) if prev == cr => cr,
                     _ => 0,
                 });
+                km_used = true;
                 true
             } else {
                 false
@@ -2099,6 +2116,8 @@ impl DfPnSolver {
                 return (false, None);
             }
         }
+        if km_used { self.diag_km_hits += 1; }
+        self.diag_km_total_refuted += 1;
         (true, km_cycle_root)
     }
 

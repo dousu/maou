@@ -13778,3 +13778,341 @@ use crate::types::{Color, PieceType};
             .unwrap();
     }
 
+    // ======================================================================
+    // retain_proofs_only() fix (v0.55.27)
+    // ======================================================================
+
+    /// `retain_proofs_only()` が confirmed disproof を保持することを確認する
+    /// ユニットテスト (v0.55.27 fix 検証)．
+    ///
+    /// 修正前: confirmed disproof が削除されていた
+    /// 修正後: confirmed disproof (dn=0, remaining=REMAINING_INFINITE) は保持される
+    #[test]
+    fn test_retain_proofs_only_preserves_confirmed_disproofs() {
+        let sfen_1d1e = "9/3+N1P3/+R5p1+B/9/8k/9/1R2S4/3p5/9 b NPb4g3s2n4l14p 11";
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut b = Board::new();
+                b.set_sfen(sfen_1d1e).unwrap();
+
+                let mut solver = DfPnSolver::with_timeout(35, 200_000, 32767, 15);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.solve(&mut b);
+
+                let (proofs_before, confirmed_before, refutable_before) =
+                    solver.table.proven_map_stats();
+
+                eprintln!(
+                    "[before retain_proofs_only] proofs={} confirmed={} refutable={}",
+                    proofs_before, confirmed_before, refutable_before
+                );
+
+                solver.table.retain_proofs_only();
+
+                let (proofs_after, confirmed_after, refutable_after) =
+                    solver.table.proven_map_stats();
+
+                eprintln!(
+                    "[after  retain_proofs_only] proofs={} confirmed={} refutable={}",
+                    proofs_after, confirmed_after, refutable_after
+                );
+
+                assert_eq!(
+                    proofs_after, proofs_before,
+                    "proofs must be preserved: before={}, after={}",
+                    proofs_before, proofs_after
+                );
+                assert_eq!(
+                    confirmed_after, confirmed_before,
+                    "confirmed disproofs must be preserved after fix: before={}, after={}",
+                    confirmed_before, confirmed_after
+                );
+                assert_eq!(
+                    refutable_after, 0,
+                    "refutable disproofs must be removed: before={}, after={}",
+                    refutable_before, refutable_after
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// **[SLOW]** `retain_proofs_only()` 修正後の ProvenTT oscillation 改善測定 (v0.55.27)．
+    ///
+    /// 修正前: 10M nodes → 240K, 次の solver 起動で 53K に激減 (187K GC)
+    /// 修正後: confirmed disproof 保持により oscillation が解消される
+    ///
+    /// Phase 1: ProvenTT エントリ種別内訳 (proofs / confirmed / refutable)
+    /// Phase 2: 修正後の成長曲線 (oscillation が起きないことを確認)
+    /// Phase 3: 100M ノード直接探索での進捗確認
+    ///
+    /// ```bash
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_1d1e_proventt_oscillation_fix --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_1d1e_proventt_oscillation_fix() {
+        let sfen_1d1e = "9/3+N1P3/+R5p1+B/9/8k/9/1R2S4/3p5/9 b NPb4g3s2n4l14p 11";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" retain_proofs_only() 修正効果測定 (v0.55.27)");
+                eprintln!("{}", "=".repeat(80));
+
+                // --- Phase 1: 10M nodes 後の ProvenTT 種別内訳 ---
+                eprintln!("\n[Phase1] ProvenTT 種別内訳 @ 10M nodes");
+
+                let mut b = Board::new();
+                b.set_sfen(sfen_1d1e).unwrap();
+                let mut s10m = DfPnSolver::with_timeout(35, 10_000_000, 32767, 180);
+                s10m.set_find_shortest(false);
+                s10m.set_preserve_proven_tt(true);
+                s10m.solve(&mut b);
+
+                let (proofs, confirmed, refutable) = s10m.table.proven_map_stats();
+                let total = proofs + confirmed + refutable;
+                eprintln!(
+                    "  total={} proofs={} ({:.1}%) confirmed={} ({:.1}%) refutable={} ({:.1}%)",
+                    total,
+                    proofs,
+                    proofs as f64 / total.max(1) as f64 * 100.0,
+                    confirmed,
+                    confirmed as f64 / total.max(1) as f64 * 100.0,
+                    refutable,
+                    refutable as f64 / total.max(1) as f64 * 100.0,
+                );
+
+                // --- Phase 2: 修正後の成長曲線 ---
+                // 修正前: 10M→53K (drop 187K), 修正後: 240K以上を維持するはず
+                eprintln!("\n[Phase2] 修正後 ProvenTT 成長曲線 (累積)");
+                eprintln!("  {:>12} {:>8} {:>8} {:>8} {:>10}",
+                    "cumul_nodes", "total", "proofs", "conf", "result");
+                eprintln!("  {}", "-".repeat(58));
+
+                let checkpoints: &[u64] = &[
+                    500_000, 1_000_000, 2_000_000, 5_000_000,
+                    10_000_000, 20_000_000, 40_000_000,
+                ];
+                let mut cumul_pm = None;
+                let mut cumul_pt = 0usize;
+                let mut cumul_nodes: u64 = 0;
+
+                for &cp in checkpoints {
+                    let add_budget = cp - cumul_nodes;
+                    let mut solver = DfPnSolver::with_timeout(35, add_budget, 32767, 180);
+                    solver.set_find_shortest(false);
+                    solver.set_preserve_proven_tt(true);
+                    if let Some(pm) = cumul_pm.take() {
+                        solver.table.set_proven_map(pm, cumul_pt);
+                    }
+                    let mut b2 = Board::new();
+                    b2.set_sfen(sfen_1d1e).unwrap();
+                    let res = solver.solve(&mut b2);
+                    cumul_nodes += solver.nodes_searched;
+
+                    let (p, c, _r) = solver.table.proven_map_stats();
+                    let (new_pm, new_pt) = solver.table.clone_proven_map();
+                    cumul_pm = Some(new_pm);
+                    cumul_pt = new_pt;
+
+                    let res_str = match &res {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".into(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".into(),
+                        TsumeResult::Unknown { .. } => "Unknown".into(),
+                    };
+                    eprintln!("  {:>12} {:>8} {:>8} {:>8} {:>10}",
+                        cumul_nodes, p + c, p, c, res_str);
+                    if res_str != "Unknown" { break; }
+                }
+
+                // --- Phase 3: 100M ノード直接探索 ---
+                eprintln!("\n[Phase3] 100M ノード直接探索 (修正後)");
+                let mut b3 = Board::new();
+                b3.set_sfen(sfen_1d1e).unwrap();
+                let t3 = Instant::now();
+                let mut s100m = DfPnSolver::with_timeout(35, 100_000_000, 32767, 1800);
+                s100m.set_find_shortest(false);
+                s100m.set_preserve_proven_tt(true);
+                let r3 = s100m.solve(&mut b3);
+                let (p3, c3, _) = s100m.table.proven_map_stats();
+                eprintln!("  nodes={} time={:.1}s proven_total={} (proofs={} confirmed={})",
+                    s100m.nodes_searched, t3.elapsed().as_secs_f64(), p3 + c3, p3, c3);
+                let r3s = match &r3 {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".into(),
+                    TsumeResult::NoCheckmate { .. } => "NoMate".into(),
+                    TsumeResult::Unknown { .. } => "Unknown".into(),
+                };
+                eprintln!("  result={}", r3s);
+
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// `clear_proven_disproofs_below()` が confirmed disproof を保持するか確認する
+    /// (v0.55.28 バグ #2 修正の単体テスト)
+    #[test]
+    fn test_clear_proven_disproofs_preserves_confirmed() {
+        let sfen_1d1e = "9/3+N1P3/+R5p1+B/9/8k/9/1R2S4/3p5/9 b NPb4g3s2n4l14p 11";
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut b = Board::new();
+                b.set_sfen(sfen_1d1e).unwrap();
+                let mut solver = DfPnSolver::with_timeout(35, 200_000, 32767, 15);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.solve(&mut b);
+
+                let (proofs_before, confirmed_before, refutable_before) =
+                    solver.table.proven_map_stats();
+                eprintln!(
+                    "[before clear_proven_disproofs_below(8)] proofs={} confirmed={} refutable={}",
+                    proofs_before, confirmed_before, refutable_before
+                );
+
+                // IDS 最大深度 16 相当の threshold で clear
+                solver.table.clear_proven_disproofs_below(8);
+
+                let (proofs_after, confirmed_after, refutable_after) =
+                    solver.table.proven_map_stats();
+                eprintln!(
+                    "[after  clear_proven_disproofs_below(8)] proofs={} confirmed={} refutable={}",
+                    proofs_after, confirmed_after, refutable_after
+                );
+
+                // confirmed disproof は深さ非依存: clear 後も全保持される
+                assert_eq!(
+                    confirmed_after, confirmed_before,
+                    "confirmed disproofs must not be removed by clear_proven_disproofs_below"
+                );
+                // refutable disproof は浅いものが除去されてよい (== は偶然の一致なのでチェック不要)
+                let _ = refutable_after;
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// `clear_proven_disproofs_below()` バグ #2 修正の効果測定 (v0.55.28)
+    ///
+    /// IDS depth 遷移で confirmed disproof が削除されなくなったことで，
+    /// ProvenTT 累積成長がどの程度改善するかを測定する．
+    ///
+    /// **[SLOW]** release ビルド必須:
+    /// `cargo test --release -p maou_shogi -- test_1d1e_ids_disproof_fix --nocapture --ignored`
+    #[test]
+    #[ignore]
+    fn test_1d1e_ids_disproof_fix_effectiveness() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let sfen_1d1e = "9/3+N1P3/+R5p1+B/9/8k/9/1R2S4/3p5/9 b NPb4g3s2n4l14p 11";
+
+                eprintln!("{}", "=".repeat(80));
+                eprintln!(" clear_proven_disproofs_below() バグ #2 修正効果測定 (v0.55.28)");
+                eprintln!("{}", "=".repeat(80));
+
+                // Phase 1: 10M ノード時の ProvenTT 内訳 (depth=35, v0.55.27 比較用)
+                // NOTE: depth=41 にすると IDS の clear_proven_disproofs_below(20) が
+                //       深さ<20 の全 proof を削除するため stats=0 になる．
+                //       v0.55.27 (bug#1 only) との比較のため depth=35 を使用．
+                eprintln!("\n[Phase1] ProvenTT 種別内訳 @ 10M nodes (depth=35, v0.55.27 比較)");
+                let mut b1 = Board::new();
+                b1.set_sfen(sfen_1d1e).unwrap();
+                let mut s1 = DfPnSolver::with_timeout(35, 10_000_000, 32767, 300);
+                s1.set_find_shortest(false);
+                s1.set_preserve_proven_tt(true);
+                s1.solve(&mut b1);
+                let (p1, c1, r1) = s1.table.proven_map_stats();
+                let total1 = p1 + c1 + r1;
+                eprintln!(
+                    "  total={} proofs={} ({:.1}%) confirmed={} ({:.1}%) refutable={} ({:.1}%)",
+                    total1,
+                    p1, p1 as f64 / total1.max(1) as f64 * 100.0,
+                    c1, c1 as f64 / total1.max(1) as f64 * 100.0,
+                    r1, r1 as f64 / total1.max(1) as f64 * 100.0,
+                );
+                eprintln!("  (v0.55.27 ref: total=286204 proofs=91283 confirmed=31154 refutable=163767)");
+
+                // Phase 2: 累積成長曲線 (depth=35, v0.55.27 比較用)
+                eprintln!("\n[Phase2] 修正後 ProvenTT 成長曲線 (depth=35, 累積)");
+                eprintln!("   cumul_nodes    total   proofs     conf     result");
+                eprintln!("  ----------------------------------------------------------");
+
+                let checkpoints: &[u64] = &[
+                    500_000, 1_000_000, 2_000_000, 5_000_000,
+                    10_000_000, 20_000_000, 40_000_000,
+                ];
+                let mut cumul_pm: Option<_> = None;
+                let mut cumul_pt = 0usize;
+                let mut cumul_nodes: u64 = 0;
+
+                for &cp_budget in checkpoints {
+                    let add_budget = cp_budget - cumul_nodes;
+                    let mut s = DfPnSolver::with_timeout(35, add_budget, 32767, 300);
+                    s.set_find_shortest(false);
+                    s.set_preserve_proven_tt(true);
+                    if let Some(pm) = cumul_pm.take() {
+                        s.table.set_proven_map(pm, cumul_pt);
+                    }
+                    let mut b = Board::new();
+                    b.set_sfen(sfen_1d1e).unwrap();
+                    let r = s.solve(&mut b);
+                    cumul_nodes += s.nodes_searched;
+                    let (cp2, cc2, _) = s.table.proven_map_stats();
+                    let (new_pm, new_pt) = s.table.clone_proven_map();
+                    cumul_pm = Some(new_pm);
+                    cumul_pt = new_pt;
+
+                    let rs = match &r {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".into(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".into(),
+                        TsumeResult::Unknown { .. } => "Unknown".into(),
+                    };
+                    eprintln!(
+                        "  {:>12}  {:>7}  {:>7}  {:>7}    {}",
+                        cumul_nodes, cp2 + cc2, cp2, cc2, rs
+                    );
+                    if rs != "Unknown" { break; }
+                }
+
+                // Phase 3: 100M ノード直接探索 (修正後)
+                eprintln!("\n[Phase3] 100M ノード直接探索 (修正後)");
+                let t3 = std::time::Instant::now();
+                let mut b3 = Board::new();
+                b3.set_sfen(sfen_1d1e).unwrap();
+                let mut s3 = DfPnSolver::with_timeout(41, 100_000_000, 32767, 1800);
+                s3.set_find_shortest(false);
+                s3.set_preserve_proven_tt(true);
+                let r3 = s3.solve(&mut b3);
+                let (p3, c3, _) = s3.table.proven_map_stats();
+                let r3s = match &r3 {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".into(),
+                    TsumeResult::NoCheckmate { .. } => "NoMate".into(),
+                    TsumeResult::Unknown { .. } => "Unknown".into(),
+                };
+                eprintln!(
+                    "  nodes={} time={:.1}s proven_total={} (proofs={} confirmed={})",
+                    s3.nodes_searched, t3.elapsed().as_secs_f64(), p3 + c3, p3, c3
+                );
+                eprintln!("  result={}", r3s);
+
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
