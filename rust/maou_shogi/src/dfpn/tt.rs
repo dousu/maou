@@ -2676,11 +2676,13 @@ impl TranspositionTable {
 
     /// ProvenTT の独立 GC．
     ///
-    /// ProvenTT の充填率に基づいてエントリを除去する．
-    /// refutable disproof を最初に除去し，confirmed disproof は後回し，proof は最後まで保護する．
+    /// refutable disproof を最初に除去し，confirmed disproof は
+    /// proofs+confirmed 単独でキャパシティ閾値を超えた場合のみ除去する．
+    /// proof は最後まで保護する．
+    ///
     /// Phase 1: refutable disproof を全て除去 (confirmed は保護)
-    /// Phase 2: confirmed disproof のうち amount が低いものから除去
-    /// Phase 3: 全 confirmed disproof を除去
+    /// Phase 2: proofs+confirmed がキャパシティ閾値を超えた場合のみ confirmed を除去
+    /// Phase 3: 全 confirmed disproof を除去 (最終手段)
     /// Phase 4: proof のうち amount が低いものから除去
     ///
     /// 返り値: 除去されたエントリ数．
@@ -2697,11 +2699,13 @@ impl TranspositionTable {
             !vec.is_empty()
         });
         self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
-        if self.proven_total_entries <= target {
+        // refutable を除去後，proofs+confirmed がキャパシティ閾値を下回っていれば停止する．
+        // target (60% of initial) には届かなくても confirmed は保護する．
+        if self.proven_total_entries <= PROVEN_MAP_GC_CAPACITY * 7 / 10 {
             return initial - self.proven_total_entries;
         }
 
-        // Phase 2: confirmed disproof のうち amount が低いものから除去
+        // Phase 2: proofs+confirmed だけでキャパシティ閾値を超えている場合のみ confirmed を除去
         for threshold in [0u8, 16, 32, 64, 128] {
             self.proven_map.retain(|_, vec| {
                 vec.retain(|e| e.is_proof() || e.amount() > threshold);
@@ -2713,7 +2717,7 @@ impl TranspositionTable {
             }
         }
 
-        // Phase 3: 全 confirmed disproof を除去
+        // Phase 3: 全 confirmed disproof を除去 (最終手段)
         self.proven_map.retain(|_, vec| {
             vec.retain(|e| e.is_proof());
             !vec.is_empty()

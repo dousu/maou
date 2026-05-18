@@ -14189,9 +14189,10 @@ use crate::types::{Color, PieceType};
     }
 
     /// `gc_proven()` が confirmed disproof を保護するか確認する
-    /// (v0.55.29 バグ #3 修正の単体テスト)
+    /// (v0.55.30 バグ #3 修正の単体テスト)
     ///
-    /// GC は refutable disproof を最初に除去し，confirmed disproof は後回しにすること．
+    /// Phase 1 (refutable 除去) 後に proofs+confirmed がキャパシティ閾値を下回っていれば
+    /// confirmed は 1 つも除去されないこと．
     #[test]
     fn test_gc_proven_preserves_confirmed_disproofs() {
         let sfen_1d1e = "9/3+N1P3/+R5p1+B/9/8k/9/1R2S4/3p5/9 b NPb4g3s2n4l14p 11";
