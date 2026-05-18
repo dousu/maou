@@ -2772,6 +2772,15 @@ impl TranspositionTable {
     ///
     /// confirmed disproof は絶対に除去しない．
     /// 返り値: 除去されたエントリ数．
+    /// proof エントリを amount 昇順で evict し，NPS 低下を防ぐ (Step 1, v0.55.35)．
+    ///
+    /// proof が PROOF_MAP_GC_CAPACITY を超えた場合，amount の小さいエントリから
+    /// 順に除去して PROOF_MAP_GC_TARGET まで削減する．
+    ///
+    /// **v0.55.36 バグ修正**: 境界レベルでのオーバーシュート防止．
+    /// 全エントリが同一 amount (例: mate_distance=0 → amount=64) の場合，
+    /// 旧実装は全 proof を除去していた．boundary_remaining カウンターで
+    /// 境界レベルの除去数を正確に制御する．
     pub(super) fn gc_proofs(&mut self) -> usize {
         let proof_count = self.proven_proof_entries;
         let target = PROOF_MAP_GC_TARGET;
@@ -2790,22 +2799,40 @@ impl TranspositionTable {
             }
         }
 
-        // Step 2: 除去対象 amount の閾値を決定
-        // amount <= evict_threshold のエントリを全除去する
-        let mut cumulative = 0usize;
-        let mut evict_threshold = 0u8;
+        // Step 2: 境界 amount 閾値と境界レベルでの除去数を決定
+        // amount < evict_threshold: 全除去
+        // amount == evict_threshold: boundary_remaining 個だけ除去
+        // amount > evict_threshold: 全保持
+        let mut below_boundary = 0usize;
+        let mut evict_threshold = 255u8;
         for a in 0u8..=255u8 {
-            cumulative = cumulative.saturating_add(hist[a as usize]);
-            if cumulative >= to_remove {
+            let count_at_a = hist[a as usize];
+            if below_boundary + count_at_a >= to_remove {
                 evict_threshold = a;
                 break;
             }
+            below_boundary += count_at_a;
         }
+        // 境界レベルで除去すべき数 (オーバーシュート防止)
+        let boundary_remaining = to_remove - below_boundary;
 
-        // Step 3: retain pass (proof のみ絞り込み; confirmed は無条件保持)
+        // Step 3: retain pass
         let before_total = self.proven_total_entries;
+        let mut boundary_evicted = 0usize;
         self.proven_map.retain(|_, vec| {
-            vec.retain(|e| !e.is_proof() || e.amount() > evict_threshold);
+            vec.retain(|e| {
+                if !e.is_proof() { return true; }  // confirmed/refutable は保持
+                let a = e.amount();
+                if a < evict_threshold { return false; }  // 境界未満: 必ず除去
+                if a > evict_threshold { return true; }   // 境界超過: 必ず保持
+                // 境界レベル: boundary_remaining 個まで除去
+                if boundary_evicted < boundary_remaining {
+                    boundary_evicted += 1;
+                    false
+                } else {
+                    true
+                }
+            });
             !vec.is_empty()
         });
         self.recalculate_proven_counters();
