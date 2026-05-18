@@ -2676,14 +2676,13 @@ impl TranspositionTable {
 
     /// ProvenTT の独立 GC．
     ///
-    /// refutable disproof を最初に除去し，confirmed disproof は
-    /// proofs+confirmed 単独でキャパシティ閾値を超えた場合のみ除去する．
-    /// proof は最後まで保護する．
+    /// confirmed disproof は永続的な知識であり，GC では絶対に削除しない．
+    /// 削除優先順位: refutable disproof → filter-dependent proof → absolute proof
     ///
-    /// Phase 1: refutable disproof を全て除去 (confirmed は保護)
-    /// Phase 2: proofs+confirmed がキャパシティ閾値を超えた場合のみ confirmed を除去
-    /// Phase 3: 全 confirmed disproof を除去 (最終手段)
-    /// Phase 4: proof のうち amount が低いものから除去
+    /// Phase 1: refutable disproof を全て除去
+    /// Phase 2: filter-dependent proof を amount 昇順で除去
+    /// Phase 3: 全 filter-dependent proof を除去
+    /// Phase 4: absolute proof を amount 昇順で除去 (最終手段)
     ///
     /// 返り値: 除去されたエントリ数．
     pub(super) fn gc_proven(&mut self) -> usize {
@@ -2693,22 +2692,25 @@ impl TranspositionTable {
             return 0;
         }
 
-        // Phase 1: refutable disproof を全て除去 (confirmed disproof は保護)
+        // Phase 1: refutable disproof を全て除去 (confirmed は永遠に保護)
         self.proven_map.retain(|_, vec| {
             vec.retain(|e| e.is_proof() || !e.is_refutable_disproof());
             !vec.is_empty()
         });
         self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
-        // refutable を除去後，proofs+confirmed がキャパシティ閾値を下回っていれば停止する．
-        // target (60% of initial) には届かなくても confirmed は保護する．
-        if self.proven_total_entries <= PROVEN_MAP_GC_CAPACITY * 7 / 10 {
+        if self.proven_total_entries <= target {
             return initial - self.proven_total_entries;
         }
 
-        // Phase 2: proofs+confirmed だけでキャパシティ閾値を超えている場合のみ confirmed を除去
-        for threshold in [0u8, 16, 32, 64, 128] {
+        // Phase 2: filter-dependent proof を amount 昇順で除去
+        // amount: filter-dependent=48, absolute=64, mate=128-191
+        for threshold in [0u8, 16, 32, 48] {
             self.proven_map.retain(|_, vec| {
-                vec.retain(|e| e.is_proof() || e.amount() > threshold);
+                vec.retain(|e| {
+                    !e.is_proof()  // confirmed はそのまま
+                        || e.proof_tag() == super::entry::PROOF_TAG_ABSOLUTE
+                        || e.amount() > threshold
+                });
                 !vec.is_empty()
             });
             self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
@@ -2717,18 +2719,8 @@ impl TranspositionTable {
             }
         }
 
-        // Phase 3: 全 confirmed disproof を除去 (最終手段)
-        self.proven_map.retain(|_, vec| {
-            vec.retain(|e| e.is_proof());
-            !vec.is_empty()
-        });
-        self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
-        if self.proven_total_entries <= target {
-            return initial - self.proven_total_entries;
-        }
-
-        // Phase 4: proof のうち amount が低いものから除去
-        for threshold in [0u8, 16, 32, 64, 128, 192] {
+        // Phase 3: absolute proof を amount 昇順で除去 (confirmed は引き続き保護)
+        for threshold in [0u8, 16, 32, 48, 64, 128, 192] {
             self.proven_map.retain(|_, vec| {
                 vec.retain(|e| !e.is_proof() || e.amount() > threshold);
                 !vec.is_empty()
