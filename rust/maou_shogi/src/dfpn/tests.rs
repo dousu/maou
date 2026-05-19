@@ -13624,6 +13624,193 @@ use crate::types::{Color, PieceType};
             .unwrap();
     }
 
+    /// **[SLOW]** 分岐プリソルブ + 大バジェット効果測定 (v0.55.37)．
+    ///
+    /// `test_2c1d_branch_presolve_effectiveness` と同じプリソルブを行ったうえで
+    /// Phase 4 のバジェットを 50M ノード / 600s に拡大して 1d1e / 1d2e を再挑戦する．
+    /// branch-pre ProvenTT (3.4M+ エントリ) を使うと NPS ≈ 52K になるため
+    /// 50M ノード = 約 960s ≈ 16 分かかる.
+    ///
+    /// ```bash
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_2c1d_branch_presolve_large_budget --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_2c1d_branch_presolve_large_budget() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv_usi = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i",
+            "8i6i", "6h6i+", "S*2h", "1i2i", "2h3g", "2i3i",
+            "2g2h", "3i4i", "2h4h",
+        ];
+        let sfen_1d1e = "9/3+N1P3/+R5p1+B/9/8k/9/1R2S4/3p5/9 b NPb4g3s2n4l14p 11";
+        let sfen_1d2e = "9/3+N1P3/+R5p1+B/9/7kN/9/1R2S4/3p5/9 b NPb4g3sn4l14p 11";
+
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 分岐プリソルブ + 大バジェット測定: 1d1e / 1d2e (50M nodes)");
+                eprintln!("{}", "=".repeat(80));
+
+                // --- Phase 1: ply 38→12 バックワードプリソルブ ---
+                let mut board_root = Board::new();
+                board_root.set_sfen(sfen).unwrap();
+                let mut positions: Vec<(usize, Board)> = Vec::new();
+                {
+                    let mut sub = board_root.clone();
+                    positions.push((0, sub.clone()));
+                    for i in (0..38).step_by(2) {
+                        let m1 = sub.move_from_usi(pv_usi[i]).unwrap();
+                        sub.do_move(m1);
+                        let m2 = sub.move_from_usi(pv_usi[i + 1]).unwrap();
+                        sub.do_move(m2);
+                        positions.push((i + 2, sub.clone()));
+                    }
+                    positions.reverse();
+                }
+                let mut warmup = DfPnSolver::with_timeout(41, 50_000_000, 32767, 300);
+                warmup.set_find_shortest(false);
+                warmup.set_preserve_proven_tt(true);
+                let t_wu = Instant::now();
+                for (ply, pos) in &positions {
+                    if *ply < 12 { continue; }
+                    let remaining = (39 - ply) as u32;
+                    let depth = (remaining + 2).min(41);
+                    warmup.depth = depth;
+                    let mut b = pos.clone();
+                    warmup.solve(&mut b);
+                }
+                let wu_proven = warmup.table.proven_len();
+                eprintln!("[Phase1] ply 38→12 完了: ProvenTT={} t={:.1}s",
+                    wu_proven, t_wu.elapsed().as_secs_f64());
+                let (wu_pm, wu_pt) = warmup.table.clone_proven_map();
+                drop(warmup);
+
+                // --- Phase 2/3: 分岐プリソルブ ---
+                let branch_targets: &[(&str, &str, u32)] = &[
+                    ("1d1e", sfen_1d1e, 29),
+                    ("1d2e", sfen_1d2e, 29),
+                ];
+                let mut shared_pm = wu_pm.clone();
+                let mut shared_pt = wu_pt;
+
+                for (name, or_sfen, remaining) in branch_targets {
+                    let t_branch = Instant::now();
+                    let mut b_or = Board::new();
+                    b_or.set_sfen(or_sfen).unwrap();
+                    let checks = {
+                        let tmp = DfPnSolver::default_solver();
+                        tmp.generate_check_moves(&mut b_or)
+                    };
+                    let n_checks = checks.len();
+                    let mut n_defenses_total = 0usize;
+                    let mut n_sub = 0usize;
+                    for check in &checks {
+                        let cap_ck = b_or.do_move(*check);
+                        let defenses = {
+                            let mut tmp = DfPnSolver::default_solver();
+                            tmp.generate_defense_moves(&mut b_or)
+                        };
+                        n_defenses_total += defenses.len();
+                        for defense in &defenses {
+                            let cap_def = b_or.do_move(*defense);
+                            let sub_remaining = remaining.saturating_sub(2);
+                            if sub_remaining == 0 {
+                                b_or.undo_move(*defense, cap_def);
+                                continue;
+                            }
+                            let sub_depth = (sub_remaining + 2).min(41);
+                            {
+                                let mut sub = DfPnSolver::with_timeout(
+                                    sub_depth, 10_000_000, 32767, 30,
+                                );
+                                sub.set_find_shortest(false);
+                                sub.set_preserve_proven_tt(true);
+                                sub.table.set_proven_map(shared_pm.clone(), shared_pt);
+                                sub.solve(&mut b_or);
+                                let (new_pm, new_pt) = sub.table.clone_proven_map();
+                                drop(sub);
+                                shared_pm = new_pm;
+                                shared_pt = new_pt;
+                            }
+                            n_sub += 1;
+                            b_or.undo_move(*defense, cap_def);
+                        }
+                        b_or.undo_move(*check, cap_ck);
+                    }
+                    eprintln!("[Phase2/3] {} 完了: checks={} defenses={} sub={} ProvenTT={} t={:.1}s",
+                        name, n_checks, n_defenses_total, n_sub,
+                        shared_pt, t_branch.elapsed().as_secs_f64());
+                }
+                let branch_proven_total = shared_pt;
+                eprintln!("[Phase2/3] 全分岐完了: ProvenTT={} (warmup時 {})",
+                    branch_proven_total, wu_proven);
+                let (branch_pm, branch_pt) = (shared_pm, shared_pt);
+
+                // --- Phase 4: 大バジェット効果測定 (50M nodes / 600s) ---
+                eprintln!();
+                eprintln!("{:<8} {:<14} {:>12} {:>8} {:>10}  {}",
+                    "defense", "mode", "nodes", "proven", "time(s)", "result");
+                eprintln!("{}", "-".repeat(72));
+
+                let budget = 50_000_000u64;
+                let fmt_r = |r: &TsumeResult| match r {
+                    TsumeResult::Checkmate { moves, nodes_searched } =>
+                        format!("Mate({}) n={}", moves.len(), nodes_searched),
+                    TsumeResult::CheckmateNoPv { nodes_searched } =>
+                        format!("MateNoPV n={}", nodes_searched),
+                    TsumeResult::NoCheckmate { nodes_searched } =>
+                        format!("NoMate n={}", nodes_searched),
+                    TsumeResult::Unknown { nodes_searched } =>
+                        format!("Unknown n={}", nodes_searched),
+                };
+
+                for (name, or_sfen, _) in branch_targets {
+                    // (A) warmup-only ProvenTT
+                    {
+                        let mut b = Board::new();
+                        b.set_sfen(or_sfen).unwrap();
+                        let mut solver_a = DfPnSolver::with_timeout(35, budget, 32767, 600);
+                        solver_a.set_find_shortest(false);
+                        solver_a.set_preserve_proven_tt(true);
+                        solver_a.table.set_proven_map(wu_pm.clone(), wu_pt);
+                        let t = Instant::now();
+                        let res = solver_a.solve(&mut b);
+                        eprintln!("{:<8} {:<14} {:>12} {:>8} {:>10.1}  {}",
+                            name, "warmup-only",
+                            solver_a.nodes_searched, solver_a.table.proven_len(),
+                            t.elapsed().as_secs_f64(), fmt_r(&res));
+                    }
+                    // (B) branch-presolved ProvenTT
+                    {
+                        let mut b = Board::new();
+                        b.set_sfen(or_sfen).unwrap();
+                        let mut solver_b = DfPnSolver::with_timeout(35, budget, 32767, 600);
+                        solver_b.set_find_shortest(false);
+                        solver_b.set_preserve_proven_tt(true);
+                        solver_b.table.set_proven_map(branch_pm.clone(), branch_pt);
+                        let t = Instant::now();
+                        let res = solver_b.solve(&mut b);
+                        eprintln!("{:<8} {:<14} {:>12} {:>8} {:>10.1}  {}",
+                            name, "branch-pre",
+                            solver_b.nodes_searched, solver_b.table.proven_len(),
+                            t.elapsed().as_secs_f64(), fmt_r(&res));
+                    }
+                    eprintln!();
+                }
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// **[SLOW]** 1d1e サブツリー構造診断 (v0.55.26)．
     ///
     /// 分岐プリソルブが 1d1e に効かない根本原因を定量調査する:
@@ -13652,7 +13839,7 @@ use crate::types::{Color, PieceType};
                 let mut b_or = Board::new();
                 b_or.set_sfen(sfen_1d1e).unwrap();
                 let checks = {
-                    let mut tmp = DfPnSolver::default_solver();
+                    let tmp = DfPnSolver::default_solver();
                     tmp.generate_check_moves(&mut b_or)
                 };
                 let n_checks = checks.len();
