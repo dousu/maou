@@ -510,6 +510,13 @@ pub(super) struct TranspositionTable {
     /// ProvenTT の proof エントリ数 (GC 容量判定から除外するため別管理)．
     /// refutable のみが GC 対象: proven_len_for_gc() = total - confirmed - proof = refutable．
     proven_proof_entries: usize,
+    /// Phase 2 swift-running-cheetah (v0.59.0): KH 風 flat array + linear probing
+    /// ProvenTable．`Some` で flag ON 状態 (新実装を使用)，`None` で flag OFF
+    /// (既存 `proven_map` を使用)．設定は `set_use_kh_proven_tt(true, capacity)`
+    /// で行う．既存 caller への影響なし (default は None)．
+    ///
+    /// 関連: `docs/plans/swift-running-cheetah.md`．
+    proven_table: Option<ProvenTable>,
     /// WorkingTT: GC 対象エントリ(intermediate + depth-limited disproof)．
     working: Vec<TTFlatEntry>,
     /// LeafDisproofTT: remaining ≤ 2 の overflow 専用 compact テーブル (N-8, v0.26.0)．
@@ -637,6 +644,7 @@ impl TranspositionTable {
         let frontier_total = FRONTIER_NUM_CLUSTERS * FRONTIER_CLUSTER_SIZE;
         TranspositionTable {
             proven_map: FxHashMap::default(),
+            proven_table: None,
             proven_total_entries: 0,
             proven_confirmed_entries: 0,
             proven_proof_entries: 0,
@@ -702,6 +710,36 @@ impl TranspositionTable {
             diag_leaf_hits: std::sync::atomic::AtomicU64::new(0),
             frontier_overflow_since_gc: 0,
         }
+    }
+
+    /// KH 風 flat array `ProvenTable` を有効化/無効化する (Phase 2, v0.59.0)．
+    ///
+    /// - `on=true`: `proven_table = Some(ProvenTable::new(capacity))` で初期化．
+    ///   全ての proven 系 API は `proven_table` を使用する (既存 `proven_map`
+    ///   とは独立)．探索開始前に有効化すること．
+    /// - `on=false`: `proven_table = None` に戻し既存 `proven_map` を使う．
+    ///
+    /// **重要**: 探索中の動的切替は未サポート．caller は `solve()` 呼出前に
+    /// 設定すること．関連: `docs/plans/swift-running-cheetah.md`．
+    pub(super) fn set_use_kh_proven_tt(&mut self, on: bool, capacity: usize) {
+        self.proven_table = if on {
+            Some(ProvenTable::new(capacity))
+        } else {
+            None
+        };
+    }
+
+    /// `proven_table` が有効か (`Some`) を返す．Phase 2 internal helper．
+    #[inline(always)]
+    pub(super) fn is_kh_proven_tt(&self) -> bool {
+        self.proven_table.is_some()
+    }
+
+    /// `ProvenTable` の `(len, proof_len, confirmed_len, refutable_len)` を返す
+    /// (flag ON 時のみ)．OFF なら `None`．Phase 2a verification 用 (v0.59.0)．
+    pub(super) fn proven_table_stats(&self) -> Option<(usize, usize, usize, usize)> {
+        let t = self.proven_table.as_ref()?;
+        Some((t.len(), t.proof_len(), t.confirmed_len(), t.refutable_len()))
     }
 
     /// WorkingTT エントリの pn/dn 分布を収集する (分析用)．
@@ -1380,6 +1418,11 @@ impl TranspositionTable {
         self.proven_total_entries -= before - vec.len();
         vec.push(new_entry);
         self.proven_total_entries += 1;
+        // Phase 2a (swift-running-cheetah, v0.59.0): shadow-write 新エントリを
+        // ProvenTable へ insert (flag ON 時のみ)．retain 由来の removal は未対応．
+        if let Some(t) = self.proven_table.as_mut() {
+            t.insert(pos_key, new_entry);
+        }
     }
 
     /// テスト用: tagged proof を直接ストアする (store_tagged_proof のエイリアス)．
@@ -1542,6 +1585,10 @@ impl TranspositionTable {
             vec.push(new_entry);
             self.proven_total_entries += 1;
             self.proven_proof_entries += 1;
+            // Phase 2a shadow-write (v0.59.0)
+            if let Some(t) = self.proven_table.as_mut() {
+                t.insert(pos_key, new_entry);
+            }
         } else {
             // WorkingTT の同一 pos_key エントリを積極的に除去(proof 以外)．
             let w_start = self.working_cluster_start(pos_key, &hand);
@@ -1564,6 +1611,10 @@ impl TranspositionTable {
             self.proven_total_entries += 1;
             // new_disproof は confirmed disproof (refutable ではない)
             self.proven_confirmed_entries += 1;
+            // Phase 2a shadow-write (v0.59.0)
+            if let Some(t) = self.proven_table.as_mut() {
+                t.insert(pos_key, new_entry);
+            }
         }
 
         #[cfg(feature = "verbose")] {
@@ -1627,6 +1678,10 @@ impl TranspositionTable {
         self.proven_total_entries -= removed;
         vec.push(new_entry);
         self.proven_total_entries += 1;
+        // Phase 2a shadow-write (v0.59.0)
+        if let Some(t) = self.proven_table.as_mut() {
+            t.insert(pos_key, new_entry);
+        }
         #[cfg(feature = "tt_diag")]
         { self.diag_disproof_refutable += 1; }
     }

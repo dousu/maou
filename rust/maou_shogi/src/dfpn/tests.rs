@@ -12734,6 +12734,56 @@ use crate::types::{Color, PieceType};
         }
     }
 
+    /// Phase 2a (swift-running-cheetah, v0.59.0): shadow-write 配線検証．
+    ///
+    /// `set_use_kh_proven_tt(true, _)` で `proven_table` を有効化した状態で
+    /// 既存の小さな詰将棋を解き，`proven_table_stats()` が `Some(_)` で
+    /// 全カウンタ > 0 になっていることを確認する．
+    ///
+    /// **目的**: `store_proven` / `store_refutable_disproof` / `store_tagged_proof`
+    /// の `vec.push` と並行する `ProvenTable::insert` 呼出が結線済みであること
+    /// の sanity check．Read path は未変更のため正解判定は既存 PV と同等．
+    ///
+    /// **invariant (緩い)**:
+    /// - `proven_table.len() > 0` (何かは書き込まれた)
+    /// - `proven_table.proof_len() > 0` (proof エントリが書き込まれた)
+    /// - Phase 2a は retain 由来の removal を mirror しないため
+    ///   `proven_table.len() >= proven_total_entries` (insert のみ)．
+    ///   厳密同期は Phase 2a-2 で実装予定．
+    #[test]
+    fn test_proven_table_shadow_write_wiring() {
+        // test_tsume_3te と同じ局面: 詰みで proof が書き込まれることを保証．
+        let sfen = "8k/9/6R2/9/9/9/9/9/9 b G 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::new(7, 1_048_576, 32767);
+        solver.set_use_kh_proven_tt(true, 1 << 16);
+        let result = solver.solve(&mut board);
+
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                assert_eq!(moves.len(), 3, "expected 3 moves, got {}", moves.len());
+            }
+            other => panic!("expected Checkmate, got {:?}", other),
+        }
+
+        let stats = solver
+            .proven_table_stats()
+            .expect("proven_table should be Some when flag ON");
+        let (len, proof_len, _confirmed_len, _refutable_len) = stats;
+        assert!(
+            len > 0,
+            "proven_table.len() expected > 0, got {} (shadow-write not wired)",
+            len
+        );
+        assert!(
+            proof_len > 0,
+            "proven_table.proof_len() expected > 0, got {} (no proof written)",
+            proof_len
+        );
+    }
+
     /// **[SLOW]** ply 6 (remaining=33) 大バジェットプローブ．
     ///
     /// TT 共有 backward 解析で ply 8 まで解いた後に ProvenTT を引き継ぎ

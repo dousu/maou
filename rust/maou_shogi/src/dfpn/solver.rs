@@ -1094,6 +1094,30 @@ impl DfPnSolver {
         self.param_use_handset_combination = on;
     }
 
+    /// **Phase 2a (swift-running-cheetah, v0.59.0)**: KH 風 flat array + linear
+    /// probing `ProvenTable` の shadow-write を有効化する．
+    ///
+    /// `on=true` で，`store_proven` / `store_tagged_proof` / `store_refutable_disproof`
+    /// の `vec.push` と同時に `ProvenTable::insert` を呼ぶ．既存 `proven_map`
+    /// は primary store のまま (read path は変更なし)．Phase 2b で read path
+    /// を切り替える予定．
+    ///
+    /// `capacity` は ProvenTable の初期 slot 数の目安．内部で `next_power_of_two`
+    /// に切り上げ (最小 64)．例: 4M entries なら `1 << 22`．
+    ///
+    /// **注意**: 探索開始前 (`solve()` 呼出前) に設定すること．探索中の動的切替は未対応．
+    ///
+    /// 関連: `docs/plans/swift-running-cheetah.md`．
+    pub fn set_use_kh_proven_tt(&mut self, on: bool, capacity: usize) {
+        self.table.set_use_kh_proven_tt(on, capacity);
+    }
+
+    /// `ProvenTable` の `(len, proof_len, confirmed_len, refutable_len)` を返す
+    /// (flag ON 時のみ)．OFF なら `None`．Phase 2a verification 用 (v0.59.0)．
+    pub fn proven_table_stats(&self) -> Option<(usize, usize, usize, usize)> {
+        self.table.proven_table_stats()
+    }
+
     /// depth-limited disproof の WorkingTT 格納閾値を明示的に設定する (v0.25.0)．
     ///
     /// `remaining < threshold` の depth-limited disproof はスキップされる．
