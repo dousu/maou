@@ -2362,6 +2362,14 @@ impl DfPnSolver {
                             removed, self.table.proven_proof_len(), self.table.proven_len());
                     }
                 }
+                // confirmed GC: disproof_depth 昇順 (浅い IDS = 再導出コスト安) で evict
+                if self.table.confirmed_gc_needed() {
+                    let removed = self.table.gc_confirmed();
+                    if removed > 0 {
+                        eprintln!("[confirmed_gc] removed={} confirmed={} total={}",
+                            removed, self.table.proven_confirmed_len(), self.table.proven_len());
+                    }
+                }
             }
         }
         // Periodic progress: every 1M nodes

@@ -14277,6 +14277,41 @@ use crate::types::{Color, PieceType};
             .unwrap();
     }
 
+    /// gc_confirmed() が threshold 未満の時に何も削除しないことを確認 (v0.55.37)
+    ///
+    /// confirmed < CONFIRMED_MAP_GC_CAPACITY (2M) の場合，gc_confirmed() は 0 を返し
+    /// 全エントリ (proof/confirmed/refutable) が変化しないことを検証する．
+    #[test]
+    fn test_gc_confirmed_preserves_all_when_below_threshold() {
+        let sfen_1d1e = "9/3+N1P3/+R5p1+B/9/8k/9/1R2S4/3p5/9 b NPb4g3s2n4l14p 11";
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut b = Board::new();
+                b.set_sfen(sfen_1d1e).unwrap();
+                let mut solver = DfPnSolver::with_timeout(35, 1_000_000, 32767, 30);
+                solver.set_find_shortest(false);
+                solver.set_preserve_proven_tt(true);
+                solver.solve(&mut b);
+
+                let (p_before, c_before, r_before) = solver.table.proven_map_stats();
+                eprintln!("[before gc_confirmed] proofs={} confirmed={} refutable={}", p_before, c_before, r_before);
+
+                // confirmed < CONFIRMED_MAP_GC_CAPACITY (2M) → gc_confirmed() は何も除去しない
+                let removed = solver.table.gc_confirmed();
+                let (p_after, c_after, r_after) = solver.table.proven_map_stats();
+                eprintln!("[after  gc_confirmed] proofs={} confirmed={} refutable={} removed={}", p_after, c_after, r_after, removed);
+
+                assert_eq!(removed, 0, "gc_confirmed must not remove anything when confirmed < threshold");
+                assert_eq!(p_after, p_before, "gc_confirmed must not remove proofs");
+                assert_eq!(c_after, c_before, "gc_confirmed must not remove confirmed disproofs when below threshold");
+                assert_eq!(r_after, r_before, "gc_confirmed must not remove refutable disproofs");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// 累積 ProvenTT で confirmed disproof が減少する現象の診断 (v0.55.28)
     ///
     /// Step 1 → Step 2 の solver 境界で confirmed が 105K → 42K に減少する。

@@ -48,6 +48,14 @@ const PROOF_MAP_GC_CAPACITY: usize = 2_000_000;
 /// gc_proofs() 後の proof エントリ目標数 (PROOF_MAP_GC_CAPACITY の 60%)．
 const PROOF_MAP_GC_TARGET: usize = 1_200_000;
 
+/// ProvenTT confirmed disproof エントリの GC トリガー閾値．
+/// confirmed がこの値を超えると gc_confirmed() が disproof_depth 昇順で evict を行う．
+/// depth が低い = 浅い IDS で確認 = 再導出コストが安い → 優先的に削除．
+const CONFIRMED_MAP_GC_CAPACITY: usize = 2_000_000;
+
+/// gc_confirmed() 後の confirmed エントリ目標数 (CONFIRMED_MAP_GC_CAPACITY の 60%)．
+const CONFIRMED_MAP_GC_TARGET: usize = 1_200_000;
+
 /// WorkingTT の 1 クラスタあたりのエントリ数．
 ///
 /// intermediate + depth-limited disproof 専用．
@@ -2393,6 +2401,16 @@ impl TranspositionTable {
         self.proven_proof_entries > PROOF_MAP_GC_CAPACITY
     }
 
+    /// confirmed disproof エントリ数を返す (O(1))．
+    pub(super) fn proven_confirmed_len(&self) -> usize {
+        self.proven_confirmed_entries
+    }
+
+    /// confirmed GC が必要かどうかを返す (O(1))．
+    pub(super) fn confirmed_gc_needed(&self) -> bool {
+        self.proven_confirmed_entries > CONFIRMED_MAP_GC_CAPACITY
+    }
+
     /// ProvenTT マップのクローンを返す (TT 共有診断用)．
     #[cfg(test)]
     pub(super) fn clone_proven_map(
@@ -2826,6 +2844,68 @@ impl TranspositionTable {
                 if a < evict_threshold { return false; }  // 境界未満: 必ず除去
                 if a > evict_threshold { return true; }   // 境界超過: 必ず保持
                 // 境界レベル: boundary_remaining 個まで除去
+                if boundary_evicted < boundary_remaining {
+                    boundary_evicted += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+            !vec.is_empty()
+        });
+        self.recalculate_proven_counters();
+        before_total - self.proven_total_entries
+    }
+
+    /// confirmed disproof が CONFIRMED_MAP_GC_CAPACITY を超えた場合，
+    /// disproof_depth の小さいエントリ (浅い IDS で確認 = 再導出コストが安い) から
+    /// 順に除去して CONFIRMED_MAP_GC_TARGET まで削減する．
+    ///
+    /// proof・refutable disproof は除去しない．
+    /// 境界レベルでは boundary_remaining カウンターでオーバーシュートを防止する．
+    pub(super) fn gc_confirmed(&mut self) -> usize {
+        let confirmed_count = self.proven_confirmed_entries;
+        let target = CONFIRMED_MAP_GC_TARGET;
+        if confirmed_count <= target {
+            return 0;
+        }
+        let to_remove = confirmed_count - target;
+
+        // Step 1: confirmed エントリの disproof_depth ヒストグラム (64 buckets, 0-63)
+        let mut hist = [0usize; 64];
+        for vec in self.proven_map.values() {
+            for e in vec {
+                if !e.is_proof() && !e.is_refutable_disproof() {
+                    hist[e.disproof_depth().min(63) as usize] += 1;
+                }
+            }
+        }
+
+        // Step 2: 境界 depth 閾値と境界レベルでの除去数を決定
+        // disproof_depth < evict_threshold: 全除去
+        // disproof_depth == evict_threshold: boundary_remaining 個だけ除去
+        // disproof_depth > evict_threshold: 全保持
+        let mut below_boundary = 0usize;
+        let mut evict_threshold = 63usize;
+        for d in 0..64usize {
+            let count_at_d = hist[d];
+            if below_boundary + count_at_d >= to_remove {
+                evict_threshold = d;
+                break;
+            }
+            below_boundary += count_at_d;
+        }
+        let boundary_remaining = to_remove - below_boundary;
+
+        // Step 3: retain pass
+        let before_total = self.proven_total_entries;
+        let mut boundary_evicted = 0usize;
+        self.proven_map.retain(|_, vec| {
+            vec.retain(|e| {
+                if e.is_proof() || e.is_refutable_disproof() { return true; }
+                let d = e.disproof_depth().min(63) as usize;
+                if d < evict_threshold { return false; }
+                if d > evict_threshold { return true; }
                 if boundary_evicted < boundary_remaining {
                     boundary_evicted += 1;
                     false
