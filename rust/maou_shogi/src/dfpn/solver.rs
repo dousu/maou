@@ -345,6 +345,25 @@ pub struct DfPnSolver {
     /// ply 24 などの shallow 問題での退行を回避する．
     pub(super) param_disproof_remaining_threshold: u16,
 
+    /// **visit_history dominance check** (KomoringHeights `IsSuperior` 相当)．
+    ///
+    /// true で，子展開時に `(child_pos_key, child_hand)` が現在の探索パス
+    /// `path_pos_key[i] / path_hand[i]` の祖先で支配されている場合
+    /// (`hand_gte_forward_chain(ancestor_hand, child_hand)` が同一 board_key で
+    /// 成立) を loop と同じく経路依存不詰として扱う．
+    ///
+    /// **Why:** 攻め方が同じ局面に「より少ない持ち駒」で再訪している場合，
+    /// 過去のより有利な状態でも詰めなかった事実から現在も詰まないと sound に
+    /// 推論できる．chain aigoma で hand 多様性が指数爆発する局面の枝刈りに効く．
+    ///
+    /// **soundness:** 経路依存 (path_dependent) 反証として扱われるため
+    /// 永続 TT エントリは汚染されない．`is_loop_child` と同じパスで処理されるため
+    /// 既存の GHI 機構と整合する．
+    ///
+    /// デフォルトは false (既存挙動と同等)．効果測定のため opt-in で有効化する．
+    /// 関連: KomoringHeights v1.1.0 `visit_history.hpp::IsSuperior`．
+    pub(super) param_use_visit_history_dominance: bool,
+
     // === M-1 refutable check fast path 改善フラグ (v0.25.4) ===
     /// **F1**: `all_checks_refutable_recursive_inner` で false 確定 check
     /// で早期 return せず，全 check を評価して store する．
@@ -723,6 +742,7 @@ impl DfPnSolver {
             // の導入で false-NoMate が根絶されたため，adaptive を安全に default 化．
             // depth ≤ 19: 0, depth 20-22: 1, depth ≥ 23: 3 (§3.6, M-D)．
             param_disproof_remaining_threshold: DISPROOF_THRESHOLD_ADAPTIVE,
+            param_use_visit_history_dominance: false,
             saved_depth_for_epsilon: 0,
             outer_solve_depth: 0,
             killer_table: Vec::new(),
@@ -1029,6 +1049,17 @@ impl DfPnSolver {
     /// 下がる代わりにメモリ消費が増える．`min_value` (1024) 未満は丸められる．
     pub fn set_pns_arena_max(&mut self, max_nodes: usize) {
         self.param_pns_arena_max = max_nodes.max(1024);
+    }
+
+    /// visit_history dominance check (KomoringHeights `IsSuperior` 相当) を有効化する．
+    ///
+    /// true で子展開時に経路上の祖先 hand が現 hand を支配する局面を
+    /// 経路依存不詰として枝刈りする．chain aigoma で hand 多様性が爆発する
+    /// 局面の枝刈り効果を期待．デフォルトは false．
+    ///
+    /// 詳細: [`DfPnSolver::param_use_visit_history_dominance`]．
+    pub fn set_use_visit_history_dominance(&mut self, on: bool) {
+        self.param_use_visit_history_dominance = on;
     }
 
     /// depth-limited disproof の WorkingTT 格納閾値を明示的に設定する (v0.25.0)．
@@ -1355,6 +1386,40 @@ impl DfPnSolver {
         if self.path_len < 2 { return false; }
         for i in (0..self.path_len - 1).rev() {
             if self.table.has_proof(self.path_pos_key[i], &self.path_hand[i]) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// visit_history dominance check (KomoringHeights `IsSuperior` 相当)．
+    ///
+    /// 子展開時に `(child_pos_key, child_hand)` がパス `path[0..path_len]` の
+    /// **祖先** で支配されている場合 true を返す．支配の定義は
+    /// 「同一 pos_key かつ祖先 hand が child hand を `hand_gte_forward_chain`
+    /// で支配する」(=祖先のほうが攻め方持ち駒が多い)．
+    ///
+    /// **Soundness:** 攻め方が同じ局面に「より少ない (or 同じ) 持ち駒」で再訪
+    /// するため，過去のより有利な状態でも詰めなかった事実から現在も詰まないと
+    /// sound に推論できる．呼び出し側はこれを loop_child と同様に経路依存
+    /// 反証 (path_dependent disproof) として扱うこと．
+    ///
+    /// **opt-in:** `param_use_visit_history_dominance == false` の場合は
+    /// 常に false を返す (既存挙動と同等)．
+    ///
+    /// **注意:** identity (`hand` も完全一致) は既に `path_set.contains()` の
+    /// ループ検出で捕捉済みなので，本関数の呼び出し側は通常 `path_set.contains`
+    /// が false の子に対してのみ呼ぶ．本関数自体は identity も true を返すが，
+    /// それは sound (祖先 hand == child hand も dominance に含まれる) で害は
+    /// ない．
+    #[inline]
+    fn is_dominated_in_path(&self, child_pos_key: u64, child_hand: &[u8; HAND_KINDS]) -> bool {
+        if !self.param_use_visit_history_dominance { return false; }
+        if self.path_len == 0 { return false; }
+        for i in 0..self.path_len {
+            if self.path_pos_key[i] == child_pos_key
+                && hand_gte_forward_chain(&self.path_hand[i], child_hand)
+            {
                 return true;
             }
         }
@@ -3314,7 +3379,10 @@ impl DfPnSolver {
                 // ループ検出: 子がパス上にある場合は (INF, 0) として扱い，
                 // mid() を呼ばず即座にループ NM として処理する．
                 // GHI 対策: ループ子の NM は path_dependent として store される(下流)．
-                let is_loop_child = self.path_set.contains(&child_fh);
+                // v0.55.38: visit_history dominance check も同じパスで処理する
+                // (param_use_visit_history_dominance == true のとき)．
+                let is_loop_child = self.path_set.contains(&child_fh)
+                    || self.is_dominated_in_path(child_pk, child_hand);
                 let (cpn, cdn, _csrc) = if is_loop_child {
                     (INF, 0, 0)
                 } else {
@@ -3830,7 +3898,10 @@ impl DfPnSolver {
                 for (i, &(ref m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
                 {
-                    let is_loop_child = self.path_set.contains(&child_fh);
+                    // v0.55.38: visit_history dominance check は identity loop と
+                    // 同じパスで処理 (経路依存反証として store される)．
+                    let is_loop_child = self.path_set.contains(&child_fh)
+                        || self.is_dominated_in_path(child_pk, child_hand);
                     let (cpn, cdn, csrc) =
                         if is_loop_child {
                             (INF, 0, 0)

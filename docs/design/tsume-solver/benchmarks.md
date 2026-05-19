@@ -6059,6 +6059,83 @@ if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
 
 ---
 
+### 10.2.26 v0.56.0 — visit_history dominance check (opt-in，効果ゼロ)
+
+#### 動機
+
+KomoringHeights v1.1.0 との実機比較 (2026-05-19) で `maou` 比 600+ 倍の探索効率差が
+判明した．KH のソース精読で `visit_history.hpp::IsSuperior` が「経路上の同一
+board_key かつ祖先 hand が現 hand を支配する局面を即不詰判定する」機構として
+動作していることを特定した．maou の `path` は identity (full_hash 一致) check
+のみで，hand 支配の path 内 check は未実装だった．chain aigoma での hand 多様性
+爆発を抑制すると仮定し，opt-in flag で実装して効果測定した．
+
+#### 実装内容
+
+`solver.rs` に以下を追加 (v0.56.0):
+
+- `param_use_visit_history_dominance: bool` (default `false`)
+- `set_use_visit_history_dominance(on: bool)` setter
+- `is_dominated_in_path(child_pos_key, child_hand) -> bool` helper:
+  `path[0..path_len]` を走査して同一 `pos_key` かつ祖先 hand が child hand を
+  `hand_gte_forward_chain` で支配する場合 `true` を返す
+
+子展開時の loop check を identity ∪ dominance に拡張 (2 箇所，single-child OR と
+multi-child AND):
+
+```rust
+let is_loop_child = self.path_set.contains(&child_fh)
+    || self.is_dominated_in_path(child_pk, child_hand);
+```
+
+dominance 時も既存の path-dependent 反証として下流で処理される (loop と同じ
+パスを通る)．`source = child_fh as u32` は path 上にないため cross-branch
+再利用は不可能 (safe fallback)．
+
+#### 効果測定 (`test_visit_history_dominance_ply6_effect`)
+
+ply 6 (残り 33 手), 5M budget, 60s timeout で OFF/ON 比較:
+
+| flag | nodes | time | NPS | result |
+|------|-------|------|-----|--------|
+| OFF (default) | 2,376,996 | 60.7s | 39K | Unknown |
+| ON | 2,376,088 | 60.9s | 39K | Unknown |
+
+差: 908 nodes (-0.04%)．**ほぼ効果なし**．
+
+#### soundness 確認
+
+`test_tsume_39te_ply24_mate15_regression_with_dominance` (v0.56.0 で新規追加):
+- flag ON で canonical Mate(15) PV が出力されることを確認 → **通過**
+- 既存 138 fast test も全通過 (flag OFF default で既存挙動と完全一致)
+
+#### 解釈
+
+maou は既に TT lookup レベルで hand dominance を活用している (tt.rs の
+`hand_gte_forward_chain` を 30+ 箇所で使用):
+- 証明再利用: `hand_gte_forward_chain(query, stored_proof_hand)` で支配する
+  上位 hand の proof を下位 hand に流用
+- 反証再利用: `hand_gte_forward_chain(stored_disproof_hand, query)` で支配される
+  下位 hand の disproof を上位 hand に流用
+
+これは **cross-branch dominance** (異なる経路から同じ board_key + 支配 hand に
+到達した場合の TT 共有) を実装している．visit_history dominance は
+**path 内 (同一経路上の祖先)** の check で，探索木が基本的に tree 構造のため
+同一 board_key が path 上に複数現れる頻度が低い．chain aigoma でも実際の経路は
+着手で board_key が変化するため，dominance パターンが path 上に蓄積しにくい．
+
+KH との 600+ 倍効率差の本質は visit_history 単独ではなく，**HandSet による
+proof/disproof hand の集合演算** (KH `local_expansion.hpp::HandSet`:
+AND proof = 子の和 + 攻め方独占駒種, OR disproof = 子の交集合) と
+**sum_mask による精密 DAG 合流対策** にあると推定される．
+
+#### Next
+
+flag は opt-in で残し，将来 HandSet 集合演算実装と組み合わせた際の効果再評価用
+とする．H4-B (HandSet 集合演算実装) を次の単位として検討する．
+
+---
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |

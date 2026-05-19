@@ -2506,6 +2506,71 @@ use crate::types::{Color, PieceType};
         }
     }
 
+    /// `test_tsume_39te_ply24_mate15_regression` の visit_history dominance ON 版 (v0.56.0)．
+    ///
+    /// `param_use_visit_history_dominance=true` でも canonical Mate(15) PV が変わらないことを
+    /// soundness 確認する．flag ON で同じ Mate(15) を返さなければ dominance 実装が
+    /// 不正と判定．
+    #[test]
+    fn test_tsume_39te_ply24_mate15_regression_with_dominance() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+        let expected_pv = [
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i",
+            "S*6i", "8i6i", "6h6i+", "S*2h", "1i2i",
+            "2h3g", "2i3i", "2g2h", "3i4i", "2h4h",
+        ];
+        assert_eq!(expected_pv.len(), 15);
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix_pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        let mut solver = DfPnSolver::with_timeout(17, 1_000_000, 32767, 600);
+        solver.set_find_shortest(false);
+        solver.set_use_visit_history_dominance(true);
+
+        let result = solver.solve(&mut board);
+
+        match result {
+            TsumeResult::Checkmate { moves, .. } => {
+                assert_eq!(
+                    moves.len(), 15,
+                    "expected Mate(15) with dominance ON, got Mate({}): {:?}",
+                    moves.len(),
+                    moves.iter().map(|m| m.to_usi()).collect::<Vec<_>>()
+                );
+                let pv_usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                let pv_refs: Vec<&str> = pv_usi.iter().map(|s| s.as_str()).collect();
+                assert_eq!(
+                    pv_refs, expected_pv,
+                    "Mate(15) PV mismatch with dominance ON\n  got:      {}\n  expected: {}",
+                    pv_usi.join(" "), expected_pv.join(" "),
+                );
+            }
+            TsumeResult::CheckmateNoPv { nodes_searched } => {
+                panic!(
+                    "dominance ON: expected full Mate(15) PV but got CheckmateNoPv (nodes={})",
+                    nodes_searched
+                );
+            }
+            TsumeResult::NoCheckmate { .. } => {
+                panic!("dominance ON: expected Mate(15), got NoMate (soundness violation)");
+            }
+            TsumeResult::Unknown { .. } => {
+                panic!("dominance ON: expected Mate(15), got Unknown");
+            }
+        }
+    }
+
     /// 39手詰め ply24 depth=25 soundness regression (v0.24.50+)．
     ///
     /// **[SLOW]** 3M ノード / 300s バジェット．debug ビルドでは時間制限を超過するリスクがある．
@@ -12432,6 +12497,71 @@ use crate::types::{Color, PieceType};
                 eprintln!("\n合計ノード数: {}", total_nodes);
                 eprintln!("最終 ProvenTT: {} エントリ", proven_len);
                 eprintln!("全解決: {}", all_solved);
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// **[SLOW]** visit_history dominance check (v0.56.0) の効果測定．
+    ///
+    /// `param_use_visit_history_dominance` フラグの OFF/ON を同じ ply 6 局面で
+    /// 比較し，ノード数と時間の差を測る．KomoringHeights は同じ ply 6 を
+    /// 809K ノード / 0.67s で詰みに到達する（2026-05-19 実機比較）．
+    ///
+    /// ```bash
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_visit_history_dominance_ply6_effect --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_visit_history_dominance_ply6_effect() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix = ["7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c"];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" visit_history dominance check 効果測定 (ply 6, 5M budget, 60s)");
+                eprintln!("{}", "=".repeat(80));
+
+                for use_dom in [false, true] {
+                    let label = if use_dom { "ON " } else { "OFF" };
+
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    for m_usi in &prefix {
+                        let mv = board.move_from_usi(m_usi).unwrap();
+                        board.do_move(mv);
+                    }
+
+                    let mut solver = DfPnSolver::with_timeout(35, 5_000_000, 32767, 60);
+                    solver.set_find_shortest(false);
+                    solver.set_use_visit_history_dominance(use_dom);
+
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed = t.elapsed();
+
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+
+                    eprintln!(
+                        "[{}] nodes={} time={:.1}s NPS={:.0}K result={}",
+                        label,
+                        solver.nodes_searched,
+                        elapsed.as_secs_f64(),
+                        solver.nodes_searched as f64 / elapsed.as_secs_f64() / 1000.0,
+                        res
+                    );
+                }
+
                 eprintln!("{}", "=".repeat(80));
             })
             .unwrap()
