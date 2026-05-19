@@ -13490,6 +13490,8 @@ use crate::types::{Color, PieceType};
 
                 // warmup-only ProvenTT を保存 (Phase 4 (A) 比較用)
                 let (wu_pm, wu_pt) = warmup.table.clone_proven_map();
+                // warmup の 1GB WorkingTT を解放してから Phase 2 へ
+                drop(warmup);
 
                 // --- Phase 2/3: 分岐プリソルブ ---
                 let branch_targets: &[(&str, &str, u32)] = &[
@@ -13497,21 +13499,19 @@ use crate::types::{Color, PieceType};
                     ("1d2e", sfen_1d2e, 29),
                 ];
 
-                // 共有 ProvenTT (初期値 = warmup)
-                // shared_solver は TT 蓄積専用なので budget は小さくてよい
-                let mut shared_solver = DfPnSolver::with_timeout(41, 1_000_000, 32767, 5);
-                shared_solver.set_find_shortest(false);
-                shared_solver.set_preserve_proven_tt(true);
-                shared_solver.table.set_proven_map(wu_pm.clone(), wu_pt);
+                // 共有 ProvenTT をタプルとして保持 (DfPnSolver を常駐させず 1GB 削減)
+                // sub-solver は各ペアでのみ生成し solve() 後に即 drop する
+                let mut shared_pm = wu_pm.clone();
+                let mut shared_pt = wu_pt;
 
                 for (name, or_sfen, remaining) in branch_targets {
                     let t_branch = Instant::now();
                     let mut b_or = Board::new();
                     b_or.set_sfen(or_sfen).unwrap();
 
-                    // OR ノードの実際の王手手のみを列挙
+                    // OR ノードの王手手を列挙 (tmp は即 drop して 1GB を解放)
                     let checks = {
-                        let mut tmp = DfPnSolver::default_solver();
+                        let tmp = DfPnSolver::default_solver();
                         tmp.generate_check_moves(&mut b_or)
                     };
                     let n_checks = checks.len();
@@ -13520,6 +13520,7 @@ use crate::types::{Color, PieceType};
 
                     for check in &checks {
                         let cap_ck = b_or.do_move(*check);
+                        // defenses 列挙 (tmp は即 drop)
                         let defenses = {
                             let mut tmp = DfPnSolver::default_solver();
                             tmp.generate_defense_moves(&mut b_or)
@@ -13534,32 +13535,36 @@ use crate::types::{Color, PieceType};
                                 continue;
                             }
                             let sub_depth = (sub_remaining + 2).min(41);
-                            let (cur_pm, cur_pt) = shared_solver.table.clone_proven_map();
-                            let mut sub = DfPnSolver::with_timeout(
-                                sub_depth, 10_000_000, 32767, 30,
-                            );
-                            sub.set_find_shortest(false);
-                            sub.set_preserve_proven_tt(true);
-                            sub.table.set_proven_map(cur_pm, cur_pt);
-                            sub.solve(&mut b_or);
-                            let (new_pm, new_pt) = sub.table.clone_proven_map();
-                            shared_solver.table.set_proven_map(new_pm, new_pt);
+                            // sub-solver を生成・求解・ProvenTT 抽出後に即 drop (1GB を解放)
+                            {
+                                let mut sub = DfPnSolver::with_timeout(
+                                    sub_depth, 10_000_000, 32767, 30,
+                                );
+                                sub.set_find_shortest(false);
+                                sub.set_preserve_proven_tt(true);
+                                sub.table.set_proven_map(shared_pm.clone(), shared_pt);
+                                sub.solve(&mut b_or);
+                                let (new_pm, new_pt) = sub.table.clone_proven_map();
+                                // sub drop → 1GB 解放
+                                drop(sub);
+                                shared_pm = new_pm;
+                                shared_pt = new_pt;
+                            }
                             n_sub += 1;
                             b_or.undo_move(*defense, cap_def);
                         }
                         b_or.undo_move(*check, cap_ck);
                     }
 
-                    let branch_proven = shared_solver.table.proven_len();
                     eprintln!("[Phase2/3] {} 完了: checks={} defenses={} sub={} ProvenTT={} t={:.1}s",
                         name, n_checks, n_defenses_total, n_sub,
-                        branch_proven, t_branch.elapsed().as_secs_f64());
+                        shared_pt, t_branch.elapsed().as_secs_f64());
                 }
 
-                let branch_proven_total = shared_solver.table.proven_len();
+                let branch_proven_total = shared_pt;
                 eprintln!("[Phase2/3] 全分岐完了: ProvenTT={} (warmup時 {})",
                     branch_proven_total, wu_proven);
-                let (branch_pm, branch_pt) = shared_solver.table.clone_proven_map();
+                let (branch_pm, branch_pt) = (shared_pm, shared_pt);
 
                 // --- Phase 4: 効果測定 (budget=10M) ---
                 eprintln!();
