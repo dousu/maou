@@ -12828,7 +12828,14 @@ use crate::types::{Color, PieceType};
         );
     }
 
-    /// Phase 2a-2: より深い詰将棋 (39te ply24 Mate15 regression) でも不変式が保たれる．
+    /// Phase 2b (v0.61.0): 39te ply24 で flag ON 時の read path 切替後も
+    /// Mate(15) PV が完全一致 (`test_tsume_39te_ply24_mate15_regression` と等価)．
+    ///
+    /// **重要**: read path が proven_table の iter_pos_key (linear probing 順) に
+    /// 切替後，iteration order が `proven_map` (Vec 挿入順) と異なる．これにより
+    /// `hand_gte_forward_chain` で 「first match」 を返す lookup の選択 entry が
+    /// 変わる可能性がある．本テストで Mate(15) PV が完全一致することで，
+    /// order 差が探索結果に影響しないことを実証する．
     #[test]
     fn test_proven_table_strict_invariant_39te_ply24() {
         let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
@@ -12838,6 +12845,12 @@ use crate::types::{Color, PieceType};
             "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
             "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
         ];
+        let expected_pv = [
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i",
+            "S*6i", "8i6i", "6h6i+", "S*2h", "1i2i",
+            "2h3g", "2i3i", "2g2h", "3i4i", "2h4h",
+        ];
+
         let mut board = Board::new();
         board.set_sfen(sfen).unwrap();
         for usi in &prefix_pv {
@@ -12850,10 +12863,16 @@ use crate::types::{Color, PieceType};
         solver.set_use_kh_proven_tt(true, 1 << 20);
         let result = solver.solve(&mut board);
 
-        // soundness: Mate(15) PV (test_tsume_39te_ply24_mate15_regression と同等)
+        // soundness: Mate(15) と PV 完全一致 (read path 切替の regression check)
         match &result {
             TsumeResult::Checkmate { moves, .. } => {
                 assert_eq!(moves.len(), 15, "expected Mate(15), got {}", moves.len());
+                let pv_usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                let pv_refs: Vec<&str> = pv_usi.iter().map(|s| s.as_str()).collect();
+                assert_eq!(
+                    pv_refs, expected_pv,
+                    "Mate(15) PV mismatch with kh_proven_tt ON (read path regression)",
+                );
             }
             other => panic!("expected Checkmate, got {:?}", other),
         }

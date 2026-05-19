@@ -599,6 +599,38 @@ impl<'a> Iterator for ProvenTableIter<'a> {
     }
 }
 
+/// Phase 2b (v0.61.0, swift-running-cheetah): proven entry の読出経路を
+/// `proven_map: FxHashMap` (primary) または `proven_table: ProvenTable` (KH 風)
+/// のいずれかから抽象化する dispatched iterator．
+///
+/// `TranspositionTable::iter_proven_entries(pos_key)` が返す．flag OFF なら
+/// `Map` バリアントで proven_map から `Vec::iter`，ON なら `Table` バリアントで
+/// `ProvenTable::iter_pos_key` を呼ぶ．caller は `for e in tt.iter_proven_entries(pos_key)`
+/// と書くだけで両ストレージ対応となる．
+///
+/// **注意 (iteration order)**: proven_map は `Vec` 挿入順，proven_table は
+/// linear probing 順 (hash 位置から線形走査) で異なる．`hand_gte_forward_chain`
+/// で 「first match」 を返す lookup は，両 store で論理集合は同じだが選ばれる
+/// entry が異なる場合がある．soundness は保たれる (proof/disproof flag は
+/// 不変) が，PV ・ pn/dn 値が変わりうる．既存テスト (Mate(15) 等) で確認すること．
+pub(super) enum ProvenEntriesIter<'a> {
+    Table(ProvenTableIter<'a>),
+    Map(std::slice::Iter<'a, ProvenEntry>),
+    Empty,
+}
+
+impl<'a> Iterator for ProvenEntriesIter<'a> {
+    type Item = &'a ProvenEntry;
+    #[inline(always)]
+    fn next(&mut self) -> Option<&'a ProvenEntry> {
+        match self {
+            Self::Table(it) => it.next(),
+            Self::Map(it) => it.next(),
+            Self::Empty => None,
+        }
+    }
+}
+
 /// Dual フラットハッシュテーブル型転置表(証明駒/反証駒対応)．
 ///
 /// v0.24.0: ProvenTT + WorkingTT の 2 テーブル構成．
@@ -849,6 +881,23 @@ impl TranspositionTable {
     pub(super) fn proven_table_stats(&self) -> Option<(usize, usize, usize, usize)> {
         let t = self.proven_table.as_ref()?;
         Some((t.len(), t.proof_len(), t.confirmed_len(), t.refutable_len()))
+    }
+
+    /// Phase 2b (v0.61.0): 指定 `pos_key` の proven entry を抽象化された iterator
+    /// で返す．`proven_table` が `Some` なら KH 風 flat array から，それ以外なら
+    /// `proven_map` から走査．`pos_key` は caller 側で `Self::safe_key` 済み
+    /// であること．
+    ///
+    /// 関連: `ProvenEntriesIter` doc，`docs/plans/swift-running-cheetah.md`．
+    #[inline(always)]
+    pub(super) fn iter_proven_entries(&self, pos_key: u64) -> ProvenEntriesIter<'_> {
+        if let Some(t) = self.proven_table.as_ref() {
+            return ProvenEntriesIter::Table(t.iter_pos_key(pos_key));
+        }
+        match self.proven_map.get(&pos_key) {
+            Some(vec) => ProvenEntriesIter::Map(vec.iter()),
+            None => ProvenEntriesIter::Empty,
+        }
     }
 
     /// Phase 2a-2 (v0.60.0): `proven_table` を `proven_map[pos_key]` と整合させる．
@@ -1278,14 +1327,11 @@ impl TranspositionTable {
     ) -> (u32, u32, u32) {
         let pos_key = Self::safe_key(pos_key);
         let _ = remaining;
-        let Some(vec) = self.proven_map.get(&pos_key) else {
-            return (PN_UNIT, PN_UNIT, 0);
-        };
         // Tag-aware proof lookup: non-ABSOLUTE proof は tag_depth <
         // current_ids_depth の場合にスキップする．
         let ids_depth = self.current_ids_depth;
         // Pass 1: proof(pn=0)
-        for e in vec {
+        for e in self.iter_proven_entries(pos_key) {
             if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
                 let tag = e.proof_tag();
                 if tag != super::entry::PROOF_TAG_ABSOLUTE
@@ -1298,7 +1344,7 @@ impl TranspositionTable {
         }
         // Pass 2: confirmed/refutable disproof(dn=0)
         // ProvenTT の confirmed disproof は常に depth 非依存として格納される．
-        for e in vec {
+        for e in self.iter_proven_entries(pos_key) {
             if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
                 if skip_refutable && e.is_refutable_disproof() { continue; }
                 return (e.pn(), 0, e.source());
@@ -1323,17 +1369,15 @@ impl TranspositionTable {
     ) -> Option<u16> {
         let pos_key = Self::safe_key(pos_key);
         let ids_depth = self.current_ids_depth;
-        if let Some(vec) = self.proven_map.get(&pos_key) {
-            for e in vec {
-                if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
-                    let tag = e.proof_tag();
-                    if tag != super::entry::PROOF_TAG_ABSOLUTE
-                        && e.tag_depth() < ids_depth
-                    {
-                        continue;
-                    }
-                    return e.mate_distance();
+        for e in self.iter_proven_entries(pos_key) {
+            if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
+                let tag = e.proof_tag();
+                if tag != super::entry::PROOF_TAG_ABSOLUTE
+                    && e.tag_depth() < ids_depth
+                {
+                    continue;
                 }
+                return e.mate_distance();
             }
         }
         None
@@ -1407,11 +1451,9 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
     ) -> bool {
         let pos_key = Self::safe_key(pos_key);
-        if let Some(vec) = self.proven_map.get(&pos_key) {
-            for e in vec {
-                if e.is_proof() && e.hand != *hand {
-                    return true;
-                }
+        for e in self.iter_proven_entries(pos_key) {
+            if e.is_proof() && e.hand != *hand {
+                return true;
             }
         }
         false
@@ -1420,11 +1462,9 @@ impl TranspositionTable {
     /// 指定局面に proof エントリ(pn=0)が存在するかチェックする．
     pub(super) fn has_proof(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> bool {
         let pos_key = Self::safe_key(pos_key);
-        if let Some(vec) = self.proven_map.get(&pos_key) {
-            for e in vec {
-                if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
-                    return true;
-                }
+        for e in self.iter_proven_entries(pos_key) {
+            if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
+                return true;
             }
         }
         false
@@ -1454,11 +1494,9 @@ impl TranspositionTable {
             }
         }
         // ProvenTT fallback (proof/disproof may also have best_move)
-        if let Some(vec) = self.proven_map.get(&pos_key) {
-            for e in vec {
-                if e.hand == *hand && e.best_move != 0 {
-                    return e.best_move;
-                }
+        for e in self.iter_proven_entries(pos_key) {
+            if e.hand == *hand && e.best_move != 0 {
+                return e.best_move;
             }
         }
         0
@@ -1613,22 +1651,20 @@ impl TranspositionTable {
         let rem_idx = if remaining == REMAINING_INFINITE { 32 } else { (remaining as usize).min(31) };
 
         // === 共通: 既存の証明/反証に支配されているなら挿入不要 ===
-        // ProvenTT をチェック (HashMap ベース)
+        // ProvenTT をチェック．Phase 2b (v0.61.0): flag ON 時は proven_table から走査．
         // 注意: v0.24.53 以降，ProvenTT の confirmed disproof は depth 非依存
         // として格納されるため `remaining` との比較は不要．
-        if let Some(vec) = self.proven_map.get(&pos_key) {
-            for e in vec {
-                if e.is_proof() && hand_gte_forward_chain(&hand, &e.hand) {
-                    #[cfg(feature = "verbose")] { self.diag_dominated_skip += 1; }
-                    return;
-                }
-                if !e.is_proof()
-                    && !path_dependent
-                    && hand_gte_forward_chain(&e.hand, &hand)
-                {
-                    #[cfg(feature = "verbose")] { self.diag_dominated_skip += 1; }
-                    return;
-                }
+        for e in self.iter_proven_entries(pos_key) {
+            if e.is_proof() && hand_gte_forward_chain(&hand, &e.hand) {
+                #[cfg(feature = "verbose")] { self.diag_dominated_skip += 1; }
+                return;
+            }
+            if !e.is_proof()
+                && !path_dependent
+                && hand_gte_forward_chain(&e.hand, &hand)
+            {
+                #[cfg(feature = "verbose")] { self.diag_dominated_skip += 1; }
+                return;
             }
         }
 
@@ -1783,18 +1819,17 @@ impl TranspositionTable {
         let pos_key = Self::safe_key(pos_key);
 
         // hand_gte 支配チェック: 既存エントリが新 hand を支配するなら挿入不要
-        if let Some(vec) = self.proven_map.get(&pos_key) {
-            for e in vec {
-                // 既存 proof が支配 → 不詰ではないので挿入不要
-                if e.is_proof() && hand_gte_forward_chain(&hand, &e.hand) {
-                    return;
-                }
-                // 既存 disproof (confirmed/refutable) が支配 → 冗長なので挿入不要
-                if !e.is_proof() && hand_gte_forward_chain(&e.hand, &hand) {
-                    #[cfg(feature = "tt_diag")]
-                    { self.diag_disproof_refutable_skip += 1; }
-                    return;
-                }
+        // Phase 2b (v0.61.0): flag ON 時は proven_table から走査．
+        for e in self.iter_proven_entries(pos_key) {
+            // 既存 proof が支配 → 不詰ではないので挿入不要
+            if e.is_proof() && hand_gte_forward_chain(&hand, &e.hand) {
+                return;
+            }
+            // 既存 disproof (confirmed/refutable) が支配 → 冗長なので挿入不要
+            if !e.is_proof() && hand_gte_forward_chain(&e.hand, &hand) {
+                #[cfg(feature = "tt_diag")]
+                { self.diag_disproof_refutable_skip += 1; }
+                return;
             }
         }
 
@@ -1833,11 +1868,9 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
     ) -> bool {
         let pos_key = Self::safe_key(pos_key);
-        if let Some(vec) = self.proven_map.get(&pos_key) {
-            for e in vec {
-                if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
-                    return true;
-                }
+        for e in self.iter_proven_entries(pos_key) {
+            if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
+                return true;
             }
         }
         false
@@ -2263,11 +2296,9 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
     ) -> [u8; HAND_KINDS] {
         let pos_key = Self::safe_key(pos_key);
-        if let Some(vec) = self.proven_map.get(&pos_key) {
-            for e in vec {
-                if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
-                    return e.hand;
-                }
+        for e in self.iter_proven_entries(pos_key) {
+            if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
+                return e.hand;
             }
         }
         *hand
@@ -2282,11 +2313,9 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
     ) -> [u8; HAND_KINDS] {
         let pos_key = Self::safe_key(pos_key);
-        if let Some(vec) = self.proven_map.get(&pos_key) {
-            for e in vec {
-                if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
-                    return e.hand;
-                }
+        for e in self.iter_proven_entries(pos_key) {
+            if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
+                return e.hand;
             }
         }
         *hand
@@ -2413,14 +2442,12 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
     ) -> u16 {
         let pos_key = Self::safe_key(pos_key);
-        // ProvenTT: HashMap で全バリアントが同一エントリリストに集約される
+        // ProvenTT: Phase 2b (v0.61.0): flag ON 時は proven_table から走査．
         // Q-1 (v0.55.20): refutable disproof は REMAINING_INFINITE を返さない
-        if let Some(vec) = self.proven_map.get(&pos_key) {
-            for e in vec {
-                if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
-                    if e.is_refutable_disproof() { continue; }
-                    return REMAINING_INFINITE;
-                }
+        for e in self.iter_proven_entries(pos_key) {
+            if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
+                if e.is_refutable_disproof() { continue; }
+                return REMAINING_INFINITE;
             }
         }
         for fe in self.working_cluster(pos_key, hand) {
@@ -2462,15 +2489,13 @@ impl TranspositionTable {
         remaining: u16,
     ) -> Option<(u16, bool)> {
         let pos_key = Self::safe_key(pos_key);
-        // ProvenTT: HashMap で全バリアントが同一エントリリストに集約される
+        // ProvenTT: Phase 2b (v0.61.0): flag ON 時は proven_table から走査．
         // Q-1 (v0.55.20): refutable disproof は深さ制限付きで絶対知識ではないため
         // REMAINING_INFINITE 伝播の根拠に使わない．confirmed disproof のみ返す．
-        if let Some(vec) = self.proven_map.get(&pos_key) {
-            for e in vec {
-                if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
-                    if e.is_refutable_disproof() { continue; }
-                    return Some((REMAINING_INFINITE, false));
-                }
+        for e in self.iter_proven_entries(pos_key) {
+            if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
+                if e.is_refutable_disproof() { continue; }
+                return Some((REMAINING_INFINITE, false));
             }
         }
         for fe in self.working_cluster(pos_key, hand) {
