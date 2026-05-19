@@ -364,6 +364,25 @@ pub struct DfPnSolver {
     /// 関連: KomoringHeights v1.1.0 `visit_history.hpp::IsSuperior`．
     pub(super) param_use_visit_history_dominance: bool,
 
+    /// **HandSet OR disproof 交集合演算** (KomoringHeights `local_expansion.hpp::HandSet`
+    /// の DisproofHandTag 動作相当)．
+    ///
+    /// true で，OR ノード全子反証時 (`current_dn == 0`) の disproof_hand を
+    /// 全子の `disproof_hand` の要素ごと min (交集合) で計算して store する．
+    /// 既存実装は `att_hand` をそのまま渡しており，子の精密 disproof_hand
+    /// 情報を活用していなかった．
+    ///
+    /// **Why:** 全子 (攻め手) で反証された場合，「これ以下の持ち駒では全子で詰まない」
+    /// 最も強い disproof hand は子 disproof_hand の要素 min．これにより TT
+    /// cross-branch ヒット率向上が期待される．
+    ///
+    /// **soundness:** 子の `get_disproof_hand` 自体は sound (TT lookup で
+    /// `hand_gte_forward_chain` を確認済み)．要素 min はその制約を強める
+    /// 方向の操作のため不正は導入しない．
+    ///
+    /// デフォルトは false．関連: KomoringHeights `hands.hpp::HandSet`．
+    pub(super) param_use_handset_combination: bool,
+
     // === M-1 refutable check fast path 改善フラグ (v0.25.4) ===
     /// **F1**: `all_checks_refutable_recursive_inner` で false 確定 check
     /// で早期 return せず，全 check を評価して store する．
@@ -743,6 +762,7 @@ impl DfPnSolver {
             // depth ≤ 19: 0, depth 20-22: 1, depth ≥ 23: 3 (§3.6, M-D)．
             param_disproof_remaining_threshold: DISPROOF_THRESHOLD_ADAPTIVE,
             param_use_visit_history_dominance: false,
+            param_use_handset_combination: false,
             saved_depth_for_epsilon: 0,
             outer_solve_depth: 0,
             killer_table: Vec::new(),
@@ -1060,6 +1080,18 @@ impl DfPnSolver {
     /// 詳細: [`DfPnSolver::param_use_visit_history_dominance`]．
     pub fn set_use_visit_history_dominance(&mut self, on: bool) {
         self.param_use_visit_history_dominance = on;
+    }
+
+    /// HandSet OR disproof 交集合演算 (KomoringHeights `HandSet::DisproofHandTag` 相当)
+    /// を有効化する．
+    ///
+    /// true で，OR ノード全子反証時の disproof_hand を子 disproof_hand の
+    /// 要素ごと min (交集合) で計算する．既存実装は `att_hand` 単一伝播のみ．
+    /// デフォルトは false．
+    ///
+    /// 詳細: [`DfPnSolver::param_use_handset_combination`]．
+    pub fn set_use_handset_combination(&mut self, on: bool) {
+        self.param_use_handset_combination = on;
     }
 
     /// depth-limited disproof の WorkingTT 格納閾値を明示的に設定する (v0.25.0)．
@@ -3668,14 +3700,24 @@ impl DfPnSolver {
                 snda_pairs.clear();
                 // WPN: OR dn の max(child_dn) を追跡
                 let mut max_cdn: u32 = 0;
+                // HandSet (v0.56.1): 子 disproof_hand の交集合 (要素 min) 累積．
+                // OR 全子反証時の disproof_hand 計算用 (path-dep child は除外)．
+                let mut or_disproof_hand = [u8::MAX; HAND_KINDS];
+                let mut or_disproof_initialized = false;
 
                 for (i, &(ref _m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
                 {
+                    // v0.55.38: visit_history dominance check を path_set.contains に
+                    // 併用 (H4-A 補完，OR multi-child loop も含める)．
+                    let is_loop_or_dominated_child = self.path_set.contains(&child_fh)
+                        || self.is_dominated_in_path(child_pk, child_hand);
                     let (cpn, cdn, csrc) =
-                        if self.path_set.contains(&child_fh) {
+                        if is_loop_or_dominated_child {
                             loop_child_count += 1;
                             // K-M (v0.55.23): 直接ループ → cycle_root = child_fh as u32
+                            // dominance 時は child_fh が path 上にないため cycle_root として
+                            // 不正だが，下流の cross-branch 再利用チェックで弾かれる (safe)．
                             let cr = child_fh as u32;
                             or_km_cycle_root = Some(match or_km_cycle_root {
                                 None => cr,
@@ -3749,6 +3791,21 @@ impl DfPnSolver {
                                 });
                             }
                         }
+                        // HandSet OR disproof 交集合 (v0.56.1, opt-in)．
+                        // path-dep child (loop / dominance) は実際の disproof_hand を
+                        // 持たないため除外 (get_disproof_hand は child_hand を fallback で
+                        // 返してしまい交集合が保守的になりすぎる)．
+                        if self.param_use_handset_combination && !is_loop_or_dominated_child {
+                            let child_dh = self.table.get_disproof_hand(child_pk, child_hand);
+                            if !or_disproof_initialized {
+                                or_disproof_hand = child_dh;
+                                or_disproof_initialized = true;
+                            } else {
+                                for k in 0..HAND_KINDS {
+                                    or_disproof_hand[k] = or_disproof_hand[k].min(child_dh[k]);
+                                }
+                            }
+                        }
                     }
 
                     // True min cpn tracking (for node's proof number).
@@ -3819,20 +3876,31 @@ impl DfPnSolver {
                     // GHI 対策: ループ子または経路依存な子の反証が寄与した場合は
                     // 親の反証も経路依存．init フェーズで蓄積した init_or_path_dep
                     // も考慮する(init で反証済みの子が MID ループには残らないため)．
-                    // OR ノード反証: att_hand で保存(TT ヒット率最大化)
+                    // HandSet (v0.56.1): 全子反証時の disproof_hand 計算．
+                    // 子 disproof_hand の交集合 (要素 min) を att_hand で上限クリップ．
+                    // OR ノード反証: 既定では att_hand で保存(TT ヒット率最大化)．
+                    let hand_to_store = if self.param_use_handset_combination && or_disproof_initialized {
+                        let mut h = or_disproof_hand;
+                        for k in 0..HAND_KINDS {
+                            h[k] = h[k].min(att_hand[k]);
+                        }
+                        h
+                    } else {
+                        att_hand
+                    };
                     if loop_child_count > 0 || init_or_path_dep {
                         // K-M (v0.55.23): main loop と init フェーズの cycle_root をマージ
                         let cr = or_km_cycle_root
                             .or(init_or_km_cycle_root)
                             .unwrap_or(0);
                         self.store_path_dep(
-                            pos_key, att_hand,
+                            pos_key, hand_to_store,
                             INF, 0,
                             parent_nm_remaining, cr, true,
                         );
                     } else {
                         self.store(
-                            pos_key, att_hand,
+                            pos_key, hand_to_store,
                             INF, 0,
                             parent_nm_remaining, pos_key as u32,
                         );

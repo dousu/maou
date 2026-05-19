@@ -12569,6 +12569,171 @@ use crate::types::{Color, PieceType};
             .unwrap();
     }
 
+    /// **[SLOW]** HandSet OR disproof + visit_history dominance の効果測定 (v0.57.0)．
+    ///
+    /// 4 通りの flag 組合せ (`dom`, `handset`) を同じ ply 6 局面で比較し，
+    /// ノード数と時間の差を測る．組合せ効果も評価．
+    ///
+    /// ```bash
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_handset_and_dominance_ply6_effect --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_handset_and_dominance_ply6_effect() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix = ["7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c"];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" HandSet + dominance 効果測定 (ply 6, 5M budget, 60s)");
+                eprintln!("{}", "=".repeat(80));
+                eprintln!("{:<24} {:>12} {:>10} {:>10} {:<12}",
+                    "label", "nodes", "time(s)", "NPS(K)", "result");
+
+                for (use_dom, use_hs) in [
+                    (false, false),
+                    (true, false),
+                    (false, true),
+                    (true, true),
+                ] {
+                    let label = format!("dom={} hs={}", use_dom, use_hs);
+
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    for m_usi in &prefix {
+                        let mv = board.move_from_usi(m_usi).unwrap();
+                        board.do_move(mv);
+                    }
+
+                    let mut solver = DfPnSolver::with_timeout(35, 5_000_000, 32767, 60);
+                    solver.set_find_shortest(false);
+                    solver.set_use_visit_history_dominance(use_dom);
+                    solver.set_use_handset_combination(use_hs);
+
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed = t.elapsed();
+
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+
+                    eprintln!("{:<24} {:>12} {:>10.1} {:>10.0} {:<12}",
+                        label,
+                        solver.nodes_searched,
+                        elapsed.as_secs_f64(),
+                        solver.nodes_searched as f64 / elapsed.as_secs_f64() / 1000.0,
+                        res);
+                }
+
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// `test_tsume_39te_ply24_mate15_regression` の HandSet ON 版 (v0.57.0)．
+    ///
+    /// `param_use_handset_combination=true` で canonical Mate(15) PV が
+    /// 不変であることを soundness 確認．
+    #[test]
+    fn test_tsume_39te_ply24_mate15_regression_with_handset() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+        let expected_pv = [
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i",
+            "S*6i", "8i6i", "6h6i+", "S*2h", "1i2i",
+            "2h3g", "2i3i", "2g2h", "3i4i", "2h4h",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix_pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        let mut solver = DfPnSolver::with_timeout(17, 1_000_000, 32767, 600);
+        solver.set_find_shortest(false);
+        solver.set_use_handset_combination(true);
+
+        let result = solver.solve(&mut board);
+
+        match result {
+            TsumeResult::Checkmate { moves, .. } => {
+                assert_eq!(
+                    moves.len(), 15,
+                    "expected Mate(15) with HandSet ON, got Mate({}): {:?}",
+                    moves.len(),
+                    moves.iter().map(|m| m.to_usi()).collect::<Vec<_>>()
+                );
+                let pv_usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                let pv_refs: Vec<&str> = pv_usi.iter().map(|s| s.as_str()).collect();
+                assert_eq!(
+                    pv_refs, expected_pv,
+                    "Mate(15) PV mismatch with HandSet ON",
+                );
+            }
+            _ => panic!("HandSet ON: expected Mate(15), got {:?}", result),
+        }
+    }
+
+    /// `test_tsume_39te_ply24_mate15_regression` の HandSet + dominance 両 ON 版 (v0.57.0)．
+    #[test]
+    fn test_tsume_39te_ply24_mate15_regression_with_both() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+        let expected_pv = [
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i",
+            "S*6i", "8i6i", "6h6i+", "S*2h", "1i2i",
+            "2h3g", "2i3i", "2g2h", "3i4i", "2h4h",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix_pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        let mut solver = DfPnSolver::with_timeout(17, 1_000_000, 32767, 600);
+        solver.set_find_shortest(false);
+        solver.set_use_visit_history_dominance(true);
+        solver.set_use_handset_combination(true);
+
+        let result = solver.solve(&mut board);
+
+        match result {
+            TsumeResult::Checkmate { moves, .. } => {
+                assert_eq!(
+                    moves.len(), 15,
+                    "expected Mate(15) with both ON, got Mate({})", moves.len()
+                );
+                let pv_usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                let pv_refs: Vec<&str> = pv_usi.iter().map(|s| s.as_str()).collect();
+                assert_eq!(pv_refs, expected_pv, "Mate(15) PV mismatch with both flags ON");
+            }
+            _ => panic!("both flags ON: expected Mate(15), got {:?}", result),
+        }
+    }
+
     /// **[SLOW]** ply 6 (remaining=33) 大バジェットプローブ．
     ///
     /// TT 共有 backward 解析で ply 8 まで解いた後に ProvenTT を引き継ぎ
