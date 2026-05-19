@@ -211,6 +211,285 @@ fn is_proven_entry(pn: u32, dn: u32, remaining: u16, path_dependent: bool) -> bo
     pn == 0 || (dn == 0 && !path_dependent && remaining == REMAINING_INFINITE)
 }
 
+// =============================================================================
+// Phase 1 of swift-running-cheetah (docs/plans/swift-running-cheetah.md):
+// KH 風 flat array + linear probing の ProvenTable
+//
+// 既存 `proven_map: FxHashMap<u64, Vec<ProvenEntry>>` の cache locality 問題
+// (NPS 12× 残差の主因可能性) を解消するため，KomoringHeights `RegularTable`
+// 相当の open-addressed flat array + linear probing + amount-based GC を導入する．
+//
+// Phase 1: 新 struct 定義 + 基本 API (lookup/insert/length/iter_pos_key)．
+// 既存 `proven_map` と並列で動作させ，caller-facing API の差し替えは Phase 2 で行う．
+// =============================================================================
+
+/// `ProvenTable` の flat-array スロット．
+///
+/// レイアウト (24 bytes, alignment=8):
+/// - `pos_key: u64` (8B) — 局面ハッシュ (持ち駒除く)．`0` = empty slot．
+/// - `entry: ProvenEntry` (12B) — 既存 proven entry を流用．
+/// - padding (4B, alignment)．
+///
+/// `safe_key` で実 `pos_key == 0` の局面は `1` に置換してから格納する．
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub(super) struct ProvenSlot {
+    /// 局面ハッシュ (持ち駒除く)．`0` = empty slot．
+    pos_key: u64,
+    /// proven entry (proof / confirmed / refutable disproof)．
+    entry: ProvenEntry,
+}
+
+impl Default for ProvenSlot {
+    fn default() -> Self {
+        Self {
+            pos_key: 0,
+            entry: ProvenEntry::ZERO,
+        }
+    }
+}
+
+/// `ProvenTable::lookup` / `insert` の linear probing 最大距離．
+///
+/// これを超えると lookup は `None`，insert は `false` を返す．caller は
+/// GC をトリガーして容量を確保する．128 は load factor 50% 時の期待距離より
+/// 十分大きい．
+pub(super) const PROVEN_TABLE_MAX_PROBE: usize = 128;
+
+/// KomoringHeights `RegularTable` 風の flat array + linear probing ProvenTT
+/// (Phase 1, swift-running-cheetah)．
+///
+/// ## 設計
+///
+/// - 固定容量 `Vec<ProvenSlot>` (size は 2 のべき乗)．
+/// - インデックス: `(hash_low * size) >> 32` (Stockfish 風)．
+/// - 衝突処理: linear probing (`(idx + 1) % size`)．
+/// - eviction: Phase 3 で amount-based GC (sampling) を実装予定．
+///
+/// ## Phase 1 の範囲
+///
+/// 基本 API (`lookup`, `insert`, `iter_pos_key`, length 系) のみ実装．
+/// caller-facing API (`look_up_proven` 等) は Phase 2 で差し替える．
+/// 既存 `proven_map: FxHashMap` と並列で動作する．
+///
+/// 関連: `docs/plans/swift-running-cheetah.md`．
+pub(super) struct ProvenTable {
+    /// flat array．`entries.len()` は `2^N` (`new` で保証)．
+    entries: Vec<ProvenSlot>,
+    /// 全エントリ数 (O(1) カウンタ)．
+    total: usize,
+    /// proof エントリ数．
+    proofs: usize,
+    /// confirmed disproof エントリ数 (refutable は別)．
+    confirmed: usize,
+}
+
+impl ProvenTable {
+    /// 指定容量で空 table を生成する．`capacity` は 2 のべき乗に切り上げ
+    /// (最小 64) する．
+    pub(super) fn new(capacity: usize) -> Self {
+        let cap = capacity.next_power_of_two().max(64);
+        Self {
+            entries: vec![ProvenSlot::default(); cap],
+            total: 0,
+            proofs: 0,
+            confirmed: 0,
+        }
+    }
+
+    /// `pos_key == 0` を `1` に置換する `safe_key`．
+    /// 既存 `TranspositionTable::safe_key` と同等．
+    #[inline(always)]
+    fn safe_key(pos_key: u64) -> u64 {
+        if pos_key == 0 { 1 } else { pos_key }
+    }
+
+    /// Stockfish 風インデックス計算 (`hash_low * size >> 32`)．
+    /// `%` を回避し division-free．
+    #[inline(always)]
+    fn index(&self, pos_key: u64) -> usize {
+        let hash_low = pos_key & 0xFFFF_FFFF;
+        ((hash_low.wrapping_mul(self.entries.len() as u64)) >> 32) as usize
+    }
+
+    /// table 容量．
+    #[inline(always)]
+    pub(super) fn capacity(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// 総エントリ数 (proof + confirmed + refutable)．
+    #[inline(always)]
+    pub(super) fn len(&self) -> usize {
+        self.total
+    }
+
+    /// proof エントリ数．
+    #[inline(always)]
+    pub(super) fn proof_len(&self) -> usize {
+        self.proofs
+    }
+
+    /// confirmed disproof エントリ数．
+    #[inline(always)]
+    pub(super) fn confirmed_len(&self) -> usize {
+        self.confirmed
+    }
+
+    /// refutable disproof エントリ数 (`total - proofs - confirmed`)．
+    #[inline(always)]
+    pub(super) fn refutable_len(&self) -> usize {
+        self.total
+            .saturating_sub(self.proofs)
+            .saturating_sub(self.confirmed)
+    }
+
+    /// 全エントリをクリアする．
+    pub(super) fn clear(&mut self) {
+        for slot in self.entries.iter_mut() {
+            slot.pos_key = 0;
+        }
+        self.total = 0;
+        self.proofs = 0;
+        self.confirmed = 0;
+    }
+
+    /// `(pos_key, hand)` で完全一致するエントリを検索する．
+    ///
+    /// linear probing で次の空 slot (`pos_key == 0`) に到達したら `None`．
+    /// 一致しない pos_key の slot は skip して継続．
+    pub(super) fn lookup(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> Option<&ProvenEntry> {
+        let pos_key = Self::safe_key(pos_key);
+        let mut idx = self.index(pos_key);
+        let n = self.entries.len();
+        for _ in 0..PROVEN_TABLE_MAX_PROBE {
+            let slot = &self.entries[idx];
+            if slot.pos_key == 0 {
+                return None;
+            }
+            if slot.pos_key == pos_key && slot.entry.hand == *hand {
+                return Some(&slot.entry);
+            }
+            idx += 1;
+            if idx >= n {
+                idx = 0;
+            }
+        }
+        None
+    }
+
+    /// 同じ `pos_key` の全エントリを線形に走査する iterator．
+    ///
+    /// `hand_gte_forward_chain` 等で antichain を走査する際に使う．
+    /// 空 slot (`pos_key == 0`) に到達した時点で停止．
+    pub(super) fn iter_pos_key<'a>(
+        &'a self,
+        pos_key: u64,
+    ) -> ProvenTableIter<'a> {
+        let pos_key = Self::safe_key(pos_key);
+        ProvenTableIter {
+            table: self,
+            target_pos_key: pos_key,
+            idx: self.index(pos_key),
+            remaining: PROVEN_TABLE_MAX_PROBE,
+            done: false,
+        }
+    }
+
+    /// `(pos_key, hand)` のエントリを挿入または更新する．
+    ///
+    /// 既存エントリ (同 hand) があれば上書き．なければ空 slot に挿入．
+    /// 空 slot が見つからず (load factor 高) かつ MAX_PROBE 超過なら
+    /// `false` を返す (caller は GC をトリガー)．
+    pub(super) fn insert(&mut self, pos_key: u64, entry: ProvenEntry) -> bool {
+        let pos_key = Self::safe_key(pos_key);
+        let mut idx = self.index(pos_key);
+        let n = self.entries.len();
+        for _ in 0..PROVEN_TABLE_MAX_PROBE {
+            let slot = &mut self.entries[idx];
+            if slot.pos_key == 0 {
+                slot.pos_key = pos_key;
+                slot.entry = entry;
+                self.total += 1;
+                Self::adjust_counters(&mut self.proofs, &mut self.confirmed, &entry, true);
+                return true;
+            }
+            if slot.pos_key == pos_key && slot.entry.hand == entry.hand {
+                // 更新: 旧 entry のカウンタを引き，新 entry のカウンタを足す．
+                Self::adjust_counters(&mut self.proofs, &mut self.confirmed, &slot.entry, false);
+                slot.entry = entry;
+                Self::adjust_counters(&mut self.proofs, &mut self.confirmed, &entry, true);
+                return true;
+            }
+            idx += 1;
+            if idx >= n {
+                idx = 0;
+            }
+        }
+        false
+    }
+
+    /// `proofs` / `confirmed` カウンタを `entry` 種別に応じて増減する．
+    /// `add=true` で +1, `add=false` で saturating -1．
+    #[inline(always)]
+    fn adjust_counters(
+        proofs: &mut usize,
+        confirmed: &mut usize,
+        entry: &ProvenEntry,
+        add: bool,
+    ) {
+        if entry.is_proof() {
+            *proofs = if add { *proofs + 1 } else { proofs.saturating_sub(1) };
+        } else if !entry.is_refutable_disproof() {
+            *confirmed = if add { *confirmed + 1 } else { confirmed.saturating_sub(1) };
+        }
+    }
+}
+
+/// `ProvenTable::iter_pos_key` の戻り値．同一 `pos_key` のエントリ群を
+/// linear probing 順で走査する．
+pub(super) struct ProvenTableIter<'a> {
+    table: &'a ProvenTable,
+    target_pos_key: u64,
+    idx: usize,
+    remaining: usize,
+    done: bool,
+}
+
+impl<'a> Iterator for ProvenTableIter<'a> {
+    type Item = &'a ProvenEntry;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        let n = self.table.entries.len();
+        while self.remaining > 0 {
+            self.remaining -= 1;
+            let slot = &self.table.entries[self.idx];
+            let cur_idx = self.idx;
+            self.idx += 1;
+            if self.idx >= n {
+                self.idx = 0;
+            }
+            if slot.pos_key == 0 {
+                self.done = true;
+                return None;
+            }
+            if slot.pos_key == self.target_pos_key {
+                let _ = cur_idx;
+                return Some(&slot.entry);
+            }
+        }
+        self.done = true;
+        None
+    }
+}
+
 /// Dual フラットハッシュテーブル型転置表(証明駒/反証駒対応)．
 ///
 /// v0.24.0: ProvenTT + WorkingTT の 2 テーブル構成．
@@ -3069,5 +3348,127 @@ impl TranspositionTable {
         self.working_cluster(pos_key, hand).iter()
             .filter(move |fe| fe.pos_key == pos_key)
             .map(|fe| &fe.entry)
+    }
+}
+
+// =============================================================================
+// Phase 1 unit tests for swift-running-cheetah ProvenTable
+// =============================================================================
+
+#[cfg(test)]
+mod proven_table_tests {
+    use super::*;
+
+    #[test]
+    fn test_proven_table_basic_lookup_miss() {
+        let table = ProvenTable::new(64);
+        let hand = [0u8; HAND_KINDS];
+        assert!(table.lookup(0x1234, &hand).is_none());
+        assert_eq!(table.len(), 0);
+        assert_eq!(table.proof_len(), 0);
+        assert_eq!(table.confirmed_len(), 0);
+        assert_eq!(table.refutable_len(), 0);
+    }
+
+    #[test]
+    fn test_proven_table_capacity_rounding() {
+        // capacity は 2^N に切り上げ
+        assert_eq!(ProvenTable::new(60).capacity(), 64);
+        assert_eq!(ProvenTable::new(64).capacity(), 64);
+        assert_eq!(ProvenTable::new(100).capacity(), 128);
+        // 最小は 64
+        assert_eq!(ProvenTable::new(1).capacity(), 64);
+    }
+
+    #[test]
+    fn test_proven_table_store_lookup() {
+        let mut table = ProvenTable::new(64);
+        let hand = [1u8, 0, 0, 0, 0, 0, 0];
+        let entry = ProvenEntry::new_proof(hand, 0, 15);
+
+        assert!(table.insert(0x1234, entry));
+        let found = table.lookup(0x1234, &hand);
+        assert!(found.is_some());
+        assert!(found.unwrap().is_proof());
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.proof_len(), 1);
+    }
+
+    #[test]
+    fn test_proven_table_safe_key_collision() {
+        let mut table = ProvenTable::new(64);
+        let hand = [1u8, 0, 0, 0, 0, 0, 0];
+        let entry = ProvenEntry::new_proof(hand, 0, 15);
+
+        // pos_key = 0 は safe_key で 1 に置換される．
+        // pos_key=0 と pos_key=1 は同じ slot に格納される．
+        assert!(table.insert(0, entry));
+        assert!(table.lookup(0, &hand).is_some());
+        assert!(table.lookup(1, &hand).is_some());
+    }
+
+    #[test]
+    fn test_proven_table_counters() {
+        let mut table = ProvenTable::new(64);
+        let hand1 = [1u8, 0, 0, 0, 0, 0, 0];
+        let hand2 = [2u8, 0, 0, 0, 0, 0, 0];
+
+        // 2 proof + 1 confirmed disproof を挿入
+        table.insert(0x1, ProvenEntry::new_proof(hand1, 0, 15));
+        table.insert(0x2, ProvenEntry::new_proof(hand2, 0, 17));
+        table.insert(0x3, ProvenEntry::new_disproof(hand1, 30));
+
+        assert_eq!(table.len(), 3);
+        assert_eq!(table.proof_len(), 2);
+        assert_eq!(table.confirmed_len(), 1);
+        assert_eq!(table.refutable_len(), 0);
+    }
+
+    #[test]
+    fn test_proven_table_iter_pos_key() {
+        let mut table = ProvenTable::new(64);
+        let hand1 = [1u8, 0, 0, 0, 0, 0, 0];
+        let hand2 = [2u8, 0, 0, 0, 0, 0, 0];
+
+        // 同じ pos_key で異なる hand を 2 個挿入
+        table.insert(0x100, ProvenEntry::new_proof(hand1, 0, 15));
+        table.insert(0x100, ProvenEntry::new_proof(hand2, 0, 17));
+
+        let count = table.iter_pos_key(0x100).count();
+        assert_eq!(count, 2);
+        // 異なる pos_key のは 0 個
+        assert_eq!(table.iter_pos_key(0x200).count(), 0);
+    }
+
+    #[test]
+    fn test_proven_table_update_existing() {
+        let mut table = ProvenTable::new(64);
+        let hand = [1u8, 0, 0, 0, 0, 0, 0];
+
+        // 最初 proof として挿入
+        table.insert(0x1, ProvenEntry::new_proof(hand, 0, 15));
+        assert_eq!(table.proof_len(), 1);
+        assert_eq!(table.confirmed_len(), 0);
+
+        // 同じ pos_key + hand で disproof に更新
+        table.insert(0x1, ProvenEntry::new_disproof(hand, 30));
+        assert_eq!(table.len(), 1, "total should remain 1 after update");
+        assert_eq!(table.proof_len(), 0, "proof counter should decrement");
+        assert_eq!(table.confirmed_len(), 1, "confirmed counter should increment");
+    }
+
+    #[test]
+    fn test_proven_table_clear() {
+        let mut table = ProvenTable::new(64);
+        let hand = [1u8, 0, 0, 0, 0, 0, 0];
+        table.insert(0x1, ProvenEntry::new_proof(hand, 0, 15));
+        table.insert(0x2, ProvenEntry::new_disproof(hand, 30));
+        assert_eq!(table.len(), 2);
+
+        table.clear();
+        assert_eq!(table.len(), 0);
+        assert_eq!(table.proof_len(), 0);
+        assert_eq!(table.confirmed_len(), 0);
+        assert!(table.lookup(0x1, &hand).is_none());
     }
 }
