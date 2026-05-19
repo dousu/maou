@@ -256,6 +256,16 @@ impl Default for ProvenSlot {
 /// 十分大きい．
 pub(super) const PROVEN_TABLE_MAX_PROBE: usize = 128;
 
+/// `ProvenTable` の tombstone (削除済み slot) を表すセンチネル `pos_key`．
+///
+/// `pos_key == 0` は empty slot．`pos_key == TOMBSTONE_KEY` は tombstone
+/// (削除済みだが probe chain を壊さないため slot を保持)．通常の
+/// `TT::safe_key` は `pos_key | 1` で奇数を返すため，`u64::MAX` (奇数だが
+/// 1 bit hash 衝突確率 2^-63 と無視可能) を tombstone として利用しても
+/// 実害なし．衝突した場合，該当エントリが lookup で見えないだけで
+/// soundness は保たれる (proven_map が primary store)．
+pub(super) const PROVEN_TABLE_TOMBSTONE_KEY: u64 = u64::MAX;
+
 /// KomoringHeights `RegularTable` 風の flat array + linear probing ProvenTT
 /// (Phase 1, swift-running-cheetah)．
 ///
@@ -357,7 +367,7 @@ impl ProvenTable {
     /// `(pos_key, hand)` で完全一致するエントリを検索する．
     ///
     /// linear probing で次の空 slot (`pos_key == 0`) に到達したら `None`．
-    /// 一致しない pos_key の slot は skip して継続．
+    /// 一致しない pos_key および tombstone slot は skip して継続．
     pub(super) fn lookup(
         &self,
         pos_key: u64,
@@ -371,7 +381,10 @@ impl ProvenTable {
             if slot.pos_key == 0 {
                 return None;
             }
-            if slot.pos_key == pos_key && slot.entry.hand == *hand {
+            if slot.pos_key != PROVEN_TABLE_TOMBSTONE_KEY
+                && slot.pos_key == pos_key
+                && slot.entry.hand == *hand
+            {
                 return Some(&slot.entry);
             }
             idx += 1;
@@ -403,22 +416,31 @@ impl ProvenTable {
     /// `(pos_key, hand)` のエントリを挿入または更新する．
     ///
     /// 既存エントリ (同 hand) があれば上書き．なければ空 slot に挿入．
-    /// 空 slot が見つからず (load factor 高) かつ MAX_PROBE 超過なら
-    /// `false` を返す (caller は GC をトリガー)．
+    /// tombstone slot は最初に遭遇したものを記憶しておき，empty に到達した
+    /// 場合に再利用する (load factor を保つ)．空 slot も tombstone も
+    /// 見つからず MAX_PROBE 超過なら `false` を返す (caller は GC をトリガー)．
     pub(super) fn insert(&mut self, pos_key: u64, entry: ProvenEntry) -> bool {
         let pos_key = Self::safe_key(pos_key);
         let mut idx = self.index(pos_key);
         let n = self.entries.len();
+        let mut first_tombstone: Option<usize> = None;
         for _ in 0..PROVEN_TABLE_MAX_PROBE {
             let slot = &mut self.entries[idx];
             if slot.pos_key == 0 {
-                slot.pos_key = pos_key;
-                slot.entry = entry;
+                // empty: tombstone があれば再利用，なければここに挿入
+                let target = first_tombstone.unwrap_or(idx);
+                let s = &mut self.entries[target];
+                s.pos_key = pos_key;
+                s.entry = entry;
                 self.total += 1;
                 Self::adjust_counters(&mut self.proofs, &mut self.confirmed, &entry, true);
                 return true;
             }
-            if slot.pos_key == pos_key && slot.entry.hand == entry.hand {
+            if slot.pos_key == PROVEN_TABLE_TOMBSTONE_KEY {
+                if first_tombstone.is_none() {
+                    first_tombstone = Some(idx);
+                }
+            } else if slot.pos_key == pos_key && slot.entry.hand == entry.hand {
                 // 更新: 旧 entry のカウンタを引き，新 entry のカウンタを足す．
                 Self::adjust_counters(&mut self.proofs, &mut self.confirmed, &slot.entry, false);
                 slot.entry = entry;
@@ -430,7 +452,90 @@ impl ProvenTable {
                 idx = 0;
             }
         }
+        // 走査終了．tombstone があれば再利用．
+        if let Some(target) = first_tombstone {
+            let s = &mut self.entries[target];
+            s.pos_key = pos_key;
+            s.entry = entry;
+            self.total += 1;
+            Self::adjust_counters(&mut self.proofs, &mut self.confirmed, &entry, true);
+            return true;
+        }
         false
+    }
+
+    /// `(pos_key, hand)` のエントリを削除する (tombstone marker)．
+    ///
+    /// 該当エントリを発見した場合，slot の `pos_key` を
+    /// `PROVEN_TABLE_TOMBSTONE_KEY` に変更し，カウンタを減算する．
+    /// linear probing chain を壊さないため slot 自体は保持する．
+    /// 戻り値: 削除に成功したら `true`，見つからなければ `false`．
+    pub(super) fn remove(&mut self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> bool {
+        let pos_key = Self::safe_key(pos_key);
+        let mut idx = self.index(pos_key);
+        let n = self.entries.len();
+        for _ in 0..PROVEN_TABLE_MAX_PROBE {
+            let slot = &mut self.entries[idx];
+            if slot.pos_key == 0 {
+                return false;
+            }
+            if slot.pos_key != PROVEN_TABLE_TOMBSTONE_KEY
+                && slot.pos_key == pos_key
+                && slot.entry.hand == *hand
+            {
+                let removed = slot.entry;
+                Self::adjust_counters(
+                    &mut self.proofs,
+                    &mut self.confirmed,
+                    &removed,
+                    false,
+                );
+                self.total -= 1;
+                slot.pos_key = PROVEN_TABLE_TOMBSTONE_KEY;
+                return true;
+            }
+            idx += 1;
+            if idx >= n {
+                idx = 0;
+            }
+        }
+        false
+    }
+
+    /// 指定 `pos_key` の全エントリを tombstone 化する．
+    ///
+    /// `iter_pos_key` 相当の走査で同一 `pos_key` の slot を全て削除．
+    /// 戻り値は削除したエントリ数．Phase 2a-2 の `sync_proven_table_for_pos_key`
+    /// で使用 (proven_map と整合させるため，差分計算より単純な
+    /// 「pos_key 全消去 + proven_map から再挿入」戦略を採用)．
+    pub(super) fn remove_pos_key(&mut self, pos_key: u64) -> usize {
+        let pos_key = Self::safe_key(pos_key);
+        let mut idx = self.index(pos_key);
+        let n = self.entries.len();
+        let mut removed = 0usize;
+        for _ in 0..PROVEN_TABLE_MAX_PROBE {
+            let slot = &mut self.entries[idx];
+            if slot.pos_key == 0 {
+                break;
+            }
+            if slot.pos_key == pos_key {
+                let entry = slot.entry;
+                Self::adjust_counters(
+                    &mut self.proofs,
+                    &mut self.confirmed,
+                    &entry,
+                    false,
+                );
+                self.total -= 1;
+                slot.pos_key = PROVEN_TABLE_TOMBSTONE_KEY;
+                removed += 1;
+            }
+            idx += 1;
+            if idx >= n {
+                idx = 0;
+            }
+        }
+        removed
     }
 
     /// `proofs` / `confirmed` カウンタを `entry` 種別に応じて増減する．
@@ -479,6 +584,10 @@ impl<'a> Iterator for ProvenTableIter<'a> {
             if slot.pos_key == 0 {
                 self.done = true;
                 return None;
+            }
+            if slot.pos_key == PROVEN_TABLE_TOMBSTONE_KEY {
+                // tombstone: skip but keep probing
+                continue;
             }
             if slot.pos_key == self.target_pos_key {
                 let _ = cur_idx;
@@ -740,6 +849,41 @@ impl TranspositionTable {
     pub(super) fn proven_table_stats(&self) -> Option<(usize, usize, usize, usize)> {
         let t = self.proven_table.as_ref()?;
         Some((t.len(), t.proof_len(), t.confirmed_len(), t.refutable_len()))
+    }
+
+    /// Phase 2a-2 (v0.60.0): `proven_table` を `proven_map[pos_key]` と整合させる．
+    ///
+    /// 戦略: `proven_table` から `pos_key` 配下の全エントリを tombstone 化し，
+    /// `proven_map[pos_key]` の現在内容を再挿入する．retain で削除されたエントリと
+    /// 新規 push されたエントリを個別に追跡せずとも，整合性を保証できる．
+    ///
+    /// 呼び出しタイミング: `store_proven` / `store_tagged_proof` /
+    /// `store_refutable_disproof` の `vec.retain` + `vec.push` 直後．
+    /// flag OFF (`proven_table is None`) なら no-op．
+    fn sync_proven_table_for_pos_key(&mut self, pos_key: u64) {
+        let Some(t) = self.proven_table.as_mut() else { return; };
+        t.remove_pos_key(pos_key);
+        if let Some(vec) = self.proven_map.get(&pos_key) {
+            for e in vec {
+                t.insert(pos_key, *e);
+            }
+        }
+    }
+
+    /// Phase 2a-2 (v0.60.0): `proven_table` 全体を `proven_map` 全体から再構築する．
+    ///
+    /// `retain_proofs_only` / `retain_proofs` / `clear_proven_disproofs_below`
+    /// / `gc_proven` / `gc_proofs` / `gc_confirmed` / `remove_refutable_disproofs`
+    /// など大域操作の直後に呼ぶ．計算量 O(|proven_map|) の `clear` + 再挿入．
+    /// flag OFF なら no-op．
+    fn rebuild_proven_table(&mut self) {
+        let Some(t) = self.proven_table.as_mut() else { return; };
+        t.clear();
+        for (&pos_key, vec) in self.proven_map.iter() {
+            for e in vec {
+                t.insert(pos_key, *e);
+            }
+        }
     }
 
     /// WorkingTT エントリの pn/dn 分布を収集する (分析用)．
@@ -1418,11 +1562,8 @@ impl TranspositionTable {
         self.proven_total_entries -= before - vec.len();
         vec.push(new_entry);
         self.proven_total_entries += 1;
-        // Phase 2a (swift-running-cheetah, v0.59.0): shadow-write 新エントリを
-        // ProvenTable へ insert (flag ON 時のみ)．retain 由来の removal は未対応．
-        if let Some(t) = self.proven_table.as_mut() {
-            t.insert(pos_key, new_entry);
-        }
+        // Phase 2a-2 (v0.60.0): retain + push の結果を proven_table へ同期．
+        self.sync_proven_table_for_pos_key(pos_key);
     }
 
     /// テスト用: tagged proof を直接ストアする (store_tagged_proof のエイリアス)．
@@ -1585,10 +1726,8 @@ impl TranspositionTable {
             vec.push(new_entry);
             self.proven_total_entries += 1;
             self.proven_proof_entries += 1;
-            // Phase 2a shadow-write (v0.59.0)
-            if let Some(t) = self.proven_table.as_mut() {
-                t.insert(pos_key, new_entry);
-            }
+            // Phase 2a-2 (v0.60.0): retain + push の結果を proven_table へ同期．
+            self.sync_proven_table_for_pos_key(pos_key);
         } else {
             // WorkingTT の同一 pos_key エントリを積極的に除去(proof 以外)．
             let w_start = self.working_cluster_start(pos_key, &hand);
@@ -1611,10 +1750,8 @@ impl TranspositionTable {
             self.proven_total_entries += 1;
             // new_disproof は confirmed disproof (refutable ではない)
             self.proven_confirmed_entries += 1;
-            // Phase 2a shadow-write (v0.59.0)
-            if let Some(t) = self.proven_table.as_mut() {
-                t.insert(pos_key, new_entry);
-            }
+            // Phase 2a-2 (v0.60.0): retain + push の結果を proven_table へ同期．
+            self.sync_proven_table_for_pos_key(pos_key);
         }
 
         #[cfg(feature = "verbose")] {
@@ -1678,10 +1815,8 @@ impl TranspositionTable {
         self.proven_total_entries -= removed;
         vec.push(new_entry);
         self.proven_total_entries += 1;
-        // Phase 2a shadow-write (v0.59.0)
-        if let Some(t) = self.proven_table.as_mut() {
-            t.insert(pos_key, new_entry);
-        }
+        // Phase 2a-2 (v0.60.0): retain + push の結果を proven_table へ同期．
+        self.sync_proven_table_for_pos_key(pos_key);
         #[cfg(feature = "tt_diag")]
         { self.diag_disproof_refutable += 1; }
     }
@@ -2375,6 +2510,10 @@ impl TranspositionTable {
         self.proven_proof_entries = 0;
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
         self.working_overflow_since_gc = 0;
+        // Phase 2a-2 (v0.60.0): proven_table もクリア．
+        if let Some(t) = self.proven_table.as_mut() {
+            t.clear();
+        }
     }
 
     /// ProvenTT を保持したまま WorkingTT のみクリアする．
@@ -2408,6 +2547,8 @@ impl TranspositionTable {
                 }
             }
         }
+        // Phase 2a-2 (v0.60.0): 大域 proven_map 修正後の proven_table 再構築．
+        self.rebuild_proven_table();
     }
 
     pub(super) fn retain_proofs_only(&mut self) {
@@ -3110,6 +3251,8 @@ impl TranspositionTable {
             !vec.is_empty()
         });
         self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
+        // Phase 2a-2 (v0.60.0): proven_map 大域修正後の proven_table 再構築．
+        self.rebuild_proven_table();
         // refutable を除去したので proven_confirmed と proven_proof は変化なし
         initial_total - self.proven_total_entries
     }
@@ -3525,5 +3668,97 @@ mod proven_table_tests {
         assert_eq!(table.proof_len(), 0);
         assert_eq!(table.confirmed_len(), 0);
         assert!(table.lookup(0x1, &hand).is_none());
+    }
+
+    /// Phase 2a-2 (v0.60.0): tombstone-based `remove` の基本動作．
+    #[test]
+    fn test_proven_table_remove_basic() {
+        let mut table = ProvenTable::new(64);
+        let h1 = [1u8, 0, 0, 0, 0, 0, 0];
+        let h2 = [2u8, 0, 0, 0, 0, 0, 0];
+        table.insert(0x1, ProvenEntry::new_proof(h1, 0, 15));
+        table.insert(0x1, ProvenEntry::new_proof(h2, 0, 15));
+        assert_eq!(table.len(), 2);
+        assert_eq!(table.proof_len(), 2);
+
+        assert!(table.remove(0x1, &h1));
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.proof_len(), 1);
+        // h1 はもう見えない，h2 は依然見える
+        assert!(table.lookup(0x1, &h1).is_none());
+        assert!(table.lookup(0x1, &h2).is_some());
+
+        // 同じ削除を繰り返しても false
+        assert!(!table.remove(0x1, &h1));
+    }
+
+    /// Phase 2a-2: `remove` で tombstone slot に新エントリが再挿入できること．
+    #[test]
+    fn test_proven_table_remove_then_reinsert() {
+        let mut table = ProvenTable::new(64);
+        let h1 = [1u8, 0, 0, 0, 0, 0, 0];
+        table.insert(0x1, ProvenEntry::new_proof(h1, 0, 15));
+        assert_eq!(table.len(), 1);
+
+        assert!(table.remove(0x1, &h1));
+        assert_eq!(table.len(), 0);
+
+        // 再挿入: tombstone slot が再利用される (容量消費なし)．
+        let entry2 = ProvenEntry::new_disproof(h1, 30);
+        assert!(table.insert(0x1, entry2));
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.confirmed_len(), 1);
+        let found = table.lookup(0x1, &h1).unwrap();
+        assert!(!found.is_proof());
+    }
+
+    /// Phase 2a-2: `remove_pos_key` で同一 pos_key の全エントリを削除．
+    #[test]
+    fn test_proven_table_remove_pos_key() {
+        let mut table = ProvenTable::new(64);
+        let h1 = [1u8, 0, 0, 0, 0, 0, 0];
+        let h2 = [2u8, 0, 0, 0, 0, 0, 0];
+        let h3 = [3u8, 0, 0, 0, 0, 0, 0];
+        table.insert(0x100, ProvenEntry::new_proof(h1, 0, 15));
+        table.insert(0x100, ProvenEntry::new_proof(h2, 0, 17));
+        table.insert(0x100, ProvenEntry::new_disproof(h3, 30));
+        // 他の pos_key も追加 (削除されないこと)
+        table.insert(0x200, ProvenEntry::new_proof(h1, 0, 15));
+        assert_eq!(table.len(), 4);
+
+        let removed = table.remove_pos_key(0x100);
+        assert_eq!(removed, 3);
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.proof_len(), 1);
+        assert_eq!(table.confirmed_len(), 0);
+        // 0x200 は残る
+        assert!(table.lookup(0x200, &h1).is_some());
+        // 0x100 の全 hand は見えない
+        assert!(table.lookup(0x100, &h1).is_none());
+        assert!(table.lookup(0x100, &h2).is_none());
+        assert!(table.lookup(0x100, &h3).is_none());
+    }
+
+    /// Phase 2a-2: tombstone を含む slot 列で lookup chain が壊れないこと．
+    #[test]
+    fn test_proven_table_lookup_skips_tombstones() {
+        let mut table = ProvenTable::new(64);
+        let h1 = [1u8, 0, 0, 0, 0, 0, 0];
+        let h2 = [2u8, 0, 0, 0, 0, 0, 0];
+
+        // 同じ pos_key で 2 個挿入 (linear probing で隣接 slot に配置)
+        table.insert(0x100, ProvenEntry::new_proof(h1, 0, 15));
+        table.insert(0x100, ProvenEntry::new_proof(h2, 0, 17));
+
+        // 先に挿入した h1 を削除 → tombstone が残る
+        assert!(table.remove(0x100, &h1));
+
+        // h2 は依然 lookup できなければならない (tombstone を skip して継続)
+        assert!(table.lookup(0x100, &h2).is_some(),
+            "lookup must skip tombstones and reach h2");
+
+        // iter_pos_key も 1 エントリ (h2) のみ返す
+        let count = table.iter_pos_key(0x100).count();
+        assert_eq!(count, 1, "iter_pos_key must skip tombstones");
     }
 }

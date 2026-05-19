@@ -1118,6 +1118,17 @@ impl DfPnSolver {
         self.table.proven_table_stats()
     }
 
+    /// `proven_map` (primary store) の `(len, proof_len, confirmed_len, refutable_len)`
+    /// を返す．Phase 2a-2 (v0.60.0) で `proven_table_stats()` と整合性を検証する
+    /// 不変式テストに用いる．
+    pub fn proven_map_counts(&self) -> (usize, usize, usize, usize) {
+        let total = self.table.proven_len();
+        let proof = self.table.proven_proof_len();
+        let confirmed = self.table.proven_confirmed_len();
+        let refutable = total.saturating_sub(proof).saturating_sub(confirmed);
+        (total, proof, confirmed, refutable)
+    }
+
     /// depth-limited disproof の WorkingTT 格納閾値を明示的に設定する (v0.25.0)．
     ///
     /// `remaining < threshold` の depth-limited disproof はスキップされる．

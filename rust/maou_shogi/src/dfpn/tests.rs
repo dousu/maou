@@ -12784,6 +12784,89 @@ use crate::types::{Color, PieceType};
         );
     }
 
+    /// Phase 2a-2 (v0.60.0): proven_table と proven_map のカウンタが厳密一致．
+    ///
+    /// `sync_proven_table_for_pos_key` (各 store retain 後) と
+    /// `rebuild_proven_table` (recalculate_proven_counters 経由の大域 retain/gc 後)
+    /// で proven_table が proven_map と完全同期されることを検証する．
+    ///
+    /// 検証する 4 カウンタ:
+    /// - total len
+    /// - proof len
+    /// - confirmed len
+    /// - refutable len
+    ///
+    /// soundness 制約: proven_map は primary store のため探索結果 (PV) は
+    /// 既存テストと同一であるべき．本テストは追加で内部整合性のみ検証．
+    #[test]
+    fn test_proven_table_strict_invariant_ply3() {
+        let sfen = "8k/9/6R2/9/9/9/9/9/9 b G 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::new(7, 1_048_576, 32767);
+        solver.set_use_kh_proven_tt(true, 1 << 16);
+        let result = solver.solve(&mut board);
+
+        // soundness: 既存テスト test_tsume_3te と同じ PV を返す
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                assert_eq!(moves.len(), 3, "expected 3 moves");
+            }
+            other => panic!("expected Checkmate, got {:?}", other),
+        }
+
+        // 厳密不変式: proven_table と proven_map のカウンタが全一致
+        let table_stats = solver
+            .proven_table_stats()
+            .expect("proven_table should be Some");
+        let map_stats = solver.proven_map_counts();
+        assert_eq!(
+            table_stats, map_stats,
+            "proven_table {:?} != proven_map {:?} (sync invariant violated)",
+            table_stats, map_stats
+        );
+    }
+
+    /// Phase 2a-2: より深い詰将棋 (39te ply24 Mate15 regression) でも不変式が保たれる．
+    #[test]
+    fn test_proven_table_strict_invariant_39te_ply24() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix_pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        let mut solver = DfPnSolver::with_timeout(17, 1_000_000, 32767, 600);
+        solver.set_find_shortest(false);
+        solver.set_use_kh_proven_tt(true, 1 << 20);
+        let result = solver.solve(&mut board);
+
+        // soundness: Mate(15) PV (test_tsume_39te_ply24_mate15_regression と同等)
+        match &result {
+            TsumeResult::Checkmate { moves, .. } => {
+                assert_eq!(moves.len(), 15, "expected Mate(15), got {}", moves.len());
+            }
+            other => panic!("expected Checkmate, got {:?}", other),
+        }
+
+        let table_stats = solver.proven_table_stats().expect("proven_table Some");
+        let map_stats = solver.proven_map_counts();
+        assert_eq!(
+            table_stats, map_stats,
+            "39te ply24: proven_table {:?} != proven_map {:?} (sync invariant violated)",
+            table_stats, map_stats
+        );
+    }
+
     /// **[SLOW]** ply 6 (remaining=33) 大バジェットプローブ．
     ///
     /// TT 共有 backward 解析で ply 8 まで解いた後に ProvenTT を引き継ぎ
