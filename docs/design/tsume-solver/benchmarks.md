@@ -6279,6 +6279,74 @@ dual-store では効果検出不能．次は **Phase 3 (KH 風 sampling GC) + Ph
 
 ---
 
+### 10.2.29 v0.62.0〜v0.63.0 — Phase 3 GC 実装 + Phase 4 proven_map 完全削除．NPS 効果ゼロ〜やや退行
+
+#### 動機
+
+§10.2.28 (v0.61.0 Phase 2b) で kh_proven_tt の効果がゼロだった原因を「dual-store
+の write overhead が cache locality 利点を相殺」と推定．Phase 3 (sampling GC) +
+Phase 4 (proven_map 完全削除) で proven_table 単独運用に移行し，真の効果を測定．
+
+#### 実装フェーズ
+
+- **v0.62.0 (Phase 3)**: `ProvenTable::load_factor()` と
+  `collect_garbage(removal_ratio, only_refutable)` を実装．caller 未接続．
+  単体テスト 4 個追加．
+- **v0.63.0 (Phase 4)**: `proven_map: FxHashMap` と TT 側 3 カウンタを完全削除．
+  - **Phase 4a**: `proven_table: Option<ProvenTable>` → 常設 `ProvenTable`
+  - **Phase 4b**: store path を proven_table 直接操作に書き換え
+  - **Phase 4c**: 大域 ops (retain, clear, gc) を proven_table 直接操作に
+  - **Phase 4d**: フィールド削除．`proven_len` 等は proven_table 経由
+  - 新規 `ProvenTable::iter_all()` で全エントリ走査 (診断・GC 用)
+  - `ProvenEntriesIter` enum → type alias に簡素化
+  - 376 行削除 / 262 行追加 (差し引き -114 行)．
+  - Mate(15) PV 完全一致 (`strict_invariant_39te_ply24` で確認)．
+
+#### 効果測定 (`test_kh_proven_tt_ply6_effect`, ply 6, 5M budget, 60s, v0.63.0)
+
+| label | v0.61.0 NPS | v0.63.0 NPS (run1) | v0.63.0 NPS (run2) |
+|-------|------------:|-------------------:|-------------------:|
+| hs=OFF, kh=OFF | 39K | — | 39K |
+| hs=ON, kh=OFF | 94K | 84K | 82K |
+| hs=OFF, kh=ON | 39K | 39K | 33K |
+| hs=ON, kh=ON | 93K | 94K | 82K |
+
+**結論**: Phase 4 後 (proven_table 単独) でも **NPS 効果ゼロ〜やや退行** (run 間
+変動含めて -13% 程度の場合あり)．期待した cache locality 効果は materialize せず．
+
+#### 分析
+
+考えられる原因 (複数仮説):
+
+1. **tombstone 累積**: proven_table の `remove + insert` を繰り返す度に
+   tombstone slot が増え，linear probe 長が伸びる．compaction 機構未実装．
+2. **iter_all() の空 slot 走査**: 大域操作で全 capacity (1M〜4M slots) を walk．
+   proven_map.values() は実エントリのみで効率的．
+3. **小規模 cluster での FxHashMap の優位**: 各 pos_key の entry 数は典型 1-3 個．
+   proven_map の Vec::retain は連続メモリ走査で cache-friendly．proven_table の
+   linear probing は別 pos_key の干渉あり．
+
+**重要 (soundness)**: nodes 完全一致 (hs=false で 2.37M / 2.37M)．Phase 2a-2 の
+strict invariant + Phase 2b/4 の Mate(15) PV 一致と整合．技術的には clean
+single-store 達成．
+
+#### 評価
+
+- **技術成果**: ProvenTT を proven_table 単独運用に移行．コード簡素化 (-114 行)．
+  proven_map / 3 カウンタフィールド削除．
+- **NPS 効果**: 期待 (12〜30× の KH 比 NPS 差) の縮小は実現せず．
+- **soundness**: 完全保証．既存 PV/nodes 不変．
+
+#### Next
+
+KH との NPS 差 (12〜30×) を埋める方向としては proven_table の cache locality
+よりも別の要因 (例: HandSet 系の探索効率向上，または KH 固有の SNDA・
+合駒遅延展開などのアルゴリズム的改善) が重要であることが示唆される．次は
+HandSet ON 状態で大バジェット (50M+) ply 6 解探索を試み，proven_table 効率を
+さらに測定するか，KH の他の枝刈り手法 (合駒遅延展開等) の移植を検討する．
+
+---
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
