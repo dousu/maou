@@ -13016,7 +13016,7 @@ use crate::types::{Color, PieceType};
             ("9te",      "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1",                                                            11, 1_000_000, 10),
             ("tsume_3",  "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1",                                                       13, 1_000_000, 10),
             ("tsume_4",  "7nk/9/5R3/8p/6P2/9/9/9/9 b SNPr2b4g3s2n4l15p 1",                                                          13, 1_000_000, 10),
-            ("tsume_5",  "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1",                                                              15, 2_000_000, 15),
+            ("tsume_5",  "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1",                                                              21, 2_000_000, 15),
             ("29te",     "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1",                            31, 5_000_000, 20),
             ("39te",     "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1",                                                41, 5_000_000, 20),
         ];

@@ -97,7 +97,7 @@ const PN_UNIT: u32 = 16;
 /// OR dn 専用 γ_dn の分離も試みた (v0.39.0, γ_dn=4) が，AND-min 伝播が支配的であり
 /// σ_ln の改善は得られなかった．OR dn 緩和は AND ノードで即座に min されて消えるため，
 /// WPN_GAMMA_SHIFT は pn/dn 共通で 6 を維持する (pn-dn-distribution.md §3.10 参照)．
-const WPN_GAMMA_SHIFT: u32 = 6;
+const WPN_GAMMA_SHIFT: u32 = 4;
 
 /// AND ノードで合駒(drop)を後回しにするための dn バイアス．
 ///
