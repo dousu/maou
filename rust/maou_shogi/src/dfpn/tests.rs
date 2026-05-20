@@ -12639,6 +12639,85 @@ use crate::types::{Color, PieceType};
             .unwrap();
     }
 
+    /// **[SLOW]** Phase 2b/5 (v0.61.0): KH 風 `ProvenTable` flag OFF/ON 効果測定．
+    ///
+    /// 39te ply 6 (remaining=33) を 5M nodes / 60s で OFF/ON 比較．proven_table
+    /// (linear probing, cache locality 期待) vs proven_map (FxHashMap) の
+    /// 実機 NPS 差を測定．現状は dual-store のため off+on の cost は両方発生
+    /// するが，cache locality の効果を一次オーダーで観察できる．
+    ///
+    /// HandSet ON 状態 (v0.57.0 で NPS 2.5× 確認済み) でさらに proven_table を
+    /// ON にすることで残差効果を見る．計 4 通り測定:
+    /// (hs=off, kh=off), (hs=on, kh=off), (hs=off, kh=on), (hs=on, kh=on)．
+    ///
+    /// ```
+    /// cargo test --release -p maou_shogi -- \
+    ///     test_kh_proven_tt_ply6_effect --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_kh_proven_tt_ply6_effect() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix = ["7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c"];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" kh_proven_tt 効果測定 (ply 6, 5M budget, 60s)");
+                eprintln!("{}", "=".repeat(80));
+                eprintln!("{:<24} {:>12} {:>10} {:>10} {:<12}",
+                    "label", "nodes", "time(s)", "NPS(K)", "result");
+
+                for (use_hs, use_kh) in [
+                    (false, false),
+                    (true, false),
+                    (false, true),
+                    (true, true),
+                ] {
+                    let label = format!("hs={} kh={}", use_hs, use_kh);
+
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    for m_usi in &prefix {
+                        let mv = board.move_from_usi(m_usi).unwrap();
+                        board.do_move(mv);
+                    }
+
+                    let mut solver = DfPnSolver::with_timeout(35, 5_000_000, 32767, 60);
+                    solver.set_find_shortest(false);
+                    solver.set_use_handset_combination(use_hs);
+                    if use_kh {
+                        // proven_table capacity: 4M slot (96 MB)，5M nodes に十分．
+                        solver.set_use_kh_proven_tt(true, 1 << 22);
+                    }
+
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed = t.elapsed();
+
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+
+                    eprintln!("{:<24} {:>12} {:>10.1} {:>10.0} {:<12}",
+                        label,
+                        solver.nodes_searched,
+                        elapsed.as_secs_f64(),
+                        solver.nodes_searched as f64 / elapsed.as_secs_f64() / 1000.0,
+                        res);
+                }
+
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// `test_tsume_39te_ply24_mate15_regression` の HandSet ON 版 (v0.57.0)．
     ///
     /// `param_use_handset_combination=true` で canonical Mate(15) PV が
