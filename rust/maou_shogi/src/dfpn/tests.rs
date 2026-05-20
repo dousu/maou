@@ -12816,6 +12816,140 @@ use crate::types::{Color, PieceType};
         }
     }
 
+    /// **[SLOW]** twinkling-hatching-duckling Tier tuning loop 用ベンチ．
+    ///
+    /// 39 手詰め問題 root (ply 0) を大バジェットで解くまでの時間/ノード数を計測．
+    /// パラメータ別 (heuristic / SNDA / handset / dml) で比較する基盤．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_39te_root_bench --nocapture --ignored
+    /// ```
+    ///
+    /// 目標: 5M〜100M nodes / 60〜600s で詰みに到達．現状は v0.65.0 で baseline 計測．
+    #[test]
+    #[ignore]
+    fn test_tsume_39te_root_bench() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 39te ply0 root bench (20M nodes / 120s budget)");
+                eprintln!("{}", "=".repeat(80));
+                eprintln!("{:<32} {:>10} {:>7} {:>7} {:>10} {:>10} {:<10}",
+                    "config", "nodes", "t(s)", "NPS(K)", "root_pn", "root_dn", "result");
+
+                // パラメータチューニング用 config 一覧．
+                // budget は中規模 (20M nodes / 120s) にして反復速度を確保．
+                let configs = [
+                    ("default (Tier1+3 ON)", true, true, false),
+                    ("Tier1 only (dml OFF)", true, false, false),
+                    ("both OFF (baseline)",   false, false, false),
+                    ("+ dominance",           true, true, true),
+                ];
+
+                for (label, hs, dml, dom) in configs {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+
+                    // depth=41 で 39 手詰めに到達可能．20M nodes / 120s で挑戦．
+                    let mut solver = DfPnSolver::with_timeout(41, 20_000_000, 32767, 120);
+                    solver.set_find_shortest(false);
+                    solver.set_use_handset_combination(hs);
+                    solver.set_use_delayed_move_list(dml);
+                    solver.set_use_visit_history_dominance(dom);
+
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed = t.elapsed();
+
+                    // 探索後の root pn/dn を取得 (探索進捗指標)
+                    let (root_pn, root_dn) = solver.look_up_board(&board);
+
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+
+                    eprintln!("{:<32} {:>10} {:>7.1} {:>7.0} {:>10} {:>10} {:<10}",
+                        label,
+                        solver.nodes_searched,
+                        elapsed.as_secs_f64(),
+                        solver.nodes_searched as f64 / elapsed.as_secs_f64() / 1000.0,
+                        root_pn,
+                        root_dn,
+                        res);
+                }
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// **[SLOW]** maou と KH のアルゴリズム差分析用 multi-problem ベンチ．
+    ///
+    /// 様々な難度の詰将棋 SFEN を maou で順次実行し，KH との node/time 比を
+    /// 算出する基盤．KH 側は `/tmp/run_kh_all.sh` で同じ SFEN を計測．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_maou_multi_problem_bench --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_maou_multi_problem_bench() {
+        let problems: &[(&str, &str, u32, u64, u64)] = &[
+            // (label, sfen, depth, budget_nodes, timeout_s)
+            ("3te",      "8k/9/6R2/9/9/9/9/9/9 b G 1",                                                                            7,  1_000_000, 10),
+            ("9te",      "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1",                                                            11, 1_000_000, 10),
+            ("tsume_3",  "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1",                                                       13, 1_000_000, 10),
+            ("tsume_4",  "7nk/9/5R3/8p/6P2/9/9/9/9 b SNPr2b4g3s2n4l15p 1",                                                          13, 1_000_000, 10),
+            ("tsume_5",  "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1",                                                              15, 2_000_000, 30),
+            ("29te",     "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1",                            31, 5_000_000, 60),
+            ("39te",     "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1",                                                41, 5_000_000, 60),
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" maou multi-problem bench (default Tier1+3 ON)");
+                eprintln!("{}", "=".repeat(80));
+                eprintln!("{:<10} {:>12} {:>10} {:>10} {:<12}",
+                    "label", "nodes", "time(ms)", "NPS(K)", "result");
+
+                for &(label, sfen, depth, budget, timeout_s) in problems {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(depth, budget, 32767, timeout_s);
+                    solver.set_find_shortest(false);
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed_ms = t.elapsed().as_millis() as u64;
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    let nps_k = if elapsed_ms > 0 {
+                        solver.nodes_searched * 1000 / elapsed_ms.max(1) / 1000
+                    } else { 0 };
+                    eprintln!("{:<10} {:>12} {:>10} {:>10} {:<12}",
+                        label, solver.nodes_searched, elapsed_ms, nps_k, res);
+                }
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// `test_tsume_39te_ply24_mate15_regression` の HandSet + dominance 両 ON 版 (v0.57.0)．
     #[test]
     fn test_tsume_39te_ply24_mate15_regression_with_both() {
