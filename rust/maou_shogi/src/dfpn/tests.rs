@@ -12913,55 +12913,35 @@ use crate::types::{Color, PieceType};
             .stack_size(32 * 1024 * 1024)
             .spawn(move || {
                 eprintln!("\n{}", "=".repeat(80));
-                eprintln!(" tsume_5 step-by-step (per_move_support OFF/ON 比較)");
+                eprintln!(" tsume_5 step-by-step (maou default)");
                 eprintln!("{}", "=".repeat(80));
-                eprintln!("{:<5} {:<14} {:>12} {:>10} {:>12} {:>10} {:<14}",
-                    "ply", "move_played", "nodes_OFF", "ms_OFF", "nodes_ON", "ms_ON", "result");
+                eprintln!("{:<5} {:<14} {:>12} {:>10} {:<14}",
+                    "ply", "move_played", "nodes", "time(ms)", "result");
 
                 for ply in 0..pv.len() {
-                    // OFF
-                    let mut board0 = Board::new();
-                    board0.set_sfen(sfen).unwrap();
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
                     for usi in &pv[..ply] {
-                        let m = board0.move_from_usi(usi).unwrap();
-                        board0.do_move(m);
+                        let m = board.move_from_usi(usi).unwrap();
+                        board.do_move(m);
                     }
+                    // depth = mate + 4 margin (IDS が正常動作するために必要)
                     let remaining_moves = pv.len() - ply;
                     let depth = (remaining_moves as u32 + 4).min(41);
-                    let mut s0 = DfPnSolver::with_timeout(depth, 5_000_000, 32767, 30);
-                    s0.set_find_shortest(false);
-                    let t0 = Instant::now();
-                    let r0 = s0.solve(&mut board0);
-                    let ms0 = t0.elapsed().as_millis() as u64;
-                    // ON
-                    let mut board1 = Board::new();
-                    board1.set_sfen(sfen).unwrap();
-                    for usi in &pv[..ply] {
-                        let m = board1.move_from_usi(usi).unwrap();
-                        board1.do_move(m);
-                    }
-                    let mut s1 = DfPnSolver::with_timeout(depth, 5_000_000, 32767, 30);
-                    s1.set_find_shortest(false);
-                    s1.set_use_per_move_support(true);
-                    let t1 = Instant::now();
-                    let r1 = s1.solve(&mut board1);
-                    let ms1 = t1.elapsed().as_millis() as u64;
-                    let res0 = match &r0 {
+                    let mut solver = DfPnSolver::with_timeout(depth, 5_000_000, 32767, 30);
+                    solver.set_find_shortest(false);
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed_ms = t.elapsed().as_millis() as u64;
+                    let res = match &result {
                         TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
                         TsumeResult::Unknown { .. } => "Unknown".to_string(),
-                        _ => "Other".to_string(),
-                    };
-                    let _res1 = match &r1 {
-                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
-                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
-                        _ => "Other".to_string(),
                     };
                     let move_label = if ply == 0 { "(root)" } else { pv[ply-1] };
-                    eprintln!("{:<5} {:<14} {:>12} {:>10} {:>12} {:>10} {:<14}",
-                        ply, move_label,
-                        s0.nodes_searched, ms0,
-                        s1.nodes_searched, ms1,
-                        res0);
+                    eprintln!("{:<5} {:<14} {:>12} {:>10} {:<14}",
+                        ply, move_label, solver.nodes_searched, elapsed_ms, res);
                 }
                 eprintln!("{}", "=".repeat(80));
             })
