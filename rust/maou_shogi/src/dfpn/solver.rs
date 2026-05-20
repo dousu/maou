@@ -762,7 +762,11 @@ impl DfPnSolver {
             // depth ≤ 19: 0, depth 20-22: 1, depth ≥ 23: 3 (§3.6, M-D)．
             param_disproof_remaining_threshold: DISPROOF_THRESHOLD_ADAPTIVE,
             param_use_visit_history_dominance: false,
-            param_use_handset_combination: false,
+            // Tier 1 (twinkling-hatching-duckling, v0.64.0): default ON．
+            // KH (`hands.hpp::HandSet`) と同じく常時 OR disproof_hand を要素 min で集約．
+            // v0.57.0 で NPS 2.4× の効果実証済み (§10.2.27)．
+            // OFF にしたい場合は `set_use_handset_combination(false)` を明示呼出．
+            param_use_handset_combination: true,
             saved_depth_for_epsilon: 0,
             outer_solve_depth: 0,
             killer_table: Vec::new(),
