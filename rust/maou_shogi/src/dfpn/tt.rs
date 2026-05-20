@@ -538,6 +538,107 @@ impl ProvenTable {
         removed
     }
 
+    /// 負荷率 (実エントリ数 / 容量)．`0.0..=1.0`．Phase 3 (v0.62.0)．
+    ///
+    /// caller は容量逼迫の指標として参照する．KH `IsAlmostFull()` 相当の
+    /// 閾値 (例: 0.94) を超えた場合に `collect_garbage` を呼ぶ運用を想定．
+    #[inline(always)]
+    pub(super) fn load_factor(&self) -> f64 {
+        self.total as f64 / self.entries.len() as f64
+    }
+
+    /// KH 風 sampling-based amount GC (Phase 3, v0.62.0)．
+    ///
+    /// `removal_ratio` (`0.0..=1.0`) を target ratio として，sampling で
+    /// amount の `removal_ratio` 分位点 (低い側) を threshold に決定し，
+    /// `amount() <= threshold` のエントリを tombstone 化する．
+    ///
+    /// ## アルゴリズム
+    ///
+    /// 1. `SAMPLE_SIZE = 20_000` 個のエントリを stride 走査でサンプリング
+    ///    (KH `transposition_table.cpp::CollectGarbage` 相当)．
+    /// 2. `select_nth_unstable` で `removal_ratio` 分位点を threshold とする．
+    /// 3. 全 slot 走査して `amount() <= threshold` を tombstone 化．
+    ///
+    /// ## `only_refutable` パラメータ
+    ///
+    /// - `true`: refutable disproof のみを eviction 対象 (proof / confirmed
+    ///   は永続として保護)．既存 `TranspositionTable::gc_proven` と同等．
+    /// - `false`: proof / confirmed / refutable 全てを対象 (KH 同等)．
+    ///   Phase 4 で proven_map 削除後に proof/confirmed の GC も統合する場合
+    ///   に使う．現状の Phase 3 では未使用．
+    ///
+    /// **戻り値**: tombstone 化したエントリ数．
+    ///
+    /// **注意**: Phase 3 (v0.62.0) ではこの API を追加するのみで，caller は
+    /// 接続しない (proven_map が primary store のため)．Phase 4 で proven_map
+    /// 削除後に caller を接続する．
+    pub(super) fn collect_garbage(
+        &mut self,
+        removal_ratio: f64,
+        only_refutable: bool,
+    ) -> usize {
+        if self.total == 0 {
+            return 0;
+        }
+        let removal_ratio = removal_ratio.clamp(0.0, 1.0);
+        if removal_ratio <= 0.0 {
+            return 0;
+        }
+
+        const SAMPLE_SIZE: usize = 20_000;
+        let n = self.entries.len();
+        let stride = (n / SAMPLE_SIZE).max(1);
+
+        let mut samples: Vec<u8> = Vec::with_capacity(SAMPLE_SIZE.min(self.total));
+        let mut idx = 0usize;
+        let mut visited = 0usize;
+        // sample 数または slot 走査数のどちらかが上限に達するまで走査
+        while samples.len() < SAMPLE_SIZE && visited < n {
+            let slot = &self.entries[idx];
+            if slot.pos_key != 0 && slot.pos_key != PROVEN_TABLE_TOMBSTONE_KEY {
+                if !only_refutable || slot.entry.is_refutable_disproof() {
+                    samples.push(slot.entry.amount());
+                }
+            }
+            idx = (idx + stride) % n;
+            visited += stride;
+        }
+        if samples.is_empty() {
+            return 0;
+        }
+
+        // threshold: removal_ratio 分位点 (nth_element)
+        let pivot = ((samples.len() as f64) * removal_ratio) as usize;
+        let pivot = pivot.min(samples.len() - 1);
+        samples.select_nth_unstable(pivot);
+        let threshold = samples[pivot];
+
+        // eviction pass: amount <= threshold の対象エントリを tombstone 化
+        let mut removed = 0usize;
+        for slot in self.entries.iter_mut() {
+            if slot.pos_key == 0 || slot.pos_key == PROVEN_TABLE_TOMBSTONE_KEY {
+                continue;
+            }
+            if only_refutable && !slot.entry.is_refutable_disproof() {
+                continue;
+            }
+            if slot.entry.amount() <= threshold {
+                let entry = slot.entry;
+                Self::adjust_counters(
+                    &mut self.proofs,
+                    &mut self.confirmed,
+                    &entry,
+                    false,
+                );
+                self.total -= 1;
+                slot.pos_key = PROVEN_TABLE_TOMBSTONE_KEY;
+                removed += 1;
+            }
+        }
+        removed
+    }
+
     /// `proofs` / `confirmed` カウンタを `entry` 種別に応じて増減する．
     /// `add=true` で +1, `add=false` で saturating -1．
     #[inline(always)]
@@ -3785,5 +3886,118 @@ mod proven_table_tests {
         // iter_pos_key も 1 エントリ (h2) のみ返す
         let count = table.iter_pos_key(0x100).count();
         assert_eq!(count, 1, "iter_pos_key must skip tombstones");
+    }
+
+    /// Phase 3 (v0.62.0): `load_factor` の基本動作．
+    #[test]
+    fn test_proven_table_load_factor() {
+        let mut table = ProvenTable::new(64);
+        assert_eq!(table.load_factor(), 0.0);
+
+        let h1 = [1u8, 0, 0, 0, 0, 0, 0];
+        table.insert(0x1, ProvenEntry::new_proof(h1, 0, 15));
+        // 1 / 64 ≈ 0.015625
+        assert!((table.load_factor() - 1.0 / 64.0).abs() < 1e-9);
+
+        // 32 個挿入で 32/64 = 0.5 を超える
+        for i in 2u64..=32 {
+            let h = [i as u8, 0, 0, 0, 0, 0, 0];
+            table.insert(i, ProvenEntry::new_proof(h, 0, 15));
+        }
+        assert!(table.load_factor() >= 0.5);
+        assert!(table.load_factor() <= 1.0);
+    }
+
+    /// Phase 3: `collect_garbage(only_refutable=true)` で refutable のみ evict．
+    /// proof と confirmed は保護される．
+    #[test]
+    fn test_proven_table_collect_garbage_refutable_only() {
+        let mut table = ProvenTable::new(64);
+        let h_p = [1u8, 0, 0, 0, 0, 0, 0];
+        let h_c = [2u8, 0, 0, 0, 0, 0, 0];
+        let h_r1 = [3u8, 0, 0, 0, 0, 0, 0];
+        let h_r2 = [4u8, 0, 0, 0, 0, 0, 0];
+
+        // proof / confirmed / refutable disproof を 1 個ずつ挿入
+        table.insert(0x10, ProvenEntry::new_proof(h_p, 0, 15));
+        table.insert(0x20, ProvenEntry::new_disproof(h_c, 30));
+        let r1 = ProvenEntry {
+            hand: h_r1,
+            flags: ProvenEntry::encode_refutable_disproof_flags(10),
+            best_move: 0,
+            meta: 0,
+        };
+        let r2 = ProvenEntry {
+            hand: h_r2,
+            flags: ProvenEntry::encode_refutable_disproof_flags(20),
+            best_move: 0,
+            meta: 0,
+        };
+        table.insert(0x30, r1);
+        table.insert(0x40, r2);
+        assert_eq!(table.len(), 4);
+        assert_eq!(table.proof_len(), 1);
+        assert_eq!(table.confirmed_len(), 1);
+        assert_eq!(table.refutable_len(), 2);
+
+        // ratio=1.0 で refutable のみ全て evict (proof/confirmed は保護)
+        let removed = table.collect_garbage(1.0, true);
+        assert!(removed > 0, "should evict at least one refutable");
+        assert_eq!(table.proof_len(), 1, "proof は保護");
+        assert_eq!(table.confirmed_len(), 1, "confirmed は保護");
+        // proof + confirmed = 2 が残る
+        assert_eq!(table.len(), 2);
+        assert!(table.lookup(0x10, &h_p).is_some(), "proof は残る");
+        assert!(table.lookup(0x20, &h_c).is_some(), "confirmed は残る");
+    }
+
+    /// Phase 3: `collect_garbage(only_refutable=false)` で全 entry を amount 順 evict．
+    /// `removal_ratio=0.0` なら no-op．
+    #[test]
+    fn test_proven_table_collect_garbage_full() {
+        let mut table = ProvenTable::new(64);
+        let h_p = [1u8, 0, 0, 0, 0, 0, 0];
+        let h_c = [2u8, 0, 0, 0, 0, 0, 0];
+
+        table.insert(0x10, ProvenEntry::new_proof(h_p, 0, 15));
+        table.insert(0x20, ProvenEntry::new_disproof(h_c, 30));
+        assert_eq!(table.len(), 2);
+
+        // removal_ratio=0.0: 何も削除されない
+        let removed = table.collect_garbage(0.0, false);
+        assert_eq!(removed, 0);
+        assert_eq!(table.len(), 2);
+
+        // removal_ratio=1.0 & only_refutable=false: 全 entry が threshold 以下になり全 evict．
+        let removed = table.collect_garbage(1.0, false);
+        assert_eq!(removed, 2, "all entries should be evicted at ratio=1.0");
+        assert_eq!(table.len(), 0);
+        assert_eq!(table.proof_len(), 0);
+        assert_eq!(table.confirmed_len(), 0);
+    }
+
+    /// Phase 3: GC 後の tombstone slot に再 insert ができる．
+    #[test]
+    fn test_proven_table_collect_garbage_then_reinsert() {
+        let mut table = ProvenTable::new(64);
+        let h = [1u8, 0, 0, 0, 0, 0, 0];
+        let r1 = ProvenEntry {
+            hand: h,
+            flags: ProvenEntry::encode_refutable_disproof_flags(10),
+            best_move: 0,
+            meta: 0,
+        };
+        table.insert(0x10, r1);
+        assert_eq!(table.len(), 1);
+
+        let removed = table.collect_garbage(1.0, true);
+        assert_eq!(removed, 1);
+        assert_eq!(table.len(), 0);
+
+        // tombstone slot に新エントリを再挿入
+        table.insert(0x10, ProvenEntry::new_proof(h, 0, 17));
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.proof_len(), 1);
+        assert!(table.lookup(0x10, &h).is_some());
     }
 }
