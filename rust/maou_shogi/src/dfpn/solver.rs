@@ -402,6 +402,14 @@ pub struct DfPnSolver {
     /// (TT 親情報を辿る) と異なり，path_pos_key の完全一致のみ検出．
     pub(super) param_use_dag_correction: bool,
 
+    /// twinkling-hatching-duckling Phase C (v0.67.0): KH 風 per-move 差別化．
+    ///
+    /// true で，OR child の `edge_cost_or` を `edge_cost_or_with_support` に
+    /// 切り替え．`compute_checkers_at` で to_sq の attack/defense support を算出し，
+    /// 受け駒 ≥ 2 のマスを後回し，攻め支援 > 受け支援のマスを優先する．
+    /// tsume_5 step-by-step 分析で ply 0 で 4.2× の差を縮める目的．
+    pub(super) param_use_per_move_support: bool,
+
     // === M-1 refutable check fast path 改善フラグ (v0.25.4) ===
     /// **F1**: `all_checks_refutable_recursive_inner` で false 確定 check
     /// で早期 return せず，全 check を評価して store する．
@@ -793,6 +801,9 @@ impl DfPnSolver {
             // twinkling-hatching-duckling Phase B (v0.66.0): path-aware DAG 補正 (簡易版)．
             // 初期は opt-in (default false)．Mate(15) PV regression で正確性確認後 ON 検討．
             param_use_dag_correction: false,
+            // Phase C (v0.67.0): per-move attack/defense support 差別化．
+            // 初期は opt-in (default false)．効果確認後 default ON 検討．
+            param_use_per_move_support: false,
             saved_depth_for_epsilon: 0,
             outer_solve_depth: 0,
             killer_table: Vec::new(),
@@ -1142,6 +1153,12 @@ impl DfPnSolver {
     /// max のみで集約する (KH `double_count_elimination` 相当)．
     pub fn set_use_dag_correction(&mut self, on: bool) {
         self.param_use_dag_correction = on;
+    }
+
+    /// Phase C (twinkling-hatching-duckling, v0.67.0): per-move attack/defense
+    /// support 差別化を ON/OFF．有効時 `edge_cost_or_with_support` を呼ぶ．
+    pub fn set_use_per_move_support(&mut self, on: bool) {
+        self.param_use_per_move_support = on;
     }
 
     /// Phase B helper: child の DAG 合流先祖を検出する (v0.66.0 簡易版)．
@@ -3023,7 +3040,15 @@ impl DfPnSolver {
                             let mut pn = self.heuristic_and_pn(board, n);
                             // DFPN-E: エッジコスト加算
                             if let Some(ksq) = defender_king_sq {
-                                pn = pn.saturating_add(edge_cost_or(*m, ksq));
+                                if self.param_use_per_move_support {
+                                    pn = pn.saturating_add(
+                                        super::edge_cost_or_with_support(
+                                            *m, ksq, board, board.turn.opponent(),
+                                        ),
+                                    );
+                                } else {
+                                    pn = pn.saturating_add(edge_cost_or(*m, ksq));
+                                }
                             }
                             let dn = heuristic_dn_from_pn(pn);
                             self.store(child_pk, child_hand, pn, dn,
@@ -3034,7 +3059,15 @@ impl DfPnSolver {
                         let mut pn = PN_UNIT;
                         // DFPN-E: エッジコスト加算
                         if let Some(ksq) = defender_king_sq {
-                            pn = pn.saturating_add(edge_cost_or(*m, ksq));
+                            if self.param_use_per_move_support {
+                                pn = pn.saturating_add(
+                                    super::edge_cost_or_with_support(
+                                        *m, ksq, board, board.turn.opponent(),
+                                    ),
+                                );
+                            } else {
+                                pn = pn.saturating_add(edge_cost_or(*m, ksq));
+                            }
                         }
                         let dn = heuristic_dn_from_pn(pn);
                         self.store(child_pk, child_hand, pn, dn,

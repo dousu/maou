@@ -238,6 +238,55 @@ fn edge_cost_or(m: Move, king_sq: Square) -> u32 {
     base + drop_penalty
 }
 
+/// `edge_cost_or` の KH 風 per-move 差別化版 (twinkling-hatching-duckling, v0.67.0)．
+///
+/// `compute_checkers_at` で `to_sq` の attack_support / defense_support を
+/// 算出し，KH `InitialPnDnPlusOrNode` 相当の調整を加算する:
+///
+/// - 受け駒 ≥ 2: pn += 2*PN_UNIT (後回し)
+/// - 攻め駒 + (drop ? 1 : 0) > 受け駒: 調整なし (good move)
+/// - その他: pn += PN_UNIT (mild penalty)
+///
+/// この差別化により root level の OR move 選択が改善し，tsume_5 root の
+/// 13K→数K nodes 削減を狙う．
+///
+/// `attacker` は OR ノードの攻め方 (board.turn と一致するが明示)．
+#[inline]
+fn edge_cost_or_with_support(
+    m: Move,
+    king_sq: Square,
+    board: &crate::board::Board,
+    attacker: crate::types::Color,
+) -> u32 {
+    let base = edge_cost_or(m, king_sq);
+    let promo = m.is_promotion();
+    let capture = m.captured_piece_raw() > 0;
+    if promo || capture {
+        // promo/capture は base==0 のままで強制優先 (元の意味論を維持)
+        return base;
+    }
+    let to = m.to_sq();
+    let att_bb = board.compute_checkers_at(to, attacker);
+    let def_bb = board.compute_checkers_at(to, attacker.opponent());
+    let mut attack_support = att_bb.count();
+    if m.is_drop() {
+        // KH 流: drop 時は dropped piece 自体が +1 attacker として扱う
+        attack_support += 1;
+    }
+    let defense_support = def_bb.count();
+    let support_penalty = if defense_support >= 2 {
+        // 受け駒多い → 後回し
+        2 * PN_UNIT
+    } else if attack_support > defense_support {
+        // 攻め支援 > 受け支援 → good (penalty なし)
+        0
+    } else {
+        // 拮抗 → 軽い penalty
+        PN_UNIT
+    };
+    base + support_penalty
+}
+
 /// AND ノード(守備側の応手)のエッジコストを計算する(DFPN-E)．
 ///
 /// 攻め方にとって有利な応手(=詰ませやすい応手)ほどコストが低く，
