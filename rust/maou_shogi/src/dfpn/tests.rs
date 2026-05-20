@@ -12769,6 +12769,53 @@ use crate::types::{Color, PieceType};
         }
     }
 
+    /// Tier 3 (twinkling-hatching-duckling, v0.65.0): `param_use_delayed_move_list`
+    /// 有効時に canonical Mate(15) PV が不変であることを確認する soundness テスト．
+    #[test]
+    fn test_tsume_39te_ply24_mate15_regression_with_delayed_move_list() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+        let expected_pv = [
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i",
+            "S*6i", "8i6i", "6h6i+", "S*2h", "1i2i",
+            "2h3g", "2i3i", "2g2h", "3i4i", "2h4h",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix_pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        let mut solver = DfPnSolver::with_timeout(17, 1_000_000, 32767, 600);
+        solver.set_find_shortest(false);
+        solver.set_use_delayed_move_list(true);
+
+        let result = solver.solve(&mut board);
+        match result {
+            TsumeResult::Checkmate { moves, .. } => {
+                assert_eq!(
+                    moves.len(), 15,
+                    "expected Mate(15) with delayed_move_list ON, got Mate({})",
+                    moves.len()
+                );
+                let pv_usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                let pv_refs: Vec<&str> = pv_usi.iter().map(|s| s.as_str()).collect();
+                assert_eq!(
+                    pv_refs, expected_pv,
+                    "Mate(15) PV mismatch with delayed_move_list ON",
+                );
+            }
+            _ => panic!("delayed_move_list ON: expected Mate(15), got {:?}", result),
+        }
+    }
+
     /// `test_tsume_39te_ply24_mate15_regression` の HandSet + dominance 両 ON 版 (v0.57.0)．
     #[test]
     fn test_tsume_39te_ply24_mate15_regression_with_both() {

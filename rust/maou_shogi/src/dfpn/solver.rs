@@ -383,6 +383,15 @@ pub struct DfPnSolver {
     /// デフォルトは false．関連: KomoringHeights `hands.hpp::HandSet`．
     pub(super) param_use_handset_combination: bool,
 
+    /// Tier 3 (twinkling-hatching-duckling, v0.65.0): KH 風 `DelayedMoveList`．
+    ///
+    /// true で，AND ノード multi-child loop で同マス合駒の chain (prev/next 双方向リスト) を
+    /// 構築し，「prev が未解決なら next の子を skip」する semantics を適用する．
+    /// 全合駒展開による pn 過大評価を抑止する．
+    ///
+    /// 関連: `delayed_move_list.rs`，`docs/plans/twinkling-hatching-duckling.md` Tier 3．
+    pub(super) param_use_delayed_move_list: bool,
+
     // === M-1 refutable check fast path 改善フラグ (v0.25.4) ===
     /// **F1**: `all_checks_refutable_recursive_inner` で false 確定 check
     /// で早期 return せず，全 check を評価して store する．
@@ -767,6 +776,10 @@ impl DfPnSolver {
             // v0.57.0 で NPS 2.4× の効果実証済み (§10.2.27)．
             // OFF にしたい場合は `set_use_handset_combination(false)` を明示呼出．
             param_use_handset_combination: true,
+            // Tier 3 (twinkling-hatching-duckling, v0.65.0): KH 風 DelayedMoveList．
+            // AND ノードで同マス合駒 chain の prev が未解決なら next を skip．
+            // 既存 161 fast tests + Mate(15) PV regression pass で default ON．
+            param_use_delayed_move_list: true,
             saved_depth_for_epsilon: 0,
             outer_solve_depth: 0,
             killer_table: Vec::new(),
@@ -1096,6 +1109,18 @@ impl DfPnSolver {
     /// 詳細: [`DfPnSolver::param_use_handset_combination`]．
     pub fn set_use_handset_combination(&mut self, on: bool) {
         self.param_use_handset_combination = on;
+    }
+
+    /// Tier 3 (twinkling-hatching-duckling, v0.65.0): KH 風 `DelayedMoveList` を
+    /// 有効化/無効化する．
+    ///
+    /// 有効時，AND ノード multi-child loop で同マス合駒 chain を構築し，
+    /// 「prev が未解決なら next を skip」する semantics を適用．
+    /// 全合駒展開による pn 過大評価を抑止し，合駒可能局面のノード数削減を狙う．
+    ///
+    /// デフォルト OFF．関連: [`DfPnSolver::param_use_delayed_move_list`]．
+    pub fn set_use_delayed_move_list(&mut self, on: bool) {
+        self.param_use_delayed_move_list = on;
     }
 
     /// **Phase 2a (swift-running-cheetah, v0.59.0)**: KH 風 flat array + linear
@@ -4002,9 +4027,46 @@ impl DfPnSolver {
                 let mut drop_squares_seen: u128 = 0;
                 let mut cd_sq_min_pn: [u32; 81] = [INF; 81];
 
+                // Tier 3 (v0.65.0): DelayedMoveList による同マス合駒 chain．
+                // flag ON 時のみ構築．prev chain 上に未解決の手があれば child を skip．
+                let dml_opt: Option<super::delayed_move_list::DelayedMoveList> =
+                    if self.param_use_delayed_move_list && children.len() >= 2 {
+                        let moves_vec: Vec<Move> = children.iter().map(|c| c.0).collect();
+                        let dml = super::delayed_move_list::DelayedMoveList::build(
+                            &moves_vec, /*or_node=*/false,
+                        );
+                        Some(dml)
+                    } else {
+                        None
+                    };
+                // Pre-compute is_resolved[i] for prev chain check: child i は cpn==0 または cdn==0 で resolved．
+                // dml が None なら is_resolved も使わないため空のまま．
+                let is_resolved_for_dml: Vec<bool> = if dml_opt.is_some() {
+                    children.iter().map(|(_, _, child_pk, child_hand)| {
+                        let (cpn, cdn, _) = self.look_up_pn_dn(
+                            *child_pk, child_hand,
+                            remaining.saturating_sub(1),
+                        );
+                        cpn == 0 || cdn == 0
+                    }).collect()
+                } else {
+                    Vec::new()
+                };
+
                 for (i, &(ref m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
                 {
+                    // Tier 3 (v0.65.0): prev chain 上に未解決手があれば skip．
+                    // 次回 mid() iteration で prev が resolved になってから再訪問される．
+                    if let Some(ref dml) = dml_opt {
+                        if dml.has_unresolved_prev(i, |j| is_resolved_for_dml[j]) {
+                            // 未解決 prev あり: この child は今 sweep ではスキップ．
+                            // ただし pn/dn 集計には参加せず all_proved も false に保つ必要あり．
+                            // (skip した child を「証明済み」扱いすると AND が誤って proven 判定される)
+                            all_proved = false;
+                            continue;
+                        }
+                    }
                     // v0.55.38: visit_history dominance check は identity loop と
                     // 同じパスで処理 (経路依存反証として store される)．
                     let is_loop_child = self.path_set.contains(&child_fh)

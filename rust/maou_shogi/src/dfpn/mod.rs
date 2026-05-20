@@ -34,6 +34,7 @@ mod entry;
 mod tt;
 mod solver;
 mod pns;
+mod delayed_move_list;
 #[cfg(test)]
 mod tests;
 
