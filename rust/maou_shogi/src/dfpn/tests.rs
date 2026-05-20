@@ -12847,9 +12847,7 @@ use crate::types::{Color, PieceType};
             other => panic!("expected Checkmate, got {:?}", other),
         }
 
-        let stats = solver
-            .proven_table_stats()
-            .expect("proven_table should be Some when flag ON");
+        let stats = solver.proven_table_stats();
         let (len, proof_len, _confirmed_len, _refutable_len) = stats;
         assert!(
             len > 0,
@@ -12896,9 +12894,7 @@ use crate::types::{Color, PieceType};
         }
 
         // 厳密不変式: proven_table と proven_map のカウンタが全一致
-        let table_stats = solver
-            .proven_table_stats()
-            .expect("proven_table should be Some");
+        let table_stats = solver.proven_table_stats();
         let map_stats = solver.proven_map_counts();
         assert_eq!(
             table_stats, map_stats,
@@ -12956,7 +12952,7 @@ use crate::types::{Color, PieceType};
             other => panic!("expected Checkmate, got {:?}", other),
         }
 
-        let table_stats = solver.proven_table_stats().expect("proven_table Some");
+        let table_stats = solver.proven_table_stats();
         let map_stats = solver.proven_map_counts();
         assert_eq!(
             table_stats, map_stats,

@@ -1112,9 +1112,9 @@ impl DfPnSolver {
         self.table.set_use_kh_proven_tt(on, capacity);
     }
 
-    /// `ProvenTable` の `(len, proof_len, confirmed_len, refutable_len)` を返す
-    /// (flag ON 時のみ)．OFF なら `None`．Phase 2a verification 用 (v0.59.0)．
-    pub fn proven_table_stats(&self) -> Option<(usize, usize, usize, usize)> {
+    /// `ProvenTable` の `(len, proof_len, confirmed_len, refutable_len)` を返す．
+    /// Phase 4a (v0.63.0): 常設化により非 Option．
+    pub fn proven_table_stats(&self) -> (usize, usize, usize, usize) {
         self.table.proven_table_stats()
     }
 

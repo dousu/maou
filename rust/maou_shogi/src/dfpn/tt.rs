@@ -12,6 +12,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(test)]
 use rustc_hash::FxHashMap;
 
 use crate::types::{HAND_KINDS, PieceType};
@@ -256,6 +257,12 @@ impl Default for ProvenSlot {
 /// 十分大きい．
 pub(super) const PROVEN_TABLE_MAX_PROBE: usize = 128;
 
+/// Phase 4a (v0.63.0): `TranspositionTable::new()` 経由でデフォルト初期化される
+/// `ProvenTable` の容量．`1 << 20` = 1M slots ≈ 24 MB．caller は
+/// `set_use_kh_proven_tt(true, capacity)` で再初期化可能 (Phase 4 以降は
+/// `on` 引数は dead，capacity のみ反映)．
+pub(super) const DEFAULT_PROVEN_TABLE_CAPACITY: usize = 1 << 20;
+
 /// `ProvenTable` の tombstone (削除済み slot) を表すセンチネル `pos_key`．
 ///
 /// `pos_key == 0` は empty slot．`pos_key == TOMBSTONE_KEY` は tombstone
@@ -393,6 +400,20 @@ impl ProvenTable {
             }
         }
         None
+    }
+
+    /// Phase 4b (v0.63.0): 全 (pos_key, &ProvenEntry) を走査する iterator．
+    ///
+    /// 診断 (count_proven 等)，clone_proven_map (test 用) 等の大域走査で使う．
+    /// 空 slot および tombstone slot は skip する．
+    pub(super) fn iter_all(&self) -> impl Iterator<Item = (u64, &ProvenEntry)> + '_ {
+        self.entries.iter().filter_map(|slot| {
+            if slot.pos_key == 0 || slot.pos_key == PROVEN_TABLE_TOMBSTONE_KEY {
+                None
+            } else {
+                Some((slot.pos_key, &slot.entry))
+            }
+        })
     }
 
     /// 同じ `pos_key` の全エントリを線形に走査する iterator．
@@ -700,37 +721,11 @@ impl<'a> Iterator for ProvenTableIter<'a> {
     }
 }
 
-/// Phase 2b (v0.61.0, swift-running-cheetah): proven entry の読出経路を
-/// `proven_map: FxHashMap` (primary) または `proven_table: ProvenTable` (KH 風)
-/// のいずれかから抽象化する dispatched iterator．
-///
-/// `TranspositionTable::iter_proven_entries(pos_key)` が返す．flag OFF なら
-/// `Map` バリアントで proven_map から `Vec::iter`，ON なら `Table` バリアントで
-/// `ProvenTable::iter_pos_key` を呼ぶ．caller は `for e in tt.iter_proven_entries(pos_key)`
-/// と書くだけで両ストレージ対応となる．
-///
-/// **注意 (iteration order)**: proven_map は `Vec` 挿入順，proven_table は
-/// linear probing 順 (hash 位置から線形走査) で異なる．`hand_gte_forward_chain`
-/// で 「first match」 を返す lookup は，両 store で論理集合は同じだが選ばれる
-/// entry が異なる場合がある．soundness は保たれる (proof/disproof flag は
-/// 不変) が，PV ・ pn/dn 値が変わりうる．既存テスト (Mate(15) 等) で確認すること．
-pub(super) enum ProvenEntriesIter<'a> {
-    Table(ProvenTableIter<'a>),
-    Map(std::slice::Iter<'a, ProvenEntry>),
-    Empty,
-}
-
-impl<'a> Iterator for ProvenEntriesIter<'a> {
-    type Item = &'a ProvenEntry;
-    #[inline(always)]
-    fn next(&mut self) -> Option<&'a ProvenEntry> {
-        match self {
-            Self::Table(it) => it.next(),
-            Self::Map(it) => it.next(),
-            Self::Empty => None,
-        }
-    }
-}
+/// Phase 4b (v0.63.0, swift-running-cheetah): proven entry の読出経路は
+/// `proven_table: ProvenTable` 単独．以前は `Option<ProvenTable>` + `proven_map`
+/// fallback の dispatched enum だったが，proven_map 廃止に伴いシンプルな
+/// type alias に置換．
+pub(super) type ProvenEntriesIter<'a> = ProvenTableIter<'a>;
 
 /// Dual フラットハッシュテーブル型転置表(証明駒/反証駒対応)．
 ///
@@ -741,24 +736,21 @@ impl<'a> Iterator for ProvenEntriesIter<'a> {
 /// ProvenTT の永続エントリが WorkingTT のクラスタを圧迫しないため，
 /// クラスタ飽和問題(§6.6.1)が構造的に解消される．
 pub(super) struct TranspositionTable {
-    /// ProvenTT: 永続エントリ(proof + confirmed disproof)．
-    /// HashMap 化 (v0.55.17): pos_key → Vec<ProvenEntry>．
-    /// エビクションなし，antichain 全体を保持する．
-    proven_map: FxHashMap<u64, Vec<ProvenEntry>>,
-    /// ProvenTT のエントリ総数 (O(1) カウンタ)．
-    proven_total_entries: usize,
-    /// ProvenTT の confirmed disproof エントリ数 (GC 容量判定から除外するため別管理)．
-    proven_confirmed_entries: usize,
-    /// ProvenTT の proof エントリ数 (GC 容量判定から除外するため別管理)．
-    /// refutable のみが GC 対象: proven_len_for_gc() = total - confirmed - proof = refutable．
-    proven_proof_entries: usize,
+    // Phase 4d (v0.63.0): ProvenTT は `proven_table: ProvenTable` 単独運用．
+    // 旧 `proven_map: FxHashMap` と TT 側カウンタ
+    // (proven_total_entries / proven_confirmed_entries / proven_proof_entries)
+    // は廃止．ProvenTable の O(1) カウンタ (len / proof_len / confirmed_len /
+    // refutable_len) を直接参照する．
     /// Phase 2 swift-running-cheetah (v0.59.0): KH 風 flat array + linear probing
     /// ProvenTable．`Some` で flag ON 状態 (新実装を使用)，`None` で flag OFF
     /// (既存 `proven_map` を使用)．設定は `set_use_kh_proven_tt(true, capacity)`
     /// で行う．既存 caller への影響なし (default は None)．
     ///
     /// 関連: `docs/plans/swift-running-cheetah.md`．
-    proven_table: Option<ProvenTable>,
+    /// Phase 4a (v0.63.0): 常設化．`Option` を排除し，`with_clusters` で
+    /// `DEFAULT_PROVEN_TABLE_CAPACITY` の容量で初期化される．`set_use_kh_proven_tt`
+    /// は今後 capacity 変更 (再初期化) を行う．
+    proven_table: ProvenTable,
     /// WorkingTT: GC 対象エントリ(intermediate + depth-limited disproof)．
     working: Vec<TTFlatEntry>,
     /// LeafDisproofTT: remaining ≤ 2 の overflow 専用 compact テーブル (N-8, v0.26.0)．
@@ -885,11 +877,7 @@ impl TranspositionTable {
         let leaf_total = LEAF_NUM_CLUSTERS * LEAF_CLUSTER_SIZE;
         let frontier_total = FRONTIER_NUM_CLUSTERS * FRONTIER_CLUSTER_SIZE;
         TranspositionTable {
-            proven_map: FxHashMap::default(),
-            proven_table: None,
-            proven_total_entries: 0,
-            proven_confirmed_entries: 0,
-            proven_proof_entries: 0,
+            proven_table: ProvenTable::new(DEFAULT_PROVEN_TABLE_CAPACITY),
             working: vec![TTFlatEntry::EMPTY; working_total],
             leaf_disproofs: vec![TTLeafEntry::EMPTY; leaf_total],
             frontier: vec![TTFlatEntry::EMPTY; frontier_total],
@@ -954,86 +942,28 @@ impl TranspositionTable {
         }
     }
 
-    /// KH 風 flat array `ProvenTable` を有効化/無効化する (Phase 2, v0.59.0)．
+    /// Phase 4a (v0.63.0): `proven_table` を指定 capacity で再初期化する．
     ///
-    /// - `on=true`: `proven_table = Some(ProvenTable::new(capacity))` で初期化．
-    ///   全ての proven 系 API は `proven_table` を使用する (既存 `proven_map`
-    ///   とは独立)．探索開始前に有効化すること．
-    /// - `on=false`: `proven_table = None` に戻し既存 `proven_map` を使う．
-    ///
-    /// **重要**: 探索中の動的切替は未サポート．caller は `solve()` 呼出前に
-    /// 設定すること．関連: `docs/plans/swift-running-cheetah.md`．
-    pub(super) fn set_use_kh_proven_tt(&mut self, on: bool, capacity: usize) {
-        self.proven_table = if on {
-            Some(ProvenTable::new(capacity))
-        } else {
-            None
-        };
+    /// 以前は opt-in flag だったが，Phase 4 で常設化．`on` 引数は dead
+    /// (互換のため残置)．呼ぶと既存内容は破棄され空 table になる．
+    /// 探索開始前のみ呼ぶこと．
+    pub(super) fn set_use_kh_proven_tt(&mut self, _on: bool, capacity: usize) {
+        self.proven_table = ProvenTable::new(capacity);
     }
 
-    /// `proven_table` が有効か (`Some`) を返す．Phase 2 internal helper．
-    #[inline(always)]
-    pub(super) fn is_kh_proven_tt(&self) -> bool {
-        self.proven_table.is_some()
+    /// `ProvenTable` の `(len, proof_len, confirmed_len, refutable_len)` を返す．
+    /// Phase 4a (v0.63.0): 常設化により `Option` を返さない．
+    pub(super) fn proven_table_stats(&self) -> (usize, usize, usize, usize) {
+        let t = &self.proven_table;
+        (t.len(), t.proof_len(), t.confirmed_len(), t.refutable_len())
     }
 
-    /// `ProvenTable` の `(len, proof_len, confirmed_len, refutable_len)` を返す
-    /// (flag ON 時のみ)．OFF なら `None`．Phase 2a verification 用 (v0.59.0)．
-    pub(super) fn proven_table_stats(&self) -> Option<(usize, usize, usize, usize)> {
-        let t = self.proven_table.as_ref()?;
-        Some((t.len(), t.proof_len(), t.confirmed_len(), t.refutable_len()))
-    }
-
-    /// Phase 2b (v0.61.0): 指定 `pos_key` の proven entry を抽象化された iterator
-    /// で返す．`proven_table` が `Some` なら KH 風 flat array から，それ以外なら
-    /// `proven_map` から走査．`pos_key` は caller 側で `Self::safe_key` 済み
-    /// であること．
-    ///
-    /// 関連: `ProvenEntriesIter` doc，`docs/plans/swift-running-cheetah.md`．
+    /// 指定 `pos_key` の proven entry を走査する iterator．Phase 4b (v0.63.0)
+    /// で proven_table 単独になったため，直接 `iter_pos_key` を呼ぶシンプルな
+    /// helper．`pos_key` は caller 側で `Self::safe_key` 済みであること．
     #[inline(always)]
     pub(super) fn iter_proven_entries(&self, pos_key: u64) -> ProvenEntriesIter<'_> {
-        if let Some(t) = self.proven_table.as_ref() {
-            return ProvenEntriesIter::Table(t.iter_pos_key(pos_key));
-        }
-        match self.proven_map.get(&pos_key) {
-            Some(vec) => ProvenEntriesIter::Map(vec.iter()),
-            None => ProvenEntriesIter::Empty,
-        }
-    }
-
-    /// Phase 2a-2 (v0.60.0): `proven_table` を `proven_map[pos_key]` と整合させる．
-    ///
-    /// 戦略: `proven_table` から `pos_key` 配下の全エントリを tombstone 化し，
-    /// `proven_map[pos_key]` の現在内容を再挿入する．retain で削除されたエントリと
-    /// 新規 push されたエントリを個別に追跡せずとも，整合性を保証できる．
-    ///
-    /// 呼び出しタイミング: `store_proven` / `store_tagged_proof` /
-    /// `store_refutable_disproof` の `vec.retain` + `vec.push` 直後．
-    /// flag OFF (`proven_table is None`) なら no-op．
-    fn sync_proven_table_for_pos_key(&mut self, pos_key: u64) {
-        let Some(t) = self.proven_table.as_mut() else { return; };
-        t.remove_pos_key(pos_key);
-        if let Some(vec) = self.proven_map.get(&pos_key) {
-            for e in vec {
-                t.insert(pos_key, *e);
-            }
-        }
-    }
-
-    /// Phase 2a-2 (v0.60.0): `proven_table` 全体を `proven_map` 全体から再構築する．
-    ///
-    /// `retain_proofs_only` / `retain_proofs` / `clear_proven_disproofs_below`
-    /// / `gc_proven` / `gc_proofs` / `gc_confirmed` / `remove_refutable_disproofs`
-    /// など大域操作の直後に呼ぶ．計算量 O(|proven_map|) の `clear` + 再挿入．
-    /// flag OFF なら no-op．
-    fn rebuild_proven_table(&mut self) {
-        let Some(t) = self.proven_table.as_mut() else { return; };
-        t.clear();
-        for (&pos_key, vec) in self.proven_map.iter() {
-            for e in vec {
-                t.insert(pos_key, *e);
-            }
-        }
+        self.proven_table.iter_pos_key(pos_key)
     }
 
     /// WorkingTT エントリの pn/dn 分布を収集する (分析用)．
@@ -1217,11 +1147,9 @@ impl TranspositionTable {
         hand: &[u8; HAND_KINDS],
     ) -> u8 {
         let pos_key = Self::safe_key(pos_key);
-        if let Some(vec) = self.proven_map.get(&pos_key) {
-            for e in vec {
-                if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
-                    return e.proof_tag();
-                }
+        for e in self.iter_proven_entries(pos_key) {
+            if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
+                return e.proof_tag();
             }
         }
         super::entry::PROOF_TAG_ABSOLUTE
@@ -1680,29 +1608,28 @@ impl TranspositionTable {
             hand, best_move, mate_distance, tag, tag_depth,
         );
         let new_priority = new_entry.amount();
-        let vec = self.proven_map.entry(pos_key).or_default();
-        let before = vec.len();
-        // 同一 hand の proof がいれば priority 比較で上書き判定
+        // Phase 4b (v0.63.0): proven_table 単独．同一 hand の既存 proof の amount を比較．
         let mut dominated = false;
-        vec.retain(|e| {
+        let mut should_replace = false;
+        for e in self.proven_table.iter_pos_key(pos_key) {
             if e.is_proof() && e.hand == hand {
                 if new_priority >= e.amount() {
-                    return false; // 旧エントリを除去
+                    should_replace = true;
                 } else {
-                    dominated = true; // 新エントリが劣る
+                    dominated = true;
                 }
+                break; // 同一 (pos_key, hand) は最大 1 件
             }
-            true
-        });
-        if dominated {
-            self.proven_total_entries -= before - vec.len();
-            return; // 既存の方が価値高
         }
-        self.proven_total_entries -= before - vec.len();
-        vec.push(new_entry);
-        self.proven_total_entries += 1;
-        // Phase 2a-2 (v0.60.0): retain + push の結果を proven_table へ同期．
-        self.sync_proven_table_for_pos_key(pos_key);
+        if dominated {
+            return;
+        }
+        if should_replace {
+            // 旧エントリを除去．insert が更新も対応するため明示 remove 不要だが，
+            // 念のため counters のため remove → insert で書き直す．
+            self.proven_table.remove(pos_key, &hand);
+        }
+        self.proven_table.insert(pos_key, new_entry);
     }
 
     /// テスト用: tagged proof を直接ストアする (store_tagged_proof のエイリアス)．
@@ -1836,35 +1763,31 @@ impl TranspositionTable {
                 }
             }
 
-            // ProvenTT HashMap: 被支配 proof を除去してから挿入
-            let vec = self.proven_map.entry(pos_key).or_default();
-            let before = vec.len();
+            // Phase 4b (v0.63.0): proven_table 単独．被支配 proof を収集 → 除去
             let mut dominated = false;
-            vec.retain(|e| {
-                if !e.is_proof() { return true; }
-                // 被支配 proof: old_hand ≥ new_hand → 除去
+            let mut to_remove: arrayvec::ArrayVec<[u8; HAND_KINDS], 16> =
+                arrayvec::ArrayVec::new();
+            for e in self.proven_table.iter_pos_key(pos_key) {
+                if !e.is_proof() { continue; }
+                // 被支配 proof: old_hand ≥ new_hand → 除去対象
                 if hand_gte_forward_chain(&e.hand, &hand) {
-                    return false;
+                    let _ = to_remove.try_push(e.hand);
+                    continue;
                 }
                 // 同一 hand の proof: amount が高い方を残す
                 if e.hand == hand {
                     if new_priority >= e.amount() {
-                        return false;
+                        let _ = to_remove.try_push(e.hand);
                     } else {
-                        dominated = true; // 既存の方が価値高
+                        dominated = true;
                     }
                 }
-                true
-            });
-            let removed = before - vec.len();
-            self.proven_total_entries -= removed;
-            self.proven_proof_entries -= removed; // 除去されたのは全て proof
+            }
+            for h in &to_remove {
+                self.proven_table.remove(pos_key, h);
+            }
             if dominated { return; }
-            vec.push(new_entry);
-            self.proven_total_entries += 1;
-            self.proven_proof_entries += 1;
-            // Phase 2a-2 (v0.60.0): retain + push の結果を proven_table へ同期．
-            self.sync_proven_table_for_pos_key(pos_key);
+            self.proven_table.insert(pos_key, new_entry);
         } else {
             // WorkingTT の同一 pos_key エントリを積極的に除去(proof 以外)．
             let w_start = self.working_cluster_start(pos_key, &hand);
@@ -1875,20 +1798,19 @@ impl TranspositionTable {
                 fe.pos_key = 0;
             }
 
-            // ProvenTT HashMap: 同一 hand の disproof を置換
-            let vec = self.proven_map.entry(pos_key).or_default();
-            let before = vec.len();
-            let confirmed_before = vec.iter().filter(|e| !e.is_proof() && !e.is_refutable_disproof() && e.hand == hand).count();
-            vec.retain(|e| e.is_proof() || e.hand != hand);
-            let removed = before - vec.len();
-            self.proven_total_entries -= removed;
-            self.proven_confirmed_entries -= confirmed_before;
-            vec.push(new_entry);
-            self.proven_total_entries += 1;
-            // new_disproof は confirmed disproof (refutable ではない)
-            self.proven_confirmed_entries += 1;
-            // Phase 2a-2 (v0.60.0): retain + push の結果を proven_table へ同期．
-            self.sync_proven_table_for_pos_key(pos_key);
+            // Phase 4b (v0.63.0): 同一 hand の既存 disproof (proof でない) を除去
+            let mut to_remove: arrayvec::ArrayVec<[u8; HAND_KINDS], 16> =
+                arrayvec::ArrayVec::new();
+            for e in self.proven_table.iter_pos_key(pos_key) {
+                if !e.is_proof() && e.hand == hand {
+                    let _ = to_remove.try_push(e.hand);
+                }
+            }
+            for h in &to_remove {
+                self.proven_table.remove(pos_key, h);
+            }
+            // 新 confirmed disproof を挿入
+            self.proven_table.insert(pos_key, new_entry);
         }
 
         #[cfg(feature = "verbose")] {
@@ -1941,18 +1863,18 @@ impl TranspositionTable {
             meta: 0,
         };
 
-        // 新エントリに支配される既存 refutable disproof を除去して挿入
-        let vec = self.proven_map.entry(pos_key).or_default();
-        let before = vec.len();
-        vec.retain(|e| {
-            !(e.is_refutable_disproof() && hand_gte_forward_chain(&hand, &e.hand))
-        });
-        let removed = before - vec.len();
-        self.proven_total_entries -= removed;
-        vec.push(new_entry);
-        self.proven_total_entries += 1;
-        // Phase 2a-2 (v0.60.0): retain + push の結果を proven_table へ同期．
-        self.sync_proven_table_for_pos_key(pos_key);
+        // Phase 4b (v0.63.0): 新エントリに支配される既存 refutable disproof を除去．
+        let mut to_remove: arrayvec::ArrayVec<[u8; HAND_KINDS], 16> =
+            arrayvec::ArrayVec::new();
+        for e in self.proven_table.iter_pos_key(pos_key) {
+            if e.is_refutable_disproof() && hand_gte_forward_chain(&hand, &e.hand) {
+                let _ = to_remove.try_push(e.hand);
+            }
+        }
+        for h in &to_remove {
+            self.proven_table.remove(pos_key, h);
+        }
+        self.proven_table.insert(pos_key, new_entry);
         #[cfg(feature = "tt_diag")]
         { self.diag_disproof_refutable += 1; }
     }
@@ -2628,18 +2550,11 @@ impl TranspositionTable {
         None
     }
 
-    /// 全エントリをクリアする．
+    /// 全エントリをクリアする．Phase 4b (v0.63.0): proven_table 単独．
     pub(super) fn clear(&mut self) {
-        self.proven_map.clear();
-        self.proven_total_entries = 0;
-        self.proven_confirmed_entries = 0;
-        self.proven_proof_entries = 0;
+        self.proven_table.clear();
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
         self.working_overflow_since_gc = 0;
-        // Phase 2a-2 (v0.60.0): proven_table もクリア．
-        if let Some(t) = self.proven_table.as_mut() {
-            t.clear();
-        }
     }
 
     /// ProvenTT を保持したまま WorkingTT のみクリアする．
@@ -2656,35 +2571,19 @@ impl TranspositionTable {
     /// 永続エントリであり，IDS depth 遷移を超えて有効なため保持する．
     /// Refutable disproof (`all_checks_refutable_recursive` 由来) のみ除去する．
     ///
-    /// WorkingTT の `retain_proofs()` が confirmed disproof を保持するのと同様の方針．
-    /// proven_map から proven_total/confirmed/proof カウンタを再計算する．
-    /// proven_map を直接変更した後に必ず呼ぶこと．
-    fn recalculate_proven_counters(&mut self) {
-        self.proven_total_entries = 0;
-        self.proven_confirmed_entries = 0;
-        self.proven_proof_entries = 0;
-        for vec in self.proven_map.values() {
-            for e in vec {
-                self.proven_total_entries += 1;
-                if e.is_proof() {
-                    self.proven_proof_entries += 1;
-                } else if !e.is_refutable_disproof() {
-                    self.proven_confirmed_entries += 1;
-                }
-            }
-        }
-        // Phase 2a-2 (v0.60.0): 大域 proven_map 修正後の proven_table 再構築．
-        self.rebuild_proven_table();
-    }
-
+    /// Phase 4b (v0.63.0): proven_table 単独．`iter_all` で走査し refutable のみ tombstone．
     pub(super) fn retain_proofs_only(&mut self) {
         for fe in self.working.iter_mut() { fe.pos_key = 0; }
-        self.proven_map.retain(|_, vec| {
-            // proof (pn=0) と confirmed disproof を保持; refutable disproof のみ除去
-            vec.retain(|e| e.is_proof() || !e.is_refutable_disproof());
-            !vec.is_empty()
-        });
-        self.recalculate_proven_counters();
+        // proven_table から refutable disproof のみ除去
+        let mut to_remove: Vec<(u64, [u8; HAND_KINDS])> = Vec::new();
+        for (pk, e) in self.proven_table.iter_all() {
+            if e.is_refutable_disproof() {
+                to_remove.push((pk, e.hand));
+            }
+        }
+        for (pk, h) in &to_remove {
+            self.proven_table.remove(*pk, h);
+        }
     }
 
     /// WorkingTT の confirmed disproof を保持し，他を除去する．
@@ -2956,21 +2855,22 @@ impl TranspositionTable {
     /// 呼出元 (pns.rs:~1704): IDS depth 遷移で `clear_proven_disproofs_below(next_ids_depth / 2)`
     /// として呼ばれる．proof/disproof 共通の閾値で動作する．
     pub(super) fn clear_proven_disproofs_below(&mut self, min_depth: u32) {
-        self.proven_map.retain(|_, vec| {
-            vec.retain(|e| {
-                if e.is_proof() {
-                    e.proof_tag() == super::entry::PROOF_TAG_ABSOLUTE
-                        || e.tag_depth() >= min_depth
-                } else {
-                    // confirmed disproof (remaining=REMAINING_INFINITE) は深さ非依存の
-                    // 永続エントリ: IDS depth に関係なく保持する．
-                    // refutable disproof のみ min_depth でフィルタ．
-                    !e.is_refutable_disproof() || e.disproof_depth() >= min_depth
-                }
-            });
-            !vec.is_empty()
-        });
-        self.recalculate_proven_counters();
+        // Phase 4b (v0.63.0): proven_table 直接走査．条件に合致しないエントリを remove．
+        let mut to_remove: Vec<(u64, [u8; HAND_KINDS])> = Vec::new();
+        for (pk, e) in self.proven_table.iter_all() {
+            let keep = if e.is_proof() {
+                e.proof_tag() == super::entry::PROOF_TAG_ABSOLUTE
+                    || e.tag_depth() >= min_depth
+            } else {
+                !e.is_refutable_disproof() || e.disproof_depth() >= min_depth
+            };
+            if !keep {
+                to_remove.push((pk, e.hand));
+            }
+        }
+        for (pk, h) in &to_remove {
+            self.proven_table.remove(*pk, h);
+        }
     }
 
     /// WorkingTT の非空エントリ数を返す．
@@ -2978,91 +2878,96 @@ impl TranspositionTable {
         self.working.iter().filter(|fe| fe.pos_key != 0).count()
     }
 
-    /// ProvenTT の非空エントリ数を返す．
+    /// ProvenTT の非空エントリ数を返す (O(1))．
     pub(super) fn proven_len(&self) -> usize {
-        self.proven_total_entries
+        self.proven_table.len()
     }
 
     /// GC トリガー判定用: refutable のみのエントリ数を返す (O(1))．
     /// confirmed disproof と proof は永続エントリのため GC 容量カウントから除外する．
-    /// refutable = total - confirmed - proof．
     pub(super) fn proven_len_for_gc(&self) -> usize {
-        self.proven_total_entries
-            .saturating_sub(self.proven_confirmed_entries)
-            .saturating_sub(self.proven_proof_entries)
+        self.proven_table.refutable_len()
     }
 
     /// proof エントリ数を返す (O(1))．
     pub(super) fn proven_proof_len(&self) -> usize {
-        self.proven_proof_entries
+        self.proven_table.proof_len()
     }
 
     /// proof GC が必要かどうかを返す (O(1))．
     pub(super) fn proof_gc_needed(&self) -> bool {
-        self.proven_proof_entries > PROOF_MAP_GC_CAPACITY
+        self.proven_table.proof_len() > PROOF_MAP_GC_CAPACITY
     }
 
     /// confirmed disproof エントリ数を返す (O(1))．
     pub(super) fn proven_confirmed_len(&self) -> usize {
-        self.proven_confirmed_entries
+        self.proven_table.confirmed_len()
     }
 
     /// confirmed GC が必要かどうかを返す (O(1))．
     pub(super) fn confirmed_gc_needed(&self) -> bool {
-        self.proven_confirmed_entries > CONFIRMED_MAP_GC_CAPACITY
+        self.proven_table.confirmed_len() > CONFIRMED_MAP_GC_CAPACITY
     }
 
     /// ProvenTT マップのクローンを返す (TT 共有診断用)．
+    /// Phase 4b (v0.63.0): proven_table から FxHashMap を再構築して返す．
+    /// API シグネチャは互換のため維持．
     #[cfg(test)]
     pub(super) fn clone_proven_map(
         &self,
     ) -> (FxHashMap<u64, Vec<ProvenEntry>>, usize) {
-        (self.proven_map.clone(), self.proven_total_entries)
+        let mut map: FxHashMap<u64, Vec<ProvenEntry>> = FxHashMap::default();
+        for (pk, e) in self.proven_table.iter_all() {
+            map.entry(pk).or_default().push(*e);
+        }
+        (map, self.proven_table.len())
     }
 
     /// ProvenTT エントリ種別カウントを返す (診断用)．
     /// 戻り値: (proof_count, confirmed_disproof_count, refutable_disproof_count)
+    /// Phase 4b (v0.63.0): proven_table の O(1) カウンタを参照．
     #[cfg(test)]
     pub(super) fn proven_map_stats(&self) -> (usize, usize, usize) {
-        let mut proofs = 0usize;
-        let mut confirmed = 0usize;
-        let mut refutable = 0usize;
-        for vec in self.proven_map.values() {
-            for e in vec {
-                if e.is_proof() {
-                    proofs += 1;
-                } else if e.is_refutable_disproof() {
-                    refutable += 1;
-                } else {
-                    confirmed += 1;
-                }
-            }
-        }
-        (proofs, confirmed, refutable)
+        (
+            self.proven_table.proof_len(),
+            self.proven_table.confirmed_len(),
+            self.proven_table.refutable_len(),
+        )
     }
 
     /// ProvenTT から refutable disproof エントリを除去する (診断用)．
     /// 残るのは proof と confirmed disproof のみ．
+    /// Phase 4b (v0.63.0): proven_table 直接走査．
     #[cfg(test)]
     pub(super) fn remove_refutable_disproofs(&mut self) {
-        self.proven_map.retain(|_, vec| {
-            vec.retain(|e| e.is_proof() || !e.is_refutable_disproof());
-            !vec.is_empty()
-        });
-        self.recalculate_proven_counters();
+        let mut to_remove: Vec<(u64, [u8; HAND_KINDS])> = Vec::new();
+        for (pk, e) in self.proven_table.iter_all() {
+            if e.is_refutable_disproof() {
+                to_remove.push((pk, e.hand));
+            }
+        }
+        for (pk, h) in &to_remove {
+            self.proven_table.remove(*pk, h);
+        }
     }
 
     /// ProvenTT マップを置き換える (TT 共有診断用)．
     /// 既存エントリは全て破棄されるため，探索開始前のみ呼ぶこと．
+    /// Phase 4b (v0.63.0): proven_table をクリアして全エントリを再挿入．
+    /// API シグネチャは互換のため維持．
     #[cfg(test)]
     pub(super) fn set_proven_map(
         &mut self,
         map: FxHashMap<u64, Vec<ProvenEntry>>,
         total_entries: usize,
     ) {
-        self.proven_map = map;
-        self.recalculate_proven_counters();
-        let _ = total_entries; // recalculate_proven_counters() が正確な値を計算する
+        let _ = total_entries; // proven_table の O(1) カウンタが計算する
+        self.proven_table.clear();
+        for (pos_key, vec) in &map {
+            for e in vec {
+                self.proven_table.insert(*pos_key, *e);
+            }
+        }
     }
 
     /// WorkingTT の非空エントリ数を返す(`len` のエイリアス)．
@@ -3090,11 +2995,11 @@ impl TranspositionTable {
     /// TT の詳細診断情報を出力する(テスト用)．
     #[cfg(test)]
     pub(super) fn dump_overflow_diag(&self) {
-        let proven_count = self.proven_total_entries;
+        let proven_count = self.proven_table.len();
         let working_count = self.working.iter().filter(|fe| fe.pos_key != 0).count();
         let working_slots = self.working.len();
 
-        eprintln!("ProvenTT:  entries={} (HashMap, no cluster limit)",
+        eprintln!("ProvenTT:  entries={} (ProvenTable, no cluster limit)",
             proven_count);
         eprintln!("WorkingTT: entries={} / {} slots ({:.1}% full)",
             working_count, working_slots,
@@ -3143,16 +3048,14 @@ impl TranspositionTable {
                 self.overflow_disproof_path_dep as f64 / total_disp * 100.0);
         }
 
-        // ProvenTT エントリ種別
+        // ProvenTT エントリ種別 (Phase 4b: proven_table から)
         let mut proof_count = 0u64;
         let mut confirmed_disproof_count = 0u64;
-        for vec in self.proven_map.values() {
-            for e in vec {
-                if e.is_proof() {
-                    proof_count += 1;
-                } else {
-                    confirmed_disproof_count += 1;
-                }
+        for (_pk, e) in self.proven_table.iter_all() {
+            if e.is_proof() {
+                proof_count += 1;
+            } else {
+                confirmed_disproof_count += 1;
             }
         }
         eprintln!("ProvenTT breakdown: proof={} confirmed_disproof={}", proof_count, confirmed_disproof_count);
@@ -3176,11 +3079,16 @@ impl TranspositionTable {
         eprintln!("WorkingTT breakdown: intermediate={} depth_limited_disproof={} path_dep_disproof={}",
             intermediate_count, dl_disproof_count, pd_disproof_count);
 
-        // ProvenTT エントリ/局面分布 (HashMap)
-        let num_positions = self.proven_map.len();
-        eprintln!("ProvenTT HashMap: {} positions, {} total entries (avg {:.1}/pos)",
-            num_positions, self.proven_total_entries,
-            if num_positions > 0 { self.proven_total_entries as f64 / num_positions as f64 } else { 0.0 });
+        // ProvenTT エントリ/局面分布 (Phase 4b: proven_table から)
+        let mut distinct_keys = std::collections::HashSet::new();
+        for (pk, _e) in self.proven_table.iter_all() {
+            distinct_keys.insert(pk);
+        }
+        let num_positions = distinct_keys.len();
+        let total = self.proven_table.len();
+        eprintln!("ProvenTT ProvenTable: {} positions, {} total entries (avg {:.1}/pos)",
+            num_positions, total,
+            if num_positions > 0 { total as f64 / num_positions as f64 } else { 0.0 });
 
         // WorkingTT クラスタ充填分布
         let working_clusters = working_slots / WORKING_CLUSTER_SIZE;
@@ -3256,11 +3164,9 @@ impl TranspositionTable {
             if fe.entry.amount >= 255 { continue; } // パス保護エントリは除外
             let pk = fe.pos_key;
             let hand = fe.entry.hand;
-            let is_resolved = self.proven_map.get(&pk).map_or(false, |vec| {
-                vec.iter().any(|e| {
-                    (e.is_proof() && hand_gte_forward_chain(&hand, &e.hand))
-                    || (!e.is_proof() && hand_gte_forward_chain(&e.hand, &hand))
-                })
+            let is_resolved = self.proven_table.iter_pos_key(pk).any(|e| {
+                (e.is_proof() && hand_gte_forward_chain(&hand, &e.hand))
+                || (!e.is_proof() && hand_gte_forward_chain(&e.hand, &hand))
             });
             if is_resolved {
                 fe.pos_key = 0;
@@ -3319,11 +3225,9 @@ impl TranspositionTable {
             // ProvenTT に proof/disproof があれば obsolete
             let pk = fe.pos_key;
             let hand = fe.entry.hand;
-            let is_resolved = self.proven_map.get(&pk).map_or(false, |vec| {
-                vec.iter().any(|e| {
-                    (e.is_proof() && hand_gte_forward_chain(&hand, &e.hand))
-                    || (!e.is_proof() && hand_gte_forward_chain(&e.hand, &hand))
-                })
+            let is_resolved = self.proven_table.iter_pos_key(pk).any(|e| {
+                (e.is_proof() && hand_gte_forward_chain(&hand, &e.hand))
+                || (!e.is_proof() && hand_gte_forward_chain(&e.hand, &hand))
             });
             if is_resolved {
                 fe.pos_key = 0;
@@ -3365,22 +3269,18 @@ impl TranspositionTable {
     ///
     /// 返り値: 除去されたエントリ数．
     pub(super) fn gc_proven(&mut self) -> usize {
-        // proof と confirmed disproof は永続エントリのため GC 対象外．
-        // GC は refutable disproof のみを除去する (v0.55.34 バグ#4 根本修正)．
-        // proven_len_for_gc() = refutable のみ返すため，refutable が大量の
-        // 時のみ GC がトリガーされ，proof が誤って削除されることはない．
-        let initial_total = self.proven_total_entries;
-
-        // Phase 1 のみ: refutable disproof を全除去 (confirmed・proof は保護)
-        self.proven_map.retain(|_, vec| {
-            vec.retain(|e| e.is_proof() || !e.is_refutable_disproof());
-            !vec.is_empty()
-        });
-        self.proven_total_entries = self.proven_map.values().map(|v| v.len()).sum();
-        // Phase 2a-2 (v0.60.0): proven_map 大域修正後の proven_table 再構築．
-        self.rebuild_proven_table();
-        // refutable を除去したので proven_confirmed と proven_proof は変化なし
-        initial_total - self.proven_total_entries
+        // Phase 4b (v0.63.0): proven_table 直接走査．refutable disproof を全除去．
+        let initial_total = self.proven_table.len();
+        let mut to_remove: Vec<(u64, [u8; HAND_KINDS])> = Vec::new();
+        for (pk, e) in self.proven_table.iter_all() {
+            if e.is_refutable_disproof() {
+                to_remove.push((pk, e.hand));
+            }
+        }
+        for (pk, h) in &to_remove {
+            self.proven_table.remove(*pk, h);
+        }
+        initial_total - self.proven_table.len()
     }
 
     /// proof エントリを amount 昇順で evict し，NPS 低下を防ぐ (Step 1, v0.55.35)．
@@ -3403,7 +3303,8 @@ impl TranspositionTable {
     /// 旧実装は全 proof を除去していた．boundary_remaining カウンターで
     /// 境界レベルの除去数を正確に制御する．
     pub(super) fn gc_proofs(&mut self) -> usize {
-        let proof_count = self.proven_proof_entries;
+        // Phase 4b (v0.63.0): proven_table 直接走査．
+        let proof_count = self.proven_table.proof_len();
         let target = PROOF_MAP_GC_TARGET;
         if proof_count <= target {
             return 0;
@@ -3412,18 +3313,13 @@ impl TranspositionTable {
 
         // Step 1: proof エントリの amount ヒストグラム (256 buckets)
         let mut hist = [0usize; 256];
-        for vec in self.proven_map.values() {
-            for e in vec {
-                if e.is_proof() {
-                    hist[e.amount() as usize] += 1;
-                }
+        for (_pk, e) in self.proven_table.iter_all() {
+            if e.is_proof() {
+                hist[e.amount() as usize] += 1;
             }
         }
 
         // Step 2: 境界 amount 閾値と境界レベルでの除去数を決定
-        // amount < evict_threshold: 全除去
-        // amount == evict_threshold: boundary_remaining 個だけ除去
-        // amount > evict_threshold: 全保持
         let mut below_boundary = 0usize;
         let mut evict_threshold = 255u8;
         for a in 0u8..=255u8 {
@@ -3434,30 +3330,28 @@ impl TranspositionTable {
             }
             below_boundary += count_at_a;
         }
-        // 境界レベルで除去すべき数 (オーバーシュート防止)
         let boundary_remaining = to_remove - below_boundary;
 
-        // Step 3: retain pass
-        let before_total = self.proven_total_entries;
+        // Step 3: 削除対象を収集
+        let before_total = self.proven_table.len();
+        let mut to_remove_list: Vec<(u64, [u8; HAND_KINDS])> = Vec::new();
         let mut boundary_evicted = 0usize;
-        self.proven_map.retain(|_, vec| {
-            vec.retain(|e| {
-                if !e.is_proof() { return true; }  // confirmed/refutable は保持
-                let a = e.amount();
-                if a < evict_threshold { return false; }  // 境界未満: 必ず除去
-                if a > evict_threshold { return true; }   // 境界超過: 必ず保持
-                // 境界レベル: boundary_remaining 個まで除去
+        for (pk, e) in self.proven_table.iter_all() {
+            if !e.is_proof() { continue; }
+            let a = e.amount();
+            if a < evict_threshold {
+                to_remove_list.push((pk, e.hand));
+            } else if a == evict_threshold {
                 if boundary_evicted < boundary_remaining {
                     boundary_evicted += 1;
-                    false
-                } else {
-                    true
+                    to_remove_list.push((pk, e.hand));
                 }
-            });
-            !vec.is_empty()
-        });
-        self.recalculate_proven_counters();
-        before_total - self.proven_total_entries
+            }
+        }
+        for (pk, h) in &to_remove_list {
+            self.proven_table.remove(*pk, h);
+        }
+        before_total - self.proven_table.len()
     }
 
     /// confirmed disproof が CONFIRMED_MAP_GC_CAPACITY を超えた場合，
@@ -3467,7 +3361,8 @@ impl TranspositionTable {
     /// proof・refutable disproof は除去しない．
     /// 境界レベルでは boundary_remaining カウンターでオーバーシュートを防止する．
     pub(super) fn gc_confirmed(&mut self) -> usize {
-        let confirmed_count = self.proven_confirmed_entries;
+        // Phase 4b (v0.63.0): proven_table 直接走査．
+        let confirmed_count = self.proven_table.confirmed_len();
         let target = CONFIRMED_MAP_GC_TARGET;
         if confirmed_count <= target {
             return 0;
@@ -3476,18 +3371,13 @@ impl TranspositionTable {
 
         // Step 1: confirmed エントリの disproof_depth ヒストグラム (64 buckets, 0-63)
         let mut hist = [0usize; 64];
-        for vec in self.proven_map.values() {
-            for e in vec {
-                if !e.is_proof() && !e.is_refutable_disproof() {
-                    hist[e.disproof_depth().min(63) as usize] += 1;
-                }
+        for (_pk, e) in self.proven_table.iter_all() {
+            if !e.is_proof() && !e.is_refutable_disproof() {
+                hist[e.disproof_depth().min(63) as usize] += 1;
             }
         }
 
         // Step 2: 境界 depth 閾値と境界レベルでの除去数を決定
-        // disproof_depth < evict_threshold: 全除去
-        // disproof_depth == evict_threshold: boundary_remaining 個だけ除去
-        // disproof_depth > evict_threshold: 全保持
         let mut below_boundary = 0usize;
         let mut evict_threshold = 63usize;
         for d in 0..64usize {
@@ -3500,26 +3390,26 @@ impl TranspositionTable {
         }
         let boundary_remaining = to_remove - below_boundary;
 
-        // Step 3: retain pass
-        let before_total = self.proven_total_entries;
+        // Step 3: 削除対象を収集
+        let before_total = self.proven_table.len();
+        let mut to_remove_list: Vec<(u64, [u8; HAND_KINDS])> = Vec::new();
         let mut boundary_evicted = 0usize;
-        self.proven_map.retain(|_, vec| {
-            vec.retain(|e| {
-                if e.is_proof() || e.is_refutable_disproof() { return true; }
-                let d = e.disproof_depth().min(63) as usize;
-                if d < evict_threshold { return false; }
-                if d > evict_threshold { return true; }
+        for (pk, e) in self.proven_table.iter_all() {
+            if e.is_proof() || e.is_refutable_disproof() { continue; }
+            let d = e.disproof_depth().min(63) as usize;
+            if d < evict_threshold {
+                to_remove_list.push((pk, e.hand));
+            } else if d == evict_threshold {
                 if boundary_evicted < boundary_remaining {
                     boundary_evicted += 1;
-                    false
-                } else {
-                    true
+                    to_remove_list.push((pk, e.hand));
                 }
-            });
-            !vec.is_empty()
-        });
-        self.recalculate_proven_counters();
-        before_total - self.proven_total_entries
+            }
+        }
+        for (pk, h) in &to_remove_list {
+            self.proven_table.remove(*pk, h);
+        }
+        before_total - self.proven_table.len()
     }
 
     /// 指定局面のエントリ数を返す(診断用)．
