@@ -12891,6 +12891,54 @@ use crate::types::{Color, PieceType};
             .unwrap();
     }
 
+    /// Phase B (twinkling-hatching-duckling, v0.66.0): `param_use_dag_correction`
+    /// 有効時の Mate(15) PV regression．DAG 補正で path-aware DAG 合流子を
+    /// sum 集約から除外しても canonical Mate(15) PV が不変であることを確認．
+    #[test]
+    fn test_tsume_39te_ply24_mate15_regression_with_dag_correction() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+        let expected_pv = [
+            "5g6f", "1g1h", "2c2g", "1h1i", "8g8i",
+            "S*6i", "8i6i", "6h6i+", "S*2h", "1i2i",
+            "2h3g", "2i3i", "2g2h", "3i4i", "2h4h",
+        ];
+
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix_pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+
+        let mut solver = DfPnSolver::with_timeout(17, 1_000_000, 32767, 600);
+        solver.set_find_shortest(false);
+        solver.set_use_dag_correction(true);
+
+        let result = solver.solve(&mut board);
+        match result {
+            TsumeResult::Checkmate { moves, .. } => {
+                assert_eq!(
+                    moves.len(), 15,
+                    "expected Mate(15) with dag_correction ON, got Mate({})",
+                    moves.len()
+                );
+                let pv_usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                let pv_refs: Vec<&str> = pv_usi.iter().map(|s| s.as_str()).collect();
+                assert_eq!(
+                    pv_refs, expected_pv,
+                    "Mate(15) PV mismatch with dag_correction ON",
+                );
+            }
+            _ => panic!("dag_correction ON: expected Mate(15), got {:?}", result),
+        }
+    }
+
     /// **[SLOW]** maou と KH のアルゴリズム差分析用 multi-problem ベンチ．
     ///
     /// 様々な難度の詰将棋 SFEN を maou で順次実行し，KH との node/time 比を
@@ -12909,9 +12957,9 @@ use crate::types::{Color, PieceType};
             ("9te",      "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1",                                                            11, 1_000_000, 10),
             ("tsume_3",  "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1",                                                       13, 1_000_000, 10),
             ("tsume_4",  "7nk/9/5R3/8p/6P2/9/9/9/9 b SNPr2b4g3s2n4l15p 1",                                                          13, 1_000_000, 10),
-            ("tsume_5",  "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1",                                                              15, 2_000_000, 30),
-            ("29te",     "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1",                            31, 5_000_000, 60),
-            ("39te",     "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1",                                                41, 5_000_000, 60),
+            ("tsume_5",  "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1",                                                              15, 2_000_000, 15),
+            ("29te",     "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1",                            31, 5_000_000, 20),
+            ("39te",     "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1",                                                41, 5_000_000, 20),
         ];
 
         std::thread::Builder::new()
@@ -12923,25 +12971,30 @@ use crate::types::{Color, PieceType};
                 eprintln!("{:<10} {:>12} {:>10} {:>10} {:<12}",
                     "label", "nodes", "time(ms)", "NPS(K)", "result");
 
-                for &(label, sfen, depth, budget, timeout_s) in problems {
-                    let mut board = Board::new();
-                    board.set_sfen(sfen).unwrap();
-                    let mut solver = DfPnSolver::with_timeout(depth, budget, 32767, timeout_s);
-                    solver.set_find_shortest(false);
-                    let t = Instant::now();
-                    let result = solver.solve(&mut board);
-                    let elapsed_ms = t.elapsed().as_millis() as u64;
-                    let res = match &result {
-                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
-                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
-                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
-                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
-                    };
-                    let nps_k = if elapsed_ms > 0 {
-                        solver.nodes_searched * 1000 / elapsed_ms.max(1) / 1000
-                    } else { 0 };
-                    eprintln!("{:<10} {:>12} {:>10} {:>10} {:<12}",
-                        label, solver.nodes_searched, elapsed_ms, nps_k, res);
+                // Phase B (v0.66.0): DAG 補正 OFF/ON 比較．
+                for dag_on in [false, true] {
+                    eprintln!("--- DAG correction = {} ---", dag_on);
+                    for &(label, sfen, depth, budget, timeout_s) in problems {
+                        let mut board = Board::new();
+                        board.set_sfen(sfen).unwrap();
+                        let mut solver = DfPnSolver::with_timeout(depth, budget, 32767, timeout_s);
+                        solver.set_find_shortest(false);
+                        solver.set_use_dag_correction(dag_on);
+                        let t = Instant::now();
+                        let result = solver.solve(&mut board);
+                        let elapsed_ms = t.elapsed().as_millis() as u64;
+                        let res = match &result {
+                            TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                            TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                            TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                            TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                        };
+                        let nps_k = if elapsed_ms > 0 {
+                            solver.nodes_searched * 1000 / elapsed_ms.max(1) / 1000
+                        } else { 0 };
+                        eprintln!("{:<10} {:>12} {:>10} {:>10} {:<12}",
+                            label, solver.nodes_searched, elapsed_ms, nps_k, res);
+                    }
                 }
                 eprintln!("{}", "=".repeat(80));
             })

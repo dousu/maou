@@ -392,6 +392,16 @@ pub struct DfPnSolver {
     /// 関連: `delayed_move_list.rs`，`docs/plans/twinkling-hatching-duckling.md` Tier 3．
     pub(super) param_use_delayed_move_list: bool,
 
+    /// twinkling-hatching-duckling Phase B (v0.66.0): path-aware DAG 補正 (簡易版)．
+    ///
+    /// true で，AND multi-child loop で `find_dag_ancestor(child_pk)` が
+    /// 検出した transposition DAG 子を sum 集約から除外し max のみで集約する．
+    ///
+    /// 簡易版の仕組み: child の pos_key が現在のサーチパス上の先祖 (immediate
+    /// parent 除く) と一致すれば DAG 判定．KH の `double_count_elimination`
+    /// (TT 親情報を辿る) と異なり，path_pos_key の完全一致のみ検出．
+    pub(super) param_use_dag_correction: bool,
+
     // === M-1 refutable check fast path 改善フラグ (v0.25.4) ===
     /// **F1**: `all_checks_refutable_recursive_inner` で false 確定 check
     /// で早期 return せず，全 check を評価して store する．
@@ -780,6 +790,9 @@ impl DfPnSolver {
             // AND ノードで同マス合駒 chain の prev が未解決なら next を skip．
             // 既存 161 fast tests + Mate(15) PV regression pass で default ON．
             param_use_delayed_move_list: true,
+            // twinkling-hatching-duckling Phase B (v0.66.0): path-aware DAG 補正 (簡易版)．
+            // 初期は opt-in (default false)．Mate(15) PV regression で正確性確認後 ON 検討．
+            param_use_dag_correction: false,
             saved_depth_for_epsilon: 0,
             outer_solve_depth: 0,
             killer_table: Vec::new(),
@@ -1121,6 +1134,39 @@ impl DfPnSolver {
     /// デフォルト OFF．関連: [`DfPnSolver::param_use_delayed_move_list`]．
     pub fn set_use_delayed_move_list(&mut self, on: bool) {
         self.param_use_delayed_move_list = on;
+    }
+
+    /// Phase B (twinkling-hatching-duckling, v0.66.0): path-aware DAG 補正を ON/OFF．
+    ///
+    /// 有効時，AND multi-child loop で DAG 合流子を sum 集約から除外し
+    /// max のみで集約する (KH `double_count_elimination` 相当)．
+    pub fn set_use_dag_correction(&mut self, on: bool) {
+        self.param_use_dag_correction = on;
+    }
+
+    /// Phase B helper: child の DAG 合流先祖を検出する (v0.66.0 簡易版)．
+    ///
+    /// 現在のサーチパス上の先祖 pos_key (immediate parent を除く) と
+    /// `child_pk` が一致すれば，「異なる手順 (hand 違い) で同じ盤面に到達」
+    /// = transposition DAG と判定して true を返す．
+    ///
+    /// `param_use_dag_correction = false` の場合は false を返す．
+    ///
+    /// 注: KH の本来の `double_count_elimination` は TT の親情報を辿る
+    /// 深い検出をするが，maou は TT に親情報を持たないため，path 上の
+    /// pos_key 完全一致のみ検出する簡易版で代替．
+    pub(super) fn find_dag_ancestor(&self, child_pk: u64) -> bool {
+        if !self.param_use_dag_correction || self.path_len <= 1 {
+            return false;
+        }
+        // path_pos_key[i] が child_pk に一致する場合 (immediate parent 除く)
+        // = transposition DAG．
+        for i in 0..(self.path_len - 1) {
+            if self.path_pos_key[i] == child_pk {
+                return true;
+            }
+        }
+        false
     }
 
     /// **Phase 2a (swift-running-cheetah, v0.59.0)**: KH 風 flat array + linear
@@ -4139,12 +4185,19 @@ impl DfPnSolver {
 
                     all_proved = false;
 
+                    // Phase B (v0.66.0): path-aware DAG 補正．
+                    // 子の pos_key が祖先 (immediate parent 除く) の pos_key と一致 =
+                    // transposition DAG．sum 集約から除外し max のみで集約する．
+                    let is_dag_child = self.find_dag_ancestor(child_pk);
+
                     // WPN: max(cpn) を追跡し，未証明子をカウント
                     if cpn > max_cpn {
                         max_cpn = cpn;
                     }
-                    unproven_count += 1;
-                    sum_cpn += cpn as u64;
+                    if !is_dag_child {
+                        unproven_count += 1;
+                        sum_cpn += cpn as u64;
+                    }
                     // CD-WPN: 同一マスのドロップは1グループとして数える
                     // グループ代表値 = 同一マスへのドロップの中で最小 cpn
                     if m.is_drop() {
