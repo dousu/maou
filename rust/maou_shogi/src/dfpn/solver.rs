@@ -5169,14 +5169,14 @@ impl DfPnSolver {
         let safe_escapes = (king_moves & !our_occ & !danger).count();
 
         // 拡張 heuristic_and_pn: 逃げ場に基づく連続スケーリング．
-        // num_defenses ベースで既に大きな値(例: 5×S=80)になるため，
-        // 逃げ場による補正は控えめに保つ．
+        // 実験 (twinkling-hatching-duckling, v0.65.2): KH の per-move 4 カテゴリ
+        // 差別化に近づける目的で safe_escapes 重みを 1/2 → 1 に拡大．
         let base = if safe_escapes == 0 {
             // 逃げ場なし: 合駒・駒取りのみ → 詰みやすい(2/3 に割引)
             (num_defenses * 2 / 3).max(1) * PN_UNIT
         } else {
-            // 逃げ場あり: 応手数ベース + 逃げ場 × S/2
-            num_defenses * PN_UNIT + safe_escapes * PN_UNIT / 2
+            // 逃げ場あり: 応手数ベース + 逃げ場 × S
+            num_defenses * PN_UNIT + safe_escapes * PN_UNIT
         };
         base
     }
