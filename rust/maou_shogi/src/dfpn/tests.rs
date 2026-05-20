@@ -12891,6 +12891,65 @@ use crate::types::{Color, PieceType};
             .unwrap();
     }
 
+    /// **[SLOW]** tsume_5 を KH の PV に沿って 1 手ずつ進め，各 OR/AND 局面で
+    /// maou が必要とするノード数を計測する．KH との差が大きい ply を特定し，
+    /// アルゴリズム面のボトルネックを絞り込む基盤．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_5_step_by_step --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_5_step_by_step() {
+        let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
+        let pv = [
+            "S*4a", "3b2a", "S*3b", "2a2b", "1d1a+", "2b1a", "1e3c+",
+            "G*2b", "3c2b", "1a2b", "G*2c", "2b1a", "3b2a+", "1a2a",
+            "4a3b+", "2a1a", "2c2b",
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" tsume_5 step-by-step (maou Tier1+3 ON, DAG OFF)");
+                eprintln!("{}", "=".repeat(80));
+                eprintln!("{:<5} {:<14} {:>12} {:>10} {:<14}",
+                    "ply", "move_played", "nodes", "time(ms)", "result");
+
+                for ply in 0..pv.len() {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    for usi in &pv[..ply] {
+                        let m = board.move_from_usi(usi).unwrap();
+                        board.do_move(m);
+                    }
+                    // 残り手数を depth に
+                    let remaining_moves = pv.len() - ply;
+                    let depth = (remaining_moves as u32 + 4).min(41);
+                    let mut solver = DfPnSolver::with_timeout(depth, 5_000_000, 32767, 30);
+                    solver.set_find_shortest(false);
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed_ms = t.elapsed().as_millis() as u64;
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    let move_label = if ply == 0 { "(root)" } else { pv[ply-1] };
+                    eprintln!("{:<5} {:<14} {:>12} {:>10} {:<14}",
+                        ply, move_label, solver.nodes_searched, elapsed_ms, res);
+                }
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// Phase B (twinkling-hatching-duckling, v0.66.0): `param_use_dag_correction`
     /// 有効時の Mate(15) PV regression．DAG 補正で path-aware DAG 合流子を
     /// sum 集約から除外しても canonical Mate(15) PV が不変であることを確認．
