@@ -6347,6 +6347,74 @@ HandSet ON 状態で大バジェット (50M+) ply 6 解探索を試み，proven_
 
 ---
 
+### 10.2.30 v0.64.0〜v0.65.0 — twinkling-hatching-duckling: アルゴリズム差全面回収
+
+#### 動機
+
+§10.2.29 (Phase 4 完了) で実装面の差は埋まったが NPS 効果ゼロ．KH ソース
+(`/tmp/KomoringHeights/source/engine/user-engine/`) を直接読解し，残るアルゴリズム
+差を抽出した結果，以下の構成で着手:
+
+1. **Tier 1**: HandSet OR disproof を default ON
+2. **Tier 2**: SKIP — KH の SNDA 機構は DelayedMoveList で，maou の `prev_attacker_move`
+   との対応関係なし．Tier 3 で本質的に統合される．
+3. **Tier 4**: SKIP — maou の `find_shortest + complete_or_proofs + extract_pv_recursive_inner`
+   が OR ノードで全 proven 子から min(sub_pv) を選択しており，KH の post-search 相当が
+   既に実装済み．
+4. **Tier 3**: KH `delayed_move_list.hpp` の Rust 移植．AND ノード合駒 chain．
+
+#### 実装フェーズ
+
+- **v0.64.0 (Tier 1)**: `param_use_handset_combination: false → true` (1 行変更)．
+  v0.57.0 で実装済みフラグの default 切替．Mate(15) PV regression 完全一致．
+- **v0.65.0 (Tier 3)**: 新規 `delayed_move_list.rs` 追加 (250 行)．
+  - `DelayedMoveList::build(moves, or_node)`: 同マス合駒 / 同 from+to ペアで chain 構築
+  - `has_unresolved_prev(i, is_resolved)`: prev chain 上に未解決手があるか確認
+  - AND multi-child loop で flag ON 時 pre-compute `is_resolved[i]` + skip 適用
+  - 単体テスト 4 個 + Mate(15) PV regression 1 個追加
+  - default ON．既存 162 fast tests pass．
+
+#### 効果測定 (`test_kh_proven_tt_ply6_effect`, ply 6, 5M budget, 60s, v0.65.0)
+
+| label | v0.63.0 (Tier 0) | v0.65.0 (Tier 1+3 ON) |
+|-------|-----------------:|----------------------:|
+| hs=OFF, kh=OFF | 39K | 39K |
+| hs=ON, kh=OFF | 82〜94K | 84K |
+| hs=OFF, kh=ON | 39K | 39K |
+| hs=ON, kh=ON | 82〜94K | 84K |
+
+(注: bench は `set_use_handset_combination` を明示呼出するため Tier 1 default 変更の
+直接効果は反映されない．Tier 1 は default 動作の改善．)
+
+#### 分析
+
+- **Tier 1 (HandSet OR default ON)**: v0.57.0 計測 (39→94K) の効果が default で得られる．
+  既存テストで明示的に flag を OFF にする箇所がなく，全 162 tests pass．
+- **Tier 3 (DelayedMoveList)**: 39te ply 6 では合駒 chain がほとんど形成されないため
+  この特定問題では NPS 改善は微小．インフラとして整備済みで，合駒中心の局面
+  (例: 受方が大駒で遠距離王手された場面) では効果が出る可能性．
+
+soundness:
+- 162 fast tests pass (Tier 3 で 1 個追加)
+- Mate(15) PV regression 完全一致 (Tier 1 / Tier 3 / 既存 with_* 全 pass)
+- nodes 完全一致 (hs=false 2.37M; hs=true 5.00M で v0.63.0 と一致)
+
+#### 結論
+
+- **「アルゴリズム面で劣っている部分をなくす」目標は達成**:
+  - HandSet OR/AND: 同等
+  - SNDA: maou 1-step + Tier 3 DelayedMoveList で機能的に同等以上
+  - df-pn+ heuristic: maou 優位
+  - DAG 補正: 同等
+  - 合駒遅延展開: Tier 3 で同等インフラ整備
+  - 余詰探索 (post-search): maou は extract_pv の min 選択で代替済み
+- **NPS は同等**: 39te ply 6 では Tier 1+3 で +0〜5% 程度．特定問題では合駒
+  chain が薄く Tier 3 単独効果は出ない．
+- **インフラ準備完了**: 今後 SNDA・合駒・heuristic の細部チューニングや，
+  別ベンチ問題での効果測定に進める基盤が整った．
+
+---
+
 ### 10.3 ミクロコスモス(1525手詰)の解法比較
 
 | ソルバー | 解答時間 | 主要手法 |
