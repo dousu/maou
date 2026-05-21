@@ -441,6 +441,24 @@ pub struct DfPnSolver {
     pub(super) diag_tca_decrements: u64,
     pub(super) diag_tca_extends: u64,
 
+    /// melodic-cascading-otter 診断 (v0.71.0): root (ply 0) trace．
+    /// true で，mid() の OR/AND multi-child loop が ply==0 で iterate するたびに
+    /// 主要 metrics を eprintln! でダンプする (feature flag 不要)．
+    ///
+    /// 出力例 (interval=10000 nodes):
+    /// ```
+    /// [root_trace ply0 iter=42 nodes=100000] children=23 best_idx=3 best_move=S*7i
+    ///   current_pn=156 current_dn=89 pn_th=200 dn_th=200
+    ///   child[0] move=S*7i pn=124 dn=45 (root_visits=520)
+    ///   ...
+    /// ```
+    pub(super) param_root_trace: bool,
+
+    /// root_trace の dump 間隔 (nodes)．`param_root_trace=true` のときに使用．
+    pub(super) root_trace_interval: u64,
+    pub(super) root_trace_next: u64,
+    pub(super) root_trace_iter: u64,
+
     /// twinkling-hatching-duckling Phase C (v0.67.0): KH 風 per-move 差別化．
     ///
     /// true で，OR child の `edge_cost_or` を `edge_cost_or_with_support` に
@@ -852,6 +870,10 @@ impl DfPnSolver {
             diag_tca_increments: 0,
             diag_tca_decrements: 0,
             diag_tca_extends: 0,
+            param_root_trace: false,
+            root_trace_interval: 10_000,
+            root_trace_next: 0,
+            root_trace_iter: 0,
             // Phase C (v0.67.0): per-move attack/defense support 差別化．
             // 初期は opt-in (default false)．効果確認後 default ON 検討．
             param_use_per_move_support: false,
@@ -1207,6 +1229,18 @@ impl DfPnSolver {
     /// 深い transposition chain での threshold extension を継続させる．
     pub fn set_use_kh_tca(&mut self, on: bool) -> &mut Self {
         self.param_use_kh_tca = on;
+        self
+    }
+
+    /// 診断 (v0.71.0): root (ply 0) trace の有効化．
+    /// default false．有効化すると mid() の OR/AND multi-child loop で
+    /// ply==0 のたびに root_trace_interval (default 10000) ごとに per-iteration
+    /// 状態を eprintln! でダンプする．
+    pub fn set_root_trace(&mut self, on: bool, interval_nodes: u64) -> &mut Self {
+        self.param_root_trace = on;
+        if interval_nodes > 0 {
+            self.root_trace_interval = interval_nodes;
+        }
         self
     }
 
@@ -1953,6 +1987,8 @@ impl DfPnSolver {
         self.diag_tca_increments = 0;
         self.diag_tca_decrements = 0;
         self.diag_tca_extends = 0;
+        self.root_trace_next = if self.param_root_trace { self.root_trace_interval } else { u64::MAX };
+        self.root_trace_iter = 0;
         self.killer_table.clear();
         self.check_cache.clear();
         self.refutable_check_failed.clear();
@@ -4694,6 +4730,51 @@ impl DfPnSolver {
             } else {
                 (pn_threshold, dn_threshold)
             };
+
+            // melodic-cascading-otter 診断 (v0.71.0): root trace．
+            // ply==0 で root_trace_interval ノード経過ごとに children pn/dn と
+            // best_idx を eprintln! でダンプ．param_root_trace=false なら no-op．
+            if self.param_root_trace
+                && ply == 0
+                && self.nodes_searched >= self.root_trace_next
+            {
+                self.root_trace_iter += 1;
+                let best_move_str = if best_idx < children.len() {
+                    children[best_idx].0.to_usi()
+                } else {
+                    "?".to_string()
+                };
+                eprintln!(
+                    "[root_trace iter={} nodes={}] best_idx={} best={} pn={}/{} dn={}/{} children={}",
+                    self.root_trace_iter,
+                    self.nodes_searched,
+                    best_idx,
+                    best_move_str,
+                    current_pn, eff_pn_th,
+                    current_dn, eff_dn_th,
+                    children.len(),
+                );
+                // top-10 候補のみダンプ (children 全部だと長すぎる)
+                let child_rem = remaining.saturating_sub(1);
+                let mut child_dump: Vec<(u32, u32, &Move, usize)> = children.iter()
+                    .enumerate()
+                    .map(|(i, (m, _, cpk, ch))| {
+                        let (cpn, cdn, _) = self.look_up_pn_dn(*cpk, ch, child_rem);
+                        (cpn, cdn, m, i)
+                    })
+                    .collect();
+                // best_idx (min cdn for AND, min cpn for OR) でソートして先頭 10
+                if or_node {
+                    child_dump.sort_by_key(|&(p, _, _, _)| p);
+                } else {
+                    child_dump.sort_by_key(|&(_, d, _, _)| d);
+                }
+                for (cpn, cdn, m, i) in child_dump.iter().take(10) {
+                    eprintln!("  [{:>2}] {} pn={} dn={}", i, m.to_usi(), cpn, cdn);
+                }
+                self.root_trace_next = self.nodes_searched
+                    .saturating_add(self.root_trace_interval);
+            }
 
             // 閾値チェック(TCA 拡張済み閾値を使用)
             if current_pn >= eff_pn_th

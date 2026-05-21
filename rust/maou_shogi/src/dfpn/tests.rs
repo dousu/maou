@@ -12930,6 +12930,46 @@ use crate::types::{Color, PieceType};
             .unwrap();
     }
 
+    /// **[SLOW]** 29te ply 0 root trace 診断 (v0.71.0)．
+    ///
+    /// budget 200K nodes / 10s．`set_root_trace(true, 25000)` で 25K nodes
+    /// ごとに root の per-iteration 状態をダンプする．どの move が選ばれ続け，
+    /// pn/dn 分布がどう推移するかを観察．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_root_trace --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_root_trace() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                let mut solver = DfPnSolver::with_timeout(33, 200_000, 32767, 30);
+                solver.set_find_shortest(false);
+                solver.set_root_trace(true, 25_000);
+                let t = Instant::now();
+                let result = solver.solve(&mut board);
+                let elapsed_ms = t.elapsed().as_millis() as u64;
+                let res = match &result {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                    TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                };
+                eprintln!("\n=== final: nodes={} t(ms)={} res={} ===",
+                    solver.nodes_searched, elapsed_ms, res);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// **[SLOW]** 29te ply 0 で各 opt-in flag の効果を sweep する診断．
     ///
     /// budget 500K nodes / 15s × N flag combo．
