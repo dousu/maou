@@ -475,6 +475,12 @@ pub struct DfPnSolver {
     pub(super) diag_tt_disproven: std::cell::Cell<u64>,
     pub(super) diag_tt_working: std::cell::Cell<u64>,
 
+    /// 診断 (v0.73.0): per-depth proven 蓄積カウンタ．
+    /// `store_proof_with_tag` 呼び出し時に `path_len` (= 現在の ply) を
+    /// インデックスとして increment．solve() 完了後に proof がどの深さで
+    /// 累積したかのヒストグラムが取れる．候補 E．
+    pub(super) diag_proven_per_ply: [u64; 64],
+
     /// 診断 (v0.71.1): periodic GC (overflow-based working TT GC) を無効化する．
     /// default false (= GC fire OK)．true で `nodes_searched % 100_000 == 0` の
     /// GC トリガを skip する．catastrophic forgetting の検証用．
@@ -910,6 +916,7 @@ impl DfPnSolver {
             diag_tt_proven: std::cell::Cell::new(0),
             diag_tt_disproven: std::cell::Cell::new(0),
             diag_tt_working: std::cell::Cell::new(0),
+            diag_proven_per_ply: [0u64; 64],
             root_trace_interval: 10_000,
             root_trace_next: 0,
             root_trace_iter: 0,
@@ -1330,6 +1337,12 @@ impl DfPnSolver {
             self.diag_tt_disproven.get(),
             self.diag_tt_working.get(),
         )
+    }
+
+    /// 診断 (v0.73.0, E): per-depth proven 蓄積ヒストグラム取得．
+    /// 配列 `[u64; 64]` で index = ply, 値 = 当該 ply で proven 確定回数．
+    pub fn get_proven_per_ply(&self) -> [u64; 64] {
+        self.diag_proven_per_ply
     }
 
     pub fn set_use_dag_correction(&mut self, on: bool) {
@@ -1859,6 +1872,10 @@ impl DfPnSolver {
         if pn == 0 && self.ancestor_has_proof() {
             return;
         }
+        if pn == 0 {
+            let ply = self.path_len.min(63);
+            self.diag_proven_per_ply[ply] = self.diag_proven_per_ply[ply].saturating_add(1);
+        }
         self.table.store(pos_key, hand, pn, dn, remaining, source);
     }
 
@@ -1876,6 +1893,10 @@ impl DfPnSolver {
     ) {
         if pn == 0 && self.ancestor_has_proof() {
             return;
+        }
+        if pn == 0 {
+            let ply = self.path_len.min(63);
+            self.diag_proven_per_ply[ply] = self.diag_proven_per_ply[ply].saturating_add(1);
         }
         self.table.store_with_best_move(pos_key, hand, pn, dn, remaining, source, best_move);
     }
@@ -1898,6 +1919,10 @@ impl DfPnSolver {
     ) {
         if pn == 0 && self.ancestor_has_proof() {
             return;
+        }
+        if pn == 0 {
+            let ply = self.path_len.min(63);
+            self.diag_proven_per_ply[ply] = self.diag_proven_per_ply[ply].saturating_add(1);
         }
         self.table.store_with_best_move_and_distance(
             pos_key, hand, pn, dn, remaining, source, best_move, mate_distance,
@@ -1923,6 +1948,9 @@ impl DfPnSolver {
         if self.ancestor_has_proof() {
             return;
         }
+        // 診断 (v0.73.0, E): proof 発見時の現在 ply (= path_len) を記録．
+        let ply = self.path_len.min(63);
+        self.diag_proven_per_ply[ply] = self.diag_proven_per_ply[ply].saturating_add(1);
         self.table.store_tagged_proof(
             pos_key, hand, best_move, mate_distance, tag, self.depth,
         );
@@ -2096,6 +2124,7 @@ impl DfPnSolver {
         self.diag_tt_proven.set(0);
         self.diag_tt_disproven.set(0);
         self.diag_tt_working.set(0);
+        self.diag_proven_per_ply = [0u64; 64];
         self.killer_table.clear();
         self.check_cache.clear();
         self.refutable_check_failed.clear();

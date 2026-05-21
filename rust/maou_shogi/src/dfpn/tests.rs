@@ -13242,6 +13242,51 @@ use crate::types::{Color, PieceType};
     /// ```
     /// cargo test --release -p maou_shogi -- test_tsume_5_step_by_step --nocapture --ignored
     /// ```
+    /// **[SLOW]** 29te per-depth proven 蓄積ヒストグラム (v0.73.0, 候補 E)．
+    ///
+    /// `get_proven_per_ply()` で `store_proof_with_tag` 呼出時の `path_len` (=ply)
+    /// ベースの proof 累積を取得．29te で proof がどの深さで止まっているか可視化．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_proven_depth_diag --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_proven_depth_diag() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n=== 29te per-depth proven diag (5M nodes) ===");
+                for (label, skip_ids, per_move) in [
+                    ("default",                    false, false),
+                    ("skip_ids+per_move",          true,  true),
+                ] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(33, 5_000_000, 32767, 60);
+                    solver.set_find_shortest(false);
+                    solver.set_use_per_move_support(per_move);
+                    solver.set_skip_ids_shallow(skip_ids);
+                    let _ = solver.solve(&mut board);
+                    let hist = solver.get_proven_per_ply();
+                    let total: u64 = hist.iter().sum();
+                    eprintln!("\n[{}] total_proven={} nodes={}",
+                        label, total, solver.nodes_searched);
+                    eprintln!("  ply | count    | bar (each # = max/40)");
+                    let max = *hist.iter().max().unwrap_or(&1);
+                    for ply in 0..64 {
+                        if hist[ply] == 0 { continue; }
+                        let bar_len = (hist[ply] * 40 / max.max(1)) as usize;
+                        let bar: String = "#".repeat(bar_len);
+                        eprintln!("  {:>3} | {:>8} | {}", ply, hist[ply], bar);
+                    }
+                }
+            }).unwrap().join().unwrap();
+    }
+
     /// **[SLOW]** 29te TT lookup hit rate 診断 (v0.72.0)．
     ///
     /// 29te ply 0 を 2 つの config (default / skip_ids_shallow) で実行し，
