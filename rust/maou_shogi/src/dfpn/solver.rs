@@ -6749,5 +6749,175 @@ impl DfPnSolver {
     //
     // test_tsume_39te_ply24_mate15_regression で Mate(15) → Mate(5) の
     // soundness 違反が発生したため revert．
+
+    // ===========================================================
+    // mid_v2 (Phase 3, v0.84.0): KH SearchImpl 風の本格的 mid 実装．
+    // 既存 mid() と並走．`param_use_mid_v2=true` で有効化．
+    // ===========================================================
+
+    /// Phase 3: mid_v2 本体．DfPnSolver の method として実装．
+    /// callback closure と `&mut self` の衝突を避けるため，mid_v2 内で
+    /// 全ての TT/board アクセスを行う．
+    pub(super) fn mid_v2(
+        &mut self,
+        board: &mut Board,
+        thpn: u32,
+        thdn: u32,
+        ply: u32,
+        or_node: bool,
+        inc_flag: &mut u32,
+    ) -> super::mid_v2::MidSearchResult {
+        use super::mid_v2::{MidLocalExpansion, MidSearchResult};
+
+        // Budget / timeout チェック
+        if self.nodes_searched >= self.max_nodes {
+            return MidSearchResult::new_unknown(PN_UNIT, PN_UNIT);
+        }
+        if self.nodes_searched & 0x3FF == 0 && self.is_timed_out() {
+            self.timed_out = true;
+            return MidSearchResult::new_unknown(PN_UNIT, PN_UNIT);
+        }
+        self.nodes_searched += 1;
+
+        // Depth limit (PATH_CAPACITY)
+        if (ply as usize) >= PATH_CAPACITY {
+            // 千日手相当：depth 限界で unknown 返す
+            return MidSearchResult::new_unknown(PN_UNIT, PN_UNIT);
+        }
+
+        // children 生成 (OR: check moves, AND: legal moves)
+        let moves_vec: Vec<Move> = if or_node {
+            self.generate_check_moves_cached(board).into_iter().collect()
+        } else {
+            movegen::generate_legal_moves(board)
+        };
+
+        if moves_vec.is_empty() {
+            // Terminal: OR (no checks available) → 攻め方失敗 = lose
+            //          AND (no defenses) → 詰み = win
+            let result = if or_node {
+                MidSearchResult::new_lose(0)
+            } else {
+                MidSearchResult::new_win(0)
+            };
+            let pk = position_key(board);
+            let att_hand = board.hand[self.attacker.index()];
+            let remaining = (self.depth.saturating_sub(ply)) as u16;
+            self.store(pk, att_hand, result.pn, result.dn, remaining, pk as u32);
+            return result;
+        }
+
+        // 各 child の初期評価を TT lookup で取得
+        let mut initial_results: Vec<MidSearchResult> = Vec::with_capacity(moves_vec.len());
+        let child_remaining = (self.depth.saturating_sub(ply + 1)) as u16;
+        for &m in &moves_vec {
+            let captured = board.do_move(m);
+            let pk = position_key(board);
+            let hand = board.hand[self.attacker.index()];
+            let (pn, dn, _) = self.look_up_pn_dn(pk, &hand, child_remaining);
+            board.undo_move(m, captured);
+            // child の or_node は反転
+            let _ = (); // child_or_node = !or_node
+            initial_results.push(MidSearchResult::new_unknown(pn, dn));
+        }
+
+        let mut expansion = MidLocalExpansion::new(or_node, moves_vec, initial_results);
+
+        let orig_thpn = thpn;
+        let orig_thdn = thdn;
+        let orig_inc_flag = *inc_flag;
+        let mut cur_thpn = thpn;
+        let mut cur_thdn = thdn;
+
+        let mut curr = expansion.current_result();
+        if expansion.does_have_old_child() {
+            *inc_flag = inc_flag.saturating_add(1);
+        }
+        if *inc_flag > 0 {
+            extend_threshold_for_mid_v2(&mut cur_thpn, &mut cur_thdn, &curr);
+        }
+
+        while curr.pn < cur_thpn && curr.dn < cur_thdn {
+            if self.nodes_searched >= self.max_nodes { break; }
+            if expansion.empty() { break; }
+
+            let best_move = expansion.best_move();
+            let is_first = expansion.front_is_first_visit();
+            let (child_thpn, child_thdn) = expansion.front_pn_dn_thresholds(cur_thpn, cur_thdn);
+
+            let captured = board.do_move(best_move);
+
+            let child_result = if is_first {
+                let pk = position_key(board);
+                let hand = board.hand[self.attacker.index()];
+                let (pn, dn, _) = self.look_up_pn_dn(pk, &hand, child_remaining);
+                let initial = MidSearchResult::new_unknown(pn, dn);
+                if *inc_flag > 0 { *inc_flag -= 1; }
+                if initial.pn >= child_thpn || initial.dn >= child_thdn {
+                    initial
+                } else {
+                    self.mid_v2(board, child_thpn, child_thdn, ply + 1, !or_node, inc_flag)
+                }
+            } else {
+                self.mid_v2(board, child_thpn, child_thdn, ply + 1, !or_node, inc_flag)
+            };
+
+            board.undo_move(best_move, captured);
+
+            expansion.update_best_child(child_result);
+            curr = expansion.current_result();
+
+            // TCA threshold rollback + re-extend
+            cur_thpn = orig_thpn;
+            cur_thdn = orig_thdn;
+            if *inc_flag > 0 {
+                extend_threshold_for_mid_v2(&mut cur_thpn, &mut cur_thdn, &curr);
+            } else if *inc_flag == 0 && orig_inc_flag > 0 {
+                break;
+            }
+        }
+
+        *inc_flag = (*inc_flag).min(orig_inc_flag);
+
+        // Store final result to TT
+        let pk = position_key(board);
+        let att_hand = board.hand[self.attacker.index()];
+        let remaining = (self.depth.saturating_sub(ply)) as u16;
+        if curr.pn == 0 {
+            // Proven: 詰み駒情報なしで簡易 store
+            self.store(pk, att_hand, 0, INF, remaining, pk as u32);
+        } else if curr.dn == 0 {
+            // Disproven
+            self.store(pk, att_hand, INF, 0, remaining, pk as u32);
+        } else {
+            self.store(pk, att_hand, curr.pn, curr.dn, remaining, pk as u32);
+        }
+
+        curr
+    }
+
+    /// mid_v2 用 entry point: solve() から呼ばれる．
+    /// inc_flag を 0 で初期化し，root mid_v2 を呼ぶ．
+    pub fn solve_v2(&mut self, board: &mut Board) -> super::mid_v2::MidSearchResult {
+        self.attacker = board.turn;
+        self.start_time = std::time::Instant::now();
+        self.path_len = 0;
+        self.path_set.clear();
+        let mut inc_flag = 0u32;
+        self.mid_v2(board, INF - 1, INF - 1, 0, true, &mut inc_flag)
+    }
+}
+
+/// mid_v2 用の TCA threshold 拡張 (mod_v2.rs の extend_search_threshold と等価)．
+fn extend_threshold_for_mid_v2(thpn: &mut u32, thdn: &mut u32, curr: &super::mid_v2::MidSearchResult) {
+    const EXTEND_DENOM: u32 = 4;
+    if curr.pn < INF {
+        let extra = curr.pn / EXTEND_DENOM + 1;
+        *thpn = thpn.saturating_add(extra).min(INF - 1);
+    }
+    if curr.dn < INF {
+        let extra = curr.dn / EXTEND_DENOM + 1;
+        *thdn = thdn.saturating_add(extra).min(INF - 1);
+    }
 }
 

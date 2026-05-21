@@ -13242,6 +13242,34 @@ use crate::types::{Color, PieceType};
     /// ```
     /// cargo test --release -p maou_shogi -- test_tsume_5_step_by_step --nocapture --ignored
     /// ```
+    /// mid_v2 動作確認 (v0.84.0, Phase 3)．
+    /// tsume_5 (17 手詰) で proof 到達するか確認．
+    #[test]
+    #[ignore]
+    fn test_mid_v2_tsume_5_smoke() {
+        let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                let mut solver = DfPnSolver::with_timeout(21, 1_000_000, 32767, 30);
+                let t = Instant::now();
+                let result = solver.solve_v2(&mut board);
+                let elapsed_ms = t.elapsed().as_millis() as u64;
+                eprintln!("[mid_v2 tsume_5] nodes={} t(ms)={} pn={} dn={}",
+                    solver.nodes_searched, elapsed_ms, result.pn, result.dn);
+                if result.pn == 0 {
+                    eprintln!("  PROVEN (mate found)");
+                } else if result.dn == 0 {
+                    eprintln!("  DISPROVEN");
+                } else {
+                    eprintln!("  UNKNOWN (budget exhausted or timeout)");
+                }
+            }).unwrap().join().unwrap();
+    }
+
     /// **[SLOW]** 29te 候補 D (proven defender bitmap) 効果測定 (v0.81.0)．
     ///
     /// param_use_and_proven_bitmap=true で per-AND-position の proven defender
