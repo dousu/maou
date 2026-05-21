@@ -13242,6 +13242,103 @@ use crate::types::{Color, PieceType};
     /// ```
     /// cargo test --release -p maou_shogi -- test_tsume_5_step_by_step --nocapture --ignored
     /// ```
+    /// **[SLOW]** 29te 候補 C (exhaustive AND) 効果測定 (v0.80.0)．
+    ///
+    /// AND multi-child loop の best_idx 選択を unproven defender round-robin
+    /// に切り替え．proven_count 改善 → AND fully proven 増加を期待．
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_exhaustive_and_sweep() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n=== 29te exhaustive_and 効果測定 (5M / 60s) ===");
+                eprintln!("{:<48} {:>10} {:>10} {:>9} {:>5} {:>9} {:<14}",
+                    "config", "nodes", "t(ms)", "AND_full", "cov%", "proven", "result");
+
+                for (label, skip, per_move, ex_and) in [
+                    ("baseline",                               true, true, false),
+                    ("exhaustive_AND",                         true, true, true),
+                ] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(33, 5_000_000, 32767, 60);
+                    solver.set_find_shortest(false);
+                    solver.set_use_per_move_support(per_move);
+                    solver.set_skip_ids_shallow(skip);
+                    solver.set_use_exhaustive_and(ex_and);
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } =>
+                            format!("Mate({})", moves.len()),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                        _ => "Other".to_string(),
+                    };
+                    let (_visits, prv_sum, tot_sum, _zero, full) = solver.get_and_coverage_stats();
+                    let cov = if tot_sum > 0 { 100.0 * prv_sum as f64 / tot_sum as f64 } else { 0.0 };
+                    let proven: u64 = solver.get_proven_per_ply().iter().sum();
+                    eprintln!("{:<48} {:>10} {:>10} {:>9} {:>4.1}% {:>9} {:<14}",
+                        label, solver.nodes_searched, t.elapsed().as_millis(),
+                        full, cov, proven, res);
+                }
+            }).unwrap().join().unwrap();
+    }
+
+    /// **[SLOW]** 29te per-position revisit 数調査 (v0.79.0, 候補 A)．
+    ///
+    /// 同一 pos_key の mid() 呼出が何回起きるかを histogram 化．
+    /// scattershot な探索の場合「100+ 回 visit するのに proven にならない」
+    /// position が大量に出る．
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_pos_revisit() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n=== 29te per-position revisit (5M / 60s) ===");
+
+                for (label, skip, per_move) in [
+                    ("default",                false, false),
+                    ("skip_ids+per_move",      true, true),
+                ] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(33, 5_000_000, 32767, 60);
+                    solver.set_find_shortest(false);
+                    solver.set_use_per_move_support(per_move);
+                    solver.set_skip_ids_shallow(skip);
+                    let _ = solver.solve(&mut board);
+
+                    let (unique, total, capped, top10) = solver.get_pos_visit_stats();
+                    eprintln!("\n[{}]", label);
+                    eprintln!("  unique_positions={} total_visits={} capped={}",
+                        unique, total, capped);
+                    let avg = if unique > 0 { total as f64 / unique as f64 } else { 0.0 };
+                    eprintln!("  avg_visits_per_position={:.1}", avg);
+                    eprintln!("  top 10 most visited: {:?}", top10);
+
+                    let hist = solver.get_pos_visit_histogram();
+                    eprintln!("  visit count histogram (bucket = 2^i .. 2^(i+1)):");
+                    let total_positions: u64 = hist.iter().sum();
+                    for i in 0..24 {
+                        if hist[i] == 0 { continue; }
+                        let low = if i == 0 { 1 } else { 1u32 << i };
+                        let high = if i < 23 { (1u32 << (i+1)) - 1 } else { u32::MAX };
+                        let pct = 100.0 * hist[i] as f64 / total_positions as f64;
+                        eprintln!("    [{:>5}..{:>5}] {:>8} ({:>4.1}%)",
+                            low, high, hist[i], pct);
+                    }
+                }
+                eprintln!("===");
+            }).unwrap().join().unwrap();
+    }
+
     /// **[SLOW]** 29te AND coverage 調査 (v0.77.0)．
     ///
     /// AND 多子 scan 完了時の proven_count/total_children 分布を計測．

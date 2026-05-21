@@ -495,6 +495,20 @@ pub struct DfPnSolver {
     pub(super) diag_or_proven_count_visits: u64,  // proven child があった visits の数
     pub(super) diag_or_total_sum: u64,
 
+    /// 診断 (v0.79.0, A): per-position revisit count．`(pos_key, or_node) → visit_count`．
+    /// max 1M entries に制限してメモリ暴走防止．
+    pub(super) diag_pos_visits: rustc_hash::FxHashMap<u64, u32>,
+    pub(super) diag_pos_visits_capped: bool,  // 1M 超えたら collection 停止
+
+    /// 候補 C (v0.80.0): AND node exhaustive defender prove．
+    /// default false．true で AND multi-child loop の best_idx 選択を
+    /// "未訪問 defender 優先 round-robin" に切り替える．具体的には:
+    /// - 全 children のうち cpn != 0 (まだ proven でない) defender の中で
+    ///   `self.exhaustive_and_rr_counter % unproven_count` 番目を選択
+    /// - これにより同じ defender に固定せず全 defender を巡回 prove
+    pub(super) param_use_exhaustive_and: bool,
+    pub(super) exhaustive_and_rr_counter: u32,
+
     /// melodic-cascading-otter 候補 G (v0.74.0): root child_pn_th の絶対 floor．
     /// 0 (default) で無効．> 0 で root (ply=0) の OR child_pn_th を最低
     /// この値まで引き上げる．これにより 1 つの child に深く commit するための
@@ -952,6 +966,10 @@ impl DfPnSolver {
             diag_or_visit_count: 0,
             diag_or_proven_count_visits: 0,
             diag_or_total_sum: 0,
+            diag_pos_visits: rustc_hash::FxHashMap::default(),
+            diag_pos_visits_capped: false,
+            param_use_exhaustive_and: false,
+            exhaustive_and_rr_counter: 0,
             param_or_dn_tiebreak: false,
             root_trace_interval: 10_000,
             root_trace_next: 0,
@@ -1421,11 +1439,45 @@ impl DfPnSolver {
         )
     }
 
+    /// 診断 (v0.79.0, A): per-position visit count のヒストグラム取得．
+    /// 戻り値: `(unique_positions, total_visits, capped, top_10_counts)`
+    /// `top_10_counts[i]` = 上位 10 件の最多 visit 数 (降順)．
+    pub fn get_pos_visit_stats(&self) -> (usize, u64, bool, Vec<u32>) {
+        let unique = self.diag_pos_visits.len();
+        let total: u64 = self.diag_pos_visits.values().map(|&v| v as u64).sum();
+        let capped = self.diag_pos_visits_capped;
+        let mut counts: Vec<u32> = self.diag_pos_visits.values().copied().collect();
+        counts.sort_unstable_by(|a, b| b.cmp(a));
+        counts.truncate(10);
+        (unique, total, capped, counts)
+    }
+
+    /// 診断 (v0.79.0, A): visit count buckets でヒストグラム．
+    /// `bucket[i]` = visit_count が `2^i` 以上 `2^(i+1)` 未満の position 数
+    pub fn get_pos_visit_histogram(&self) -> [u64; 24] {
+        let mut h = [0u64; 24];
+        for &count in self.diag_pos_visits.values() {
+            let bucket = if count == 0 { 0 } else {
+                (32 - count.leading_zeros() - 1).min(23) as usize
+            };
+            h[bucket] += 1;
+        }
+        h
+    }
+
     /// 候補 F (v0.75.0): OR ノード best_idx 選択の dn tie-break を有効化する．
     /// default false．true で `pn == best_pn` 同点時に `max(dn)` で tie-break．
     /// = defender の抵抗が強い attack を優先 → 探索 commit 強化．
     pub fn set_or_dn_tiebreak(&mut self, on: bool) -> &mut Self {
         self.param_or_dn_tiebreak = on;
+        self
+    }
+
+    /// 候補 C (v0.80.0): AND node exhaustive defender prove を有効化．
+    /// default false．true で AND multi-child loop の best_idx 選択を
+    /// "全 unproven defender を順次 prove するため round-robin" に変更．
+    pub fn set_use_exhaustive_and(&mut self, on: bool) -> &mut Self {
+        self.param_use_exhaustive_and = on;
         self
     }
 
@@ -2217,6 +2269,9 @@ impl DfPnSolver {
         self.diag_or_visit_count = 0;
         self.diag_or_proven_count_visits = 0;
         self.diag_or_total_sum = 0;
+        self.diag_pos_visits.clear();
+        self.diag_pos_visits_capped = false;
+        self.exhaustive_and_rr_counter = 0;
         self.killer_table.clear();
         self.check_cache.clear();
         self.refutable_check_failed.clear();
@@ -2920,6 +2975,17 @@ impl DfPnSolver {
             return;
         }
         self.nodes_searched += 1;
+        // 診断 (v0.79.0, A): per-position visit count を集計．
+        // (pos_key, or_node_bit) でキーとし visit count を increment．
+        // 1M entries 超えたら collection 停止 (memory 暴走防止)．
+        if !self.diag_pos_visits_capped {
+            let pk_full = position_key(board);
+            let key = (pk_full << 1) | (if or_node { 1u64 } else { 0u64 });
+            *self.diag_pos_visits.entry(key).or_insert(0) += 1;
+            if self.diag_pos_visits.len() > 1_000_000 {
+                self.diag_pos_visits_capped = true;
+            }
+        }
         if (ply as usize) < 64 {
             self.ply_nodes[ply as usize] += 1;
         }
@@ -5233,6 +5299,29 @@ impl DfPnSolver {
                         );
                         break;
                     }
+                }
+            }
+
+            // 候補 C (v0.80.0): AND node exhaustive defender prove．
+            // AND ノード (or_node=false) かつ proven_count < total_children なら
+            // round-robin で未 proven defender を選択し直す．
+            // best_idx を上書きすることで標準の min(cdn) 選択を override．
+            if !or_node && self.param_use_exhaustive_and && children.len() > 1 {
+                let child_rem_rr = remaining.saturating_sub(1);
+                // 未 proven な children のインデックスを収集
+                let mut unproven_idxs: Vec<usize> = Vec::with_capacity(children.len());
+                for (i, &(_, _, ch_pk, ref ch_h)) in children.iter().enumerate() {
+                    let (cpn, _, _) = self.look_up_pn_dn(ch_pk, ch_h, child_rem_rr);
+                    if cpn != 0 && cpn < INF {
+                        unproven_idxs.push(i);
+                    }
+                }
+                if unproven_idxs.len() >= 2 {
+                    let rr = (self.exhaustive_and_rr_counter as usize)
+                        % unproven_idxs.len();
+                    best_idx = unproven_idxs[rr];
+                    self.exhaustive_and_rr_counter =
+                        self.exhaustive_and_rr_counter.wrapping_add(1);
                 }
             }
 
