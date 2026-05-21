@@ -490,6 +490,11 @@ pub struct DfPnSolver {
     pub(super) diag_and_zero_proven: u64,   // proven_count == 0 で exit した回数
     pub(super) diag_and_full_proven: u64,   // proven_count == total で exit (本来は ProveAND して exit)
 
+    /// 診断 (v0.78.0): OR scan coverage 統計 (AND と対称)．
+    pub(super) diag_or_visit_count: u64,
+    pub(super) diag_or_proven_count_visits: u64,  // proven child があった visits の数
+    pub(super) diag_or_total_sum: u64,
+
     /// melodic-cascading-otter 候補 G (v0.74.0): root child_pn_th の絶対 floor．
     /// 0 (default) で無効．> 0 で root (ply=0) の OR child_pn_th を最低
     /// この値まで引き上げる．これにより 1 つの child に深く commit するための
@@ -944,6 +949,9 @@ impl DfPnSolver {
             diag_and_total_sum: 0,
             diag_and_zero_proven: 0,
             diag_and_full_proven: 0,
+            diag_or_visit_count: 0,
+            diag_or_proven_count_visits: 0,
+            diag_or_total_sum: 0,
             param_or_dn_tiebreak: false,
             root_trace_interval: 10_000,
             root_trace_next: 0,
@@ -1400,6 +1408,16 @@ impl DfPnSolver {
             self.diag_and_total_sum,
             self.diag_and_zero_proven,
             self.diag_and_full_proven,
+        )
+    }
+
+    /// 診断 (v0.78.0): OR scan coverage 統計取得．
+    /// `(visit_count, proven_count_visits, total_sum)`
+    pub fn get_or_coverage_stats(&self) -> (u64, u64, u64) {
+        (
+            self.diag_or_visit_count,
+            self.diag_or_proven_count_visits,
+            self.diag_or_total_sum,
         )
     }
 
@@ -2196,6 +2214,9 @@ impl DfPnSolver {
         self.diag_and_total_sum = 0;
         self.diag_and_zero_proven = 0;
         self.diag_and_full_proven = 0;
+        self.diag_or_visit_count = 0;
+        self.diag_or_proven_count_visits = 0;
+        self.diag_or_total_sum = 0;
         self.killer_table.clear();
         self.check_cache.clear();
         self.refutable_check_failed.clear();
@@ -4210,6 +4231,8 @@ impl DfPnSolver {
                 // OR 全子反証時の disproof_hand 計算用 (path-dep child は除外)．
                 let mut or_disproof_hand = [u8::MAX; HAND_KINDS];
                 let mut or_disproof_initialized = false;
+                // 診断 (v0.78.0): OR scan の proven child 存在を追跡．
+                let mut or_scan_has_proven: bool = false;
 
                 for (i, &(ref _m, child_fh, child_pk, ref child_hand)) in
                     children.iter().enumerate()
@@ -4239,6 +4262,8 @@ impl DfPnSolver {
                         };
 
                     if cpn == 0 {
+                        // 診断: OR scan で proven child を発見
+                        or_scan_has_proven = true;
                         // 子が証明済み → OR ノード証明
                         // Killer Move 記録: 証明を達成した王手は強力なヒント
                         self.record_killer(ply, children[i].0.to_move16());
@@ -4349,6 +4374,13 @@ impl DfPnSolver {
                     if csrc != 0 && cdn > 0 {
                         snda_pairs.push((csrc, cdn));
                     }
+                }
+
+                // 診断 (v0.78.0): OR scan の coverage 記録．
+                {
+                    self.diag_or_visit_count += 1;
+                    self.diag_or_total_sum += children.len() as u64;
+                    if or_scan_has_proven { self.diag_or_proven_count_visits += 1; }
                 }
 
                 if proved_or_disproved {

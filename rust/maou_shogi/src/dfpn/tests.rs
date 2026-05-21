@@ -13255,7 +13255,7 @@ use crate::types::{Color, PieceType};
         std::thread::Builder::new()
             .stack_size(32 * 1024 * 1024)
             .spawn(move || {
-                eprintln!("\n=== 29te AND scan coverage (5M / 60s) ===");
+                eprintln!("\n=== 29te AND/OR scan coverage (5M / 60s) ===");
                 eprintln!("{:<28} {:>10} {:>9} {:>9} {:>5} {:>9} {:>9}",
                     "config", "visits", "avg_chd", "avg_prv", "cov%", "zero", "full");
 
@@ -13274,11 +13274,17 @@ use crate::types::{Color, PieceType};
                     let avg_chd = if visits > 0 { tot_sum as f64 / visits as f64 } else { 0.0 };
                     let avg_prv = if visits > 0 { prv_sum as f64 / visits as f64 } else { 0.0 };
                     let cov = if tot_sum > 0 { 100.0 * prv_sum as f64 / tot_sum as f64 } else { 0.0 };
-                    eprintln!("{:<28} {:>10} {:>9.1} {:>9.1} {:>4.1}% {:>9} {:>9}",
+                    eprintln!("AND[{:<22}] visits={} avg_chd={:.1} avg_prv={:.1} cov={:.1}% zero={} full={}",
                         label, visits, avg_chd, avg_prv, cov, zero, full);
+                    let (or_visits, or_prv_visits, or_tot_sum) = solver.get_or_coverage_stats();
+                    let or_avg_chd = if or_visits > 0 { or_tot_sum as f64 / or_visits as f64 } else { 0.0 };
+                    let or_prv_rate = if or_visits > 0 { 100.0 * or_prv_visits as f64 / or_visits as f64 } else { 0.0 };
+                    eprintln!("OR [{:<22}] visits={} avg_chd={:.1} prv_visits={} ({:.2}%)",
+                        label, or_visits, or_avg_chd, or_prv_visits, or_prv_rate);
                 }
                 eprintln!("===");
                 eprintln!("AND proven 化 = full count / visits．低いほど propagation 詰まり．");
+                eprintln!("OR proven 化 = prv_visits / visits．高ければ OR 側で proof 拾える．");
             }).unwrap().join().unwrap();
     }
 
