@@ -13242,6 +13242,56 @@ use crate::types::{Color, PieceType};
     /// ```
     /// cargo test --release -p maou_shogi -- test_tsume_5_step_by_step --nocapture --ignored
     /// ```
+    /// **[SLOW]** 29te TT lookup hit rate 診断 (v0.72.0)．
+    ///
+    /// 29te ply 0 を 2 つの config (default / skip_ids_shallow) で実行し，
+    /// 各 config の `look_up_pn_dn` 呼び出し分布 (miss/proven/disproven/working)
+    /// を計測．TT 再利用効率 (working hit / total) を観察する．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_tt_lookup_diag --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_tt_lookup_diag() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n=== 29te ply 0: TT lookup hit rate diag (5M nodes) ===");
+                eprintln!("{:<32} {:>10} {:>9} {:>9} {:>9} {:>9} {:>9} {:>6} {:>6}",
+                    "config", "nodes", "lookups", "miss", "proven", "disprov", "working",
+                    "hit%", "miss%");
+
+                for (label, skip_ids, per_move) in [
+                    ("default", false, false),
+                    ("per_move_support_ON", false, true),
+                    ("skip_ids_shallow_ON", true, false),
+                    ("skip_ids + per_move", true, true),
+                ] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(33, 5_000_000, 32767, 60);
+                    solver.set_find_shortest(false);
+                    solver.set_use_per_move_support(per_move);
+                    solver.set_skip_ids_shallow(skip_ids);
+                    solver.set_tt_lookup_diag(true);
+                    let _ = solver.solve(&mut board);
+                    let (lookups, miss, proven, disprov, working) = solver.get_tt_lookup_stats();
+                    let hit_pct = if lookups > 0 {
+                        100.0 * (lookups - miss) as f64 / lookups as f64
+                    } else { 0.0 };
+                    let miss_pct = 100.0 - hit_pct;
+                    eprintln!("{:<32} {:>10} {:>9} {:>9} {:>9} {:>9} {:>9} {:>5.1} {:>5.1}",
+                        label, solver.nodes_searched, lookups, miss, proven, disprov,
+                        working, hit_pct, miss_pct);
+                }
+                eprintln!("===");
+            }).unwrap().join().unwrap();
+    }
+
     /// **[SLOW]** 29te subtree trace 診断 (v0.71.3)．
     ///
     /// `set_trace_ply(N)` で root から N 手目の mid() を trace する．

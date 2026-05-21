@@ -460,6 +460,21 @@ pub struct DfPnSolver {
     /// 診断 (v0.71.4): 全 path 上の child の pn/dn を 1 dump 当たり最大何件出すか．
     pub(super) param_trace_full_children: bool,
 
+    /// 診断 (v0.72.0): TT lookup hit rate を計測する．`param_tt_diag` で有効化．
+    /// `look_up_pn_dn` 呼び出しごとに以下を更新:
+    /// - `diag_tt_lookups`: 総呼び出し回数
+    /// - `diag_tt_misses`: 初期値 (PN_UNIT, PN_UNIT, 0) が返った回数
+    /// - `diag_tt_proven`: (0, INF, _) が返った回数
+    /// - `diag_tt_disproven`: (INF, 0, _) が返った回数
+    /// - `diag_tt_working`: その他 (working entry hit)．
+    pub(super) param_tt_lookup_diag: bool,
+    // Cell で `&self` の look_up_pn_dn からも更新可能にする
+    pub(super) diag_tt_lookups: std::cell::Cell<u64>,
+    pub(super) diag_tt_misses: std::cell::Cell<u64>,
+    pub(super) diag_tt_proven: std::cell::Cell<u64>,
+    pub(super) diag_tt_disproven: std::cell::Cell<u64>,
+    pub(super) diag_tt_working: std::cell::Cell<u64>,
+
     /// 診断 (v0.71.1): periodic GC (overflow-based working TT GC) を無効化する．
     /// default false (= GC fire OK)．true で `nodes_searched % 100_000 == 0` の
     /// GC トリガを skip する．catastrophic forgetting の検証用．
@@ -889,6 +904,12 @@ impl DfPnSolver {
             param_root_trace: false,
             param_trace_ply: 0,
             param_trace_full_children: false,
+            param_tt_lookup_diag: false,
+            diag_tt_lookups: std::cell::Cell::new(0),
+            diag_tt_misses: std::cell::Cell::new(0),
+            diag_tt_proven: std::cell::Cell::new(0),
+            diag_tt_disproven: std::cell::Cell::new(0),
+            diag_tt_working: std::cell::Cell::new(0),
             root_trace_interval: 10_000,
             root_trace_next: 0,
             root_trace_iter: 0,
@@ -1293,6 +1314,24 @@ impl DfPnSolver {
         self
     }
 
+    /// 診断 (v0.72.0): TT lookup hit rate を計測する．
+    pub fn set_tt_lookup_diag(&mut self, on: bool) -> &mut Self {
+        self.param_tt_lookup_diag = on;
+        self
+    }
+
+    /// 診断 (v0.72.0): solve() 完了後に TT lookup 統計を取得．
+    /// `(total, miss, proven, disproven, working)` のタプル．
+    pub fn get_tt_lookup_stats(&self) -> (u64, u64, u64, u64, u64) {
+        (
+            self.diag_tt_lookups.get(),
+            self.diag_tt_misses.get(),
+            self.diag_tt_proven.get(),
+            self.diag_tt_disproven.get(),
+            self.diag_tt_working.get(),
+        )
+    }
+
     pub fn set_use_dag_correction(&mut self, on: bool) {
         self.param_use_dag_correction = on;
     }
@@ -1663,7 +1702,21 @@ impl DfPnSolver {
         hand: &[u8; HAND_KINDS],
         remaining: u16,
     ) -> (u32, u32, u32) {
-        self.look_up_pn_dn_impl(pos_key, hand, remaining, true)
+        let result = self.look_up_pn_dn_impl(pos_key, hand, remaining, true);
+        if self.param_tt_lookup_diag {
+            self.diag_tt_lookups.set(self.diag_tt_lookups.get() + 1);
+            let (pn, dn, _) = result;
+            if pn == PN_UNIT && dn == PN_UNIT {
+                self.diag_tt_misses.set(self.diag_tt_misses.get() + 1);
+            } else if pn == 0 {
+                self.diag_tt_proven.set(self.diag_tt_proven.get() + 1);
+            } else if dn == 0 {
+                self.diag_tt_disproven.set(self.diag_tt_disproven.get() + 1);
+            } else {
+                self.diag_tt_working.set(self.diag_tt_working.get() + 1);
+            }
+        }
+        result
     }
 
 
@@ -2038,6 +2091,11 @@ impl DfPnSolver {
         self.diag_tca_extends = 0;
         self.root_trace_next = if self.param_root_trace { self.root_trace_interval } else { u64::MAX };
         self.root_trace_iter = 0;
+        self.diag_tt_lookups.set(0);
+        self.diag_tt_misses.set(0);
+        self.diag_tt_proven.set(0);
+        self.diag_tt_disproven.set(0);
+        self.diag_tt_working.set(0);
         self.killer_table.clear();
         self.check_cache.clear();
         self.refutable_check_failed.clear();
