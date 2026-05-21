@@ -12930,6 +12930,67 @@ use crate::types::{Color, PieceType};
             .unwrap();
     }
 
+    /// **[SLOW]** 29te ply 0 で各 opt-in flag の効果を sweep する診断．
+    ///
+    /// budget 500K nodes / 15s × N flag combo．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_flag_sweep --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_flag_sweep() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 29te ply 0 flag sweep (500K / 15s)");
+                eprintln!("{}", "=".repeat(80));
+
+                // (label, dml, hs, per_move_support, dag, kh_tca)
+                let configs: &[(&str, bool, bool, bool, bool, bool)] = &[
+                    ("default",                   true, true, false, false, false),
+                    ("dml_OFF",                   false, true, false, false, false),
+                    ("hs_OFF",                    true, false, false, false, false),
+                    ("per_move_support_ON",       true, true, true,  false, false),
+                    ("dag_correction_ON",         true, true, false, true,  false),
+                    ("kh_tca_ON",                 true, true, false, false, true),
+                    ("all_new_ON",                true, true, true,  true,  true),
+                    ("per_move + kh_tca",         true, true, true,  false, true),
+                ];
+
+                for (label, dml, hs, pms, dag, kh) in configs {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(33, 500_000, 32767, 15);
+                    solver.set_find_shortest(false);
+                    solver.set_use_delayed_move_list(*dml);
+                    solver.set_use_handset_combination(*hs);
+                    solver.set_use_per_move_support(*pms);
+                    solver.set_use_dag_correction(*dag);
+                    solver.set_use_kh_tca(*kh);
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed_ms = t.elapsed().as_millis() as u64;
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    eprintln!("[{:25}] nodes={:>7} t(ms)={:>5} res={}",
+                        label, solver.nodes_searched, elapsed_ms, res);
+                }
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// **[SLOW]** melodic-cascading-otter Plan B (v0.70.0) KH TCA inc_flag 効果測定．
     ///
     /// 29te ply 0 を default vs KH TCA ON で比較する．
