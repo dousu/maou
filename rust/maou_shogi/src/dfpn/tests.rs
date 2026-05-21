@@ -12876,6 +12876,9 @@ use crate::types::{Color, PieceType};
     /// ```
     /// cargo test --release -p maou_shogi -- test_tsume_29te_step_by_step --nocapture --ignored
     /// ```
+    ///
+    /// **[SLOW]** 29te ply 0〜last の step-by-step ベンチ．
+    /// budget 5M nodes / 30s × 29 ply = 最大 14.5 min．
     #[test]
     #[ignore]
     fn test_tsume_29te_step_by_step() {
@@ -12919,6 +12922,72 @@ use crate::types::{Color, PieceType};
                     let move_label = if ply == 0 { "(root)" } else { pv[ply-1] };
                     eprintln!("{:<5} {:<14} {:>12} {:>10} {:<14}",
                         ply, move_label, solver.nodes_searched, elapsed_ms, res);
+                }
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// **[SLOW]** melodic-cascading-otter (v0.69.0) Plan C 効果測定．
+    ///
+    /// 29te ply 0-6 を default vs DAG correction ON で比較する．
+    /// budget 5M nodes / 30s × 4 ply × 2 config = 最大 4 min．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_dag_correction_effect --nocapture --ignored
+    /// ```
+    ///
+    /// 目標: DAG ON で ply 0-6 のノード数が default 比 50% 以上削減 (KH に近づく)．
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_dag_correction_effect() {
+        // 予算を段階上昇させて DAG ON の挙動変化を観察する診断版．
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 29te ply 0: budget sweep with DAG diag");
+                eprintln!("{}", "=".repeat(80));
+
+                let budgets = [50_000u64, 100_000, 200_000, 500_000];
+                for &nodes_cap in &budgets {
+                    eprintln!("--- budget = {} nodes ---", nodes_cap);
+                for dag_on in [false, true] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(33, nodes_cap, 32767, 60);
+                    solver.set_find_shortest(false);
+                    solver.set_use_dag_correction(dag_on);
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed_ms = t.elapsed().as_millis() as u64;
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    let cfg_label = if dag_on { "dag_ON" } else { "default" };
+                    eprintln!("[{}] nodes={} t(ms)={} res={}",
+                        cfg_label, solver.nodes_searched, elapsed_ms, res);
+                    if dag_on {
+                        eprintln!(
+                            "  DAG diag: calls={} true={} short_first={} short_none={} max_step={} walks_16={} parent_map_size={}",
+                            solver.diag_dag_calls,
+                            solver.diag_dag_true,
+                            solver.diag_dag_short_first,
+                            solver.diag_dag_short_none,
+                            solver.diag_dag_max_step,
+                            solver.diag_dag_walks_16,
+                            solver.parent_map.len(),
+                        );
+                    }
+                }
                 }
                 eprintln!("{}", "=".repeat(80));
             })

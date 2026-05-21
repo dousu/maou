@@ -392,15 +392,33 @@ pub struct DfPnSolver {
     /// 関連: `delayed_move_list.rs`，`docs/plans/twinkling-hatching-duckling.md` Tier 3．
     pub(super) param_use_delayed_move_list: bool,
 
-    /// twinkling-hatching-duckling Phase B (v0.66.0): path-aware DAG 補正 (簡易版)．
+    /// twinkling-hatching-duckling Phase B (v0.66.0) / melodic-cascading-otter
+    /// (v0.69.0): path-aware DAG 補正．KH `double_count_elimination` 相当．
     ///
-    /// true で，AND multi-child loop で `find_dag_ancestor(child_pk)` が
-    /// 検出した transposition DAG 子を sum 集約から除外し max のみで集約する．
+    /// true で，AND multi-child loop で transposition DAG (child の TT-stored
+    /// 親が現 path 上の先祖と一致する) を検出し，sum 集約から除外し
+    /// max のみで集約する．
     ///
-    /// 簡易版の仕組み: child の pos_key が現在のサーチパス上の先祖 (immediate
-    /// parent 除く) と一致すれば DAG 判定．KH の `double_count_elimination`
-    /// (TT 親情報を辿る) と異なり，path_pos_key の完全一致のみ検出．
+    /// 実装は runtime `parent_map` を使用 (v0.69.0)．`or_insert` で
+    /// child の最初の親のみ記録．以後の同 child 再訪問では parent_map
+    /// から最初の親を取得し，それが path 上にあれば DAG と判定．
     pub(super) param_use_dag_correction: bool,
+
+    /// melodic-cascading-otter (v0.69.0): DAG 検出用 parent_map．
+    /// `child_full_hash → parent_full_hash`．mid() で子に再帰する直前に
+    /// `or_insert` で挿入 (既存 entry は上書きしない)．find_known_ancestor で
+    /// child から先祖チェーンを辿る際に参照．solve() 開始時に clear．
+    pub(super) parent_map: rustc_hash::FxHashMap<u64, u64>,
+
+    /// melodic-cascading-otter (v0.69.0): DAG 検出の診断カウンタ．
+    /// `param_use_dag_correction=true` の場合に動作確認用．
+    /// solve() 開始時にゼロクリア．
+    pub(super) diag_dag_calls: u64,
+    pub(super) diag_dag_true: u64,
+    pub(super) diag_dag_short_first: u64,  // step 0 で immediate_parent と一致して終了
+    pub(super) diag_dag_short_none: u64,   // parent_map に未登録で終了
+    pub(super) diag_dag_max_step: u32,
+    pub(super) diag_dag_walks_16: u64,     // 16 step 完走したケース
 
     /// twinkling-hatching-duckling Phase C (v0.67.0): KH 風 per-move 差別化．
     ///
@@ -798,9 +816,16 @@ impl DfPnSolver {
             // AND ノードで同マス合駒 chain の prev が未解決なら next を skip．
             // 既存 161 fast tests + Mate(15) PV regression pass で default ON．
             param_use_delayed_move_list: true,
-            // twinkling-hatching-duckling Phase B (v0.66.0): path-aware DAG 補正 (簡易版)．
-            // 初期は opt-in (default false)．Mate(15) PV regression で正確性確認後 ON 検討．
+            // twinkling-hatching-duckling Phase B / melodic-cascading-otter (v0.69.0):
+            // path-aware DAG 補正．opt-in (default false)．
             param_use_dag_correction: false,
+            parent_map: rustc_hash::FxHashMap::default(),
+            diag_dag_calls: 0,
+            diag_dag_true: 0,
+            diag_dag_short_first: 0,
+            diag_dag_short_none: 0,
+            diag_dag_max_step: 0,
+            diag_dag_walks_16: 0,
             // Phase C (v0.67.0): per-move attack/defense support 差別化．
             // 初期は opt-in (default false)．効果確認後 default ON 検討．
             param_use_per_move_support: false,
@@ -1161,28 +1186,63 @@ impl DfPnSolver {
         self.param_use_per_move_support = on;
     }
 
-    /// Phase B helper: child の DAG 合流先祖を検出する (v0.66.0 簡易版)．
+    /// melodic-cascading-otter (v0.69.0): full_hash ベースで parent_map を
+    /// 辿って DAG を検出する版．KH `double_count_elimination` 風の挙動．
     ///
-    /// 現在のサーチパス上の先祖 pos_key (immediate parent を除く) と
-    /// `child_pk` が一致すれば，「異なる手順 (hand 違い) で同じ盤面に到達」
-    /// = transposition DAG と判定して true を返す．
+    /// runtime `parent_map` (child_full_hash → first-visit parent_full_hash) を
+    /// 辿り，現 path 上の先祖 (immediate parent を除く) が現れたら
+    /// transposition DAG と判定．
     ///
-    /// `param_use_dag_correction = false` の場合は false を返す．
+    /// `param_use_dag_correction = false` の場合は false．
     ///
-    /// 注: KH の本来の `double_count_elimination` は TT の親情報を辿る
-    /// 深い検出をするが，maou は TT に親情報を持たないため，path 上の
-    /// pos_key 完全一致のみ検出する簡易版で代替．
-    pub(super) fn find_dag_ancestor(&self, child_pk: u64) -> bool {
+    /// **2026-05-21 試行結果**: 29te root で nodes_searched が default と
+    /// 完全一致．DAG 検出は動作するが sum_cpn 集約のみへの反映では探索が
+    /// 変わらず効果なし．`MAX_DAG_LOOKBACK = 16` だと 500K+ で hang する
+    /// 謎挙動あり (`MAX = 4` 推奨)．詳細: docs/plans/melodic-cascading-otter.md §9．
+    pub(super) fn find_dag_ancestor_fh(&mut self, child_full_hash: u64) -> bool {
         if !self.param_use_dag_correction || self.path_len <= 1 {
             return false;
         }
-        // path_pos_key[i] が child_pk に一致する場合 (immediate parent 除く)
-        // = transposition DAG．
-        for i in 0..(self.path_len - 1) {
-            if self.path_pos_key[i] == child_pk {
+        self.diag_dag_calls += 1;
+        // v0.69.0 diagnostic: 16 ステップで explosion を確認．4 に短縮して再評価．
+        const MAX_DAG_LOOKBACK: usize = 4;
+        let immediate_parent = self.path[self.path_len - 1];
+        let mut cur = child_full_hash;
+        for step in 0..MAX_DAG_LOOKBACK {
+            let parent = match self.parent_map.get(&cur) {
+                Some(&p) => p,
+                None => {
+                    if step == 0 { self.diag_dag_short_none += 1; }
+                    if (step as u32) > self.diag_dag_max_step {
+                        self.diag_dag_max_step = step as u32;
+                    }
+                    return false;
+                },
+            };
+            // step=0 で immediate_parent と一致 = 通常の初訪問．DAG ではない．
+            if step == 0 && parent == immediate_parent {
+                self.diag_dag_short_first += 1;
+                return false;
+            }
+            // immediate parent 以外の path 上先祖と一致 → DAG．
+            if parent != immediate_parent && self.path_set.contains(&parent) {
+                self.diag_dag_true += 1;
+                if (step as u32) > self.diag_dag_max_step {
+                    self.diag_dag_max_step = step as u32;
+                }
                 return true;
             }
+            // ループ防止 (parent_map が循環する場合)
+            if parent == cur {
+                if (step as u32) > self.diag_dag_max_step {
+                    self.diag_dag_max_step = step as u32;
+                }
+                return false;
+            }
+            cur = parent;
         }
+        self.diag_dag_walks_16 += 1;
+        self.diag_dag_max_step = 16;
         false
     }
 
@@ -1845,6 +1905,15 @@ impl DfPnSolver {
         self.ply_nodes = [0; 64];
         self.path_len = 0;
         self.path_set.clear();
+        // melodic-cascading-otter (v0.69.0): parent_map を solve() 開始時にクリア．
+        // (DAG 検出は同 solve() 内に閉じる．前回 solve() の TT 残存とは独立)．
+        self.parent_map.clear();
+        self.diag_dag_calls = 0;
+        self.diag_dag_true = 0;
+        self.diag_dag_short_first = 0;
+        self.diag_dag_short_none = 0;
+        self.diag_dag_max_step = 0;
+        self.diag_dag_walks_16 = 0;
         self.killer_table.clear();
         self.check_cache.clear();
         self.refutable_check_failed.clear();
@@ -3457,6 +3526,14 @@ impl DfPnSolver {
         self.path_len += 1;
         self.path_set.insert(full_hash);
 
+        // melodic-cascading-otter (v0.69.0): parent_map に child→parent を or_insert．
+        // path_len >= 2 ならば一つ前のフレームが parent．既存 entry は上書きしない
+        // (最初の親のみ記録 = 再訪問時に DAG として検出可能にする)．
+        if self.param_use_dag_correction && self.path_len >= 2 {
+            let parent_fh = self.path[self.path_len - 2];
+            self.parent_map.entry(full_hash).or_insert(parent_fh);
+        }
+
         // --- チェーン合駒の DN バイアス用玉位置 ---
         // children 内のドロップ子がチェーンマスへのドロップなら，
         // DN バイアスに Chebyshev 距離を使い内側(玉に近い)から探索する．
@@ -4218,10 +4295,10 @@ impl DfPnSolver {
 
                     all_proved = false;
 
-                    // Phase B (v0.66.0): path-aware DAG 補正．
-                    // 子の pos_key が祖先 (immediate parent 除く) の pos_key と一致 =
-                    // transposition DAG．sum 集約から除外し max のみで集約する．
-                    let is_dag_child = self.find_dag_ancestor(child_pk);
+                    // melodic-cascading-otter (v0.69.0): path-aware DAG 補正．
+                    // parent_map ベース (full_hash 一致のみ)．
+                    // 注: 2026-05-21 試行で 29te 効果ゼロ確認．Plan B 移行予定．
+                    let is_dag_child = self.find_dag_ancestor_fh(child_fh);
 
                     // WPN: max(cpn) を追跡し，未証明子をカウント
                     if cpn > max_cpn {
