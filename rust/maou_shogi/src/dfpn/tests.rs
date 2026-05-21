@@ -13242,6 +13242,52 @@ use crate::types::{Color, PieceType};
     /// ```
     /// cargo test --release -p maou_shogi -- test_tsume_5_step_by_step --nocapture --ignored
     /// ```
+    /// **[SLOW]** 29te 候補 D (proven defender bitmap) 効果測定 (v0.81.0)．
+    ///
+    /// param_use_and_proven_bitmap=true で per-AND-position の proven defender
+    /// index を persistent 追跡．lookup miss からの保護と explicit exclusion．
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_and_proven_bitmap_sweep() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n=== 29te D (and_proven_bitmap) sweep (5M / 60s) ===");
+                eprintln!("{:<35} {:>10} {:>10} {:>9} {:>5} {:>9} {:<14}",
+                    "config", "nodes", "t(ms)", "AND_full", "cov%", "proven", "result");
+
+                for (label, skip, per_move, bitmap) in [
+                    ("baseline",                        true, true, false),
+                    ("D (and_proven_bitmap)",           true, true, true),
+                ] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(33, 5_000_000, 32767, 60);
+                    solver.set_find_shortest(false);
+                    solver.set_use_per_move_support(per_move);
+                    solver.set_skip_ids_shallow(skip);
+                    solver.set_use_and_proven_bitmap(bitmap);
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } =>
+                            format!("Mate({})", moves.len()),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                        _ => "Other".to_string(),
+                    };
+                    let (_visits, prv_sum, tot_sum, _zero, full) = solver.get_and_coverage_stats();
+                    let cov = if tot_sum > 0 { 100.0 * prv_sum as f64 / tot_sum as f64 } else { 0.0 };
+                    let proven: u64 = solver.get_proven_per_ply().iter().sum();
+                    eprintln!("{:<35} {:>10} {:>10} {:>9} {:>4.1}% {:>9} {:<14}",
+                        label, solver.nodes_searched, t.elapsed().as_millis(),
+                        full, cov, proven, res);
+                }
+            }).unwrap().join().unwrap();
+    }
+
     /// **[SLOW]** 29te 候補 C (exhaustive AND) 効果測定 (v0.80.0)．
     ///
     /// AND multi-child loop の best_idx 選択を unproven defender round-robin

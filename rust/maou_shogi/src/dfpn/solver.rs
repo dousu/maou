@@ -509,6 +509,15 @@ pub struct DfPnSolver {
     pub(super) param_use_exhaustive_and: bool,
     pub(super) exhaustive_and_rr_counter: u32,
 
+    /// 候補 D (v0.81.0): per-AND-position の proven defender bitmap．
+    /// `pos_key → u64 bitmap` で「どの children index がすでに proven 化されたか」
+    /// を persistent 追跡．`param_use_and_proven_bitmap=true` で有効化．
+    /// AND scan で bitmap 上の bit が立つ defender は **selection 候補から除外**．
+    /// VPN は cpn==0 を毎回 lookup で判定するが，D はそれを memoize し
+    /// remaining mismatch や TT churn による誤判定からも保護．
+    pub(super) param_use_and_proven_bitmap: bool,
+    pub(super) and_proven_bitmap: rustc_hash::FxHashMap<u64, u64>,
+
     /// melodic-cascading-otter 候補 G (v0.74.0): root child_pn_th の絶対 floor．
     /// 0 (default) で無効．> 0 で root (ply=0) の OR child_pn_th を最低
     /// この値まで引き上げる．これにより 1 つの child に深く commit するための
@@ -970,6 +979,8 @@ impl DfPnSolver {
             diag_pos_visits_capped: false,
             param_use_exhaustive_and: false,
             exhaustive_and_rr_counter: 0,
+            param_use_and_proven_bitmap: false,
+            and_proven_bitmap: rustc_hash::FxHashMap::default(),
             param_or_dn_tiebreak: false,
             root_trace_interval: 10_000,
             root_trace_next: 0,
@@ -1478,6 +1489,14 @@ impl DfPnSolver {
     /// "全 unproven defender を順次 prove するため round-robin" に変更．
     pub fn set_use_exhaustive_and(&mut self, on: bool) -> &mut Self {
         self.param_use_exhaustive_and = on;
+        self
+    }
+
+    /// 候補 D (v0.81.0): AND proven defender bitmap を有効化．
+    /// default false．true で per-AND-position に proven defender index bitmap
+    /// を持ち，proven 化済 defender を selection から確実に除外する．
+    pub fn set_use_and_proven_bitmap(&mut self, on: bool) -> &mut Self {
+        self.param_use_and_proven_bitmap = on;
         self
     }
 
@@ -2272,6 +2291,7 @@ impl DfPnSolver {
         self.diag_pos_visits.clear();
         self.diag_pos_visits_capped = false;
         self.exhaustive_and_rr_counter = 0;
+        self.and_proven_bitmap.clear();
         self.killer_table.clear();
         self.check_cache.clear();
         self.refutable_check_failed.clear();
@@ -4683,10 +4703,29 @@ impl DfPnSolver {
                         }
                         // 診断: AND scan の proven child を counting
                         and_scan_proven_count += 1;
+                        // 候補 D (v0.81.0): proven defender を bitmap に記録．
+                        // 次回 visit 時に lookup miss (remaining mismatch 等) があっても
+                        // 「この index は proven 確定」として selection から除外できる．
+                        if self.param_use_and_proven_bitmap && i < 64 {
+                            let entry = self.and_proven_bitmap.entry(pos_key).or_insert(0);
+                            *entry |= 1u64 << i;
+                        }
                         // cross-deduction は all_proved パスで実行される．
                         // VPN: 証明済み子は pn=0 で sum に影響しないため，
                         // child 選択ループもスキップして効率化する．
                         continue;
+                    }
+
+                    // 候補 D (v0.81.0): bitmap で proven 化済みとされている index は
+                    // selection から除外 (lookup miss の保護)．
+                    if self.param_use_and_proven_bitmap && i < 64 {
+                        if let Some(&bm) = self.and_proven_bitmap.get(&pos_key) {
+                            if (bm & (1u64 << i)) != 0 {
+                                // 既に proven 化済と判定されている → スキップ
+                                and_scan_proven_count += 1;
+                                continue;
+                            }
+                        }
                     }
 
                     all_proved = false;
