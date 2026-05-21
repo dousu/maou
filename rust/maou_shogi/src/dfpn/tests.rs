@@ -12816,6 +12816,117 @@ use crate::types::{Color, PieceType};
         }
     }
 
+    /// **[SLOW]** 29te ply 0 config-sweep: 様々なフラグで maou のノード数を計測．
+    /// 30s/5M budget で短時間でテストする．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_root_sweep --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_root_sweep() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        let configs: &[(&str, fn(&mut DfPnSolver))] = &[
+            ("default",                |_s| {}),
+            ("hs_off+dml_off",         |s| {
+                s.set_use_handset_combination(false);
+                s.set_use_delayed_move_list(false);
+            }),
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 29te ply 0 config sweep (5M budget / 30s)");
+                eprintln!("{}", "=".repeat(80));
+                eprintln!("{:<22} {:>12} {:>10} {:<14}",
+                    "config", "nodes", "time(ms)", "result");
+
+                for (label, configure) in configs {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 120);
+                    solver.set_find_shortest(false);
+                    configure(&mut solver);
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let ms = t.elapsed().as_millis() as u64;
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                        _ => "Other".to_string(),
+                    };
+                    eprintln!("{:<22} {:>12} {:>10} {:<14}",
+                        label, solver.nodes_searched, ms, res);
+                }
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// **[SLOW]** 29te を KH PV に沿って 1 手ずつ進めて maou のノード数を測定．
+    /// tsume_5 と同様の backward-step 分析を 29te に対して行う．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_step_by_step --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_step_by_step() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let pv = [
+            "S*7i", "8h9g", "8f8g+", "7h8g", "G*8f", "9g8f", "5g6h+", "8i7g",
+            "R*8e", "8f9g", "8e8g+", "9g8g", "P*8f", "8g8f", "P*8e", "8f8g",
+            "G*8f", "8g9h", "7i8h+", "9h8h", "8f7g", "8h8i", "6h6g", "8i9h",
+            "S*8g", "9h9g", "8g8h", "9g9h", "N*8f",
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 29te step-by-step (maou default)");
+                eprintln!("{}", "=".repeat(80));
+                eprintln!("{:<5} {:<14} {:>12} {:>10} {:<14}",
+                    "ply", "move_played", "nodes", "time(ms)", "result");
+
+                for ply in 0..pv.len() {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    for usi in &pv[..ply] {
+                        let m = board.move_from_usi(usi).unwrap();
+                        board.do_move(m);
+                    }
+                    let remaining_moves = pv.len() - ply;
+                    let depth = (remaining_moves as u32 + 4).min(41);
+                    let mut solver = DfPnSolver::with_timeout(depth, 5_000_000, 32767, 30);
+                    solver.set_find_shortest(false);
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed_ms = t.elapsed().as_millis() as u64;
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    let move_label = if ply == 0 { "(root)" } else { pv[ply-1] };
+                    eprintln!("{:<5} {:<14} {:>12} {:>10} {:<14}",
+                        ply, move_label, solver.nodes_searched, elapsed_ms, res);
+                }
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// **[SLOW]** twinkling-hatching-duckling Tier tuning loop 用ベンチ．
     ///
     /// 39 手詰め問題 root (ply 0) を大バジェットで解くまでの時間/ノード数を計測．
