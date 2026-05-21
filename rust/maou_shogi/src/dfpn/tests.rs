@@ -12948,15 +12948,16 @@ use crate::types::{Color, PieceType};
         std::thread::Builder::new()
             .stack_size(32 * 1024 * 1024)
             .spawn(move || {
-                // 長時間 trace で S*7i pn 振動と switch 挙動を観察．
-                eprintln!("\n=== config: per_move_support_ON, long trace (2M / 60s) ===");
+                // 短時間 trace ply 0 (root) で挙動確認．
+                eprintln!("\n=== config: per_move_support_ON + skip_ids_shallow, ply=0 trace (5M) ===");
                 let mut board = Board::new();
                 board.set_sfen(sfen).unwrap();
-                let mut solver = DfPnSolver::with_timeout(33, 20_000_000, 32767, 180);
+                let mut solver = DfPnSolver::with_timeout(33, 5_000_000, 32767, 60);
                 solver.set_find_shortest(false);
                 solver.set_use_per_move_support(true);
                 solver.set_skip_ids_shallow(true);
                 solver.set_root_trace(true, 1_000_000);
+                solver.set_trace_ply(0);
                 let t = Instant::now();
                 let result = solver.solve(&mut board);
                 let elapsed_ms = t.elapsed().as_millis() as u64;
@@ -13241,6 +13242,51 @@ use crate::types::{Color, PieceType};
     /// ```
     /// cargo test --release -p maou_shogi -- test_tsume_5_step_by_step --nocapture --ignored
     /// ```
+    /// **[SLOW]** 29te subtree trace 診断 (v0.71.3)．
+    ///
+    /// `set_trace_ply(N)` で root から N 手目の mid() を trace する．
+    /// ply 0 で正解の root move (S*7i) を選んだ後の defender (ply 1) 挙動を観察．
+    /// この test は SFEN を S*7i 後の局面に進めて root として与えることで，
+    /// ply 0 = defender (AND) として trace する．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_ply1_trace --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_ply1_trace() {
+        // 29te 原局面 (white to move) - 通常の探索を回し ply 1 (root child の最初の
+        // 子=defender) の挙動を observe．`set_trace_ply(1)` で発火．
+        let sfen_orig = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n=== 29te ply=1 trace (defender AND-node inside root search) ===");
+                let mut board = Board::new();
+                board.set_sfen(sfen_orig).unwrap();
+
+                let mut solver = DfPnSolver::with_timeout(33, 2_000_000, 32767, 60);
+                solver.set_find_shortest(false);
+                solver.set_use_per_move_support(true);
+                solver.set_skip_ids_shallow(true);
+                solver.set_root_trace(true, 500_000);
+                solver.set_trace_ply(1);
+                solver.set_trace_full_children(true);
+                let t = Instant::now();
+                let result = solver.solve(&mut board);
+                let res = match &result {
+                    TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                    TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                    TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    _ => "Other".to_string(),
+                };
+                eprintln!("\n=== final: nodes={} t(ms)={} res={} ===",
+                    solver.nodes_searched, t.elapsed().as_millis(), res);
+            }).unwrap().join().unwrap();
+    }
+
     /// skip_ids_shallow フラグ ON/OFF 比較 (tsume_5 ply 0)．
     /// 短縮詰問題で IDS の効果を観察．
     #[test]

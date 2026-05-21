@@ -454,6 +454,12 @@ pub struct DfPnSolver {
     /// ```
     pub(super) param_root_trace: bool,
 
+    /// 診断 (v0.71.3): trace 対象の ply (default 0 = root)．
+    pub(super) param_trace_ply: u32,
+
+    /// 診断 (v0.71.4): 全 path 上の child の pn/dn を 1 dump 当たり最大何件出すか．
+    pub(super) param_trace_full_children: bool,
+
     /// 診断 (v0.71.1): periodic GC (overflow-based working TT GC) を無効化する．
     /// default false (= GC fire OK)．true で `nodes_searched % 100_000 == 0` の
     /// GC トリガを skip する．catastrophic forgetting の検証用．
@@ -881,6 +887,8 @@ impl DfPnSolver {
             diag_tca_decrements: 0,
             diag_tca_extends: 0,
             param_root_trace: false,
+            param_trace_ply: 0,
+            param_trace_full_children: false,
             root_trace_interval: 10_000,
             root_trace_next: 0,
             root_trace_iter: 0,
@@ -1260,15 +1268,28 @@ impl DfPnSolver {
         self
     }
 
-    /// 診断 (v0.71.0): root (ply 0) trace の有効化．
+    /// 診断 (v0.71.0): per-ply mid() trace の有効化．
     /// default false．有効化すると mid() の OR/AND multi-child loop で
-    /// ply==0 のたびに root_trace_interval (default 10000) ごとに per-iteration
-    /// 状態を eprintln! でダンプする．
+    /// `ply == param_trace_ply` のたびに root_trace_interval ノード経過ごとに
+    /// per-iteration 状態を eprintln! でダンプする．
     pub fn set_root_trace(&mut self, on: bool, interval_nodes: u64) -> &mut Self {
         self.param_root_trace = on;
         if interval_nodes > 0 {
             self.root_trace_interval = interval_nodes;
         }
+        self
+    }
+
+    /// 診断 (v0.71.3): trace 対象の ply を設定．`set_root_trace` と組合せて使用．
+    /// default 0 (= root)．例: 1 で root child 入った直後 (defender's first move) を trace．
+    pub fn set_trace_ply(&mut self, ply: u32) -> &mut Self {
+        self.param_trace_ply = ply;
+        self
+    }
+
+    /// 診断 (v0.71.4): trace 時に top-10 child のみでなく全 children を出力する．
+    pub fn set_trace_full_children(&mut self, on: bool) -> &mut Self {
+        self.param_trace_full_children = on;
         self
     }
 
@@ -4759,11 +4780,11 @@ impl DfPnSolver {
                 (pn_threshold, dn_threshold)
             };
 
-            // melodic-cascading-otter 診断 (v0.71.0): root trace．
-            // ply==0 で root_trace_interval ノード経過ごとに children pn/dn と
-            // best_idx を eprintln! でダンプ．param_root_trace=false なら no-op．
+            // melodic-cascading-otter 診断 (v0.71.0/3): per-ply trace．
+            // `ply == param_trace_ply` で root_trace_interval ノード経過ごとに
+            // children pn/dn と best_idx を eprintln! でダンプ．
             if self.param_root_trace
-                && ply == 0
+                && ply == self.param_trace_ply
                 && self.nodes_searched >= self.root_trace_next
             {
                 self.root_trace_iter += 1;
@@ -4772,16 +4793,26 @@ impl DfPnSolver {
                 } else {
                     "?".to_string()
                 };
+                // 親 path 情報 (path[0..self.path_len-1]) を出力
+                let path_str: String = (0..self.path_len.saturating_sub(1))
+                    .map(|i| format!("ph={:#x}", self.path[i] & 0xFFFF))
+                    .collect::<Vec<_>>()
+                    .join(" → ");
                 eprintln!(
-                    "[root_trace iter={} nodes={}] best_idx={} best={} pn={}/{} dn={}/{} children={}",
+                    "[trace ply={} iter={} nodes={}] or={} best_idx={} best={} pn={}/{} dn={}/{} children={}",
+                    ply,
                     self.root_trace_iter,
                     self.nodes_searched,
+                    or_node,
                     best_idx,
                     best_move_str,
                     current_pn, eff_pn_th,
                     current_dn, eff_dn_th,
                     children.len(),
                 );
+                if !path_str.is_empty() {
+                    eprintln!("  path: {}", path_str);
+                }
                 // top-10 候補のみダンプ (children 全部だと長すぎる)
                 let child_rem = remaining.saturating_sub(1);
                 let mut child_dump: Vec<(u32, u32, &Move, usize)> = children.iter()
@@ -4797,7 +4828,8 @@ impl DfPnSolver {
                 } else {
                     child_dump.sort_by_key(|&(_, d, _, _)| d);
                 }
-                for (cpn, cdn, m, i) in child_dump.iter().take(10) {
+                let take_n = if self.param_trace_full_children { child_dump.len() } else { 10 };
+                for (cpn, cdn, m, i) in child_dump.iter().take(take_n) {
                     eprintln!("  [{:>2}] {} pn={} dn={}", i, m.to_usi(), cpn, cdn);
                 }
                 self.root_trace_next = self.nodes_searched
