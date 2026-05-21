@@ -13242,6 +13242,142 @@ use crate::types::{Color, PieceType};
     /// ```
     /// cargo test --release -p maou_shogi -- test_tsume_5_step_by_step --nocapture --ignored
     /// ```
+    /// **[SLOW]** 29te AND coverage 調査 (v0.77.0)．
+    ///
+    /// AND 多子 scan 完了時の proven_count/total_children 分布を計測．
+    /// proven が full (=AND proven) になる回数が極端に少ない場合，proof
+    /// propagation が止まる原因と判明．
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_and_coverage() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n=== 29te AND scan coverage (5M / 60s) ===");
+                eprintln!("{:<28} {:>10} {:>9} {:>9} {:>5} {:>9} {:>9}",
+                    "config", "visits", "avg_chd", "avg_prv", "cov%", "zero", "full");
+
+                for (label, skip, per_move) in [
+                    ("default",                false, false),
+                    ("skip_ids+per_move",      true, true),
+                ] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(33, 5_000_000, 32767, 60);
+                    solver.set_find_shortest(false);
+                    solver.set_use_per_move_support(per_move);
+                    solver.set_skip_ids_shallow(skip);
+                    let _ = solver.solve(&mut board);
+                    let (visits, prv_sum, tot_sum, zero, full) = solver.get_and_coverage_stats();
+                    let avg_chd = if visits > 0 { tot_sum as f64 / visits as f64 } else { 0.0 };
+                    let avg_prv = if visits > 0 { prv_sum as f64 / visits as f64 } else { 0.0 };
+                    let cov = if tot_sum > 0 { 100.0 * prv_sum as f64 / tot_sum as f64 } else { 0.0 };
+                    eprintln!("{:<28} {:>10} {:>9.1} {:>9.1} {:>4.1}% {:>9} {:>9}",
+                        label, visits, avg_chd, avg_prv, cov, zero, full);
+                }
+                eprintln!("===");
+                eprintln!("AND proven 化 = full count / visits．低いほど propagation 詰まり．");
+            }).unwrap().join().unwrap();
+    }
+
+    /// **[SLOW]** 29te proven entry 蓄積調査 (v0.76.0)．
+    ///
+    /// `get_proven_per_ply().sum()` (= store 試行回数) と
+    /// `get_tt_proven_len()` (= unique entry 数) を比較し，proven entry が
+    /// TT 上で overwrite/GC されていないか確認する．
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_proven_persistence() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n=== 29te proven entry 永続性調査 (5M nodes / 60s) ===");
+                eprintln!("{:<35} {:>12} {:>12} {:>12} {:>5}",
+                    "config", "stores", "tt_unique", "loss", "loss%");
+
+                for (label, skip, per_move) in [
+                    ("default",                false, false),
+                    ("skip_ids+per_move",      true, true),
+                ] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(33, 5_000_000, 32767, 60);
+                    solver.set_find_shortest(false);
+                    solver.set_use_per_move_support(per_move);
+                    solver.set_skip_ids_shallow(skip);
+                    let _ = solver.solve(&mut board);
+                    let stores: u64 = solver.get_proven_per_ply().iter().sum();
+                    let unique = solver.get_tt_proven_len() as u64;
+                    let loss = stores.saturating_sub(unique);
+                    let loss_pct = if stores > 0 { 100.0 * loss as f64 / stores as f64 } else { 0.0 };
+                    eprintln!("{:<35} {:>12} {:>12} {:>12} {:>4.1}%",
+                        label, stores, unique, loss, loss_pct);
+                }
+                eprintln!("===");
+                eprintln!("loss > 0: proof entries が overwrite/GC で消失");
+                eprintln!("loss ≈ 0: proof entries は全て保持");
+            }).unwrap().join().unwrap();
+    }
+
+    /// **[SLOW]** 29te 実 node 数測定: maou が実際に詰みを発見するまでの ノード数．
+    /// KH (19K nodes / 14ms) との直接比較で algorithm 差を定量化する．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_actual_nodes --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_actual_nodes() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n=== 29te 実 node 数測定 ===");
+                eprintln!("KH baseline: 19K nodes / 14ms");
+                eprintln!("");
+                eprintln!("{:<35} {:>12} {:>10} {:<20}",
+                    "config", "nodes", "t(ms)", "result");
+
+                // maou が実際に 29te を解くまでの node 数を測定 (default のみ
+                // 80M / 480s で実行)．`test_tsume_6_29te` は 50M/300s で pass する．
+                let configs: &[(&str, bool, bool, u32, bool)] = &[
+                    ("default (long run)",            false, false, 0, false),
+                    ("skip_ids+per_move (long)",      true, true, 0, false),
+                ];
+
+                for (label, skip_ids, per_move, floor, dn_tie) in configs {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    // 80M / 480s で実行．`test_tsume_6_29te` の 50M/300s 設定より少し広い予算．
+                    let mut solver = DfPnSolver::with_timeout(31, 80_000_000, 32767, 480);
+                    solver.set_find_shortest(false);
+                    solver.set_use_per_move_support(*per_move);
+                    solver.set_skip_ids_shallow(*skip_ids);
+                    solver.set_root_child_pn_floor(*floor);
+                    solver.set_or_dn_tiebreak(*dn_tie);
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let elapsed = t.elapsed();
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } =>
+                            format!("Mate({})", moves.len()),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                        _ => "Other".to_string(),
+                    };
+                    eprintln!("{:<35} {:>12} {:>10} {:<20}",
+                        label, solver.nodes_searched, elapsed.as_millis(), res);
+                }
+                eprintln!("\n比較: KH 19K nodes / 14ms vs maou 上記の数値で ratio を計算");
+            }).unwrap().join().unwrap();
+    }
+
     /// **[SLOW]** 29te 候補 F (dn tie-break) sweep (v0.75.0)．
     ///
     /// OR ノード best_idx 選択の tie-break を反転 (max dn) し，mate path

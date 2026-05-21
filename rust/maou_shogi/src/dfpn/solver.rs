@@ -481,6 +481,15 @@ pub struct DfPnSolver {
     /// 累積したかのヒストグラムが取れる．候補 E．
     pub(super) diag_proven_per_ply: [u64; 64],
 
+    /// 診断 (v0.77.0): AND ノード multi-child loop 完了時の coverage 統計．
+    /// `(proven_count, total_children)` のヒストグラム．
+    /// proven_count ratio が低いまま loop が exit → AND coverage が不足．
+    pub(super) diag_and_visit_count: u64,
+    pub(super) diag_and_proven_sum: u64,    // proven_count の合計
+    pub(super) diag_and_total_sum: u64,     // total_children の合計
+    pub(super) diag_and_zero_proven: u64,   // proven_count == 0 で exit した回数
+    pub(super) diag_and_full_proven: u64,   // proven_count == total で exit (本来は ProveAND して exit)
+
     /// melodic-cascading-otter 候補 G (v0.74.0): root child_pn_th の絶対 floor．
     /// 0 (default) で無効．> 0 で root (ply=0) の OR child_pn_th を最低
     /// この値まで引き上げる．これにより 1 つの child に深く commit するための
@@ -930,6 +939,11 @@ impl DfPnSolver {
             diag_tt_working: std::cell::Cell::new(0),
             diag_proven_per_ply: [0u64; 64],
             param_root_child_pn_floor: 0,
+            diag_and_visit_count: 0,
+            diag_and_proven_sum: 0,
+            diag_and_total_sum: 0,
+            diag_and_zero_proven: 0,
+            diag_and_full_proven: 0,
             param_or_dn_tiebreak: false,
             root_trace_interval: 10_000,
             root_trace_next: 0,
@@ -1365,6 +1379,28 @@ impl DfPnSolver {
     pub fn set_root_child_pn_floor(&mut self, floor: u32) -> &mut Self {
         self.param_root_child_pn_floor = floor;
         self
+    }
+
+    /// 診断 (v0.76.0): TT の unique proven entry 数を取得．
+    /// `get_proven_per_ply().sum()` (= total store 回数) と比較することで，
+    /// proven entry が overwrite されていないかを確認できる．
+    pub fn get_tt_proven_len(&self) -> usize {
+        self.table.proven_len()
+    }
+
+    /// 診断 (v0.77.0): AND scan coverage 統計取得．
+    /// `(visit_count, proven_sum, total_sum, zero_proven_count, full_proven_count)`
+    /// - 平均 coverage = proven_sum / total_sum
+    /// - zero_proven_count: proven=0 で exit した AND scan 回数 (proof 進捗なし)
+    /// - full_proven_count: 全 children proven で exit (AND proven)
+    pub fn get_and_coverage_stats(&self) -> (u64, u64, u64, u64, u64) {
+        (
+            self.diag_and_visit_count,
+            self.diag_and_proven_sum,
+            self.diag_and_total_sum,
+            self.diag_and_zero_proven,
+            self.diag_and_full_proven,
+        )
     }
 
     /// 候補 F (v0.75.0): OR ノード best_idx 選択の dn tie-break を有効化する．
@@ -2155,6 +2191,11 @@ impl DfPnSolver {
         self.diag_tt_disproven.set(0);
         self.diag_tt_working.set(0);
         self.diag_proven_per_ply = [0u64; 64];
+        self.diag_and_visit_count = 0;
+        self.diag_and_proven_sum = 0;
+        self.diag_and_total_sum = 0;
+        self.diag_and_zero_proven = 0;
+        self.diag_and_full_proven = 0;
         self.killer_table.clear();
         self.check_cache.clear();
         self.refutable_check_failed.clear();
@@ -4430,6 +4471,8 @@ impl DfPnSolver {
                 let mut max_cpn: u32 = 0;
                 let mut unproven_count: u32 = 0;
                 let mut sum_cpn: u64 = 0;
+                // 診断 (v0.77.0): AND scan 内の proven_count を追跡
+                let mut and_scan_proven_count: u32 = 0;
                 // CD-WPN: 同一マスのドロップを1グループとして数える
                 // cd_sq_min_pn[sq] = そのマスへの全ドロップの min(cpn) (グループ代表値)
                 let mut cd_grouped_count: u32 = 0;
@@ -4540,6 +4583,8 @@ impl DfPnSolver {
                                 and_proof[k] = child_ph[k];
                             }
                         }
+                        // 診断: AND scan の proven child を counting
+                        and_scan_proven_count += 1;
                         // cross-deduction は all_proved パスで実行される．
                         // VPN: 証明済み子は pn=0 で sum に影響しないため，
                         // child 選択ループもスキップして効率化する．
@@ -4684,6 +4729,18 @@ impl DfPnSolver {
                     } else if effective_cdn < second_best {
                         second_best = effective_cdn;
                     }
+                }
+
+                // 診断 (v0.77.0): AND scan の coverage を記録．
+                // scan 完了後の proven_count / total_children を集計．
+                {
+                    let total = children.len() as u64;
+                    let proven = and_scan_proven_count as u64;
+                    self.diag_and_visit_count += 1;
+                    self.diag_and_proven_sum += proven;
+                    self.diag_and_total_sum += total;
+                    if proven == 0 { self.diag_and_zero_proven += 1; }
+                    if proven == total && total > 0 { self.diag_and_full_proven += 1; }
                 }
 
                 if proved_or_disproved {
