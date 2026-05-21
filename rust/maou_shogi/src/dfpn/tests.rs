@@ -12948,11 +12948,15 @@ use crate::types::{Color, PieceType};
         std::thread::Builder::new()
             .stack_size(32 * 1024 * 1024)
             .spawn(move || {
+                // 長時間 trace で S*7i pn 振動と switch 挙動を観察．
+                eprintln!("\n=== config: per_move_support_ON, long trace (2M / 60s) ===");
                 let mut board = Board::new();
                 board.set_sfen(sfen).unwrap();
-                let mut solver = DfPnSolver::with_timeout(33, 200_000, 32767, 30);
+                let mut solver = DfPnSolver::with_timeout(33, 20_000_000, 32767, 180);
                 solver.set_find_shortest(false);
-                solver.set_root_trace(true, 25_000);
+                solver.set_use_per_move_support(true);
+                solver.set_skip_ids_shallow(true);
+                solver.set_root_trace(true, 1_000_000);
                 let t = Instant::now();
                 let result = solver.solve(&mut board);
                 let elapsed_ms = t.elapsed().as_millis() as u64;
@@ -13237,6 +13241,35 @@ use crate::types::{Color, PieceType};
     /// ```
     /// cargo test --release -p maou_shogi -- test_tsume_5_step_by_step --nocapture --ignored
     /// ```
+    /// skip_ids_shallow フラグ ON/OFF 比較 (tsume_5 ply 0)．
+    /// 短縮詰問題で IDS の効果を観察．
+    #[test]
+    #[ignore]
+    fn test_tsume_5_skip_ids_shallow_compare() {
+        let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                for skip in [false, true] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(21, 5_000_000, 32767, 30);
+                    solver.set_find_shortest(false);
+                    solver.set_skip_ids_shallow(skip);
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                        _ => "Other".to_string(),
+                    };
+                    eprintln!("[skip_ids_shallow={}] nodes={} t(ms)={} res={}",
+                        skip, solver.nodes_searched, t.elapsed().as_millis(), res);
+                }
+            })
+            .unwrap().join().unwrap();
+    }
+
     #[test]
     #[ignore]
     fn test_tsume_5_step_by_step() {

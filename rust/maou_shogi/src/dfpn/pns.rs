@@ -1375,7 +1375,12 @@ impl DfPnSolver {
         let saved_depth = self.depth;
         // saved_depth_for_epsilon は full-depth 用に saved_depth を保持する．
         self.saved_depth_for_epsilon = saved_depth;
-        let mut ids_depth: u32 = 2;
+        // 診断 (v0.71.2): `param_skip_ids_shallow=true` で IDS の浅い iter を skip．
+        let mut ids_depth: u32 = if self.param_skip_ids_shallow {
+            saved_depth
+        } else {
+            2
+        };
         let total_max_nodes = self.max_nodes;
         // PNS で蓄積された中間エントリ(pn>0, dn>0)を除去し proof のみ保持する．
         // 中間エントリを保持すると以下の問題が発生する:

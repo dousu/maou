@@ -454,6 +454,16 @@ pub struct DfPnSolver {
     /// ```
     pub(super) param_root_trace: bool,
 
+    /// 診断 (v0.71.1): periodic GC (overflow-based working TT GC) を無効化する．
+    /// default false (= GC fire OK)．true で `nodes_searched % 100_000 == 0` の
+    /// GC トリガを skip する．catastrophic forgetting の検証用．
+    pub(super) param_disable_periodic_gc: bool,
+
+    /// 診断 (v0.71.2): IDS の浅い depth 反復を skip して full depth から開始する．
+    /// default false (= 通常 IDS depth=2,4,6,...)．true で `ids_depth=saved_depth` 直行．
+    /// IDS による TT 再評価 (remaining 違いで初期値復活) の影響を排除する検証用．
+    pub(super) param_skip_ids_shallow: bool,
+
     /// root_trace の dump 間隔 (nodes)．`param_root_trace=true` のときに使用．
     pub(super) root_trace_interval: u64,
     pub(super) root_trace_next: u64,
@@ -874,6 +884,8 @@ impl DfPnSolver {
             root_trace_interval: 10_000,
             root_trace_next: 0,
             root_trace_iter: 0,
+            param_disable_periodic_gc: false,
+            param_skip_ids_shallow: false,
             // Phase C (v0.67.0): per-move attack/defense support 差別化．
             // 初期は opt-in (default false)．効果確認後 default ON 検討．
             param_use_per_move_support: false,
@@ -1229,6 +1241,22 @@ impl DfPnSolver {
     /// 深い transposition chain での threshold extension を継続させる．
     pub fn set_use_kh_tca(&mut self, on: bool) -> &mut Self {
         self.param_use_kh_tca = on;
+        self
+    }
+
+    /// 診断 (v0.71.1): periodic GC を無効化する．
+    /// default false．catastrophic forgetting の検証用．
+    /// 大規模 working TT で OOM の可能性があるので long-running 検証時注意．
+    pub fn set_disable_periodic_gc(&mut self, on: bool) -> &mut Self {
+        self.param_disable_periodic_gc = on;
+        self
+    }
+
+    /// 診断 (v0.71.2): IDS の浅い depth 反復 (depth=2,4,6,...) を skip し，
+    /// 最初から `saved_depth` full depth で MID を実行する．
+    /// default false．`remaining` 違いによる TT 再評価コストを排除する検証用．
+    pub fn set_skip_ids_shallow(&mut self, on: bool) -> &mut Self {
+        self.param_skip_ids_shallow = on;
         self
     }
 
@@ -2698,7 +2726,7 @@ impl DfPnSolver {
         // === Periodic GC (ProvenTT / WorkingTT 独立) ===
         // overflow カウントベースで GC をトリガする(充填率の全走査を避ける)．
         // intermediate 保護 + パス保護により，GC で探索が崩壊することはない．
-        if self.nodes_searched % 100_000 == 0 {
+        if self.nodes_searched % 100_000 == 0 && !self.param_disable_periodic_gc {
             let overflow = self.table.drain_working_overflow();
 
             // overflow が閾値を超え，かつ前回 GC から十分なノードが経過したら実行．
