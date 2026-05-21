@@ -13252,9 +13252,10 @@ use crate::types::{Color, PieceType};
         std::thread::Builder::new()
             .stack_size(32 * 1024 * 1024)
             .spawn(move || {
+                // Phase 4: 小 budget で動作確認 (10K nodes / 5s)．
                 let mut board = Board::new();
                 board.set_sfen(sfen).unwrap();
-                let mut solver = DfPnSolver::with_timeout(21, 1_000_000, 32767, 30);
+                let mut solver = DfPnSolver::with_timeout(21, 10_000, 32767, 5);
                 let t = Instant::now();
                 let result = solver.solve_v2(&mut board);
                 let elapsed_ms = t.elapsed().as_millis() as u64;
