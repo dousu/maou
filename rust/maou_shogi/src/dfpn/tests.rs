@@ -13242,6 +13242,62 @@ use crate::types::{Color, PieceType};
     /// ```
     /// cargo test --release -p maou_shogi -- test_tsume_5_step_by_step --nocapture --ignored
     /// ```
+    /// **[SLOW]** 29te 候補 F (dn tie-break) sweep (v0.75.0)．
+    ///
+    /// OR ノード best_idx 選択の tie-break を反転 (max dn) し，mate path
+    /// commitment を強化する効果を測定．G + per_move + skip_ids との組合せで
+    /// 29te ply 0 解決速度を比較．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_or_dn_tiebreak_sweep --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_or_dn_tiebreak_sweep() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n=== 29te ply 0 F (dn tie-break) sweep (5M / 60s) ===");
+                eprintln!("{:<35} {:>10} {:>9} {:>9} {:<14}",
+                    "config", "nodes", "t(ms)", "proven", "result");
+
+                // (label, skip_ids, per_move, root_floor, dn_tie)
+                let configs: &[(&str, bool, bool, u32, bool)] = &[
+                    ("baseline (skip+per_move)",            true, true, 0, false),
+                    ("F (dn_tiebreak)",                     true, true, 0, true),
+                    ("G+F (floor=100K, dn_tiebreak)",       true, true, 100_000, true),
+                    ("G+F (floor=1M, dn_tiebreak)",         true, true, 1_000_000, true),
+                ];
+
+                for (label, skip_ids, per_move, floor, dn_tie) in configs {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(33, 5_000_000, 32767, 60);
+                    solver.set_find_shortest(false);
+                    solver.set_use_per_move_support(*per_move);
+                    solver.set_skip_ids_shallow(*skip_ids);
+                    solver.set_root_child_pn_floor(*floor);
+                    solver.set_or_dn_tiebreak(*dn_tie);
+                    let t = Instant::now();
+                    let result = solver.solve(&mut board);
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                        _ => "Other".to_string(),
+                    };
+                    let hist = solver.get_proven_per_ply();
+                    let total_proven: u64 = hist.iter().sum();
+                    eprintln!("{:<35} {:>10} {:>9} {:>9} {:<14}",
+                        label, solver.nodes_searched, t.elapsed().as_millis(),
+                        total_proven, res);
+                }
+            }).unwrap().join().unwrap();
+    }
+
     /// **[SLOW]** 29te root child_pn_floor sweep (v0.74.0, 候補 G)．
     ///
     /// `set_root_child_pn_floor(N)` で root の OR child_pn_th を最低 N まで

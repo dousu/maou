@@ -487,6 +487,12 @@ pub struct DfPnSolver {
     /// pn 予算を保証する．推奨値の出発点: 100_000 (= 6250 * PN_UNIT)．
     pub(super) param_root_child_pn_floor: u32,
 
+    /// melodic-cascading-otter 候補 F (v0.75.0): OR ノード best_idx 選択の
+    /// mate path commitment．default false で従来挙動 (argmin pn)．true で:
+    /// argmin pn の tie 時 (`pn == best_pn`) に max(dn) で tie-break する．
+    /// = defender の抵抗が強い attack を優先 → 探索 commit 強化．
+    pub(super) param_or_dn_tiebreak: bool,
+
     /// 診断 (v0.71.1): periodic GC (overflow-based working TT GC) を無効化する．
     /// default false (= GC fire OK)．true で `nodes_searched % 100_000 == 0` の
     /// GC トリガを skip する．catastrophic forgetting の検証用．
@@ -924,6 +930,7 @@ impl DfPnSolver {
             diag_tt_working: std::cell::Cell::new(0),
             diag_proven_per_ply: [0u64; 64],
             param_root_child_pn_floor: 0,
+            param_or_dn_tiebreak: false,
             root_trace_interval: 10_000,
             root_trace_next: 0,
             root_trace_iter: 0,
@@ -1357,6 +1364,14 @@ impl DfPnSolver {
     /// ply=0 の OR child の pn 予算をこの値以上に引き上げ，深い commit を可能にする．
     pub fn set_root_child_pn_floor(&mut self, floor: u32) -> &mut Self {
         self.param_root_child_pn_floor = floor;
+        self
+    }
+
+    /// 候補 F (v0.75.0): OR ノード best_idx 選択の dn tie-break を有効化する．
+    /// default false．true で `pn == best_pn` 同点時に `max(dn)` で tie-break．
+    /// = defender の抵抗が強い attack を優先 → 探索 commit 強化．
+    pub fn set_or_dn_tiebreak(&mut self, on: bool) -> &mut Self {
+        self.param_or_dn_tiebreak = on;
         self
     }
 
@@ -4262,9 +4277,17 @@ impl DfPnSolver {
                     if cpn < current_pn {
                         current_pn = cpn;
                     }
+                    // OR best_idx 選択: 主に argmin(cpn)．tie-break:
+                    // - default: argmin(cdn) — defender が反証しやすい child から確認
+                    // - param_or_dn_tiebreak=true (F, v0.75.0): argmax(cdn) —
+                    //   defender 抵抗が強い child を優先 (mate path commitment)
+                    let tie_better = if self.param_or_dn_tiebreak {
+                        cdn > best_pn_dn.1
+                    } else {
+                        cdn < best_pn_dn.1
+                    };
                     if cpn < select_best_pn
-                        || (cpn == select_best_pn
-                            && cdn < best_pn_dn.1)
+                        || (cpn == select_best_pn && tie_better)
                     {
                         second_best = select_best_pn;
                         select_best_pn = cpn;
