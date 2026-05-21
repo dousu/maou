@@ -481,6 +481,12 @@ pub struct DfPnSolver {
     /// 累積したかのヒストグラムが取れる．候補 E．
     pub(super) diag_proven_per_ply: [u64; 64],
 
+    /// melodic-cascading-otter 候補 G (v0.74.0): root child_pn_th の絶対 floor．
+    /// 0 (default) で無効．> 0 で root (ply=0) の OR child_pn_th を最低
+    /// この値まで引き上げる．これにより 1 つの child に深く commit するための
+    /// pn 予算を保証する．推奨値の出発点: 100_000 (= 6250 * PN_UNIT)．
+    pub(super) param_root_child_pn_floor: u32,
+
     /// 診断 (v0.71.1): periodic GC (overflow-based working TT GC) を無効化する．
     /// default false (= GC fire OK)．true で `nodes_searched % 100_000 == 0` の
     /// GC トリガを skip する．catastrophic forgetting の検証用．
@@ -917,6 +923,7 @@ impl DfPnSolver {
             diag_tt_disproven: std::cell::Cell::new(0),
             diag_tt_working: std::cell::Cell::new(0),
             diag_proven_per_ply: [0u64; 64],
+            param_root_child_pn_floor: 0,
             root_trace_interval: 10_000,
             root_trace_next: 0,
             root_trace_iter: 0,
@@ -1343,6 +1350,14 @@ impl DfPnSolver {
     /// 配列 `[u64; 64]` で index = ply, 値 = 当該 ply で proven 確定回数．
     pub fn get_proven_per_ply(&self) -> [u64; 64] {
         self.diag_proven_per_ply
+    }
+
+    /// 候補 G (v0.74.0): root child_pn_th の絶対 floor を設定．
+    /// 0 で無効．推奨値: 100_000 (= 6250 * PN_UNIT)．
+    /// ply=0 の OR child の pn 予算をこの値以上に引き上げ，深い commit を可能にする．
+    pub fn set_root_child_pn_floor(&mut self, floor: u32) -> &mut Self {
+        self.param_root_child_pn_floor = floor;
+        self
     }
 
     pub fn set_use_dag_correction(&mut self, on: bool) {
@@ -5007,6 +5022,13 @@ impl DfPnSolver {
                 let epsilon_or = second_best / self.effective_eps_denom() + PN_UNIT;
                 let sibling_based_or = second_best.saturating_add(epsilon_or);
                 let child_pn_th = sibling_based_or.max(2 * PN_UNIT).min(INF - 1);
+                // 候補 G (v0.74.0): root (ply=0) では floor を引き上げて
+                // 1 つの child に深く commit させる．param=0 で無効．
+                let child_pn_th = if ply == 0 && self.param_root_child_pn_floor > 0 {
+                    child_pn_th.max(self.param_root_child_pn_floor).min(INF - 1)
+                } else {
+                    child_pn_th
+                };
                 (child_pn_th, child_dn_th)
             } else {
                 // AND ノード pn 閾値の最低保証(親予算の 1/2)．
