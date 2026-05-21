@@ -12930,6 +12930,62 @@ use crate::types::{Color, PieceType};
             .unwrap();
     }
 
+    /// **[SLOW]** melodic-cascading-otter Plan B (v0.70.0) KH TCA inc_flag 効果測定．
+    ///
+    /// 29te ply 0 を default vs KH TCA ON で比較する．
+    /// budget 500K / 30s × 2 config = 最大 1 分．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_kh_tca_effect --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_kh_tca_effect() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 29te ply 0: default vs KH TCA ON (Plan B v0.70.0)");
+                eprintln!("{}", "=".repeat(80));
+
+                let budgets = [100_000u64, 500_000, 2_000_000];
+                for &nodes_cap in &budgets {
+                    eprintln!("--- budget = {} nodes ---", nodes_cap);
+                    for tca_on in [false, true] {
+                        let mut board = Board::new();
+                        board.set_sfen(sfen).unwrap();
+                        let mut solver = DfPnSolver::with_timeout(33, nodes_cap, 32767, 30);
+                        solver.set_find_shortest(false);
+                        solver.set_use_kh_tca(tca_on);
+                        let t = Instant::now();
+                        let result = solver.solve(&mut board);
+                        let elapsed_ms = t.elapsed().as_millis() as u64;
+                        let res = match &result {
+                            TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                            TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                            TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
+                            TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                        };
+                        let label = if tca_on { "kh_tca_ON" } else { "default" };
+                        eprintln!("[{}] nodes={} t(ms)={} res={}",
+                            label, solver.nodes_searched, elapsed_ms, res);
+                        if tca_on {
+                            eprintln!("  TCA diag: increments={} extends={} (no decrement impl)",
+                                solver.diag_tca_increments,
+                                solver.diag_tca_extends);
+                        }
+                    }
+                }
+                eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// **[SLOW]** melodic-cascading-otter (v0.69.0) Plan C 効果測定．
     ///
     /// 29te ply 0-6 を default vs DAG correction ON で比較する．
@@ -12945,6 +13001,7 @@ use crate::types::{Color, PieceType};
     #[ignore]
     fn test_tsume_29te_dag_correction_effect() {
         // 予算を段階上昇させて DAG ON の挙動変化を観察する診断版．
+        // Plan B (KH TCA): まずは Plan C 版と同じ枠でテスト．
         let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
 
         std::thread::Builder::new()

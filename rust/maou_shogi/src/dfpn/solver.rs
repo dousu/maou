@@ -420,6 +420,27 @@ pub struct DfPnSolver {
     pub(super) diag_dag_max_step: u32,
     pub(super) diag_dag_walks_16: u64,     // 16 step 完走したケース
 
+    /// melodic-cascading-otter Plan B (v0.70.0): KH 流 TCA inc_flag を有効化する．
+    ///
+    /// true で，mid() が「loop child を検出した時に inc_flag を increment し，
+    /// inc_flag > 0 の間は閾値拡張 (eff_pn_th/eff_dn_th) を maintain する」
+    /// 形に変更．既存 maou は loop_child_count > 0 を **同一 mid() フレーム内で
+    /// 検出された場合のみ** 適用するが，KH は inc_flag を recursion で伝播する．
+    ///
+    /// 効果: 深い transposition chain (29te) で，先祖フレームで検出された
+    /// loop が子孫フレームの閾値にも反映され，wrong branch から早期復帰する．
+    pub(super) param_use_kh_tca: bool,
+
+    /// melodic-cascading-otter Plan B (v0.70.0): KH inc_flag の現在値．
+    /// solve() 開始時に 0．mid() 内で saturating_add/sub し，
+    /// mid() 終了時に min(self.inc_flag, orig_inc_flag) で巻き戻し．
+    pub(super) inc_flag: u32,
+
+    /// Plan B 診断: TCA 発火回数．
+    pub(super) diag_tca_increments: u64,
+    pub(super) diag_tca_decrements: u64,
+    pub(super) diag_tca_extends: u64,
+
     /// twinkling-hatching-duckling Phase C (v0.67.0): KH 風 per-move 差別化．
     ///
     /// true で，OR child の `edge_cost_or` を `edge_cost_or_with_support` に
@@ -826,6 +847,11 @@ impl DfPnSolver {
             diag_dag_short_none: 0,
             diag_dag_max_step: 0,
             diag_dag_walks_16: 0,
+            param_use_kh_tca: false,
+            inc_flag: 0,
+            diag_tca_increments: 0,
+            diag_tca_decrements: 0,
+            diag_tca_extends: 0,
             // Phase C (v0.67.0): per-move attack/defense support 差別化．
             // 初期は opt-in (default false)．効果確認後 default ON 検討．
             param_use_per_move_support: false,
@@ -1176,6 +1202,14 @@ impl DfPnSolver {
     ///
     /// 有効時，AND multi-child loop で DAG 合流子を sum 集約から除外し
     /// max のみで集約する (KH `double_count_elimination` 相当)．
+    /// Plan B (v0.70.0): KH TCA inc_flag 機構の有効化．
+    /// default false．有効化すると mid() loop で inc_flag を propagate し，
+    /// 深い transposition chain での threshold extension を継続させる．
+    pub fn set_use_kh_tca(&mut self, on: bool) -> &mut Self {
+        self.param_use_kh_tca = on;
+        self
+    }
+
     pub fn set_use_dag_correction(&mut self, on: bool) {
         self.param_use_dag_correction = on;
     }
@@ -1914,6 +1948,11 @@ impl DfPnSolver {
         self.diag_dag_short_none = 0;
         self.diag_dag_max_step = 0;
         self.diag_dag_walks_16 = 0;
+        // Plan B: KH TCA inc_flag は solve() 開始時に 0．
+        self.inc_flag = 0;
+        self.diag_tca_increments = 0;
+        self.diag_tca_decrements = 0;
+        self.diag_tca_extends = 0;
         self.killer_table.clear();
         self.check_cache.clear();
         self.refutable_check_failed.clear();
@@ -2596,6 +2635,10 @@ impl DfPnSolver {
         ply: u32,
         or_node: bool,
     ) {
+        // Plan B (v0.70.0): KH TCA inc_flag を mid() exit で `min(inc_flag, orig)` で
+        // 復元する．本フレーム内で inc_flag++ した分は親フレームに leak しない．
+        // (`param_use_kh_tca = false` の場合は本機構は完全に dormant)．
+        let orig_inc_flag = self.inc_flag;
         // ノード制限・タイムアウトチェック
         if self.nodes_searched >= self.max_nodes {
             #[cfg(feature = "tt_diag")]
@@ -4621,7 +4664,23 @@ impl DfPnSolver {
             // - MID 出口のみ拡張すると，子閾値が元の値に束縛され
             //   ループが空転する(attempt 2 の教訓)．
             // - 子閾値も含め加算的に拡張することで進捗を保証する．
-            let (eff_pn_th, eff_dn_th) = if loop_child_count > 0 {
+            // Plan B (v0.70.0): KH TCA inc_flag を propagate するため，
+            // loop_child_count 検出時に self.inc_flag++ してから
+            // self.inc_flag > 0 ならば閾値拡張する．
+            // (既存 maou は loop_child_count を frame-local にしか使わなかった)．
+            if self.param_use_kh_tca && loop_child_count > 0 {
+                self.inc_flag = self.inc_flag.saturating_add(1);
+                self.diag_tca_increments += 1;
+            }
+            let extend_tca = if self.param_use_kh_tca {
+                self.inc_flag > 0
+            } else {
+                loop_child_count > 0
+            };
+            let (eff_pn_th, eff_dn_th) = if extend_tca {
+                if self.param_use_kh_tca {
+                    self.diag_tca_extends += 1;
+                }
                 (
                     pn_threshold
                         .saturating_add(pn_threshold / TCA_EXTEND_DENOM)
@@ -5245,6 +5304,13 @@ impl DfPnSolver {
         self.alpha_x_filter_active = save_alpha_x;
         self.path_set.remove(&full_hash);
         self.path_len -= 1;
+
+        // Plan B (v0.70.0): KH TCA inc_flag を mid() exit で復元．
+        // 本フレーム内で `++` した分は親に leak しない (KH 流の clamp)．
+        // 注: 早期 return 経路は inc_flag を変更していないため復元不要．
+        if self.param_use_kh_tca {
+            self.inc_flag = self.inc_flag.min(orig_inc_flag);
+        }
     }
 
     /// 施策 A-6 再評価 (v0.24.54): 境界層 PNS 責任転嫁．
