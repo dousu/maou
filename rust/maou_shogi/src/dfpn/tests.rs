@@ -13242,6 +13242,55 @@ use crate::types::{Color, PieceType};
     /// ```
     /// cargo test --release -p maou_shogi -- test_tsume_5_step_by_step --nocapture --ignored
     /// ```
+    /// mid_v2 1 手詰 smoke test．
+    #[test]
+    #[ignore]
+    fn test_mid_v2_tsume_1te() {
+        let sfen = "9/9/9/9/9/9/1g7/9/K8 w g 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut board = Board::empty();
+                board.set_sfen(sfen).unwrap();
+                let mut solver = DfPnSolver::with_timeout(3, 100, 32767, 5);
+                let t = Instant::now();
+                let result = solver.solve_v2(&mut board);
+                eprintln!("[mid_v2 1te] nodes={} t(ms)={} pn={} dn={}",
+                    solver.nodes_searched, t.elapsed().as_millis(),
+                    result.pn, result.dn);
+                let res_str = if result.pn == 0 { "PROVEN" }
+                              else if result.dn == 0 { "DISPROVEN" }
+                              else { "UNKNOWN" };
+                eprintln!("  {}", res_str);
+            }).unwrap().join().unwrap();
+    }
+
+    /// mid_v2 3 手詰 smoke test．
+    #[test]
+    #[ignore]
+    fn test_mid_v2_tsume_3te() {
+        // 先手攻め: 3 手詰の小さな問題
+        let sfen = "8K/9/9/9/9/9/7G1/9/k8 b g 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut board = Board::empty();
+                board.set_sfen(sfen).unwrap();
+                let mut solver = DfPnSolver::with_timeout(7, 1_000, 32767, 5);
+                let t = Instant::now();
+                let result = solver.solve_v2(&mut board);
+                eprintln!("[mid_v2 3te] nodes={} t(ms)={} pn={} dn={}",
+                    solver.nodes_searched, t.elapsed().as_millis(),
+                    result.pn, result.dn);
+                let res_str = if result.pn == 0 { "PROVEN" }
+                              else if result.dn == 0 { "DISPROVEN" }
+                              else { "UNKNOWN" };
+                eprintln!("  {}", res_str);
+            }).unwrap().join().unwrap();
+    }
+
     /// mid_v2 動作確認 (v0.84.0, Phase 3)．
     /// tsume_5 (17 手詰) で proof 到達するか確認．
     #[test]
@@ -13252,21 +13301,28 @@ use crate::types::{Color, PieceType};
         std::thread::Builder::new()
             .stack_size(32 * 1024 * 1024)
             .spawn(move || {
-                // Phase 4: 小 budget で動作確認 (10K nodes / 5s)．
+                // mid_v2 動作確認: tsume_5 を 10K budget で実行．
+                // KH は tsume_5 を 3.3K nodes で解く (既存 mid は 1276 nodes)．
                 let mut board = Board::new();
                 board.set_sfen(sfen).unwrap();
                 let mut solver = DfPnSolver::with_timeout(21, 10_000, 32767, 5);
                 let t = Instant::now();
                 let result = solver.solve_v2(&mut board);
                 let elapsed_ms = t.elapsed().as_millis() as u64;
-                eprintln!("[mid_v2 tsume_5] nodes={} t(ms)={} pn={} dn={}",
-                    solver.nodes_searched, elapsed_ms, result.pn, result.dn);
-                if result.pn == 0 {
-                    eprintln!("  PROVEN (mate found)");
-                } else if result.dn == 0 {
-                    eprintln!("  DISPROVEN");
-                } else {
-                    eprintln!("  UNKNOWN (budget exhausted or timeout)");
+                let res_str = if result.pn == 0 { "PROVEN" }
+                              else if result.dn == 0 { "DISPROVEN" }
+                              else { "UNKNOWN" };
+                eprintln!("[mid_v2 tsume_5] nodes={} t(ms)={} pn={} dn={} {}",
+                    solver.nodes_searched, elapsed_ms, result.pn, result.dn, res_str);
+                eprintln!("  TT proven_len={} (proof entries 蓄積数)",
+                    solver.get_tt_proven_len());
+                let hist = solver.get_proven_per_ply();
+                let total_proven: u64 = hist.iter().sum();
+                eprintln!("  diag_proven_per_ply total={}", total_proven);
+                for (ply, &cnt) in hist.iter().enumerate() {
+                    if cnt > 0 {
+                        eprintln!("    ply {} = {} proofs", ply, cnt);
+                    }
                 }
             }).unwrap().join().unwrap();
     }

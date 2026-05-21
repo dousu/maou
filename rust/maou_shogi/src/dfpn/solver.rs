@@ -6785,6 +6785,26 @@ impl DfPnSolver {
             return MidSearchResult::new_unknown(PN_UNIT, PN_UNIT);
         }
 
+        // Phase 4: 現局面の path_set に追加 (cycle 検出用)
+        let pos_key_self = position_key(board);
+        let att_hand_self = board.hand[self.attacker.index()];
+        let full_hash_self = board.hash;
+        // 既に path 上 → 千日手 → 攻め方失敗 (OR) / 防御成功 (AND)
+        if self.path_set.contains(&full_hash_self) {
+            return if or_node {
+                MidSearchResult::new_lose(0)
+            } else {
+                MidSearchResult::new_win(0)
+            };
+        }
+        if self.path_len < PATH_CAPACITY {
+            self.path[self.path_len] = full_hash_self;
+            self.path_pos_key[self.path_len] = pos_key_self;
+            self.path_hand[self.path_len] = att_hand_self;
+            self.path_len += 1;
+            self.path_set.insert(full_hash_self);
+        }
+
         // children 生成 (OR: check moves, AND: legal moves)
         let moves_vec: Vec<Move> = if or_node {
             self.generate_check_moves_cached(board).into_iter().collect()
@@ -6800,25 +6820,47 @@ impl DfPnSolver {
             } else {
                 MidSearchResult::new_win(0)
             };
-            let pk = position_key(board);
-            let att_hand = board.hand[self.attacker.index()];
-            let remaining = (self.depth.saturating_sub(ply)) as u16;
-            self.store(pk, att_hand, result.pn, result.dn, remaining, pk as u32);
+            // Terminal proven/disproven は REMAINING_INFINITE で永続化
+            self.store(pos_key_self, att_hand_self, result.pn, result.dn, REMAINING_INFINITE, pos_key_self as u32);
+            // path pop
+            self.path_len -= 1;
+            self.path_set.remove(&full_hash_self);
             return result;
         }
 
-        // 各 child の初期評価を TT lookup で取得
+        // Phase 4: per-move heuristic で children 初期 (pn, dn) を計算．
+        // OR node: edge_cost_or で pn 差別化 + dn=PN_UNIT
+        // AND node: edge_cost_and で pn 差別化 + dn=PN_UNIT
+        // 未訪問 (TT miss) のみ heuristic を適用．訪問済みなら TT 値を使用．
         let mut initial_results: Vec<MidSearchResult> = Vec::with_capacity(moves_vec.len());
         let child_remaining = (self.depth.saturating_sub(ply + 1)) as u16;
+        // OR node: target king = opponent's king (mate される側)
+        // AND node: target king = own king (mate される側 = attacker の opponent と同じ)
+        let target_king_sq = board.king_square(self.attacker.opponent());
+
         for &m in &moves_vec {
             let captured = board.do_move(m);
             let pk = position_key(board);
             let hand = board.hand[self.attacker.index()];
-            let (pn, dn, _) = self.look_up_pn_dn(pk, &hand, child_remaining);
+            let (pn_tt, dn_tt, _) = self.look_up_pn_dn(pk, &hand, child_remaining);
             board.undo_move(m, captured);
-            // child の or_node は反転
-            let _ = (); // child_or_node = !or_node
-            initial_results.push(MidSearchResult::new_unknown(pn, dn));
+
+            // TT miss (= initial PN_UNIT, PN_UNIT) なら heuristic を適用
+            let (init_pn, init_dn) = if pn_tt == PN_UNIT && dn_tt == PN_UNIT {
+                let h_pn = if or_node {
+                    if let Some(ksq) = target_king_sq {
+                        edge_cost_or(m, ksq).max(PN_UNIT)
+                    } else {
+                        PN_UNIT
+                    }
+                } else {
+                    edge_cost_and(m).max(PN_UNIT)
+                };
+                (h_pn, PN_UNIT)
+            } else {
+                (pn_tt, dn_tt)
+            };
+            initial_results.push(MidSearchResult::new_unknown(init_pn, init_dn));
         }
 
         let mut expansion = MidLocalExpansion::new(or_node, moves_vec, initial_results);
@@ -6864,6 +6906,28 @@ impl DfPnSolver {
 
             board.undo_move(best_move, captured);
 
+            // KH multi_pv=1 相当: child.phi(or_node)==0 で immediate proof/refutation．
+            // 即 break して伝播する．
+            let child_phi = child_result.phi(or_node);
+            let child_delta = child_result.delta(or_node);
+            if child_phi == 0 {
+                // OR + child.pn=0 → OR proven (1 proof で OK)
+                // AND + child.dn=0 → AND disproven (1 refutation で OK)
+                // curr を child の結果で上書きする (proper propagation)
+                curr = if or_node {
+                    super::mid_v2::MidSearchResult::new_win(0)
+                } else {
+                    super::mid_v2::MidSearchResult::new_lose(0)
+                };
+                break;
+            }
+
+            // delta(or_node)==0 は反対側の terminal:
+            // OR + child.dn=0 → child disproven．OR は別 child を試す．
+            // AND + child.pn=0 → child proven．AND は次の defender を試す．
+            // → update_best_child で excluded_moves++ で進める．
+            let _ = child_delta;
+
             expansion.update_best_child(child_result);
             curr = expansion.current_result();
 
@@ -6880,17 +6944,21 @@ impl DfPnSolver {
         *inc_flag = (*inc_flag).min(orig_inc_flag);
 
         // Store final result to TT
-        let pk = position_key(board);
-        let att_hand = board.hand[self.attacker.index()];
+        // Phase 4 fix: proven/disproven は REMAINING_INFINITE で depth 非依存に store．
+        // intermediate (pn>0, dn>0) は depth-specific remaining で store．
         let remaining = (self.depth.saturating_sub(ply)) as u16;
         if curr.pn == 0 {
-            // Proven: 詰み駒情報なしで簡易 store
-            self.store(pk, att_hand, 0, INF, remaining, pk as u32);
+            self.store(pos_key_self, att_hand_self, 0, INF, REMAINING_INFINITE, pos_key_self as u32);
         } else if curr.dn == 0 {
-            // Disproven
-            self.store(pk, att_hand, INF, 0, remaining, pk as u32);
+            self.store(pos_key_self, att_hand_self, INF, 0, REMAINING_INFINITE, pos_key_self as u32);
         } else {
-            self.store(pk, att_hand, curr.pn, curr.dn, remaining, pk as u32);
+            self.store(pos_key_self, att_hand_self, curr.pn, curr.dn, remaining, pos_key_self as u32);
+        }
+
+        // path pop
+        if self.path_len > 0 {
+            self.path_len -= 1;
+            self.path_set.remove(&full_hash_self);
         }
 
         curr
