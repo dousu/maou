@@ -304,11 +304,18 @@ impl MidLocalExpansion {
     }
 
     /// 現フレームの phi: OR ノードなら min(pn), AND ノードなら min(dn)．
+    /// KH 風: excluded_moves > 0 (= proof/refutation を発見済み) かつ front が INF なら
+    /// 0 を返す (= 全 children proven for OR / 全 refuted for AND)．
     fn get_phi(&self) -> u32 {
-        if self.empty() {
+        let front_phi = if self.excluded_moves < self.idx.len() {
+            self.front_result().phi(self.or_node)
+        } else {
+            u32::MAX
+        };
+        if front_phi >= u32::MAX && self.excluded_moves > 0 {
             return 0;
         }
-        self.front_result().phi(self.or_node)
+        front_phi
     }
 
     /// 現フレームの delta: OR ノードなら sum(dn)，AND ノードなら sum(pn)．

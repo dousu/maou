@@ -6934,12 +6934,10 @@ impl DfPnSolver {
             let child_phi = child_result.phi(or_node);
             let child_delta = child_result.delta(or_node);
             if child_phi == 0 {
-                // OR + child.pn=0 → OR proven (1 proof で OK)
-                // AND + child.dn=0 → AND disproven (1 refutation で OK)
-                // OR proven の場合 best_move を proof_best_move として記録．
+                // OR + child.pn=0 → OR proven (1 proof で break)
+                // AND + child.dn=0 → AND disproven (1 refutation で break)
                 if or_node {
                     proof_best_move = best_move.to_move16();
-                    // mate_distance: child の mate_distance + 1 (attacker's move を加算)
                     proof_mate_distance = child_result.mate_distance.saturating_add(1);
                 }
                 curr = if or_node {
@@ -7027,18 +7025,135 @@ impl DfPnSolver {
     /// mid_v2 で proven された局面から PV を抽出する．
     /// 既存 `extract_pv_limited` を流用 (TT の best_move を使う)．
     /// 返り値: (`MidSearchResult`, PV as `Vec<Move>`)
+    ///
+    /// **注意 (v0.87.0)**: 現在の mid_v2 は「初回発見 mate」を出すため
+    /// shortest mate / max-resistance defender を保証しない．真の find_shortest
+    /// 実装には KH MakeShorter 相当の iterative deepening が必要 (Phase 8 候補)．
     pub fn solve_v2_with_pv(&mut self, board: &mut Board) -> (super::mid_v2::MidSearchResult, Vec<Move>) {
         let result = self.solve_v2(board);
         let pv = if result.pn == 0 {
-            // mid_v2 後に既存 complete_or_proofs で OR 子の追加証明を行い
-            // shorter mate を持つ TT エントリを発見．これにより extract_pv の
-            // AND 側 max-resistance defender 選択が改善する．
-            self.complete_or_proofs(board);
             self.extract_pv_limited(board, 100_000)
         } else {
             Vec::new()
         };
         (result, pv)
+    }
+
+    /// Phase 7 (v0.87.0): find_shortest 用の backward analysis．
+    /// 現局面が proven なら正確な mate_distance を計算し TT を更新する．
+    ///
+    /// OR ノードで TT に proven 子が無い場合，mid_v2 を呼んで追加証明する．
+    /// これにより shortest mate を全 attacker move 候補から見つけられる．
+    ///
+    /// 返り値: Some(mate_distance) = proven (refined), None = unproven.
+    ///
+    /// `memo`: 同 position の重複計算を避けるためのキャッシュ．
+    /// `budget`: 残ノード予算 (mid_v2 追加証明用)．
+    pub fn refine_mate_distance(
+        &mut self,
+        board: &mut Board,
+        or_node: bool,
+        depth: u32,
+        memo: &mut rustc_hash::FxHashMap<u64, u16>,
+    ) -> Option<u16> {
+        // Depth limit
+        if depth >= 64 {
+            return None;
+        }
+        // 予算超過チェック (mid_v2 呼び出しで爆発するのを防ぐ)
+        if self.nodes_searched >= self.max_nodes || self.timed_out {
+            return None;
+        }
+        let pk = position_key(board);
+        let hand = board.hand[self.attacker.index()];
+        // Memo hit?
+        let cache_key = board.hash;
+        if let Some(&md) = memo.get(&cache_key) {
+            return Some(md);
+        }
+        // 既に proven か?
+        let (pn, _dn, _) = self.look_up_pn_dn(pk, &hand, REMAINING_INFINITE);
+        if pn != 0 {
+            return None; // not proven, can't refine
+        }
+        // Legal moves
+        let moves: Vec<Move> = if or_node {
+            self.generate_check_moves_cached(board).into_iter().collect()
+        } else {
+            movegen::generate_legal_moves(board)
+        };
+        if moves.is_empty() {
+            // Terminal: AND no defense = mate (distance 0)．OR no checks impossible if proven.
+            memo.insert(cache_key, 0);
+            return Some(0);
+        }
+        if or_node {
+            // OR: shortest mate = min over children + 1.
+            // 未訪問の attacker move があれば mid_v2 で追加証明を試行．
+            let mut min_md: u16 = u16::MAX;
+            let mut best_move: u16 = 0;
+            for m in &moves {
+                let cap = board.do_move(*m);
+                // 既に proven か?
+                let cpk = position_key(board);
+                let chand = board.hand[self.attacker.index()];
+                let (cpn, _, _) = self.look_up_pn_dn(cpk, &chand, REMAINING_INFINITE);
+                if cpn != 0 && self.nodes_searched < self.max_nodes && !self.timed_out {
+                    // 未証明 — mid_v2 で proof 試行
+                    let mut inc = 0u32;
+                    let _ = self.mid_v2(board, INF - 1, INF - 1, depth + 1, !or_node, &mut inc);
+                }
+                let child_md = self.refine_mate_distance(board, !or_node, depth + 1, memo);
+                board.undo_move(*m, cap);
+                if let Some(md) = child_md {
+                    if md < min_md {
+                        min_md = md;
+                        best_move = m.to_move16();
+                    }
+                }
+            }
+            if min_md == u16::MAX {
+                return None;
+            }
+            let new_md = min_md.saturating_add(1);
+            self.store_with_best_move_and_distance(
+                pk, hand, 0, INF, REMAINING_INFINITE,
+                pk as u32, best_move, new_md);
+            memo.insert(cache_key, new_md);
+            Some(new_md)
+        } else {
+            // AND: defender max-resistance = max over children + 1.
+            // 全 defender 応手は proven でなければならない．
+            let mut max_md: u16 = 0;
+            let mut all_proven = true;
+            let mut max_move: u16 = 0;
+            for m in &moves {
+                let cap = board.do_move(*m);
+                let child_md = self.refine_mate_distance(board, !or_node, depth + 1, memo);
+                board.undo_move(*m, cap);
+                match child_md {
+                    Some(md) => {
+                        if md > max_md {
+                            max_md = md;
+                            max_move = m.to_move16();
+                        }
+                    }
+                    None => {
+                        all_proven = false;
+                        break;
+                    }
+                }
+            }
+            if !all_proven {
+                return None;
+            }
+            let new_md = max_md.saturating_add(1);
+            self.store_with_best_move_and_distance(
+                pk, hand, 0, INF, REMAINING_INFINITE,
+                pk as u32, max_move, new_md);
+            memo.insert(cache_key, new_md);
+            Some(new_md)
+        }
     }
 }
 
