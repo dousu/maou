@@ -6819,14 +6819,21 @@ impl DfPnSolver {
 
         if moves_vec.is_empty() {
             // Terminal: OR (no checks available) → 攻め方失敗 = lose
-            //          AND (no defenses) → 詰み = win
+            //          AND (no defenses) → 詰み = win (mate_distance=0)
             let result = if or_node {
                 MidSearchResult::new_lose(0)
             } else {
-                MidSearchResult::new_win(0)
+                MidSearchResult::new_win(0)  // 既に mate
             };
-            // Terminal proven/disproven は REMAINING_INFINITE で永続化
-            self.store(pos_key_self, att_hand_self, result.pn, result.dn, REMAINING_INFINITE, pos_key_self as u32);
+            // Terminal proven は best_move + mate_distance 付きで store．
+            if result.pn == 0 {
+                self.store_with_best_move_and_distance(
+                    pos_key_self, att_hand_self, 0, INF, REMAINING_INFINITE,
+                    pos_key_self as u32, 0, 0);
+            } else {
+                self.store(pos_key_self, att_hand_self, result.pn, result.dn,
+                    REMAINING_INFINITE, pos_key_self as u32);
+            }
             // path pop (push されていた場合のみ)
             if pushed {
                 self.path_len -= 1;
@@ -6892,6 +6899,8 @@ impl DfPnSolver {
         // Phase 5: proof 確定時の best_move を記録．OR proven なら proof_best_move を
         // 該当 child の move に．AND proven (=全 defender proven) は最後の defender．
         let mut proof_best_move: u16 = 0;
+        // Phase 6: mate_distance 伝播．OR proven via child → child.mate_distance + 1
+        let mut proof_mate_distance: u16 = 0;
 
         while curr.pn < cur_thpn && curr.dn < cur_thdn {
             if self.nodes_searched >= self.max_nodes { break; }
@@ -6930,9 +6939,11 @@ impl DfPnSolver {
                 // OR proven の場合 best_move を proof_best_move として記録．
                 if or_node {
                     proof_best_move = best_move.to_move16();
+                    // mate_distance: child の mate_distance + 1 (attacker's move を加算)
+                    proof_mate_distance = child_result.mate_distance.saturating_add(1);
                 }
                 curr = if or_node {
-                    super::mid_v2::MidSearchResult::new_win(0)
+                    super::mid_v2::MidSearchResult::new_win(proof_mate_distance)
                 } else {
                     super::mid_v2::MidSearchResult::new_lose(0)
                 };
@@ -6961,21 +6972,32 @@ impl DfPnSolver {
         *inc_flag = (*inc_flag).min(orig_inc_flag);
 
         // Store final result to TT
-        // Phase 5: proven 時は best_move 付きで store して PV 抽出を可能に．
+        // Phase 6: proven 時 best_move + mate_distance を store．
         let remaining = (self.depth.saturating_sub(ply)) as u16;
         if curr.pn == 0 {
-            // proof_best_move が設定されていない場合 (AND proven 等) は
-            // 現在の best_move を代用．
-            let bm = if proof_best_move != 0 {
-                proof_best_move
-            } else if !expansion.empty() {
-                expansion.best_move().to_move16()
+            // OR proven: proof_best_move + proof_mate_distance を使用
+            // AND proven (all children proven): 全 children から max mate_distance を取得．
+            //   defender は max-resistance を選ぶ前提で AND の mate_distance = max+1．
+            //   best_move は AND では「any defender」(extract_pv が iterate するため不要)．
+            let (bm, md) = if or_node && proof_best_move != 0 {
+                (proof_best_move, proof_mate_distance)
+            } else if !or_node {
+                // AND proven via all children proven
+                let md_max = expansion.max_mate_distance_over_children();
+                let bm_first = if !expansion.empty() {
+                    expansion.best_move().to_move16()
+                } else {
+                    0
+                };
+                (bm_first, md_max)
             } else {
-                0
+                (0, proof_mate_distance)
             };
-            self.store_with_best_move(
+            // curr の mate_distance も更新して返値に反映
+            curr.mate_distance = md;
+            self.store_with_best_move_and_distance(
                 pos_key_self, att_hand_self, 0, INF, REMAINING_INFINITE,
-                pos_key_self as u32, bm);
+                pos_key_self as u32, bm, md);
         } else if curr.dn == 0 {
             self.store(pos_key_self, att_hand_self, INF, 0, REMAINING_INFINITE, pos_key_self as u32);
         } else {
@@ -7008,6 +7030,10 @@ impl DfPnSolver {
     pub fn solve_v2_with_pv(&mut self, board: &mut Board) -> (super::mid_v2::MidSearchResult, Vec<Move>) {
         let result = self.solve_v2(board);
         let pv = if result.pn == 0 {
+            // mid_v2 後に既存 complete_or_proofs で OR 子の追加証明を行い
+            // shorter mate を持つ TT エントリを発見．これにより extract_pv の
+            // AND 側 max-resistance defender 選択が改善する．
+            self.complete_or_proofs(board);
             self.extract_pv_limited(board, 100_000)
         } else {
             Vec::new()

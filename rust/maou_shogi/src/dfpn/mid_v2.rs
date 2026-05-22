@@ -188,6 +188,34 @@ impl MidLocalExpansion {
         self.has_old_child
     }
 
+    /// AND proven 時の max mate_distance を計算する．
+    /// AND の場合 defender は max-resistance を選ぶので max(child.mate_distance)+1．
+    pub(super) fn max_mate_distance_over_children(&self) -> u16 {
+        let mut max_md: u16 = 0;
+        for &i_raw in &self.idx {
+            let r = &self.results[i_raw as usize];
+            if r.pn == 0 {
+                // proven child
+                if r.mate_distance > max_md {
+                    max_md = r.mate_distance;
+                }
+            }
+        }
+        max_md.saturating_add(1)
+    }
+
+    /// OR proven 時の min mate_distance を計算 (= shortest mate via children)．
+    pub(super) fn min_mate_distance_over_proven_children(&self) -> u16 {
+        let mut min_md: u16 = u16::MAX;
+        for &i_raw in &self.idx {
+            let r = &self.results[i_raw as usize];
+            if r.pn == 0 && r.mate_distance < min_md {
+                min_md = r.mate_distance;
+            }
+        }
+        if min_md == u16::MAX { 0 } else { min_md.saturating_add(1) }
+    }
+
     /// CurrentResult: 現フレームの集約 (pn, dn) を計算し SearchResult として返す．
     ///
     /// or_node なら pn = min(child_pn) | sum(child_pn), dn = sum(child_dn) (要素別)．
