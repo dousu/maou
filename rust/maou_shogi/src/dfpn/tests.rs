@@ -13291,6 +13291,107 @@ use crate::types::{Color, PieceType};
             }).unwrap().join().unwrap();
     }
 
+    /// mid_v2 29te 比較 (v0.85.0)．
+    /// KH 29te 解決ノード数: 19,000．既存 maou mid: > 80M (未解決)．
+    #[test]
+    #[ignore]
+    fn test_mid_v2_tsume_29te() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n=== mid_v2 29te ply 0 ===");
+                eprintln!("KH baseline: 19,000 nodes");
+                eprintln!("既存 maou mid: 80M+ (unresolved)");
+
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                let mut solver = DfPnSolver::with_timeout(33, 5_000_000, 32767, 60);
+                let t = Instant::now();
+                let (result, pv) = solver.solve_v2_with_pv(&mut board);
+                let elapsed_ms = t.elapsed().as_millis() as u64;
+                let res_str = if result.pn == 0 { "PROVEN" }
+                              else if result.dn == 0 { "DISPROVEN" }
+                              else { "UNKNOWN" };
+                let nps = if elapsed_ms > 0 { solver.nodes_searched * 1000 / elapsed_ms } else { 0 };
+                eprintln!("[mid_v2 29te] nodes={} t(ms)={} NPS={} {}",
+                    solver.nodes_searched, elapsed_ms, nps, res_str);
+                if result.pn == 0 {
+                    let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
+                    eprintln!("  PV length: {}", pv.len());
+                    eprintln!("  PV: {}", pv_usi.join(" "));
+                    eprintln!("\n=== 全 defender 応手検証 ===");
+                    // PV を再生し，AND 局面で全 defender 応手を取得．
+                    // 各 defender 応手後の position が TT で proven か確認．
+                    let mut verify_board = Board::new();
+                    verify_board.set_sfen(sfen).unwrap();
+                    let mut all_verified = true;
+                    let mut unsound_positions: Vec<(usize, Vec<String>)> = Vec::new();
+
+                    for (ply, mv) in pv.iter().enumerate() {
+                        if ply % 2 == 1 {
+                            // ply 奇数 = AND 局面の defender 番目だが，attacker が直前に動かしたので now defender's turn
+                            // ply は 0-indexed．ply 0 が attacker，ply 1 が defender．
+                        }
+                        // Before each odd ply (defender), verify all defenders refuted
+                        // At even ply: attacker just moved. Now defender's turn.
+                        // Generate defender's legal moves, check each is refuted (TT pn=0 after defender move).
+                        if ply % 2 == 0 {
+                            // attacker just moved (PV move ply is being applied)
+                            let captured = verify_board.do_move(*mv);
+                            // Now defender's turn. Check all defender moves are refuted.
+                            let defender_moves = crate::movegen::generate_legal_moves(&mut verify_board);
+                            if defender_moves.is_empty() {
+                                // No defender moves = checkmate. Good if this is the last move.
+                                if ply == pv.len() - 1 {
+                                    // PV ends at attacker's move = should be terminal check
+                                    // But if defender has no moves, that's also OK (mate).
+                                } else {
+                                    eprintln!("  ⚠ ply {} (after {}): no defender moves but PV continues",
+                                        ply, mv.to_usi());
+                                    all_verified = false;
+                                }
+                            } else {
+                                let mut unrefuted: Vec<String> = Vec::new();
+                                for dm in &defender_moves {
+                                    let dcap = verify_board.do_move(*dm);
+                                    let pk_d = position_key(&verify_board);
+                                    let hand_d = verify_board.hand[solver.attacker.index()];
+                                    let (pn_d, dn_d, _) = solver.look_up_pn_dn(pk_d, &hand_d, REMAINING_INFINITE);
+                                    verify_board.undo_move(*dm, dcap);
+                                    if pn_d != 0 {
+                                        // この defender 応手は refuted されていない！
+                                        unrefuted.push(format!("{} (pn={}, dn={})", dm.to_usi(), pn_d, dn_d));
+                                    }
+                                }
+                                if !unrefuted.is_empty() {
+                                    eprintln!("  ⚠ ply {} after {}: {} unrefuted defender response(s):",
+                                        ply, mv.to_usi(), unrefuted.len());
+                                    for u in unrefuted.iter().take(5) {
+                                        eprintln!("    - {}", u);
+                                    }
+                                    unsound_positions.push((ply, unrefuted));
+                                    all_verified = false;
+                                }
+                            }
+                            verify_board.undo_move(*mv, captured);
+                            verify_board.do_move(*mv);
+                        } else {
+                            // odd ply = defender's move in PV — replay it
+                            verify_board.do_move(*mv);
+                        }
+                    }
+                    if all_verified {
+                        eprintln!("  ✓ 全 PV step で defender 応手は全て refuted");
+                    } else {
+                        eprintln!("  ⚠ {} 箇所で defender 応手が refuted されていません",
+                            unsound_positions.len());
+                    }
+                }
+            }).unwrap().join().unwrap();
+    }
+
     /// mid_v2 動作確認 (v0.84.0, Phase 3)．
     /// tsume_5 (17 手詰) で proof 到達するか確認．
     #[test]
@@ -13301,20 +13402,40 @@ use crate::types::{Color, PieceType};
         std::thread::Builder::new()
             .stack_size(32 * 1024 * 1024)
             .spawn(move || {
-                // mid_v2 NPS / proof 進捗の sweep
-                for budget in [1_000u64, 5_000, 10_000, 20_000, 50_000] {
-                    let mut board = Board::new();
-                    board.set_sfen(sfen).unwrap();
-                    let mut solver = DfPnSolver::with_timeout(21, budget, 32767, 60);
-                    let t = Instant::now();
-                    let result = solver.solve_v2(&mut board);
-                    let elapsed_ms = t.elapsed().as_millis() as u64;
-                    let nps = if elapsed_ms > 0 { solver.nodes_searched * 1000 / elapsed_ms } else { 0 };
-                    eprintln!("[mid_v2 budget={}] nodes={} t(ms)={} NPS={} pn={} dn={}",
-                        budget, solver.nodes_searched, elapsed_ms, nps,
-                        result.pn, result.dn);
-                    if result.pn == 0 { break; }
+                // mid_v2 で PV 抽出 + 既知 PV と比較
+                eprintln!("\n=== mid_v2 tsume_5 PV verification ===");
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                let mut solver = DfPnSolver::with_timeout(21, 50_000, 32767, 30);
+                let t = Instant::now();
+                let (result, pv) = solver.solve_v2_with_pv(&mut board);
+                let elapsed_ms = t.elapsed().as_millis() as u64;
+                let res_str = if result.pn == 0 { "PROVEN" }
+                              else if result.dn == 0 { "DISPROVEN" }
+                              else { "UNKNOWN" };
+                eprintln!("[mid_v2 tsume_5] nodes={} t(ms)={} {}",
+                    solver.nodes_searched, elapsed_ms, res_str);
+                if result.pn == 0 {
+                    let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
+                    eprintln!("  PV length: {}", pv.len());
+                    eprintln!("  PV: {}", pv_usi.join(" "));
+                    // 既知 PV (test_tsume_5_step_by_step より)
+                    let known_pv = [
+                        "S*4a", "3b2a", "S*3b", "2a2b", "1d1a+", "2b1a", "1e3c+",
+                        "G*2b", "3c2b", "1a2b", "G*2c", "2b1a", "3b2a+", "1a2a",
+                        "4a3b+", "2a1a", "2c2b",
+                    ];
+                    let known: Vec<String> = known_pv.iter().map(|s| s.to_string()).collect();
+                    eprintln!("  Known PV (17 moves): {}", known.join(" "));
+                    if pv_usi == known {
+                        eprintln!("  ✓ PV 完全一致");
+                    } else {
+                        eprintln!("  ⚠ PV mismatch — 提示します");
+                        eprintln!("    mid_v2 PV ({} moves)", pv_usi.len());
+                        eprintln!("    known PV ({} moves)", known.len());
+                    }
                 }
+
                 let mut board = Board::new();
                 board.set_sfen(sfen).unwrap();
                 let mut solver = DfPnSolver::with_timeout(21, 10_000, 32767, 60);

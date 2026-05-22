@@ -6889,6 +6889,10 @@ impl DfPnSolver {
             extend_threshold_for_mid_v2(&mut cur_thpn, &mut cur_thdn, &curr);
         }
 
+        // Phase 5: proof 確定時の best_move を記録．OR proven なら proof_best_move を
+        // 該当 child の move に．AND proven (=全 defender proven) は最後の defender．
+        let mut proof_best_move: u16 = 0;
+
         while curr.pn < cur_thpn && curr.dn < cur_thdn {
             if self.nodes_searched >= self.max_nodes { break; }
             if expansion.empty() { break; }
@@ -6923,7 +6927,10 @@ impl DfPnSolver {
             if child_phi == 0 {
                 // OR + child.pn=0 → OR proven (1 proof で OK)
                 // AND + child.dn=0 → AND disproven (1 refutation で OK)
-                // curr を child の結果で上書きする (proper propagation)
+                // OR proven の場合 best_move を proof_best_move として記録．
+                if or_node {
+                    proof_best_move = best_move.to_move16();
+                }
                 curr = if or_node {
                     super::mid_v2::MidSearchResult::new_win(0)
                 } else {
@@ -6954,11 +6961,21 @@ impl DfPnSolver {
         *inc_flag = (*inc_flag).min(orig_inc_flag);
 
         // Store final result to TT
-        // Phase 4 fix: proven/disproven は REMAINING_INFINITE で depth 非依存に store．
-        // intermediate (pn>0, dn>0) は depth-specific remaining で store．
+        // Phase 5: proven 時は best_move 付きで store して PV 抽出を可能に．
         let remaining = (self.depth.saturating_sub(ply)) as u16;
         if curr.pn == 0 {
-            self.store(pos_key_self, att_hand_self, 0, INF, REMAINING_INFINITE, pos_key_self as u32);
+            // proof_best_move が設定されていない場合 (AND proven 等) は
+            // 現在の best_move を代用．
+            let bm = if proof_best_move != 0 {
+                proof_best_move
+            } else if !expansion.empty() {
+                expansion.best_move().to_move16()
+            } else {
+                0
+            };
+            self.store_with_best_move(
+                pos_key_self, att_hand_self, 0, INF, REMAINING_INFINITE,
+                pos_key_self as u32, bm);
         } else if curr.dn == 0 {
             self.store(pos_key_self, att_hand_self, INF, 0, REMAINING_INFINITE, pos_key_self as u32);
         } else {
@@ -6983,6 +7000,19 @@ impl DfPnSolver {
         self.path_set.clear();
         let mut inc_flag = 0u32;
         self.mid_v2(board, INF - 1, INF - 1, 0, true, &mut inc_flag)
+    }
+
+    /// mid_v2 で proven された局面から PV を抽出する．
+    /// 既存 `extract_pv_limited` を流用 (TT の best_move を使う)．
+    /// 返り値: (`MidSearchResult`, PV as `Vec<Move>`)
+    pub fn solve_v2_with_pv(&mut self, board: &mut Board) -> (super::mid_v2::MidSearchResult, Vec<Move>) {
+        let result = self.solve_v2(board);
+        let pv = if result.pn == 0 {
+            self.extract_pv_limited(board, 100_000)
+        } else {
+            Vec::new()
+        };
+        (result, pv)
     }
 }
 
