@@ -6797,13 +6797,18 @@ impl DfPnSolver {
                 MidSearchResult::new_win(0)
             };
         }
-        if self.path_len < PATH_CAPACITY {
+        // Phase 4 fix: push/pop の対称性を保証．pushed フラグで判定．
+        let pushed = if self.path_len < PATH_CAPACITY {
             self.path[self.path_len] = full_hash_self;
             self.path_pos_key[self.path_len] = pos_key_self;
             self.path_hand[self.path_len] = att_hand_self;
             self.path_len += 1;
             self.path_set.insert(full_hash_self);
-        }
+            true
+        } else {
+            // path 容量オーバーで push skip — pop も skip すべき
+            false
+        };
 
         // children 生成 (OR: check moves, AND: legal moves)
         let moves_vec: Vec<Move> = if or_node {
@@ -6822,9 +6827,11 @@ impl DfPnSolver {
             };
             // Terminal proven/disproven は REMAINING_INFINITE で永続化
             self.store(pos_key_self, att_hand_self, result.pn, result.dn, REMAINING_INFINITE, pos_key_self as u32);
-            // path pop
-            self.path_len -= 1;
-            self.path_set.remove(&full_hash_self);
+            // path pop (push されていた場合のみ)
+            if pushed {
+                self.path_len -= 1;
+                self.path_set.remove(&full_hash_self);
+            }
             return result;
         }
 
@@ -6845,8 +6852,9 @@ impl DfPnSolver {
             let (pn_tt, dn_tt, _) = self.look_up_pn_dn(pk, &hand, child_remaining);
             board.undo_move(m, captured);
 
-            // TT miss (= initial PN_UNIT, PN_UNIT) なら heuristic を適用
-            let (init_pn, init_dn) = if pn_tt == PN_UNIT && dn_tt == PN_UNIT {
+            // TT miss (= initial PN_UNIT, PN_UNIT) なら heuristic を適用．
+            // TT hit (= 既訪問) なら is_first_visit=false で has_old_child を活性化．
+            let (init_pn, init_dn, is_first) = if pn_tt == PN_UNIT && dn_tt == PN_UNIT {
                 let h_pn = if or_node {
                     if let Some(ksq) = target_king_sq {
                         edge_cost_or(m, ksq).max(PN_UNIT)
@@ -6856,11 +6864,13 @@ impl DfPnSolver {
                 } else {
                     edge_cost_and(m).max(PN_UNIT)
                 };
-                (h_pn, PN_UNIT)
+                (h_pn, PN_UNIT, true)
             } else {
-                (pn_tt, dn_tt)
+                (pn_tt, dn_tt, false)
             };
-            initial_results.push(MidSearchResult::new_unknown(init_pn, init_dn));
+            let mut r = MidSearchResult::new_unknown(init_pn, init_dn);
+            r.is_first_visit = is_first;
+            initial_results.push(r);
         }
 
         let mut expansion = MidLocalExpansion::new(or_node, moves_vec, initial_results);
@@ -6955,8 +6965,8 @@ impl DfPnSolver {
             self.store(pos_key_self, att_hand_self, curr.pn, curr.dn, remaining, pos_key_self as u32);
         }
 
-        // path pop
-        if self.path_len > 0 {
+        // path pop (push されていた場合のみ)
+        if pushed {
             self.path_len -= 1;
             self.path_set.remove(&full_hash_self);
         }

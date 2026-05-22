@@ -13301,11 +13301,23 @@ use crate::types::{Color, PieceType};
         std::thread::Builder::new()
             .stack_size(32 * 1024 * 1024)
             .spawn(move || {
-                // mid_v2 動作確認: tsume_5 を 10K budget で実行．
-                // KH は tsume_5 を 3.3K nodes で解く (既存 mid は 1276 nodes)．
+                // mid_v2 NPS / proof 進捗の sweep
+                for budget in [1_000u64, 5_000, 10_000, 20_000, 50_000] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(21, budget, 32767, 60);
+                    let t = Instant::now();
+                    let result = solver.solve_v2(&mut board);
+                    let elapsed_ms = t.elapsed().as_millis() as u64;
+                    let nps = if elapsed_ms > 0 { solver.nodes_searched * 1000 / elapsed_ms } else { 0 };
+                    eprintln!("[mid_v2 budget={}] nodes={} t(ms)={} NPS={} pn={} dn={}",
+                        budget, solver.nodes_searched, elapsed_ms, nps,
+                        result.pn, result.dn);
+                    if result.pn == 0 { break; }
+                }
                 let mut board = Board::new();
                 board.set_sfen(sfen).unwrap();
-                let mut solver = DfPnSolver::with_timeout(21, 10_000, 32767, 5);
+                let mut solver = DfPnSolver::with_timeout(21, 10_000, 32767, 60);
                 let t = Instant::now();
                 let result = solver.solve_v2(&mut board);
                 let elapsed_ms = t.elapsed().as_millis() as u64;

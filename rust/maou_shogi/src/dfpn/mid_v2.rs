@@ -43,7 +43,7 @@ use crate::moves::Move;
 
 /// KH `SearchResult` 相当．現局面の探索結果を表す．
 #[derive(Debug, Clone, Copy)]
-pub(super) struct MidSearchResult {
+pub struct MidSearchResult {
     /// proof number (= 攻め方の証明難度)．0 で win 確定．
     pub pn: u32,
     /// disproof number (= 守り方の反証難度)．0 で lose 確定．
@@ -141,6 +141,11 @@ impl MidLocalExpansion {
         // 初期 sort: phi 昇順
         idx.sort_by_key(|&i| initial_results[i as usize].phi(or_node));
         let sum_mask = if n >= 64 { u64::MAX } else { (1u64 << n).wrapping_sub(1) };
+        // KH 風 has_old_child: いずれかの child が「初訪問でない」(= is_first_visit = false)
+        // なら true．新規 mid_v2 entry で initial_results は全て is_first_visit=true なので
+        // 通常は false．ただし subsequent visit で TT lookup から復元した child が含まれる場合は
+        // is_first_visit が false にできる (Phase 5 で正確な追跡を実装)．
+        let has_old_child = initial_results.iter().any(|r| !r.is_first_visit);
         let mut expansion = Self {
             or_node,
             moves,
@@ -150,7 +155,7 @@ impl MidLocalExpansion {
             sum_mask,
             sum_delta_except_best: 0,
             max_delta_except_best: 0,
-            has_old_child: false,
+            has_old_child,
         };
         expansion.recalc_delta();
         expansion
