@@ -61,6 +61,35 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 - MUST remove `docs/commands/<command-name>.md` when removing a CLI command
 - MUST follow the existing documentation format (Overview + CLI options tables)
 
+## Repository-Centric Memory Architecture (MUST)
+
+Long-term memory lives in the repository, not in the conversation.
+Full spec: [docs/memory-architecture.md](docs/memory-architecture.md).
+
+### Files
+
+| Path | Role | Committed |
+|---|---|---|
+| `reviews/YYYY-MM-DD-<title>.md` | Proposals + audit trail. `status:` in frontmatter. | yes |
+| `scratchpad/current.md` | Authoritative current state. | no (`.gitignore`d) |
+| `worklog/YYYY-MM-DD-HHMMSS.md` | One file per checkpoint, JST, immutable. | no (`.gitignore`d) |
+| `.claude/commands/checkpoint-context.md` | The only writer. | yes |
+| `.claude/commands/resume-context.md` | Read-only resume. | yes |
+
+### MUST rules
+
+- MUST NOT silently edit `CLAUDE.md` or `docs/architecture.md`. Draft a
+  `reviews/*.md` with `status: pending` and let the user apply.
+- MUST treat `worklog/*.md` as immutable. Each `/checkpoint-context`
+  creates a **new** file — never edit a previous one.
+- MUST preserve failed attempts, reasoning, and uncertainty in every
+  checkpoint entry. Do not over-summarize.
+- MUST run `/resume-context` at the start of any session inheriting
+  cleared context, before acting.
+- MUST run `/checkpoint-context` before any context reset, long break,
+  or handoff.
+- MUST use JST (`Asia/Tokyo`) for all timestamps and filenames.
+
 ## Code Exploration Policy (MUST)
 
 コードベースの調査・探索には，MUST use `Task` tool with `subagent_type=Explore`.

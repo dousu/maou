@@ -155,3 +155,8 @@ stage1_data/
 docs/plans/
 tests/maou/infra/visualization/screenshots/
 .claude/worktrees/
+
+# Repository-centric memory — local per-developer working state.
+# See docs/memory-architecture.md.
+scratchpad/
+worklog/
