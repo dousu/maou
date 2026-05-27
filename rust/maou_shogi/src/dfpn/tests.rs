@@ -13307,9 +13307,9 @@ use crate::types::{Color, PieceType};
 
                 let mut board = Board::new();
                 board.set_sfen(sfen).unwrap();
-                let mut solver = DfPnSolver::with_timeout(33, 5_000_000, 32767, 60);
+                let mut solver = DfPnSolver::with_timeout(33, 200_000_000, 32767, 600);
                 let t = Instant::now();
-                let (result, pv) = solver.solve_v2_with_pv(&mut board);
+                let (result, pv) = solver.solve_v2_find_shortest(&mut board);
                 let elapsed_ms = t.elapsed().as_millis() as u64;
                 let res_str = if result.pn == 0 { "PROVEN" }
                               else if result.dn == 0 { "DISPROVEN" }
@@ -13402,6 +13402,76 @@ use crate::types::{Color, PieceType};
         std::thread::Builder::new()
             .stack_size(32 * 1024 * 1024)
             .spawn(move || {
+                // Phase 10 v0.89.0: find_shortest IDS のコスト測定．
+                // Phase 13: budget 縮小して回避 (find_shortest IDS の効率化は別 phase で).
+                eprintln!("\n=== mid_v2 tsume_5 find_shortest verification ===");
+                {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(21, 50_000, 32767, 30);
+                    let t = Instant::now();
+                    let (result, pv) = solver.solve_v2_find_shortest(&mut board);
+                    let elapsed_ms = t.elapsed().as_millis() as u64;
+                    let res_str = if result.pn == 0 { "PROVEN" }
+                                  else if result.dn == 0 { "DISPROVEN" }
+                                  else { "UNKNOWN" };
+                    eprintln!("[find_shortest] nodes={} t(ms)={} {} (PV len={})",
+                        solver.nodes_searched, elapsed_ms, res_str, pv.len());
+                    // Phase 15: visit pattern 診断．
+                    let total_unique = solver.mid_v2_visit_counts.len();
+                    let total_visits: u32 = solver.mid_v2_visit_counts.values().sum();
+                    let max_visits = solver.mid_v2_visit_counts.values().max().copied().unwrap_or(0);
+                    let mut revisits = 0u32;
+                    for &v in solver.mid_v2_visit_counts.values() {
+                        if v > 1 { revisits += v - 1; }
+                    }
+                    eprintln!("  [visit] unique={} total_entries={} revisits={} max_per_pos={}",
+                        total_unique, total_visits, revisits, max_visits);
+
+                    // Phase 12 (v0.91.0): PV の soundness 検証．各 AND step で全 defender 応手が
+                    // refuted されているか確認．DML の不正 PV を捕捉する．
+                    if result.pn == 0 {
+                        eprintln!("\n=== tsume_5 PV soundness 検証 ===");
+                        let mut verify_board = Board::new();
+                        verify_board.set_sfen(sfen).unwrap();
+                        let mut all_verified = true;
+                        for (ply, mv) in pv.iter().enumerate() {
+                            if ply % 2 == 0 {
+                                let captured = verify_board.do_move(*mv);
+                                let defender_moves =
+                                    crate::movegen::generate_legal_moves(&mut verify_board);
+                                if !defender_moves.is_empty() {
+                                    let mut unrefuted: Vec<String> = Vec::new();
+                                    for dm in &defender_moves {
+                                        let dcap = verify_board.do_move(*dm);
+                                        let pk_d = position_key(&verify_board);
+                                        let hand_d =
+                                            verify_board.hand[solver.attacker.index()];
+                                        let (pn_d, _, _) = solver.look_up_pn_dn(
+                                            pk_d, &hand_d, REMAINING_INFINITE);
+                                        verify_board.undo_move(*dm, dcap);
+                                        if pn_d != 0 {
+                                            unrefuted.push(format!("{}", dm.to_usi()));
+                                        }
+                                    }
+                                    if !unrefuted.is_empty() {
+                                        eprintln!(
+                                            "  ⚠ ply {} after {}: {} unrefuted: {:?}",
+                                            ply, mv.to_usi(), unrefuted.len(), unrefuted);
+                                        all_verified = false;
+                                    }
+                                }
+                                verify_board.undo_move(*mv, captured);
+                                verify_board.do_move(*mv);
+                            } else {
+                                verify_board.do_move(*mv);
+                            }
+                        }
+                        if all_verified {
+                            eprintln!("  ✓ 全 PV step で defender 応手は全て refuted");
+                        }
+                    }
+                }
                 // mid_v2 で PV 抽出 + 既知 PV と比較
                 eprintln!("\n=== mid_v2 tsume_5 PV verification ===");
                 let mut board = Board::new();
@@ -13418,6 +13488,16 @@ use crate::types::{Color, PieceType};
                 if result.pn == 0 {
                     let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
                     eprintln!("  PV length: {}", pv.len());
+                    // Phase 15: base solve visit 統計．
+                    let total_unique = solver.mid_v2_visit_counts.len();
+                    let total_visits: u32 = solver.mid_v2_visit_counts.values().sum();
+                    let max_visits = solver.mid_v2_visit_counts.values().max().copied().unwrap_or(0);
+                    let mut revisits = 0u32;
+                    for &v in solver.mid_v2_visit_counts.values() {
+                        if v > 1 { revisits += v - 1; }
+                    }
+                    eprintln!("  [base visit] unique={} total_entries={} revisits={} max_per_pos={}",
+                        total_unique, total_visits, revisits, max_visits);
                     eprintln!("  PV: {}", pv_usi.join(" "));
                     // 既知 PV (test_tsume_5_step_by_step より)
                     let known_pv = [

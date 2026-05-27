@@ -224,12 +224,6 @@ fn edge_cost_or(m: Move, king_sq: Square) -> u32 {
     if promo || capture {
         return 0;
     }
-    // 静かな王手: 玉との距離 + 駒打ちペナルティでコスト決定
-    //
-    // v0.24.65: 駒打ちの静かな王手は駒移動王手より一般に弱い
-    // (攻め駒の配置を改善せず持ち駒を消費するだけ)．
-    // 追加コスト PN_UNIT/2 で駒移動王手を優先させる．
-    // NPS への影響: ゼロ (Move の属性判定のみ)
     let to = m.to_sq();
     let dc = (to.col() as i8 - king_sq.col() as i8).unsigned_abs();
     let dr = (to.row() as i8 - king_sq.row() as i8).unsigned_abs();
@@ -309,6 +303,103 @@ fn edge_cost_and(m: Move) -> u32 {
     }
     // 玉の逃げ・駒移動合い
     PN_UNIT
+}
+
+/// KH `InitialPnDnPlusOrNode` 移植 (v0.89.0, Phase 10).
+///
+/// OR ノード(攻め方の王手)の per-move (pn, dn) tuple を返す．
+/// KH `initial_estimation.hpp:87-119` と等価．
+///
+/// パラメータは KH デフォルト (all = PN_UNIT) を使用．
+/// - 受け駒 ≥ 2: pn += PN_UNIT (後回し)
+/// - 攻め支援 + drop_bonus > 受け支援: dn += PN_UNIT (探索優先)
+/// - 金/銀取り: dn += PN_UNIT
+/// - その他の駒取り: pn += PN_UNIT
+/// - 静か手: pn += PN_UNIT
+pub(super) fn init_pn_dn_or_kh(
+    board: &crate::board::Board,
+    m: Move,
+    attacker: crate::types::Color,
+) -> (u32, u32) {
+    let mut pn = PN_UNIT;
+    let mut dn = PN_UNIT;
+
+    let to = m.to_sq();
+    let att_bb = board.compute_checkers_at(to, attacker);
+    let def_bb = board.compute_checkers_at(to, attacker.opponent());
+    let attack_support = att_bb.count();
+    let defense_support = def_bb.count();
+    let drop_bonus: u32 = if m.is_drop() { 1 } else { 0 };
+
+    if defense_support >= 2 {
+        pn += PN_UNIT;
+    }
+
+    if attack_support + drop_bonus > defense_support {
+        dn += PN_UNIT;
+    } else {
+        let captured = m.captured_piece_raw();
+        if captured > 0 {
+            let cap_pt = crate::types::PieceType::from_u8(captured);
+            if matches!(
+                cap_pt,
+                Some(crate::types::PieceType::Gold) | Some(crate::types::PieceType::Silver)
+            ) {
+                dn += PN_UNIT;
+            } else {
+                pn += PN_UNIT;
+            }
+        } else {
+            pn += PN_UNIT;
+        }
+    }
+
+    (pn, dn)
+}
+
+/// KH `InitialPnDnPlusAndNode` 移植 (v0.89.0, Phase 10).
+///
+/// AND ノード(防御側の応手)の per-move (pn, dn) tuple を返す．
+/// KH `initial_estimation.hpp:127-151` と等価．
+///
+/// - 駒取り応手: (2U, U)
+/// - 玉移動: (U, U)
+/// - 攻め支援 < 受け支援 + drop_bonus (good escape): (2U, U)
+/// - その他 (bad escape): (U, 2U)
+pub(super) fn init_pn_dn_and_kh(
+    board: &crate::board::Board,
+    m: Move,
+    attacker: crate::types::Color,
+) -> (u32, u32) {
+    let defender = attacker.opponent();
+
+    if m.captured_piece_raw() > 0 {
+        return (2 * PN_UNIT, PN_UNIT);
+    }
+
+    let king_sq = board.king_square(defender);
+    if !m.is_drop() {
+        if let Some(ksq) = king_sq {
+            if m.from_sq() == ksq {
+                return (PN_UNIT, PN_UNIT);
+            }
+        }
+    }
+
+    let to = m.to_sq();
+    let att_bb = board.compute_checkers_at(to, attacker);
+    let def_bb = board.compute_checkers_at(to, defender);
+    let attack_support = att_bb.count();
+    let defense_support = def_bb.count();
+    let drop_bonus: u32 = if m.is_drop() { 1 } else { 0 };
+
+    if attack_support < defense_support + drop_bonus {
+        // good escape
+        (2 * PN_UNIT, PN_UNIT)
+    } else {
+        // bad escape
+        (PN_UNIT, 2 * PN_UNIT)
+    }
 }
 
 /// 捨て駒のみ王手ブースト(人間的枝刈り)．

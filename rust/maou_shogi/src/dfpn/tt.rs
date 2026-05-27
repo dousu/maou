@@ -765,6 +765,9 @@ pub(super) struct TranspositionTable {
     /// mid() が TT store 前にセットする．ply が小さい(ルートに近い)ほど
     /// amount が高くなり，eviction 耐性が上がる．
     pub(super) hint_ply: u32,
+    /// Phase 18 (v0.97.0): store_proven で WorkingTT の被支配 intermediate を削除しない．
+    /// IDS find_shortest で working pn/dn を保持するために使う．
+    pub(super) preserve_working_on_proof: bool,
     /// 現在の IDS depth．confirmed disproof の ProvenTT 格納時に
     /// `ProvenEntry::new_disproof(hand, ids_depth)` で確認 depth を記録する．
     /// `mid_fallback` の IDS ループで更新される．
@@ -885,6 +888,7 @@ impl TranspositionTable {
             leaf_mask: LEAF_NUM_CLUSTERS - 1,
             frontier_mask: FRONTIER_NUM_CLUSTERS - 1,
             hint_ply: 0,
+            preserve_working_on_proof: false,
             current_ids_depth: 0,
             working_overflow_since_gc: 0,
             working_peak_cluster_fill: 0,
@@ -1753,13 +1757,16 @@ impl TranspositionTable {
 
         if is_proof {
             // WorkingTT の被支配 intermediate も除去
-            let w_start = self.working_cluster_start(pos_key, &hand);
-            let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
-            for fe in w_cluster.iter_mut() {
-                if fe.pos_key != pos_key { continue; }
-                if fe.entry.dn == 0 { continue; }
-                if hand_gte_forward_chain(&fe.entry.hand, &hand) {
-                    fe.pos_key = 0;
+            // Phase 18: preserve_working_on_proof 時は IDS 用 working pn/dn 保持のため skip
+            if !self.preserve_working_on_proof {
+                let w_start = self.working_cluster_start(pos_key, &hand);
+                let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
+                for fe in w_cluster.iter_mut() {
+                    if fe.pos_key != pos_key { continue; }
+                    if fe.entry.dn == 0 { continue; }
+                    if hand_gte_forward_chain(&fe.entry.hand, &hand) {
+                        fe.pos_key = 0;
+                    }
                 }
             }
 

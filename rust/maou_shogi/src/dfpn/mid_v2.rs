@@ -109,14 +109,17 @@ impl MidSearchResult {
 pub(super) struct MidLocalExpansion {
     /// OR ノードか AND ノードか．
     or_node: bool,
+    /// Phase 14 (v0.93.0): 現フレームの局面 full_hash．DAG correction で
+    /// expansion_stack 上の祖先と一致判定．
+    position_fh: u64,
     /// 全合法手 (位置生成順)．mp_ の Rust 対応．
-    moves: Vec<Move>,
+    pub(super) moves: Vec<Move>,
     /// sorted index array (phi 昇順)．`idx_[excluded_moves_]` が現在の "best"．
-    idx: Vec<u32>,
+    pub(super) idx: Vec<u32>,
     /// proven 化済み children のカウント．BestMove() で `idx_[excluded_moves_]` を返す．
     excluded_moves: usize,
     /// 各 child の現在の (pn, dn, amount)．`UpdateBestChild` で更新．
-    results: Vec<MidSearchResult>,
+    pub(super) results: Vec<MidSearchResult>,
     /// 各 child が sum aggregation 対象か (true = sum，false = max)．BitSet64 相当．
     sum_mask: u64,
     /// キャッシュ: best 以外の delta sum．
@@ -125,6 +128,12 @@ pub(super) struct MidLocalExpansion {
     max_delta_except_best: u32,
     /// `DoesHaveOldChild`: 子の中に old visit (= TT cache 経由) があるか．
     has_old_child: bool,
+    /// Phase 11 (v0.90.0): DelayedMoveList chain (KH `delayed_move_list.hpp` 移植)．
+    /// `dml_prev[i]` = chain 上で i の直前の move index (-1 = なし)．
+    /// `dml_next[i]` = 直後 (-1 = なし)．`is_deferred[i]` = 初期 idx に含めない (=
+    /// prev の final 待ち)．
+    dml_prev: Vec<i32>,
+    dml_next: Vec<i32>,
 }
 
 impl MidLocalExpansion {
@@ -136,18 +145,48 @@ impl MidLocalExpansion {
         moves: Vec<Move>,
         initial_results: Vec<MidSearchResult>,
     ) -> Self {
+        Self::new_with_fh(or_node, moves, initial_results, 0)
+    }
+
+    /// Phase 14 (v0.93.0): position_fh 付き構築．
+    pub(super) fn new_with_fh(
+        or_node: bool,
+        moves: Vec<Move>,
+        initial_results: Vec<MidSearchResult>,
+        position_fh: u64,
+    ) -> Self {
         let n = moves.len();
-        let mut idx: Vec<u32> = (0..n as u32).collect();
+
+        // Phase 11 (v0.90.0): DelayedMoveList chain 構築．AND ノードの同 to_sq
+        // drops を chain 化．Phase 12 (v0.91.0): prev が **non-final のとき** のみ defer．
+        // KH `local_expansion.hpp:181-194` 移植．prev が TT cache から既に proven 等で
+        // final なら defer しない (= 初期 idx に含める)．これで AND の curr.pn=0 が
+        // chain の 1 件目だけで成立する soundness 違反を防ぐ．
+        let (dml_prev, dml_next) = build_delayed_chain(&moves, or_node);
+
+        let mut idx: Vec<u32> = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut deferred = false;
+            let mut cur = dml_prev[i];
+            while cur >= 0 {
+                if !initial_results[cur as usize].is_final() {
+                    deferred = true;
+                    break;
+                }
+                cur = dml_prev[cur as usize];
+            }
+            if !deferred {
+                idx.push(i as u32);
+            }
+        }
         // 初期 sort: phi 昇順
         idx.sort_by_key(|&i| initial_results[i as usize].phi(or_node));
+
         let sum_mask = if n >= 64 { u64::MAX } else { (1u64 << n).wrapping_sub(1) };
-        // KH 風 has_old_child: いずれかの child が「初訪問でない」(= is_first_visit = false)
-        // なら true．新規 mid_v2 entry で initial_results は全て is_first_visit=true なので
-        // 通常は false．ただし subsequent visit で TT lookup から復元した child が含まれる場合は
-        // is_first_visit が false にできる (Phase 5 で正確な追跡を実装)．
         let has_old_child = initial_results.iter().any(|r| !r.is_first_visit);
         let mut expansion = Self {
             or_node,
+            position_fh,
             moves,
             idx,
             excluded_moves: 0,
@@ -156,14 +195,74 @@ impl MidLocalExpansion {
             sum_delta_except_best: 0,
             max_delta_except_best: 0,
             has_old_child,
+            dml_prev,
+            dml_next,
         };
         expansion.recalc_delta();
         expansion
     }
 
+    /// Phase 14: position_fh accessor．
+    pub(super) fn position_fh(&self) -> u64 {
+        self.position_fh
+    }
+
+    /// Phase 14: or_node accessor．
+    pub(super) fn or_node_value(&self) -> bool {
+        self.or_node
+    }
+
+    /// Phase 14: 指定 move の sum_mask bit を off にする (= max 集約に切替)．
+    /// KH `ResolveDoubleCountIfBranchRoot` の child 探索 + sum_mask reset 相当．
+    /// 指定 move_to_match に一致する child を探し，見つかったら sum_mask off + recalc_delta．
+    /// `move_to_match` は idx に含まれる手の中で `to_move16` 比較で同定．
+    pub(super) fn reset_sum_mask_for_move(&mut self, move_to_match: u16) -> bool {
+        for &i_raw in &self.idx {
+            let mv = self.moves[i_raw as usize];
+            if mv.to_move16() == move_to_match {
+                let bit = 1u64 << (i_raw as u64);
+                if (self.sum_mask & bit) != 0 {
+                    self.sum_mask &= !bit;
+                    self.recalc_delta();
+                    return true;
+                }
+                return false;
+            }
+        }
+        false
+    }
+
     /// 空か (= empty)．
     pub(super) fn empty(&self) -> bool {
         self.idx.is_empty() || self.excluded_moves >= self.idx.len()
+    }
+
+    /// Phase 12 (v0.91.0) 診断用: idx_ サイズ．
+    pub(super) fn idx_len(&self) -> usize {
+        self.idx.len()
+    }
+
+    /// Phase 12 診断用: 全 moves サイズ．
+    pub(super) fn moves_len(&self) -> usize {
+        self.moves.len()
+    }
+
+    /// Phase 14 (v0.93.0): DAG correction 用．現 best_move (idx[excluded_moves]) の
+    /// sum_mask を OFF にして max 集約に切替える．KH `local_expansion.hpp:398
+    /// sum_mask_.Reset(idx_.front())` 相当．二重カウント検出時に呼ぶ．
+    pub(super) fn reset_sum_mask_for_best(&mut self) -> bool {
+        if self.empty() {
+            return false;
+        }
+        let i_raw = self.idx[self.excluded_moves] as usize;
+        let bit = 1u64 << (i_raw as u64);
+        if (self.sum_mask & bit) != 0 {
+            self.sum_mask &= !bit;
+            self.recalc_delta();
+            true
+        } else {
+            false
+        }
     }
 
     /// BestMove: `idx_[excluded_moves_]` の手を返す．
@@ -202,6 +301,43 @@ impl MidLocalExpansion {
             }
         }
         max_md.saturating_add(1)
+    }
+
+    /// Phase 17 (v0.96.0): OR proven without main loop iteration の場合，
+    /// children の中で proven (pn=0) の min mate_distance + 1 と対応 move を返す．
+    /// main loop が回らなかった場合に呼ぶ (proof_best_move 未設定)．
+    pub(super) fn min_proven_or_child(&self) -> (u16, u16) {
+        let mut best_md: u16 = u16::MAX;
+        let mut best_bm: u16 = 0;
+        for &i_raw in &self.idx {
+            let r = &self.results[i_raw as usize];
+            if r.pn == 0 && r.mate_distance < best_md {
+                best_md = r.mate_distance;
+                best_bm = self.moves[i_raw as usize].to_move16();
+            }
+        }
+        if best_md == u16::MAX {
+            (0, 0)
+        } else {
+            (best_bm, best_md.saturating_add(1))
+        }
+    }
+
+    /// Phase 11 (v0.90.0): AND proven 時の max-resistance defender move + その mate_distance + 1 を返す．
+    /// PV 抽出時に「defender が実際に選ぶ手」として TT に store するため．
+    /// 旧 `best_move()` は phi=dn 昇順の先頭 (= 任意の proven defender) を返していたが，
+    /// DML 導入で順序が変わり 17 手 mate path が選ばれなくなったため明示的に max-md 選択へ．
+    pub(super) fn max_resistance_defender(&self) -> (u16, u16) {
+        let mut best_md: u16 = 0;
+        let mut best_bm: u16 = 0;
+        for &i_raw in &self.idx {
+            let r = &self.results[i_raw as usize];
+            if r.pn == 0 && r.mate_distance >= best_md {
+                best_md = r.mate_distance;
+                best_bm = self.moves[i_raw as usize].to_move16();
+            }
+        }
+        (best_bm, best_md.saturating_add(1))
     }
 
     /// OR proven 時の min mate_distance を計算 (= shortest mate via children)．
@@ -251,8 +387,22 @@ impl MidLocalExpansion {
             self.excluded_moves += 1;
         }
 
+        // Phase 11 (v0.90.0): final 化した child の dml_next が残っていれば復活．
+        // KH `local_expansion.hpp:319-340` 相当．
+        if search_result.is_final() {
+            let mut cur = self.dml_next[old_raw];
+            while cur >= 0 {
+                let cur_raw = cur as usize;
+                self.idx.push(cur_raw as u32);
+                // 復活した手の delta が 0 (= 既に final) なら chain を進める
+                if self.results[cur_raw].delta(self.or_node) > 0 {
+                    break;
+                }
+                cur = self.dml_next[cur_raw];
+            }
+        }
+
         // re-sort: 現 best の評価が変わったので idx_ を更新
-        // 完全 sort でなく，excluded_moves 以降のみ sort
         let or_node = self.or_node;
         let results = &self.results;
         if self.excluded_moves < self.idx.len() {
@@ -319,20 +469,28 @@ impl MidLocalExpansion {
     }
 
     /// 現フレームの delta: OR ノードなら sum(dn)，AND ノードなら sum(pn)．
+    /// KH `GetDelta` (local_expansion.hpp:466) 移植．
+    /// 旧版は max-aggregate branch で best_delta を落とす bug 有り (Phase 10 で修正)．
     fn get_delta(&self) -> u32 {
         if self.empty() {
             return 0;
         }
         let raw = self.idx[self.excluded_moves] as usize;
         let best_delta = self.results[raw].delta(self.or_node);
-        let mut total = best_delta;
+        let mut sum_delta = self.sum_delta_except_best;
+        let mut max_delta = self.max_delta_except_best;
         if (self.sum_mask >> (raw as u64)) & 1 == 1 {
-            total = total.saturating_add(self.sum_delta_except_best);
+            sum_delta = sum_delta.saturating_add(best_delta);
         } else {
-            // best が sum_mask off の場合は best の delta は含めず max_except でカバー
-            total = self.sum_delta_except_best.saturating_add(self.max_delta_except_best);
+            if best_delta > max_delta {
+                max_delta = best_delta;
+            }
         }
-        total
+        let raw_delta = sum_delta.saturating_add(max_delta);
+        if self.excluded_moves > 0 && raw_delta == 0 {
+            return u32::MAX;
+        }
+        raw_delta
     }
 
     /// sum_delta_except_best と max_delta_except_best を再計算する．
@@ -350,6 +508,38 @@ impl MidLocalExpansion {
             }
         }
     }
+}
+
+/// Phase 11 (v0.90.0): KH `DelayedMoveList` 移植．Phase 12 (v0.91.0) で再有効化．
+///
+/// AND ノードの同 to_sq drops を chain 化．chain 上の prev が final になるまで
+/// next を idx_ に push しない．
+fn build_delayed_chain(moves: &[Move], or_node: bool) -> (Vec<i32>, Vec<i32>) {
+    let n = moves.len();
+    let mut prev = vec![-1i32; n];
+    let mut next = vec![-1i32; n];
+    if or_node {
+        return (prev, next);
+    }
+    let mut last_of_to: [u32; 81] = [0; 81];
+    for (i, m) in moves.iter().enumerate() {
+        if !m.is_drop() {
+            continue;
+        }
+        let to = m.to_sq();
+        let to_idx = (to.col() as usize) * 9 + (to.row() as usize);
+        if to_idx >= 81 {
+            continue;
+        }
+        let last = last_of_to[to_idx];
+        if last > 0 {
+            let last_i = (last - 1) as usize;
+            prev[i] = last_i as i32;
+            next[last_i] = i as i32;
+        }
+        last_of_to[to_idx] = (i + 1) as u32;
+    }
+    (prev, next)
 }
 
 /// 簡易 mid_v2 (DfPnSolver と独立して単体実行できる skeleton)．

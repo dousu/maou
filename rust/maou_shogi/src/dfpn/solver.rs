@@ -404,11 +404,30 @@ pub struct DfPnSolver {
     /// から最初の親を取得し，それが path 上にあれば DAG と判定．
     pub(super) param_use_dag_correction: bool,
 
+    /// Phase 14 (v0.93.0): mid_v2 用 expansion stack．KH ExpansionStack 相当．
+    /// EliminateDoubleCount で ancestor 走査するため．
+    pub(super) mid_expansion_stack: Vec<super::mid_v2::MidLocalExpansion>,
+
+    /// Phase 14 (v0.93.0): 各 expansion フレームで「親→子」の選択 move を記録．
+    /// resolve_double_count_if_branch_root で branch_root の子を同定するため．
+    /// `mid_frame_moves[i]` = mid_expansion_stack[i] フレームから次フレームへ
+    /// 進んだ best_move (の move16)．
+    pub(super) mid_frame_moves: Vec<u16>,
+
     /// melodic-cascading-otter (v0.69.0): DAG 検出用 parent_map．
     /// `child_full_hash → parent_full_hash`．mid() で子に再帰する直前に
     /// `or_insert` で挿入 (既存 entry は上書きしない)．find_known_ancestor で
     /// child から先祖チェーンを辿る際に参照．solve() 開始時に clear．
     pub(super) parent_map: rustc_hash::FxHashMap<u64, u64>,
+
+    /// Phase 14 (v0.93.0): KH `LookUpParent` 風 metadata．
+    /// child_full_hash → (child_pos_key, child_hand)．
+    /// DAG correction の chain walk で各 step に TT lookup するために必要．
+    pub(super) parent_meta: rustc_hash::FxHashMap<u64, (u64, [u8; HAND_KINDS])>,
+
+    /// Phase 15 (v0.94.0): tsume_5 micro-tuning 診断用．
+    /// position_fh → visit count．mid_v2 で各 entry 時にインクリメント．
+    pub(super) mid_v2_visit_counts: rustc_hash::FxHashMap<u64, u32>,
 
     /// melodic-cascading-otter (v0.69.0): DAG 検出の診断カウンタ．
     /// `param_use_dag_correction=true` の場合に動作確認用．
@@ -529,6 +548,13 @@ pub struct DfPnSolver {
     /// argmin pn の tie 時 (`pn == best_pn`) に max(dn) で tie-break する．
     /// = defender の抵抗が強い attack を優先 → 探索 commit 強化．
     pub(super) param_or_dn_tiebreak: bool,
+
+    /// Phase 8 (v0.88.0): find_shortest 用 mate_distance 制約．
+    /// `Some(md)` で look_up_pn_dn が proven 局面 (pn=0) かつ
+    /// stored mate_distance > md を「未証明」として扱う (PN_UNIT, PN_UNIT)．
+    /// mid_v2 が shorter mate を強制探索する．
+    /// None (default) で制約なし．
+    pub(super) param_max_mate_distance: Option<u16>,
 
     /// 診断 (v0.71.1): periodic GC (overflow-based working TT GC) を無効化する．
     /// default false (= GC fire OK)．true で `nodes_searched % 100_000 == 0` の
@@ -944,7 +970,11 @@ impl DfPnSolver {
             // twinkling-hatching-duckling Phase B / melodic-cascading-otter (v0.69.0):
             // path-aware DAG 補正．opt-in (default false)．
             param_use_dag_correction: false,
+            mid_expansion_stack: Vec::new(),
+            mid_frame_moves: Vec::new(),
             parent_map: rustc_hash::FxHashMap::default(),
+            parent_meta: rustc_hash::FxHashMap::default(),
+            mid_v2_visit_counts: rustc_hash::FxHashMap::default(),
             diag_dag_calls: 0,
             diag_dag_true: 0,
             diag_dag_short_first: 0,
@@ -982,6 +1012,7 @@ impl DfPnSolver {
             param_use_and_proven_bitmap: false,
             and_proven_bitmap: rustc_hash::FxHashMap::default(),
             param_or_dn_tiebreak: false,
+            param_max_mate_distance: None,
             root_trace_interval: 10_000,
             root_trace_next: 0,
             root_trace_iter: 0,
@@ -1870,7 +1901,18 @@ impl DfPnSolver {
         hand: &[u8; HAND_KINDS],
         remaining: u16,
     ) -> (u32, u32, u32) {
-        let result = self.look_up_pn_dn_impl(pos_key, hand, remaining, true);
+        let mut result = self.look_up_pn_dn_impl(pos_key, hand, remaining, true);
+        // Phase 8 (v0.88.0) find_shortest フィルタ (legacy global state):
+        // 旧来の API．Phase 9 以降の mid_v2 経路は look_up_pn_dn_md_bounded を使用．
+        if let Some(max_md) = self.param_max_mate_distance {
+            if result.0 == 0 {
+                if let Some(stored_md) = self.table.look_up_mate_distance(pos_key, hand) {
+                    if stored_md > max_md {
+                        result = (PN_UNIT, PN_UNIT, 0);
+                    }
+                }
+            }
+        }
         if self.param_tt_lookup_diag {
             self.diag_tt_lookups.set(self.diag_tt_lookups.get() + 1);
             let (pn, dn, _) = result;
@@ -1887,6 +1929,59 @@ impl DfPnSolver {
         result
     }
 
+
+    /// Phase 9: md_budget 制約付き TT lookup (mid_v2 用).
+    ///
+    /// `md_budget` は「この局面から詰みまでに許される最大手数」．
+    /// 例えば局面 P で `md_budget = B` なら P の proof は mate_distance <= B でなければ
+    /// 有効とみなさない．KH `LookUp(len)` 相当．
+    ///
+    /// proven entry が見つかっても stored mate_distance > md_budget なら
+    /// `(PN_UNIT, PN_UNIT, 0)` を返して mid_v2 に再探索を促す．
+    ///
+    /// Phase 13 (v0.92.0): md_budget が事実上無限大 (u16::MAX 周辺) の場合は
+    /// mate_distance lookup を完全 skip して NPS 向上．
+    #[inline]
+    pub(super) fn look_up_pn_dn_md_bounded(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        remaining: u16,
+        md_budget: u16,
+    ) -> (u32, u32, u32) {
+        let mut result = self.look_up_pn_dn_impl(pos_key, hand, remaining, true);
+        // Phase 13: 大きな md_budget (e.g., u16::MAX - depth で saturating 減算後) では
+        // 実用的に常に通過するので lookup overhead を skip．
+        const MD_BUDGET_FILTER_THRESHOLD: u16 = 1000;
+        if md_budget <= MD_BUDGET_FILTER_THRESHOLD && result.0 == 0 {
+            if let Some(stored_md) = self.table.look_up_mate_distance(pos_key, hand) {
+                if stored_md > md_budget {
+                    // Phase 18: proof rejected by md_budget — fall back to working pn/dn
+                    // if preserved (preserve_working_on_proof=true)
+                    let working = self.table.look_up_working(pos_key, hand, remaining, true);
+                    if working.0 != PN_UNIT || working.1 != PN_UNIT || working.2 != 0 {
+                        result = working;
+                    } else {
+                        result = (PN_UNIT, PN_UNIT, 0);
+                    }
+                }
+            }
+        }
+        if self.param_tt_lookup_diag {
+            self.diag_tt_lookups.set(self.diag_tt_lookups.get() + 1);
+            let (pn, dn, _) = result;
+            if pn == PN_UNIT && dn == PN_UNIT {
+                self.diag_tt_misses.set(self.diag_tt_misses.get() + 1);
+            } else if pn == 0 {
+                self.diag_tt_proven.set(self.diag_tt_proven.get() + 1);
+            } else if dn == 0 {
+                self.diag_tt_disproven.set(self.diag_tt_disproven.get() + 1);
+            } else {
+                self.diag_tt_working.set(self.diag_tt_working.get() + 1);
+            }
+        }
+        result
+    }
 
     #[inline]
     fn look_up_pn_dn_impl(
@@ -6766,8 +6861,12 @@ impl DfPnSolver {
         ply: u32,
         or_node: bool,
         inc_flag: &mut u32,
+        md_budget: u16,
     ) -> super::mid_v2::MidSearchResult {
         use super::mid_v2::{MidLocalExpansion, MidSearchResult};
+
+        // Phase 15 visit count 診断 (board.hash がここで使えるが path_set は後で push される)．
+        *self.mid_v2_visit_counts.entry(board.hash).or_insert(0) += 1;
 
         // Budget / timeout チェック
         if self.nodes_searched >= self.max_nodes {
@@ -6852,35 +6951,96 @@ impl DfPnSolver {
         // AND node: target king = own king (mate される側 = attacker の opponent と同じ)
         let target_king_sq = board.king_square(self.attacker.opponent());
 
+        // Phase 9: 子の md_budget は自分 - 1 (1 手消費)．u16::MAX なら飽和．
+        let child_md_budget = md_budget.saturating_sub(1);
         for &m in &moves_vec {
             let captured = board.do_move(m);
             let pk = position_key(board);
             let hand = board.hand[self.attacker.index()];
-            let (pn_tt, dn_tt, _) = self.look_up_pn_dn(pk, &hand, child_remaining);
+            let (pn_tt, dn_tt, _) =
+                self.look_up_pn_dn_md_bounded(pk, &hand, child_remaining, child_md_budget);
+
+            // Phase 16 (v0.95.0): KH `CheckObviousFinalOrNode` 移植．
+            // AND parent (= !or_node) で child OR が 1 手詰の場合，pn=0 即 proven．
+            // TT cache がない (= 初訪問) の場合のみ check．
+            // depth-aware: 小問題のみで適用 (大問題ではコスト > 利益)．
+            let mut mate_in_1 = false;
+            let mut mate_move_for_or: Option<Move> = None;
+            if !or_node && pn_tt == PN_UNIT && dn_tt == PN_UNIT && self.depth <= 25 {
+                let checks = self.generate_check_moves_cached(board);
+                if !checks.is_empty() {
+                    let us = board.turn;
+                    if let Some(mm) = board.mate_move_in_1ply(checks.as_slice(), us) {
+                        mate_in_1 = true;
+                        mate_move_for_or = Some(mm);
+                    }
+                }
+            }
+            // OR 局面自体を TT に store (PV 抽出が proven を確認できるように)．
+            if mate_in_1 {
+                self.store_with_best_move_and_distance(
+                    pk, hand, 0, INF, REMAINING_INFINITE,
+                    pk as u32,
+                    mate_move_for_or.map(|m| m.to_move16()).unwrap_or(0),
+                    1,
+                );
+            }
+
             board.undo_move(m, captured);
 
-            // TT miss (= initial PN_UNIT, PN_UNIT) なら heuristic を適用．
-            // TT hit (= 既訪問) なら is_first_visit=false で has_old_child を活性化．
-            let (init_pn, init_dn, is_first) = if pn_tt == PN_UNIT && dn_tt == PN_UNIT {
-                let h_pn = if or_node {
-                    if let Some(ksq) = target_king_sq {
-                        edge_cost_or(m, ksq).max(PN_UNIT)
+            // Phase 15 (v0.94.0): clamp を problem 規模で調整．
+            let clamp_value = if self.depth <= 25 { 1 } else { PN_UNIT };
+            let (init_pn, init_dn, is_first) = if mate_in_1 {
+                // Phase 16: 1 手詰 detection 成功．child OR proven (pn=0, dn=INF, md=1)．
+                (0, INF, false)
+            } else if pn_tt == PN_UNIT && dn_tt == PN_UNIT {
+                let (hp, hd) = if or_node {
+                    let pn_h = if let Some(ksq) = target_king_sq {
+                        super::edge_cost_or(m, ksq).max(clamp_value)
                     } else {
                         PN_UNIT
-                    }
+                    };
+                    let (pn_kh, dn_kh) = super::init_pn_dn_or_kh(board, m, self.attacker);
+                    let pn_h2 = if pn_kh > PN_UNIT { pn_h.saturating_add(pn_kh - PN_UNIT) } else { pn_h };
+                    (pn_h2, dn_kh)
                 } else {
-                    edge_cost_and(m).max(PN_UNIT)
+                    let pn_h = super::edge_cost_and(m).max(clamp_value);
+                    let (_pn_kh, dn_kh) = super::init_pn_dn_and_kh(board, m, self.attacker);
+                    (pn_h, dn_kh)
                 };
-                (h_pn, PN_UNIT, true)
+                (hp, hd, true)
             } else {
                 (pn_tt, dn_tt, false)
             };
-            let mut r = MidSearchResult::new_unknown(init_pn, init_dn);
-            r.is_first_visit = is_first;
+            let r = if mate_in_1 {
+                // Phase 16: child OR proven in 1 ply, md=1．
+                super::mid_v2::MidSearchResult::new_win(1)
+            } else {
+                let mut r = MidSearchResult::new_unknown(init_pn, init_dn);
+                r.is_first_visit = is_first;
+                // Phase 17 (v0.96.0): TT-cached proven の場合，mate_distance も復元．
+                // 旧バグ: cached pn=0 だが md=0 のまま → 親が min_proven_or_child で md=0+1=1 を返す．
+                if init_pn == 0 && init_dn == INF {
+                    let captured = board.do_move(m);
+                    let pk2 = position_key(board);
+                    let hand2 = board.hand[self.attacker.index()];
+                    if let Some(stored_md) = self.table.look_up_mate_distance(pk2, &hand2) {
+                        r.mate_distance = stored_md;
+                    }
+                    board.undo_move(m, captured);
+                }
+                r
+            };
             initial_results.push(r);
         }
 
-        let mut expansion = MidLocalExpansion::new(or_node, moves_vec, initial_results);
+        // Phase 14 (v0.93.0): expansion を mid_expansion_stack に push．
+        // KH の ExpansionStack 相当．eliminate_double_count で祖先を辿るために必要．
+        let expansion = MidLocalExpansion::new_with_fh(
+            or_node, moves_vec, initial_results, full_hash_self);
+        self.mid_expansion_stack.push(expansion);
+        self.mid_frame_moves.push(0);
+        let stack_idx = self.mid_expansion_stack.len() - 1;
 
         let orig_thpn = thpn;
         let orig_thdn = thdn;
@@ -6888,8 +7048,8 @@ impl DfPnSolver {
         let mut cur_thpn = thpn;
         let mut cur_thdn = thdn;
 
-        let mut curr = expansion.current_result();
-        if expansion.does_have_old_child() {
+        let mut curr = self.mid_expansion_stack[stack_idx].current_result();
+        if self.mid_expansion_stack[stack_idx].does_have_old_child() {
             *inc_flag = inc_flag.saturating_add(1);
         }
         if *inc_flag > 0 {
@@ -6904,38 +7064,63 @@ impl DfPnSolver {
 
         while curr.pn < cur_thpn && curr.dn < cur_thdn {
             if self.nodes_searched >= self.max_nodes { break; }
-            if expansion.empty() { break; }
+            if self.mid_expansion_stack[stack_idx].empty() { break; }
 
-            let best_move = expansion.best_move();
-            let is_first = expansion.front_is_first_visit();
-            let (child_thpn, child_thdn) = expansion.front_pn_dn_thresholds(cur_thpn, cur_thdn);
+            let best_move = self.mid_expansion_stack[stack_idx].best_move();
+            let is_first = self.mid_expansion_stack[stack_idx].front_is_first_visit();
+            // mid_frame_moves に記録 (DAG correction の branch_move 同定用)．
+            self.mid_frame_moves[stack_idx] = best_move.to_move16();
+
+            let (child_thpn, child_thdn) =
+                self.mid_expansion_stack[stack_idx].front_pn_dn_thresholds(cur_thpn, cur_thdn);
 
             let captured = board.do_move(best_move);
 
+            // Phase 14: DAG correction．child の parent が祖先 (immediate parent
+            // 以外) と一致するなら，その祖先の expansion の branch_move sum_mask を
+            // off に切替．KH `EliminateDoubleCount` + `ResolveDoubleCountIfBranchRoot` 移植．
+            if self.param_use_dag_correction {
+                let child_pk = position_key(board);
+                let child_hand = board.hand[self.attacker.index()];
+                self.eliminate_double_count_mid_v2(
+                    stack_idx, board.hash, child_pk, &child_hand, full_hash_self);
+            }
+
             let child_result = if is_first {
-                let pk = position_key(board);
-                let hand = board.hand[self.attacker.index()];
-                let (pn, dn, _) = self.look_up_pn_dn(pk, &hand, child_remaining);
-                let initial = MidSearchResult::new_unknown(pn, dn);
+                let initial = *self.mid_expansion_stack[stack_idx].front_result();
                 if *inc_flag > 0 { *inc_flag -= 1; }
-                if initial.pn >= child_thpn || initial.dn >= child_thdn {
+                // Phase 16: initial.is_final() なら 1 手詰 detection 等で確定済み．
+                if initial.is_final()
+                    || initial.pn >= child_thpn
+                    || initial.dn >= child_thdn
+                {
                     initial
                 } else {
-                    self.mid_v2(board, child_thpn, child_thdn, ply + 1, !or_node, inc_flag)
+                    self.mid_v2(board, child_thpn, child_thdn, ply + 1, !or_node, inc_flag,
+                                child_md_budget)
                 }
             } else {
-                self.mid_v2(board, child_thpn, child_thdn, ply + 1, !or_node, inc_flag)
+                // Phase 15 (v0.94.0): TT-hit (is_first=false) child の最適化．
+                // - cached が is_final (pn=0 or dn=0): TT 値をそのまま使う (recurse 不要)．
+                // - cached.pn/dn が threshold 超過: 同様に skip．
+                let cached = *self.mid_expansion_stack[stack_idx].front_result();
+                if cached.is_final()
+                    || cached.pn >= child_thpn
+                    || cached.dn >= child_thdn
+                {
+                    cached
+                } else {
+                    self.mid_v2(board, child_thpn, child_thdn, ply + 1, !or_node, inc_flag,
+                                child_md_budget)
+                }
             };
 
             board.undo_move(best_move, captured);
 
             // KH multi_pv=1 相当: child.phi(or_node)==0 で immediate proof/refutation．
-            // 即 break して伝播する．
             let child_phi = child_result.phi(or_node);
             let child_delta = child_result.delta(or_node);
             if child_phi == 0 {
-                // OR + child.pn=0 → OR proven (1 proof で break)
-                // AND + child.dn=0 → AND disproven (1 refutation で break)
                 if or_node {
                     proof_best_move = best_move.to_move16();
                     proof_mate_distance = child_result.mate_distance.saturating_add(1);
@@ -6947,15 +7132,10 @@ impl DfPnSolver {
                 };
                 break;
             }
-
-            // delta(or_node)==0 は反対側の terminal:
-            // OR + child.dn=0 → child disproven．OR は別 child を試す．
-            // AND + child.pn=0 → child proven．AND は次の defender を試す．
-            // → update_best_child で excluded_moves++ で進める．
             let _ = child_delta;
 
-            expansion.update_best_child(child_result);
-            curr = expansion.current_result();
+            self.mid_expansion_stack[stack_idx].update_best_child(child_result);
+            curr = self.mid_expansion_stack[stack_idx].current_result();
 
             // TCA threshold rollback + re-extend
             cur_thpn = orig_thpn;
@@ -6973,6 +7153,8 @@ impl DfPnSolver {
         // Phase 6: proven 時 best_move + mate_distance を store．
         let remaining = (self.depth.saturating_sub(ply)) as u16;
         if curr.pn == 0 {
+            // Phase 12 (v0.91.0) 診断 (verbose feature 時のみ): AND DML 漏れ検出．
+            // Phase 12 修正後はトリガしないはず．
             // OR proven: proof_best_move + proof_mate_distance を使用
             // AND proven (all children proven): 全 children から max mate_distance を取得．
             //   defender は max-resistance を選ぶ前提で AND の mate_distance = max+1．
@@ -6980,18 +7162,24 @@ impl DfPnSolver {
             let (bm, md) = if or_node && proof_best_move != 0 {
                 (proof_best_move, proof_mate_distance)
             } else if !or_node {
-                // AND proven via all children proven
-                let md_max = expansion.max_mate_distance_over_children();
-                let bm_first = if !expansion.empty() {
-                    expansion.best_move().to_move16()
-                } else {
-                    0
-                };
-                (bm_first, md_max)
+                // Phase 11 (v0.90.0): AND proven は max-resistance defender を選ぶ．
+                self.mid_expansion_stack[stack_idx].max_resistance_defender()
             } else {
-                (0, proof_mate_distance)
+                // OR proven without main loop iteration (= initial children に既に proven 含む)．
+                // Phase 17 (v0.96.0): expansion から min mate_distance を求める．
+                // 旧: (0, proof_mate_distance=0) で md=0 になる soundness 違反．
+                self.mid_expansion_stack[stack_idx].min_proven_or_child()
             };
-            // curr の mate_distance も更新して返値に反映
+            if md_budget != u16::MAX && md > md_budget {
+                if pushed {
+                    self.path_len -= 1;
+                    self.path_set.remove(&full_hash_self);
+                }
+                // Phase 14: stack pop on early return．
+                self.mid_expansion_stack.pop();
+                self.mid_frame_moves.pop();
+                return super::mid_v2::MidSearchResult::new_unknown(PN_UNIT, PN_UNIT);
+            }
             curr.mate_distance = md;
             self.store_with_best_move_and_distance(
                 pos_key_self, att_hand_self, 0, INF, REMAINING_INFINITE,
@@ -7008,27 +7196,136 @@ impl DfPnSolver {
             self.path_set.remove(&full_hash_self);
         }
 
+        // Phase 14: expansion stack pop．
+        self.mid_expansion_stack.pop();
+        self.mid_frame_moves.pop();
+
         curr
+    }
+
+    /// Phase 14 (v0.93.0): EliminateDoubleCount mid_v2 版．
+    ///
+    /// 現フレーム (stack_idx) の best_move を実行した直後 (board.hash == child_fh) に呼ぶ．
+    /// child の parent (parent_map から取得) が現在の祖先フレーム (mid_expansion_stack)
+    /// の position_fh と一致するなら，その祖先フレームの分岐 move の sum_mask を
+    /// off に切替えて double-counting を防ぐ．
+    ///
+    /// KH `expansion_stack.hpp::EliminateDoubleCount` +
+    /// `local_expansion.hpp::ResolveDoubleCountIfBranchRoot` 移植．
+    pub(super) fn eliminate_double_count_mid_v2(
+        &mut self,
+        stack_idx: usize,
+        child_fh: u64,
+        child_pos_key: u64,
+        child_hand: &[u8; HAND_KINDS],
+        immediate_parent_fh: u64,
+    ) {
+        // parent_map + parent_meta に or_insert．既存 entry は上書きしない．
+        self.parent_map.entry(child_fh).or_insert(immediate_parent_fh);
+        self.parent_meta.entry(child_fh).or_insert((child_pos_key, *child_hand));
+
+        // KH `FindKnownAncestor` 移植 (`double_count_elimination.hpp:102-149`)．
+        // 祖先 chain を walk しながら pn/dn の divergence を track．divergence が
+        // kAncestorSearchThreshold (= 3 * PN_UNIT) を超えたら double-count とみなさない．
+        // Phase 14: KH は kAncestorSearchThreshold = 3 * kPnDnUnit．
+        // maou で sweep した結果，PN_UNIT (16) が 29te で最適 (-7%)．
+        const ANCESTOR_SEARCH_THRESHOLD: u32 = PN_UNIT;
+        const MAX_DAG_LOOKBACK: usize = 16;
+
+        let mut last_pn = u32::MAX;
+        let mut last_dn = u32::MAX;
+        let mut pn_flag = true;
+        let mut dn_flag = true;
+        let mut cur_fh = child_fh;
+        // or_node alternation: child is opposite of self (immediate_parent).
+        // self.attacker は固定なので or_node 切替は stack frame の or_node から逆推する必要．
+        // 簡易化: stack_idx + 1 が child の or_node で alternates back．
+        // 実用上は anc_idx == stack_idx - dist で or_node = (stack[anc_idx].or_node)．
+
+        for _step in 0..MAX_DAG_LOOKBACK {
+            let parent_fh = match self.parent_map.get(&cur_fh) {
+                Some(&p) => p,
+                None => return,
+            };
+            // cur の pn/dn を TT lookup (divergence check 用)．
+            let (cur_pk, cur_hand) = match self.parent_meta.get(&cur_fh) {
+                Some(&v) => v,
+                None => return,
+            };
+            let (cur_pn, cur_dn, _) =
+                self.look_up_pn_dn_impl(cur_pk, &cur_hand, REMAINING_INFINITE, false);
+
+            // 初訪問チェック: step=0 で parent == immediate_parent なら通常 expand．
+            if cur_fh == child_fh && parent_fh == immediate_parent_fh {
+                return;
+            }
+
+            // divergence check．
+            if cur_dn > last_dn.saturating_add(ANCESTOR_SEARCH_THRESHOLD) {
+                dn_flag = false;
+            }
+            if cur_pn > last_pn.saturating_add(ANCESTOR_SEARCH_THRESHOLD) {
+                pn_flag = false;
+            }
+
+            // 祖先 stack に parent_fh があるか?
+            for anc_idx in (0..stack_idx).rev() {
+                if self.mid_expansion_stack[anc_idx].position_fh() == parent_fh {
+                    let branch_or_node = self.mid_expansion_stack[anc_idx].or_node_value();
+                    // KH: OR node なら dn の double-count，AND node なら pn の double-count．
+                    let allowed = (branch_or_node && dn_flag) || (!branch_or_node && pn_flag);
+                    if allowed {
+                        let branch_move = self.mid_frame_moves[anc_idx];
+                        if branch_move != 0 {
+                            self.mid_expansion_stack[anc_idx]
+                                .reset_sum_mask_for_move(branch_move);
+                        }
+                    }
+                    return;
+                }
+            }
+            if parent_fh == cur_fh { return; }
+            if !pn_flag && !dn_flag { return; }
+            last_pn = cur_pn;
+            last_dn = cur_dn;
+            cur_fh = parent_fh;
+        }
     }
 
     /// mid_v2 用 entry point: solve() から呼ばれる．
     /// inc_flag を 0 で初期化し，root mid_v2 を呼ぶ．
+    /// md_budget = u16::MAX (制約なし)．
     pub fn solve_v2(&mut self, board: &mut Board) -> super::mid_v2::MidSearchResult {
+        self.solve_v2_with_budget(board, u16::MAX)
+    }
+
+    /// Phase 9 (v0.88.0): md_budget 制約付き solve_v2．
+    ///
+    /// `md_budget` は root から見た詰みまでの許容手数．KH SearchEntry の
+    /// `MateLen len` 相当．find_shortest IDS で D-2 ずつ締めて呼ぶ．
+    pub fn solve_v2_with_budget(
+        &mut self, board: &mut Board, md_budget: u16,
+    ) -> super::mid_v2::MidSearchResult {
         self.attacker = board.turn;
         self.start_time = std::time::Instant::now();
         self.path_len = 0;
         self.path_set.clear();
+        let saved_dag = self.param_use_dag_correction;
+        self.param_use_dag_correction = true;
+        self.parent_map.clear();
+        self.parent_meta.clear();
+        self.mid_expansion_stack.clear();
+        self.mid_frame_moves.clear();
+        self.mid_v2_visit_counts.clear();
         let mut inc_flag = 0u32;
-        self.mid_v2(board, INF - 1, INF - 1, 0, true, &mut inc_flag)
+        let result = self.mid_v2(board, INF - 1, INF - 1, 0, true, &mut inc_flag, md_budget);
+        self.param_use_dag_correction = saved_dag;
+        result
     }
 
     /// mid_v2 で proven された局面から PV を抽出する．
     /// 既存 `extract_pv_limited` を流用 (TT の best_move を使う)．
     /// 返り値: (`MidSearchResult`, PV as `Vec<Move>`)
-    ///
-    /// **注意 (v0.87.0)**: 現在の mid_v2 は「初回発見 mate」を出すため
-    /// shortest mate / max-resistance defender を保証しない．真の find_shortest
-    /// 実装には KH MakeShorter 相当の iterative deepening が必要 (Phase 8 候補)．
     pub fn solve_v2_with_pv(&mut self, board: &mut Board) -> (super::mid_v2::MidSearchResult, Vec<Move>) {
         let result = self.solve_v2(board);
         let pv = if result.pn == 0 {
@@ -7039,16 +7336,152 @@ impl DfPnSolver {
         (result, pv)
     }
 
-    /// Phase 7 (v0.87.0): find_shortest 用の backward analysis．
-    /// 現局面が proven なら正確な mate_distance を計算し TT を更新する．
+    /// Phase 9 (v0.88.0): KH SearchMainLoop 風 find_shortest．
     ///
-    /// OR ノードで TT に proven 子が無い場合，mid_v2 を呼んで追加証明する．
-    /// これにより shortest mate を全 attacker move 候補から見つけられる．
+    /// アルゴリズム (KH `komoring_heights.cpp:185-254` 移植):
+    /// 1. md_budget = INF で solve_v2．mate_distance = D．
+    /// 2. md_budget = D - 2 で再 solve．成功 (D' <= D-2) なら D = D'，2 へ．
+    /// 3. 失敗 (= md_budget 内で proof 出ず) なら現 D が shortest．終了．
     ///
-    /// 返り値: Some(mate_distance) = proven (refined), None = unproven.
+    /// KH の `len = result.Len() - 2` は KH MateLen の plies (= moves) を表す．
+    /// 同奇偶 (= shortest mate のパリティ保存) のため -2 ステップ．
+    /// maou の mate_distance も plies なので同じく -2 で OK．
     ///
-    /// `memo`: 同 position の重複計算を避けるためのキャッシュ．
-    /// `budget`: 残ノード予算 (mid_v2 追加証明用)．
+    /// 返り値: (final `MidSearchResult`, shortest PV as `Vec<Move>`)
+    pub fn solve_v2_find_shortest(
+        &mut self, board: &mut Board,
+    ) -> (super::mid_v2::MidSearchResult, Vec<Move>) {
+        // Phase 18: PV-walk refinement 方式．
+        //
+        // mid_v2 は multi_pv=1 で最初に proven になった child を採用するため，
+        // 最短でない proof を取ることがある (29te で 31 手 PV が出る問題)．
+        //
+        // KH は dual-range TT により最初の SearchEntry で自然に shortest を見つけるが，
+        // maou TT では不可．代わりに以下の PV-walk approach で修正:
+        //
+        // 1. 初回 solve で first proof を得る
+        // 2. PV 上の全 OR/AND ノードを walk し，各 OR で alternative attacker moves を
+        //    per-child budget 付き mid_v2 で prove 試行．proven 化された child は TT に蓄積．
+        // 3. refine_mate_distance (proven-only, no mid_v2) で正確な md を計算し TT 更新
+        // 4. re-extract PV．shorter なら再度 walk (cascade)
+
+        // Phase 18: 初回 solve 時に working entries を保持する
+        // (IDS で working pn/dn fallback を有効にするため)
+        self.table.preserve_working_on_proof = true;
+
+        // Step 1: 初回 solve
+        let mut result = self.solve_v2_with_budget(board, u16::MAX);
+        if result.pn != 0 {
+            self.table.preserve_working_on_proof = false;
+            return (result, Vec::new());
+        }
+        let mut best_pv = self.extract_pv_limited(board, 100_000);
+        let mut best_d = best_pv.len() as u16;
+
+        // Step 2: PV-walk + refine (最大 8 反復)
+        // PV 上の各 OR ノードで alternative attacker moves を prove 試行し，
+        // refine_mate_distance で正確な md を計算して shorter PV を発見する．
+        const PER_CHILD_BUDGET: u64 = 2_000_000;
+        for _iter in 0..8u32 {
+            if self.nodes_searched >= self.max_nodes || self.timed_out { break; }
+            if best_d <= 1 { break; }
+
+            // PV-walk: PV 上の全ノードを辿り，alternative OR moves を prove
+            let pv_snapshot = best_pv.clone();
+            let mut any_new_proof = false;
+            let mut pv_captures: Vec<crate::types::Piece> = Vec::new();
+            // Walk both OR and AND branches along the PV
+            for ply in 0..pv_snapshot.len() {
+                if self.nodes_searched >= self.max_nodes || self.timed_out { break; }
+                let is_or = ply % 2 == 0;
+                if is_or {
+                    // OR node: try proving alternative attacker moves
+                    let checks: Vec<Move> = self.generate_check_moves_cached(board)
+                        .into_iter().collect();
+                    for cm in &checks {
+                        if cm.to_move16() == pv_snapshot[ply].to_move16() { continue; }
+                        if self.nodes_searched >= self.max_nodes || self.timed_out { break; }
+                        let cap = board.do_move(*cm);
+                        let cpk = position_key(board);
+                        let chand = board.hand[self.attacker.index()];
+                        let (cpn, cdn, _) = self.look_up_pn_dn(cpk, &chand, REMAINING_INFINITE);
+                        if cpn != 0 && cdn != 0 {
+                            // Unproven — try mid_v2 with per-child budget
+                            let saved_max = self.max_nodes;
+                            self.max_nodes = self.nodes_searched.saturating_add(PER_CHILD_BUDGET)
+                                .min(saved_max);
+                            let mut inc = 0u32;
+                            let _ = self.mid_v2(board, INF - 1, INF - 1,
+                                              (ply + 1) as u32, false, &mut inc, u16::MAX);
+                            self.max_nodes = saved_max;
+                            // Check if now proven
+                            let (cpn2, _, _) = self.look_up_pn_dn(cpk, &chand, REMAINING_INFINITE);
+                            if cpn2 == 0 { any_new_proof = true; }
+                        }
+                        board.undo_move(*cm, cap);
+                    }
+                } else {
+                    // AND node: walk defender responses NOT on PV, try proving their subtrees
+                    let def_moves = crate::movegen::generate_legal_moves(board);
+                    for dm in &def_moves {
+                        if dm.to_move16() == pv_snapshot[ply].to_move16() { continue; }
+                        if self.nodes_searched >= self.max_nodes || self.timed_out { break; }
+                        let cap = board.do_move(*dm);
+                        let dpk = position_key(board);
+                        let dhand = board.hand[self.attacker.index()];
+                        let (dpn, ddn, _) = self.look_up_pn_dn(dpk, &dhand, REMAINING_INFINITE);
+                        if dpn != 0 && ddn != 0 {
+                            // Unproven OR child — prove it (needed for complete AND proof)
+                            let saved_max = self.max_nodes;
+                            self.max_nodes = self.nodes_searched.saturating_add(PER_CHILD_BUDGET)
+                                .min(saved_max);
+                            let mut inc = 0u32;
+                            let _ = self.mid_v2(board, INF - 1, INF - 1,
+                                              (ply + 1) as u32, true, &mut inc, u16::MAX);
+                            self.max_nodes = saved_max;
+                            let (dpn2, _, _) = self.look_up_pn_dn(dpk, &dhand, REMAINING_INFINITE);
+                            if dpn2 == 0 { any_new_proof = true; }
+                        }
+                        board.undo_move(*dm, cap);
+                    }
+                }
+                // Advance board along PV (record captured for undo)
+                let cap_pv = board.do_move(pv_snapshot[ply]);
+                pv_captures.push(cap_pv);
+            }
+            // Undo PV moves
+            for (mv, cap_pv) in pv_snapshot.iter().rev().zip(pv_captures.iter().rev()) {
+                board.undo_move(*mv, *cap_pv);
+            }
+
+            if !any_new_proof { break; }
+
+            // Step 3: refine proven md and re-extract PV
+            let mut memo = rustc_hash::FxHashMap::default();
+            let _ = self.refine_mate_distance(board, true, 0, &mut memo);
+            let new_pv = self.extract_pv_limited(board, 100_000);
+            let new_d = new_pv.len() as u16;
+            if new_d > 0 && new_d < best_d {
+                best_pv = new_pv;
+                best_d = new_d;
+            } else {
+                break;
+            }
+        }
+
+        self.table.preserve_working_on_proof = false;
+        result.mate_distance = best_d;
+        (result, best_pv)
+    }
+
+    /// Phase 18 (v0.97.0): find_shortest 用 backward analysis．
+    ///
+    /// proven ノードの正確な mate_distance を既存 proven children のみから計算し
+    /// TT を更新する．mid_v2 は呼ばない (cheap recursion only)．
+    ///
+    /// `try_unproven=true` の場合のみ，OR ノードで未証明 child に per-child budget
+    /// 付き mid_v2 を試行する．ただし再帰呼出では `try_unproven=false` にして
+    /// budget を root-level alternatives に集中させる．
     pub fn refine_mate_distance(
         &mut self,
         board: &mut Board,
@@ -7056,62 +7489,94 @@ impl DfPnSolver {
         depth: u32,
         memo: &mut rustc_hash::FxHashMap<u64, u16>,
     ) -> Option<u16> {
-        // Depth limit
+        self.refine_mate_distance_inner(board, or_node, depth, memo, true)
+    }
+
+    fn refine_mate_distance_inner(
+        &mut self,
+        board: &mut Board,
+        or_node: bool,
+        depth: u32,
+        memo: &mut rustc_hash::FxHashMap<u64, u16>,
+        try_unproven: bool,
+    ) -> Option<u16> {
+        const PER_CHILD_BUDGET: u64 = 2_000_000;
+
         if depth >= 64 {
             return None;
         }
-        // 予算超過チェック (mid_v2 呼び出しで爆発するのを防ぐ)
         if self.nodes_searched >= self.max_nodes || self.timed_out {
             return None;
         }
         let pk = position_key(board);
         let hand = board.hand[self.attacker.index()];
-        // Memo hit?
         let cache_key = board.hash;
         if let Some(&md) = memo.get(&cache_key) {
             return Some(md);
         }
-        // 既に proven か?
         let (pn, _dn, _) = self.look_up_pn_dn(pk, &hand, REMAINING_INFINITE);
         if pn != 0 {
-            return None; // not proven, can't refine
+            return None;
         }
-        // Legal moves
         let moves: Vec<Move> = if or_node {
             self.generate_check_moves_cached(board).into_iter().collect()
         } else {
             movegen::generate_legal_moves(board)
         };
         if moves.is_empty() {
-            // Terminal: AND no defense = mate (distance 0)．OR no checks impossible if proven.
             memo.insert(cache_key, 0);
             return Some(0);
         }
         if or_node {
-            // OR: shortest mate = min over children + 1.
-            // 未訪問の attacker move があれば mid_v2 で追加証明を試行．
             let mut min_md: u16 = u16::MAX;
             let mut best_move: u16 = 0;
+            let mut unproven_moves: Vec<Move> = Vec::new();
+
+            // Pass 1: refine already-proven children (recursion does NOT try mid_v2).
             for m in &moves {
                 let cap = board.do_move(*m);
-                // 既に proven か?
                 let cpk = position_key(board);
                 let chand = board.hand[self.attacker.index()];
-                let (cpn, _, _) = self.look_up_pn_dn(cpk, &chand, REMAINING_INFINITE);
-                if cpn != 0 && self.nodes_searched < self.max_nodes && !self.timed_out {
-                    // 未証明 — mid_v2 で proof 試行
-                    let mut inc = 0u32;
-                    let _ = self.mid_v2(board, INF - 1, INF - 1, depth + 1, !or_node, &mut inc);
+                let (cpn, cdn, _) = self.look_up_pn_dn(cpk, &chand, REMAINING_INFINITE);
+                if cpn == 0 {
+                    if let Some(md) = self.refine_mate_distance_inner(
+                        board, !or_node, depth + 1, memo, false,
+                    ) {
+                        if md < min_md {
+                            min_md = md;
+                            best_move = m.to_move16();
+                        }
+                    }
+                } else if cdn != 0 && try_unproven {
+                    unproven_moves.push(*m);
                 }
-                let child_md = self.refine_mate_distance(board, !or_node, depth + 1, memo);
                 board.undo_move(*m, cap);
-                if let Some(md) = child_md {
+            }
+
+            // Pass 2: per-child budget mid_v2 (only when try_unproven=true).
+            for m in &unproven_moves {
+                if min_md <= 1 { break; }
+                if self.nodes_searched >= self.max_nodes || self.timed_out { break; }
+                let cap = board.do_move(*m);
+                let saved_max = self.max_nodes;
+                self.max_nodes = self.nodes_searched.saturating_add(PER_CHILD_BUDGET)
+                    .min(saved_max);
+                let mut inc = 0u32;
+                let _ = self.mid_v2(board, INF - 1, INF - 1, depth + 1, !or_node, &mut inc,
+                                    u16::MAX);
+                self.max_nodes = saved_max;
+                // After mid_v2, check if now proven and refine.
+                if let Some(md) = self.refine_mate_distance_inner(
+                    board, !or_node, depth + 1, memo, false,
+                ) {
                     if md < min_md {
                         min_md = md;
                         best_move = m.to_move16();
                     }
                 }
+                board.undo_move(*m, cap);
             }
+
             if min_md == u16::MAX {
                 return None;
             }
@@ -7122,8 +7587,6 @@ impl DfPnSolver {
             memo.insert(cache_key, new_md);
             Some(new_md)
         } else {
-            // AND: defender max-resistance = max over children + 1.
-            // 全 defender 応手は proven でなければならない．
             let mut max_md: u16 = 0;
             let mut all_proven = true;
             let mut max_move: u16 = 0;
@@ -7157,7 +7620,7 @@ impl DfPnSolver {
     }
 }
 
-/// mid_v2 用の TCA threshold 拡張 (mod_v2.rs の extend_search_threshold と等価)．
+/// mid_v2 用の TCA threshold 拡張．
 fn extend_threshold_for_mid_v2(thpn: &mut u32, thdn: &mut u32, curr: &super::mid_v2::MidSearchResult) {
     const EXTEND_DENOM: u32 = 4;
     if curr.pn < INF {
