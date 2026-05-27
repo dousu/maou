@@ -134,6 +134,10 @@ const PROOF_TAG_MASK: u16 = 0x000F;
 const TAG_DEPTH_MASK: u16 = 0x003F;
 /// tag_depth のビット位置．
 const TAG_DEPTH_SHIFT: u16 = 4;
+/// disproven_len のビット位置 (meta bits 10-15)．
+const DISPROVEN_LEN_SHIFT: u16 = 10;
+/// disproven_len のマスク (6 bits, 0-63)．
+const DISPROVEN_LEN_MASK: u16 = 0x003F;
 
 const _: () = assert!(
     std::mem::size_of::<ProvenEntry>() == 12,
@@ -207,6 +211,29 @@ impl ProvenEntry {
         } else {
             None
         }
+    }
+
+    /// disproven_len を取得する (proof entry のみ有効)．
+    ///
+    /// TT dual-range: この proof entry の局面で「len <= disproven_len の詰みは
+    /// 存在しない」ことが IDS で確認された最大の len．
+    /// meta bits 10-15 に格納 (6 bits, 0-63)．0 = 未設定．
+    #[inline(always)]
+    pub(super) fn disproven_len(&self) -> u16 {
+        if self.is_proof() {
+            ((self.meta >> DISPROVEN_LEN_SHIFT) & DISPROVEN_LEN_MASK) as u16
+        } else {
+            0
+        }
+    }
+
+    /// disproven_len を更新する (proof entry のみ)．
+    #[inline(always)]
+    pub(super) fn set_disproven_len(&mut self, len: u16) {
+        debug_assert!(self.is_proof(), "set_disproven_len on non-proof entry");
+        let clamped = len.min(63) as u16;
+        self.meta = (self.meta & !(DISPROVEN_LEN_MASK << DISPROVEN_LEN_SHIFT))
+            | (clamped << DISPROVEN_LEN_SHIFT);
     }
 
     /// エントリの eviction priority (高いほど保持優先)．

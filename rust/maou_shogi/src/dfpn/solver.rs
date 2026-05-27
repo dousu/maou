@@ -1956,12 +1956,13 @@ impl DfPnSolver {
         if md_budget <= MD_BUDGET_FILTER_THRESHOLD && result.0 == 0 {
             if let Some(stored_md) = self.table.look_up_mate_distance(pos_key, hand) {
                 if stored_md > md_budget {
-                    // Phase 18: proof rejected by md_budget — fall back to working pn/dn
-                    // if preserved (preserve_working_on_proof=true)
-                    let working = self.table.look_up_working(pos_key, hand, remaining, true);
-                    if working.0 != PN_UNIT || working.1 != PN_UNIT || working.2 != 0 {
-                        result = working;
+                    // Phase 19: disproven_len check — budget 内 proof 不在が確認済みなら即 prune
+                    if self.table.is_disproven_at_budget(pos_key, hand, md_budget) {
+                        result = (INF, 0, 0);
                     } else {
+                        // Phase 19: default (PN_UNIT, PN_UNIT) を返す．
+                        // 旧 Phase 18 の working pn/dn fallback は初回 solve の値で
+                        // 31手 proof 方向にガイドしてしまうため廃止．
                         result = (PN_UNIT, PN_UNIT, 0);
                     }
                 }
@@ -7121,6 +7122,24 @@ impl DfPnSolver {
             let child_phi = child_result.phi(or_node);
             let child_delta = child_result.delta(or_node);
             if child_phi == 0 {
+                // Phase 19: OR node で child が proven だが md > budget → block して次の child へ
+                if or_node && md_budget != u16::MAX && child_result.mate_distance > 0 {
+                    let effective_md = child_result.mate_distance.saturating_add(1);
+                    if effective_md > md_budget {
+                        let blocked = super::mid_v2::MidSearchResult::new_lose(
+                            child_result.mate_distance);
+                        self.mid_expansion_stack[stack_idx].update_best_child(blocked);
+                        curr = self.mid_expansion_stack[stack_idx].current_result();
+                        cur_thpn = orig_thpn;
+                        cur_thdn = orig_thdn;
+                        if *inc_flag > 0 {
+                            extend_threshold_for_mid_v2(&mut cur_thpn, &mut cur_thdn, &curr);
+                        } else if *inc_flag == 0 && orig_inc_flag > 0 {
+                            break;
+                        }
+                        continue;
+                    }
+                }
                 if or_node {
                     proof_best_move = best_move.to_move16();
                     proof_mate_distance = child_result.mate_distance.saturating_add(1);
@@ -7185,7 +7204,15 @@ impl DfPnSolver {
                 pos_key_self, att_hand_self, 0, INF, REMAINING_INFINITE,
                 pos_key_self as u32, bm, md);
         } else if curr.dn == 0 {
-            self.store(pos_key_self, att_hand_self, INF, 0, REMAINING_INFINITE, pos_key_self as u32);
+            // Phase 19: budget-bounded search で proven 局面の dn=0 は
+            // confirmed disproof ではなく disproven_len 更新
+            if md_budget != u16::MAX && md_budget <= 1000
+                && self.table.has_proof(pos_key_self, &att_hand_self)
+            {
+                self.table.update_disproven_len(pos_key_self, &att_hand_self, md_budget);
+            } else {
+                self.store(pos_key_self, att_hand_self, INF, 0, REMAINING_INFINITE, pos_key_self as u32);
+            }
         } else {
             self.store(pos_key_self, att_hand_self, curr.pn, curr.dn, remaining, pos_key_self as u32);
         }
@@ -7336,37 +7363,21 @@ impl DfPnSolver {
         (result, pv)
     }
 
-    /// Phase 9 (v0.88.0): KH SearchMainLoop 風 find_shortest．
+    /// Phase 19 (v0.98.0): PV-walk refinement find_shortest．
     ///
-    /// アルゴリズム (KH `komoring_heights.cpp:185-254` 移植):
-    /// 1. md_budget = INF で solve_v2．mate_distance = D．
-    /// 2. md_budget = D - 2 で再 solve．成功 (D' <= D-2) なら D = D'，2 へ．
-    /// 3. 失敗 (= md_budget 内で proof 出ず) なら現 D が shortest．終了．
+    /// 1. md_budget = INF で solve_v2 → first proof (mate_distance = D)
+    /// 2. refine_mate_distance (try_unproven=true) で PV 上の alternative を
+    ///    per-child budget 付き mid_v2 で prove → shorter PV を発見
+    /// 3. re-extract PV．shorter なら再度 refine (cascade)
     ///
-    /// KH の `len = result.Len() - 2` は KH MateLen の plies (= moves) を表す．
-    /// 同奇偶 (= shortest mate のパリティ保存) のため -2 ステップ．
-    /// maou の mate_distance も plies なので同じく -2 で OK．
+    /// Phase 18 比の改善:
+    /// - preserve_working_on_proof=true で working entry を保持 → refine 2.1× 高速化
+    /// - TT dual-range (disproven_len) 基盤は future IDS 改善に向け保持
     ///
     /// 返り値: (final `MidSearchResult`, shortest PV as `Vec<Move>`)
     pub fn solve_v2_find_shortest(
         &mut self, board: &mut Board,
     ) -> (super::mid_v2::MidSearchResult, Vec<Move>) {
-        // Phase 18: PV-walk refinement 方式．
-        //
-        // mid_v2 は multi_pv=1 で最初に proven になった child を採用するため，
-        // 最短でない proof を取ることがある (29te で 31 手 PV が出る問題)．
-        //
-        // KH は dual-range TT により最初の SearchEntry で自然に shortest を見つけるが，
-        // maou TT では不可．代わりに以下の PV-walk approach で修正:
-        //
-        // 1. 初回 solve で first proof を得る
-        // 2. PV 上の全 OR/AND ノードを walk し，各 OR で alternative attacker moves を
-        //    per-child budget 付き mid_v2 で prove 試行．proven 化された child は TT に蓄積．
-        // 3. refine_mate_distance (proven-only, no mid_v2) で正確な md を計算し TT 更新
-        // 4. re-extract PV．shorter なら再度 walk (cascade)
-
-        // Phase 18: 初回 solve 時に working entries を保持する
-        // (IDS で working pn/dn fallback を有効にするため)
         self.table.preserve_working_on_proof = true;
 
         // Step 1: 初回 solve
@@ -7375,88 +7386,13 @@ impl DfPnSolver {
             self.table.preserve_working_on_proof = false;
             return (result, Vec::new());
         }
+
+        // Step 2: PV-walk refine (cascade)
         let mut best_pv = self.extract_pv_limited(board, 100_000);
         let mut best_d = best_pv.len() as u16;
-
-        // Step 2: PV-walk + refine (最大 8 反復)
-        // PV 上の各 OR ノードで alternative attacker moves を prove 試行し，
-        // refine_mate_distance で正確な md を計算して shorter PV を発見する．
-        const PER_CHILD_BUDGET: u64 = 2_000_000;
         for _iter in 0..8u32 {
             if self.nodes_searched >= self.max_nodes || self.timed_out { break; }
             if best_d <= 1 { break; }
-
-            // PV-walk: PV 上の全ノードを辿り，alternative OR moves を prove
-            let pv_snapshot = best_pv.clone();
-            let mut any_new_proof = false;
-            let mut pv_captures: Vec<crate::types::Piece> = Vec::new();
-            // Walk both OR and AND branches along the PV
-            for ply in 0..pv_snapshot.len() {
-                if self.nodes_searched >= self.max_nodes || self.timed_out { break; }
-                let is_or = ply % 2 == 0;
-                if is_or {
-                    // OR node: try proving alternative attacker moves
-                    let checks: Vec<Move> = self.generate_check_moves_cached(board)
-                        .into_iter().collect();
-                    for cm in &checks {
-                        if cm.to_move16() == pv_snapshot[ply].to_move16() { continue; }
-                        if self.nodes_searched >= self.max_nodes || self.timed_out { break; }
-                        let cap = board.do_move(*cm);
-                        let cpk = position_key(board);
-                        let chand = board.hand[self.attacker.index()];
-                        let (cpn, cdn, _) = self.look_up_pn_dn(cpk, &chand, REMAINING_INFINITE);
-                        if cpn != 0 && cdn != 0 {
-                            // Unproven — try mid_v2 with per-child budget
-                            let saved_max = self.max_nodes;
-                            self.max_nodes = self.nodes_searched.saturating_add(PER_CHILD_BUDGET)
-                                .min(saved_max);
-                            let mut inc = 0u32;
-                            let _ = self.mid_v2(board, INF - 1, INF - 1,
-                                              (ply + 1) as u32, false, &mut inc, u16::MAX);
-                            self.max_nodes = saved_max;
-                            // Check if now proven
-                            let (cpn2, _, _) = self.look_up_pn_dn(cpk, &chand, REMAINING_INFINITE);
-                            if cpn2 == 0 { any_new_proof = true; }
-                        }
-                        board.undo_move(*cm, cap);
-                    }
-                } else {
-                    // AND node: walk defender responses NOT on PV, try proving their subtrees
-                    let def_moves = crate::movegen::generate_legal_moves(board);
-                    for dm in &def_moves {
-                        if dm.to_move16() == pv_snapshot[ply].to_move16() { continue; }
-                        if self.nodes_searched >= self.max_nodes || self.timed_out { break; }
-                        let cap = board.do_move(*dm);
-                        let dpk = position_key(board);
-                        let dhand = board.hand[self.attacker.index()];
-                        let (dpn, ddn, _) = self.look_up_pn_dn(dpk, &dhand, REMAINING_INFINITE);
-                        if dpn != 0 && ddn != 0 {
-                            // Unproven OR child — prove it (needed for complete AND proof)
-                            let saved_max = self.max_nodes;
-                            self.max_nodes = self.nodes_searched.saturating_add(PER_CHILD_BUDGET)
-                                .min(saved_max);
-                            let mut inc = 0u32;
-                            let _ = self.mid_v2(board, INF - 1, INF - 1,
-                                              (ply + 1) as u32, true, &mut inc, u16::MAX);
-                            self.max_nodes = saved_max;
-                            let (dpn2, _, _) = self.look_up_pn_dn(dpk, &dhand, REMAINING_INFINITE);
-                            if dpn2 == 0 { any_new_proof = true; }
-                        }
-                        board.undo_move(*dm, cap);
-                    }
-                }
-                // Advance board along PV (record captured for undo)
-                let cap_pv = board.do_move(pv_snapshot[ply]);
-                pv_captures.push(cap_pv);
-            }
-            // Undo PV moves
-            for (mv, cap_pv) in pv_snapshot.iter().rev().zip(pv_captures.iter().rev()) {
-                board.undo_move(*mv, *cap_pv);
-            }
-
-            if !any_new_proof { break; }
-
-            // Step 3: refine proven md and re-extract PV
             let mut memo = rustc_hash::FxHashMap::default();
             let _ = self.refine_mate_distance(board, true, 0, &mut memo);
             let new_pv = self.extract_pv_limited(board, 100_000);

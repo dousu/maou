@@ -559,6 +559,44 @@ impl ProvenTable {
         removed
     }
 
+    /// TT dual-range: 指定 proof entry の disproven_len を更新する．
+    ///
+    /// (pos_key, hand) 完全一致の proof entry を探し，
+    /// disproven_len = max(existing, len) で更新する．
+    /// 戻り値: 更新成功なら true．
+    pub(super) fn update_disproven_len(
+        &mut self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        len: u16,
+    ) -> bool {
+        let pos_key = Self::safe_key(pos_key);
+        let mut idx = self.index(pos_key);
+        let n = self.entries.len();
+        for _ in 0..PROVEN_TABLE_MAX_PROBE {
+            let slot = &mut self.entries[idx];
+            if slot.pos_key == 0 {
+                return false;
+            }
+            if slot.pos_key != PROVEN_TABLE_TOMBSTONE_KEY
+                && slot.pos_key == pos_key
+                && slot.entry.is_proof()
+                && slot.entry.hand == *hand
+            {
+                let existing = slot.entry.disproven_len();
+                if len > existing {
+                    slot.entry.set_disproven_len(len);
+                }
+                return true;
+            }
+            idx += 1;
+            if idx >= n {
+                idx = 0;
+            }
+        }
+        false
+    }
+
     /// 負荷率 (実エントリ数 / 容量)．`0.0..=1.0`．Phase 3 (v0.62.0)．
     ///
     /// caller は容量逼迫の指標として参照する．KH `IsAlmostFull()` 相当の
@@ -1498,6 +1536,47 @@ impl TranspositionTable {
         for e in self.iter_proven_entries(pos_key) {
             if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
                 return true;
+            }
+        }
+        false
+    }
+
+    /// TT dual-range: 指定 proof entry の disproven_len を更新する．
+    ///
+    /// ProvenTable に委譲．(pos_key, hand) 完全一致の proof entry を探して更新．
+    pub(super) fn update_disproven_len(
+        &mut self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        len: u16,
+    ) -> bool {
+        let pos_key = Self::safe_key(pos_key);
+        self.proven_table.update_disproven_len(pos_key, hand, len)
+    }
+
+    /// TT dual-range: md_budget <= disproven_len かどうか判定する．
+    ///
+    /// (pos_key, hand) 完全一致の proof entry で disproven_len を確認．
+    /// disproven_len > 0 かつ md_budget <= disproven_len かつ
+    /// disproven_len < mate_distance (sanity) なら true．
+    #[inline]
+    pub(super) fn is_disproven_at_budget(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+        md_budget: u16,
+    ) -> bool {
+        let pos_key = Self::safe_key(pos_key);
+        for e in self.iter_proven_entries(pos_key) {
+            if e.is_proof() && e.hand == *hand {
+                let d = e.disproven_len();
+                if d > 0 && md_budget <= d {
+                    if let Some(md) = e.mate_distance() {
+                        if d < md {
+                            return true;
+                        }
+                    }
+                }
             }
         }
         false
