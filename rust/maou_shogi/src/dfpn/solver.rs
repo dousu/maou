@@ -436,8 +436,14 @@ pub struct DfPnSolver {
 
     /// Phase 22: 1+ε 閾値 epsilon (KH デフォルト 1; PN_UNIT スケール考慮で PN_UNIT が候補)．
     pub(super) param_threshold_epsilon: u32,
+    /// Phase 22: TCA extension formula を KH `max(thpn, pn+1)` 形式にするか．
+    pub(super) param_tca_kh_clamp: bool,
+    /// Phase 22: root level IDS (KH SearchEntry 風 1.7× threshold growth) 有効．
+    pub(super) param_root_ids_enable: bool,
     /// Phase 21: deferred penalty 除数 (0=無効, 8=KH 準拠)．
     pub(super) param_deferred_penalty_denom: u32,
+    /// Phase 22: deferred penalty `.max(1)` floor (KH=true)．
+    pub(super) param_deferred_penalty_floor: bool,
     /// Phase 21: TCA gate を is_shallow ベースにするか (true=v0.99.0, false=旧 !is_first_visit)．
     pub(super) param_tca_use_shallow_gate: bool,
     /// Phase 21 診断: deferred penalty 発火フレーム数．
@@ -997,7 +1003,10 @@ impl DfPnSolver {
             mid_v2_visit_counts: rustc_hash::FxHashMap::default(),
             max_remaining_map: rustc_hash::FxHashMap::default(),
             param_threshold_epsilon: 2,
+            param_tca_kh_clamp: false,
+            param_root_ids_enable: false,
             param_deferred_penalty_denom: 0,
+            param_deferred_penalty_floor: false,
             param_tca_use_shallow_gate: false,
             diag_deferred_frames: 0,
             diag_deferred_penalty_sum: 0,
@@ -1475,9 +1484,27 @@ impl DfPnSolver {
         self
     }
 
+    /// Phase 22: deferred penalty `.max(1)` floor を設定 (KH=true)．
+    pub fn set_deferred_penalty_floor(&mut self, floor: bool) -> &mut Self {
+        self.param_deferred_penalty_floor = floor;
+        self
+    }
+
     /// Phase 22: 1+ε threshold epsilon を設定 (KH 1; PN_UNIT=16 試験用)．
     pub fn set_threshold_epsilon(&mut self, eps: u32) -> &mut Self {
         self.param_threshold_epsilon = eps.max(1);
+        self
+    }
+
+    /// Phase 22: TCA extension formula を KH `max(thpn, pn+1)` clamp 式にするか．
+    pub fn set_tca_kh_clamp(&mut self, on: bool) -> &mut Self {
+        self.param_tca_kh_clamp = on;
+        self
+    }
+
+    /// Phase 22: root level IDS (KH SearchEntry) を有効化．
+    pub fn set_root_ids_enable(&mut self, on: bool) -> &mut Self {
+        self.param_root_ids_enable = on;
         self
     }
 
@@ -7152,6 +7179,7 @@ impl DfPnSolver {
 
         // Phase 21: parameterized deferred penalty + TCA gate
         expansion.set_deferred_penalty_denom(self.param_deferred_penalty_denom);
+        expansion.set_deferred_penalty_floor(self.param_deferred_penalty_floor);
         // Phase 22: 1+ε threshold epsilon (PN_UNIT-scaled?)
         expansion.set_threshold_epsilon(self.param_threshold_epsilon);
         let deferred = expansion.deferred_count();
@@ -7187,7 +7215,7 @@ impl DfPnSolver {
             *inc_flag = inc_flag.saturating_add(1);
         }
         if *inc_flag > 0 {
-            extend_threshold_for_mid_v2(&mut cur_thpn, &mut cur_thdn, &curr);
+            extend_threshold_for_mid_v2_mode(&mut cur_thpn, &mut cur_thdn, &curr, self.param_tca_kh_clamp);
         }
 
         // Phase 5: proof 確定時の best_move を記録．OR proven なら proof_best_move を
@@ -7266,7 +7294,7 @@ impl DfPnSolver {
                         cur_thpn = orig_thpn;
                         cur_thdn = orig_thdn;
                         if *inc_flag > 0 {
-                            extend_threshold_for_mid_v2(&mut cur_thpn, &mut cur_thdn, &curr);
+                            extend_threshold_for_mid_v2_mode(&mut cur_thpn, &mut cur_thdn, &curr, self.param_tca_kh_clamp);
                         } else if *inc_flag == 0 && orig_inc_flag > 0 {
                             break;
                         }
@@ -7293,7 +7321,7 @@ impl DfPnSolver {
             cur_thpn = orig_thpn;
             cur_thdn = orig_thdn;
             if *inc_flag > 0 {
-                extend_threshold_for_mid_v2(&mut cur_thpn, &mut cur_thdn, &curr);
+                extend_threshold_for_mid_v2_mode(&mut cur_thpn, &mut cur_thdn, &curr, self.param_tca_kh_clamp);
             } else if *inc_flag == 0 && orig_inc_flag > 0 {
                 break;
             }
@@ -7477,8 +7505,49 @@ impl DfPnSolver {
         self.mid_expansion_stack.clear();
         self.mid_frame_moves.clear();
         self.mid_v2_visit_counts.clear();
-        let mut inc_flag = 0u32;
-        let result = self.mid_v2(board, INF - 1, INF - 1, 0, true, &mut inc_flag, md_budget);
+
+        // Phase 22: KH SearchEntry 風 root-level IDS．
+        // 初期 thpn=thdn=PN_UNIT で開始，各反復で thresholds *= 1.7+1 に拡張．
+        // KH `komoring_heights.cpp::NextPnDnThresholds`．
+        // param_root_ids_enable=false で INF-1 直接 (旧挙動)．
+        let result = if self.param_root_ids_enable {
+            let mut thpn: u32 = PN_UNIT;
+            let mut thdn: u32 = PN_UNIT;
+            let mut inc_flag = 0u32;
+            let mut last = super::mid_v2::MidSearchResult::new_unknown(PN_UNIT, PN_UNIT);
+            loop {
+                inc_flag = 0;
+                let r = self.mid_v2(board, thpn, thdn, 0, true, &mut inc_flag, md_budget);
+                last = r;
+                if r.pn == 0 || r.dn == 0 {
+                    break;
+                }
+                if self.nodes_searched >= self.max_nodes || self.timed_out {
+                    break;
+                }
+                // Both at INF means overflow — shouldn't happen but be safe
+                if r.pn >= INF - 1 && r.dn >= INF - 1 {
+                    break;
+                }
+                // Multiply thresholds by 1.7 (KH formula)
+                let next_pn = ((r.pn as f64) * 1.7) as u32 + 1;
+                let next_dn = ((r.dn as f64) * 1.7) as u32 + 1;
+                let new_thpn = thpn.max(next_pn).min(INF - 1);
+                let new_thdn = thdn.max(next_dn).min(INF - 1);
+                if new_thpn == thpn && new_thdn == thdn {
+                    // Cannot grow further; force INF
+                    thpn = INF - 1;
+                    thdn = INF - 1;
+                } else {
+                    thpn = new_thpn;
+                    thdn = new_thdn;
+                }
+            }
+            last
+        } else {
+            let mut inc_flag = 0u32;
+            self.mid_v2(board, INF - 1, INF - 1, 0, true, &mut inc_flag, md_budget)
+        };
         self.param_use_dag_correction = saved_dag;
         result
     }
@@ -7716,6 +7785,24 @@ impl DfPnSolver {
 
 /// mid_v2 用の TCA threshold 拡張．
 fn extend_threshold_for_mid_v2(thpn: &mut u32, thdn: &mut u32, curr: &super::mid_v2::MidSearchResult) {
+    extend_threshold_for_mid_v2_mode(thpn, thdn, curr, false)
+}
+
+/// Phase 22: KH style `max(thpn, pn+1)` (clamp) vs maou cumulative `thpn += pn/4+1`．
+fn extend_threshold_for_mid_v2_mode(
+    thpn: &mut u32, thdn: &mut u32, curr: &super::mid_v2::MidSearchResult, kh_clamp: bool,
+) {
+    if kh_clamp {
+        if curr.pn < INF {
+            let target = curr.pn.saturating_add(1).min(INF - 1);
+            if *thpn < target { *thpn = target; }
+        }
+        if curr.dn < INF {
+            let target = curr.dn.saturating_add(1).min(INF - 1);
+            if *thdn < target { *thdn = target; }
+        }
+        return;
+    }
     const EXTEND_DENOM: u32 = 4;
     if curr.pn < INF {
         let extra = curr.pn / EXTEND_DENOM + 1;

@@ -142,6 +142,8 @@ pub(super) struct MidLocalExpansion {
     dml_next: Vec<i32>,
     /// Phase 21: deferred penalty の除数 (0 = 無効，8 = KH 準拠)．
     deferred_penalty_denom: u32,
+    /// Phase 22: deferred penalty に `.max(1)` floor を適用 (KH=true)．
+    deferred_penalty_floor: bool,
     /// Phase 22: 1+ε 閾値 epsilon (KH デフォルト 1; maou 試験 PN_UNIT=16)．
     threshold_epsilon: u32,
 }
@@ -192,7 +194,16 @@ impl MidLocalExpansion {
         // 初期 sort: phi 昇順
         idx.sort_by_key(|&i| initial_results[i as usize].phi(or_node));
 
-        let sum_mask = if n >= 64 { u64::MAX } else { (1u64 << n).wrapping_sub(1) };
+        let mut sum_mask = if n >= 64 { u64::MAX } else { (1u64 << n).wrapping_sub(1) };
+        // Phase 22: KH `kForceSumPnDn = kInfinitePnDn / 1024` 相当．
+        // child の初期 delta が一定値以上の場合 sum_mask off (max 集約に切替)．
+        // KH `local_expansion.hpp:177` を移植．
+        const FORCE_MAX_DELTA: u32 = (u32::MAX / 2) / 1024;
+        for (i, r) in initial_results.iter().enumerate().take(64) {
+            if r.delta(or_node) >= FORCE_MAX_DELTA {
+                sum_mask &= !(1u64 << i);
+            }
+        }
         let has_old_child = initial_results.iter().any(|r| r.is_shallow);
         let mut expansion = Self {
             or_node,
@@ -208,6 +219,7 @@ impl MidLocalExpansion {
             dml_prev,
             dml_next,
             deferred_penalty_denom: 8,
+            deferred_penalty_floor: false,
             threshold_epsilon: 1,
         };
         expansion.recalc_delta();
@@ -223,6 +235,11 @@ impl MidLocalExpansion {
     /// Phase 22: 1+ε 閾値 epsilon (`second_phi + epsilon`) を設定．
     pub(super) fn set_threshold_epsilon(&mut self, eps: u32) {
         self.threshold_epsilon = eps.max(1);
+    }
+
+    /// Phase 22: deferred penalty floor (`.max(1)`) を設定．
+    pub(super) fn set_deferred_penalty_floor(&mut self, floor: bool) {
+        self.deferred_penalty_floor = floor;
     }
 
     /// Phase 21: has_old_child を !is_first_visit ベースで再計算 (旧ロジック)．
@@ -478,7 +495,12 @@ impl MidLocalExpansion {
         let mut delta_except_best = self.sum_delta_except_best;
         // KH local_expansion.hpp:513-514: deferred moves penalty
         if self.deferred_penalty_denom > 0 && self.moves.len() > self.idx.len() {
-            let penalty = ((self.moves.len() - self.idx.len()) / self.deferred_penalty_denom as usize) as u32;
+            let raw_penalty = (self.moves.len() - self.idx.len()) / self.deferred_penalty_denom as usize;
+            let penalty = if self.deferred_penalty_floor {
+                raw_penalty.max(1) as u32
+            } else {
+                raw_penalty as u32
+            };
             delta_except_best = delta_except_best.saturating_add(penalty);
         }
         if (self.sum_mask >> (self.idx[self.excluded_moves] as u64)) & 1 == 1 {
@@ -526,7 +548,12 @@ impl MidLocalExpansion {
         }
         // KH local_expansion.hpp:485-488: deferred moves penalty
         if self.deferred_penalty_denom > 0 && self.moves.len() > self.idx.len() {
-            let penalty = ((self.moves.len() - self.idx.len()) / self.deferred_penalty_denom as usize) as u32;
+            let raw_penalty = (self.moves.len() - self.idx.len()) / self.deferred_penalty_denom as usize;
+            let penalty = if self.deferred_penalty_floor {
+                raw_penalty.max(1) as u32
+            } else {
+                raw_penalty as u32
+            };
             sum_delta = sum_delta.saturating_add(penalty);
         }
         let raw_delta = sum_delta.saturating_add(max_delta);

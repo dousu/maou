@@ -17148,3 +17148,261 @@ use crate::types::{Color, PieceType};
             .join()
             .unwrap();
     }
+
+    /// Phase 22 診断: TCA extension formula 比較．
+    /// maou (thpn += pn/4+1) vs KH (max(thpn, pn+1)) を dominance + eps=2 で比較．
+    #[test]
+    #[ignore]
+    fn test_phase22_tca_formula_comparison() {
+        let base_sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let prefix_moves = ["S*7i", "8h9g", "8f8g+", "7h8g", "G*8f"];
+
+        struct Config {
+            label: &'static str,
+            epsilon: u32,
+            kh_clamp: bool,
+        }
+
+        let configs = [
+            Config { label: "eps=2, maou TCA (current)", epsilon: 2, kh_clamp: false },
+            Config { label: "eps=2, KH clamp TCA", epsilon: 2, kh_clamp: true },
+            Config { label: "eps=1, KH clamp TCA", epsilon: 1, kh_clamp: true },
+            Config { label: "eps=4, KH clamp TCA", epsilon: 4, kh_clamp: true },
+            Config { label: "eps=8, KH clamp TCA", epsilon: 8, kh_clamp: true },
+            Config { label: "eps=16, KH clamp TCA", epsilon: 16, kh_clamp: true },
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut base_board = Board::new();
+                base_board.set_sfen(base_sfen).unwrap();
+                for mv_str in &prefix_moves {
+                    let mv = base_board.move_from_usi(mv_str).unwrap();
+                    base_board.do_move(mv);
+                }
+                let defender_moves = crate::movegen::generate_legal_moves(&mut base_board);
+                let dm_8g8f = *defender_moves.iter().find(|m| m.to_usi() == "8g8f").unwrap();
+                let dm_9g8f = *defender_moves.iter().find(|m| m.to_usi() == "9g8f").unwrap();
+
+                eprintln!("\n{:=<110}", "= Phase 22 TCA formula comparison ");
+                eprintln!("{:<35} {:>8} {:>8} {:>10} {:>4} {:>8}",
+                    "Config", "9g8f", "8g8f", "init_solve", "PV", "tsume5");
+
+                for cfg in &configs {
+                    let solve_sub = |dm: crate::moves::Move| -> u64 {
+                        let mut sub = base_board.clone();
+                        sub.do_move(dm);
+                        let mut s = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
+                        s.set_threshold_epsilon(cfg.epsilon);
+                        s.set_tca_kh_clamp(cfg.kh_clamp);
+                        let _ = s.solve_v2_with_pv(&mut sub);
+                        s.nodes_searched
+                    };
+                    let n9 = solve_sub(dm_9g8f);
+                    let n8 = solve_sub(dm_8g8f);
+
+                    let (init_nodes, pv_len) = {
+                        let mut board = Board::new();
+                        board.set_sfen(base_sfen).unwrap();
+                        let mut s = DfPnSolver::with_timeout(33, 10_000_000, 32767, 120);
+                        s.set_threshold_epsilon(cfg.epsilon);
+                        s.set_tca_kh_clamp(cfg.kh_clamp);
+                        let (r, pv) = s.solve_v2_with_pv(&mut board);
+                        (s.nodes_searched, if r.pn == 0 { pv.len() } else { 0 })
+                    };
+                    let tsume5 = {
+                        let sfen5 = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
+                        let mut b5 = Board::new();
+                        b5.set_sfen(sfen5).unwrap();
+                        let mut s = DfPnSolver::with_timeout(21, 100_000, 32767, 10);
+                        s.set_threshold_epsilon(cfg.epsilon);
+                        s.set_tca_kh_clamp(cfg.kh_clamp);
+                        let (r5, _) = s.solve_v2_with_pv(&mut b5);
+                        if r5.pn != 0 {
+                            eprintln!("  WARN: tsume_5 NOT PROVEN ({}): pn={} dn={}", cfg.label, r5.pn, r5.dn);
+                            999999
+                        } else {
+                            s.nodes_searched
+                        }
+                    };
+                    eprintln!("{:<35} {:>8} {:>8} {:>10} {:>4} {:>8}",
+                        cfg.label, n9, n8, init_nodes, pv_len, tsume5);
+                }
+                eprintln!("{:=<110}", "");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// Phase 22 診断: KH 準拠 deferred penalty (denom=8, floor=true) + eps の組み合わせ．
+    #[test]
+    #[ignore]
+    fn test_phase22_kh_deferred_eps_diag() {
+        let base_sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let prefix_moves = ["S*7i", "8h9g", "8f8g+", "7h8g", "G*8f"];
+
+        struct Config {
+            label: &'static str,
+            epsilon: u32,
+            denom: u32,
+            floor: bool,
+        }
+        let configs = [
+            Config { label: "eps=2, no def (current best)", epsilon: 2, denom: 0, floor: false },
+            Config { label: "eps=1, KH def/8 + floor", epsilon: 1, denom: 8, floor: true },
+            Config { label: "eps=2, KH def/8 + floor", epsilon: 2, denom: 8, floor: true },
+            Config { label: "eps=2, def/8 no floor", epsilon: 2, denom: 8, floor: false },
+            Config { label: "eps=2, def/4 no floor", epsilon: 2, denom: 4, floor: false },
+            Config { label: "eps=2, def/16 no floor", epsilon: 2, denom: 16, floor: false },
+            Config { label: "eps=1, def/4 no floor", epsilon: 1, denom: 4, floor: false },
+            Config { label: "eps=4, def/8 + floor", epsilon: 4, denom: 8, floor: true },
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut base_board = Board::new();
+                base_board.set_sfen(base_sfen).unwrap();
+                for mv_str in &prefix_moves {
+                    let mv = base_board.move_from_usi(mv_str).unwrap();
+                    base_board.do_move(mv);
+                }
+                let defender_moves = crate::movegen::generate_legal_moves(&mut base_board);
+                let dm_8g8f = *defender_moves.iter().find(|m| m.to_usi() == "8g8f").unwrap();
+                let dm_9g8f = *defender_moves.iter().find(|m| m.to_usi() == "9g8f").unwrap();
+
+                eprintln!("\n{:=<110}", "= Phase 22 KH deferred + eps ");
+                eprintln!("{:<35} {:>8} {:>8} {:>10} {:>4} {:>8}",
+                    "Config", "9g8f", "8g8f", "init_solve", "PV", "tsume5");
+
+                for cfg in &configs {
+                    let solve_sub = |dm: crate::moves::Move| -> u64 {
+                        let mut sub = base_board.clone();
+                        sub.do_move(dm);
+                        let mut s = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
+                        s.set_threshold_epsilon(cfg.epsilon);
+                        s.set_deferred_penalty_denom(cfg.denom);
+                        s.set_deferred_penalty_floor(cfg.floor);
+                        let _ = s.solve_v2_with_pv(&mut sub);
+                        s.nodes_searched
+                    };
+                    let n9 = solve_sub(dm_9g8f);
+                    let n8 = solve_sub(dm_8g8f);
+
+                    let (init_nodes, pv_len) = {
+                        let mut board = Board::new();
+                        board.set_sfen(base_sfen).unwrap();
+                        let mut s = DfPnSolver::with_timeout(33, 10_000_000, 32767, 120);
+                        s.set_threshold_epsilon(cfg.epsilon);
+                        s.set_deferred_penalty_denom(cfg.denom);
+                        s.set_deferred_penalty_floor(cfg.floor);
+                        let (r, pv) = s.solve_v2_with_pv(&mut board);
+                        (s.nodes_searched, if r.pn == 0 { pv.len() } else { 0 })
+                    };
+                    let tsume5 = {
+                        let sfen5 = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
+                        let mut b5 = Board::new();
+                        b5.set_sfen(sfen5).unwrap();
+                        let mut s = DfPnSolver::with_timeout(21, 100_000, 32767, 10);
+                        s.set_threshold_epsilon(cfg.epsilon);
+                        s.set_deferred_penalty_denom(cfg.denom);
+                        s.set_deferred_penalty_floor(cfg.floor);
+                        let (r5, _) = s.solve_v2_with_pv(&mut b5);
+                        if r5.pn != 0 { 999999 } else { s.nodes_searched }
+                    };
+                    eprintln!("{:<35} {:>8} {:>8} {:>10} {:>4} {:>8}",
+                        cfg.label, n9, n8, init_nodes, pv_len, tsume5);
+                }
+                eprintln!("{:=<110}", "");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// Phase 22 診断: dominance + eps=2 + TCA gate variants．
+    #[test]
+    #[ignore]
+    fn test_phase22_tca_gate_with_dominance() {
+        let base_sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let prefix_moves = ["S*7i", "8h9g", "8f8g+", "7h8g", "G*8f"];
+
+        struct Config {
+            label: &'static str,
+            epsilon: u32,
+            tca_shallow: bool,
+            denom: u32,
+            floor: bool,
+        }
+        let configs = [
+            Config { label: "eps=2, old TCA, no def (current)", epsilon: 2, tca_shallow: false, denom: 0, floor: false },
+            Config { label: "eps=2, shallow TCA, no def", epsilon: 2, tca_shallow: true, denom: 0, floor: false },
+            Config { label: "eps=2, shallow TCA, KH def", epsilon: 2, tca_shallow: true, denom: 8, floor: true },
+            Config { label: "eps=4, shallow TCA, KH def", epsilon: 4, tca_shallow: true, denom: 8, floor: true },
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut base_board = Board::new();
+                base_board.set_sfen(base_sfen).unwrap();
+                for mv_str in &prefix_moves {
+                    let mv = base_board.move_from_usi(mv_str).unwrap();
+                    base_board.do_move(mv);
+                }
+                let defender_moves = crate::movegen::generate_legal_moves(&mut base_board);
+                let dm_8g8f = *defender_moves.iter().find(|m| m.to_usi() == "8g8f").unwrap();
+                let dm_9g8f = *defender_moves.iter().find(|m| m.to_usi() == "9g8f").unwrap();
+
+                eprintln!("\n{:=<115}", "= Phase 22 TCA gate + dominance ");
+                eprintln!("{:<40} {:>8} {:>8} {:>10} {:>4} {:>8}",
+                    "Config", "9g8f", "8g8f", "init_solve", "PV", "tsume5");
+
+                for cfg in &configs {
+                    let solve_sub = |dm: crate::moves::Move| -> u64 {
+                        let mut sub = base_board.clone();
+                        sub.do_move(dm);
+                        let mut s = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
+                        s.set_threshold_epsilon(cfg.epsilon);
+                        s.set_tca_shallow_gate(cfg.tca_shallow);
+                        s.set_deferred_penalty_denom(cfg.denom);
+                        s.set_deferred_penalty_floor(cfg.floor);
+                        let _ = s.solve_v2_with_pv(&mut sub);
+                        s.nodes_searched
+                    };
+                    let n9 = solve_sub(dm_9g8f);
+                    let n8 = solve_sub(dm_8g8f);
+                    let (init_nodes, pv_len) = {
+                        let mut board = Board::new();
+                        board.set_sfen(base_sfen).unwrap();
+                        let mut s = DfPnSolver::with_timeout(33, 10_000_000, 32767, 120);
+                        s.set_threshold_epsilon(cfg.epsilon);
+                        s.set_tca_shallow_gate(cfg.tca_shallow);
+                        s.set_deferred_penalty_denom(cfg.denom);
+                        s.set_deferred_penalty_floor(cfg.floor);
+                        let (r, pv) = s.solve_v2_with_pv(&mut board);
+                        (s.nodes_searched, if r.pn == 0 { pv.len() } else { 0 })
+                    };
+                    let tsume5 = {
+                        let sfen5 = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
+                        let mut b5 = Board::new();
+                        b5.set_sfen(sfen5).unwrap();
+                        let mut s = DfPnSolver::with_timeout(21, 100_000, 32767, 10);
+                        s.set_threshold_epsilon(cfg.epsilon);
+                        s.set_tca_shallow_gate(cfg.tca_shallow);
+                        s.set_deferred_penalty_denom(cfg.denom);
+                        s.set_deferred_penalty_floor(cfg.floor);
+                        let (r5, _) = s.solve_v2_with_pv(&mut b5);
+                        if r5.pn != 0 { 999999 } else { s.nodes_searched }
+                    };
+                    eprintln!("{:<40} {:>8} {:>8} {:>10} {:>4} {:>8}",
+                        cfg.label, n9, n8, init_nodes, pv_len, tsume5);
+                }
+                eprintln!("{:=<115}", "");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
