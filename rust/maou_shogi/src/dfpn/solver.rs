@@ -429,6 +429,11 @@ pub struct DfPnSolver {
     /// position_fh → visit count．mid_v2 で各 entry 時にインクリメント．
     pub(super) mid_v2_visit_counts: rustc_hash::FxHashMap<u64, u32>,
 
+    /// Phase 20 (v0.99.0): KH `min_depth` 相当の max_remaining トラッキング．
+    /// (pos_key, hand_hash) → max_remaining (= shallowest ply で stored)．
+    /// store 時に更新，mid_v2 の has_old_child 判定で参照．
+    pub(super) max_remaining_map: rustc_hash::FxHashMap<u64, u16>,
+
     /// melodic-cascading-otter (v0.69.0): DAG 検出の診断カウンタ．
     /// `param_use_dag_correction=true` の場合に動作確認用．
     /// solve() 開始時にゼロクリア．
@@ -975,6 +980,7 @@ impl DfPnSolver {
             parent_map: rustc_hash::FxHashMap::default(),
             parent_meta: rustc_hash::FxHashMap::default(),
             mid_v2_visit_counts: rustc_hash::FxHashMap::default(),
+            max_remaining_map: rustc_hash::FxHashMap::default(),
             diag_dag_calls: 0,
             diag_dag_true: 0,
             diag_dag_short_first: 0,
@@ -2045,6 +2051,39 @@ impl DfPnSolver {
         false
     }
 
+    /// Phase 20 (v0.99.0): max_remaining map を更新 (working entry のみ)．
+    #[inline]
+    fn update_max_remaining(&mut self, pos_key: u64, hand: &[u8; HAND_KINDS], pn: u32, dn: u32, remaining: u16) {
+        if pn != 0 && dn != 0 {
+            let key = pos_key ^ self.hand_hash_for_map(hand);
+            let entry = self.max_remaining_map.entry(key).or_insert(0);
+            if remaining > *entry {
+                *entry = remaining;
+            }
+        }
+    }
+
+    /// Phase 20: max_remaining map の key hash．hand の簡易 hash．
+    #[inline]
+    fn hand_hash_for_map(&self, hand: &[u8; HAND_KINDS]) -> u64 {
+        let mut h: u64 = 0;
+        for (i, &v) in hand.iter().enumerate() {
+            h ^= (v as u64).wrapping_mul(0x9e3779b97f4a7c15u64.wrapping_add(i as u64 * 0x517cc1b727220a95));
+        }
+        h
+    }
+
+    /// Phase 20: pos_key+hand の max_remaining が current_remaining より大きいか判定．
+    /// KH `min_depth < depth16` 相当: 位置が shallower ply で保存されたことを示す．
+    pub(super) fn is_shallow_remaining(&self, pos_key: u64, hand: &[u8; HAND_KINDS], current_remaining: u16) -> bool {
+        let key = pos_key ^ self.hand_hash_for_map(hand);
+        if let Some(&max_rem) = self.max_remaining_map.get(&key) {
+            max_rem > current_remaining
+        } else {
+            false
+        }
+    }
+
     /// visit_history dominance check (KomoringHeights `IsSuperior` 相当)．
     ///
     /// 子展開時に `(child_pos_key, child_hand)` がパス `path[0..path_len]` の
@@ -2128,6 +2167,7 @@ impl DfPnSolver {
             self.diag_proven_per_ply[ply] = self.diag_proven_per_ply[ply].saturating_add(1);
         }
         self.table.store(pos_key, hand, pn, dn, remaining, source);
+        self.update_max_remaining(pos_key, &hand, pn, dn, remaining);
     }
 
     /// ベストムーブ付きで転置表を更新する．
@@ -2150,6 +2190,7 @@ impl DfPnSolver {
             self.diag_proven_per_ply[ply] = self.diag_proven_per_ply[ply].saturating_add(1);
         }
         self.table.store_with_best_move(pos_key, hand, pn, dn, remaining, source, best_move);
+        self.update_max_remaining(pos_key, &hand, pn, dn, remaining);
     }
 
     /// ベストムーブ + 詰み手数付きで転置表を更新する (proven entry 用)．
@@ -7013,12 +7054,15 @@ impl DfPnSolver {
             } else {
                 (pn_tt, dn_tt, false)
             };
+            let is_shallow = !is_first && !mate_in_1
+                && self.is_shallow_remaining(pk, &hand, child_remaining);
             let r = if mate_in_1 {
                 // Phase 16: child OR proven in 1 ply, md=1．
                 super::mid_v2::MidSearchResult::new_win(1)
             } else {
                 let mut r = MidSearchResult::new_unknown(init_pn, init_dn);
                 r.is_first_visit = is_first;
+                r.is_shallow = is_shallow;
                 // Phase 17 (v0.96.0): TT-cached proven の場合，mate_distance も復元．
                 // 旧バグ: cached pn=0 だが md=0 のまま → 親が min_proven_or_child で md=0+1=1 を返す．
                 if init_pn == 0 && init_dn == INF {

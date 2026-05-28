@@ -13392,6 +13392,162 @@ use crate::types::{Color, PieceType};
             }).unwrap().join().unwrap();
     }
 
+    /// Phase 20 診断: 分岐点 sub-problem 比較．
+    /// AND node (G*8f 後) の各 defender response のノード数と proof length を比較．
+    #[test]
+    #[ignore]
+    fn test_mid_v2_tsume_29te_subproblem_diag() {
+        let base_sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let prefix_moves = ["S*7i", "8h9g", "8f8g+", "7h8g", "G*8f"];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                // まず prefix moves を再生して AND node の position を作る
+                let mut base_board = Board::new();
+                base_board.set_sfen(base_sfen).unwrap();
+                for mv_str in &prefix_moves {
+                    let mv = base_board.move_from_usi(mv_str).unwrap();
+                    base_board.do_move(mv);
+                }
+                // ここは AND node (defender's turn)．全 defender moves を列挙
+                let defender_moves = crate::movegen::generate_legal_moves(&mut base_board);
+                eprintln!("\n=== AND node after G*8f: {} defender responses ===", defender_moves.len());
+                for dm in &defender_moves {
+                    eprintln!("  {}", dm.to_usi());
+                }
+
+                // 各 defender response 後の sub-problem を solve
+                eprintln!("\n=== Sub-problem comparison ===");
+                eprintln!("{:<12} {:>10} {:>8} {:>6}", "Response", "Nodes", "PV_len", "Time(ms)");
+                for dm in &defender_moves {
+                    let mut sub_board = base_board.clone();
+                    let cap = sub_board.do_move(*dm);
+                    let mut solver = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
+                    let t = Instant::now();
+                    let (result, pv) = solver.solve_v2_with_pv(&mut sub_board);
+                    let elapsed = t.elapsed().as_millis() as u64;
+                    let pv_len = if result.pn == 0 { pv.len() } else { 0 };
+                    let status = if result.pn == 0 { "PROVEN" } else if result.dn == 0 { "DISPROVEN" } else { "UNKNOWN" };
+                    eprintln!("{:<12} {:>10} {:>8} {:>6} {}", dm.to_usi(), solver.nodes_searched, pv_len, elapsed, status);
+                    if result.pn == 0 && !pv.is_empty() {
+                        let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
+                        eprintln!("  PV: {}", pv_usi.join(" "));
+                    }
+                    sub_board.undo_move(*dm, cap);
+                }
+                // 8g8f sub-problem の再帰的分解
+                eprintln!("\n=== 8g8f sub-problem recursive decomposition ===");
+                {
+                    let mut sub_board = base_board.clone();
+                    let dm_8g8f = defender_moves.iter().find(|m| m.to_usi() == "8g8f").unwrap();
+                    sub_board.do_move(*dm_8g8f);
+                    // OR node: attacker's check moves
+                    let mut tmp_solver = DfPnSolver::with_timeout(29, 100, 32767, 5);
+                    tmp_solver.attacker = sub_board.turn;
+                    let or_moves: Vec<crate::moves::Move> = tmp_solver.generate_check_moves_cached(&mut sub_board).into_iter().collect();
+                    eprintln!("OR node after 8g8f: {} check moves", or_moves.len());
+                    eprintln!("{:<12} {:>10} {:>8} {:>6}", "Check", "Nodes", "PV_len", "Time(ms)");
+                    for cm in &or_moves {
+                        let mut or_board = sub_board.clone();
+                        let cap = or_board.do_move(*cm);
+                        // AND sub-problem
+                        let mut solver = DfPnSolver::with_timeout(29, 2_000_000, 32767, 30);
+                        let t = Instant::now();
+                        let result = solver.solve_v2(&mut or_board);
+                        let elapsed = t.elapsed().as_millis() as u64;
+                        let pv = if result.pn == 0 {
+                            solver.extract_pv_limited(&mut or_board, 100_000)
+                        } else { Vec::new() };
+                        let pv_len = if result.pn == 0 { pv.len() } else { 0 };
+                        let status = if result.pn == 0 { "PROVEN" } else if result.dn == 0 { "DISPROVEN" } else { "?" };
+                        eprintln!("{:<12} {:>10} {:>8} {:>6} {}", cm.to_usi(), solver.nodes_searched, pv_len, elapsed, status);
+                        if result.pn == 0 && !pv.is_empty() {
+                            let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
+                            eprintln!("  PV: {}", pv_usi.join(" "));
+                        }
+                        or_board.undo_move(*cm, cap);
+                    }
+                }
+            }).unwrap().join().unwrap();
+    }
+
+    /// Phase 20 診断: 初回 solve のみ (find_shortest なし) の PV を KH と比較．
+    #[test]
+    #[ignore]
+    fn test_mid_v2_tsume_29te_initial_solve_diag() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let kh_pv_usi = "S*7i 8h9g 8f8g+ 7h8g G*8f 9g8f 5g6h+ 8i7g R*8e 8f9g 8e8g+ 9g8g P*8f 8g8f P*8e 8f8g G*8f 8g9h 7i8h+ 9h8h 8f7g 8h8i 6h6g 8i9h S*8g 9h9g 8g8h 9g9h N*8f";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                let mut solver = DfPnSolver::with_timeout(33, 200_000_000, 32767, 600);
+                solver.set_tt_lookup_diag(true);
+
+                // Step 1: 初回 solve (find_shortest なし)
+                eprintln!("\n=== Step 1: solve_v2 (no find_shortest) ===");
+                let t = Instant::now();
+                let (result, pv) = solver.solve_v2_with_pv(&mut board);
+                let elapsed = t.elapsed().as_millis() as u64;
+                let nps = if elapsed > 0 { solver.nodes_searched * 1000 / elapsed } else { 0 };
+                let (lookups, misses, proven, disproven, working) = solver.get_tt_lookup_stats();
+                eprintln!("[initial solve] nodes={} t(ms)={} NPS={} pn={} dn={} md={}",
+                    solver.nodes_searched, elapsed, nps, result.pn, result.dn, result.mate_distance);
+                eprintln!("  TT: lookups={} misses={} proven={} disproven={} working={}",
+                    lookups, misses, proven, disproven, working);
+                eprintln!("  proven_entries={}", solver.get_tt_proven_len());
+                let ppy = solver.get_proven_per_ply();
+                let ply_diag: Vec<String> = ppy.iter().enumerate()
+                    .filter(|(_, &c)| c > 0)
+                    .map(|(i, c)| format!("ply{}:{}", i, c))
+                    .collect();
+                eprintln!("  proven_per_ply: {}", ply_diag.join(" "));
+
+                if result.pn == 0 {
+                    let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
+                    eprintln!("  PV length: {}", pv.len());
+                    eprintln!("  PV: {}", pv_usi.join(" "));
+
+                    // KH PV との比較
+                    let kh_moves: Vec<&str> = kh_pv_usi.split_whitespace().collect();
+                    let diverge_at = pv_usi.iter().zip(kh_moves.iter())
+                        .position(|(a, b)| a.as_str() != *b);
+                    if let Some(idx) = diverge_at {
+                        eprintln!("  KH PV divergence at move {} (ply {}): maou={} vs KH={}",
+                            idx + 1, idx, pv_usi[idx], kh_moves[idx]);
+                    } else if pv_usi.len() != kh_moves.len() {
+                        eprintln!("  PV length differs: maou={} vs KH={}", pv_usi.len(), kh_moves.len());
+                    } else {
+                        eprintln!("  PV matches KH exactly!");
+                    }
+                }
+
+                // Step 2: find_shortest (PV-walk refine)
+                eprintln!("\n=== Step 2: solve_v2_find_shortest ===");
+                let mut board2 = Board::new();
+                board2.set_sfen(sfen).unwrap();
+                let mut solver2 = DfPnSolver::with_timeout(33, 200_000_000, 32767, 600);
+                solver2.set_tt_lookup_diag(true);
+                let t2 = Instant::now();
+                let (result2, pv2) = solver2.solve_v2_find_shortest(&mut board2);
+                let elapsed2 = t2.elapsed().as_millis() as u64;
+                let nps2 = if elapsed2 > 0 { solver2.nodes_searched * 1000 / elapsed2 } else { 0 };
+                let (lookups2, misses2, proven2, disproven2, working2) = solver2.get_tt_lookup_stats();
+                eprintln!("[find_shortest] nodes={} t(ms)={} NPS={} pn={} dn={} md={}",
+                    solver2.nodes_searched, elapsed2, nps2, result2.pn, result2.dn, result2.mate_distance);
+                eprintln!("  TT: lookups={} misses={} proven={} disproven={} working={}",
+                    lookups2, misses2, proven2, disproven2, working2);
+                if result2.pn == 0 {
+                    let pv2_usi: Vec<String> = pv2.iter().map(|m| m.to_usi()).collect();
+                    eprintln!("  PV length: {}", pv2.len());
+                    eprintln!("  PV: {}", pv2_usi.join(" "));
+                }
+            }).unwrap().join().unwrap();
+    }
+
     /// mid_v2 動作確認 (v0.84.0, Phase 3)．
     /// tsume_5 (17 手詰) で proof 到達するか確認．
     #[test]

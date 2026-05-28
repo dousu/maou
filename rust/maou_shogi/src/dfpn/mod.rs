@@ -13,7 +13,7 @@ use arrayvec::ArrayVec;
 
 use crate::board::Board;
 use crate::moves::Move;
-use crate::types::{Piece, Square, HAND_KINDS};
+use crate::types::{Color, Piece, Square, HAND_KINDS};
 
 /// `eprintln!` の `verbose` feature ガード版．
 ///
@@ -400,6 +400,65 @@ pub(super) fn init_pn_dn_and_kh(
         // bad escape
         (PN_UNIT, 2 * PN_UNIT)
     }
+}
+
+/// KH `MoveBriefEvaluation` 準拠の move ordering key (Phase 20)．
+///
+/// 値が小さいほど「良い手」．KH と同じ基準:
+/// - 成れるのに成らない歩/角/飛: +1000
+/// - 移動後の駒価値が高いほど優先 (−pt_value)
+/// - 玉に近いほど優先 (+10 × distance)
+pub(super) fn move_brief_eval(m: Move, king_sq: Square, board: &Board) -> i32 {
+    let to = m.to_sq();
+    let mut value: i32 = 0;
+
+    // 移動後の駒種 raw ID (1=Pawn .. 14=Dragon)
+    let raw_pt: u8 = if m.is_drop() {
+        m.drop_piece_type().map(|pt| pt as u8).unwrap_or(0)
+    } else {
+        // board.piece_at returns raw piece byte; strip color (& 0x0F)
+        board.piece_at(m.from_sq()) & 0x0F
+    };
+
+    // 成れるのに成らない歩/角/飛: +1000 penalty
+    if !m.is_drop() && !m.is_promotion() {
+        if matches!(raw_pt, 1 | 5 | 6) {
+            let from = m.from_sq();
+            let us = board.turn;
+            let in_enemy = |sq: Square| -> bool {
+                let r = sq.row() as u8;
+                match us {
+                    Color::Black => r <= 2,
+                    Color::White => r >= 6,
+                }
+            };
+            if in_enemy(from) || in_enemy(to) {
+                value += 1000;
+            }
+        }
+    }
+
+    let after_raw = if m.is_promotion() { raw_pt + 8 } else { raw_pt };
+    let pt_value: i32 = match after_raw {
+        1 => 10,                   // Pawn
+        2 => 20,                   // Lance
+        3 => 20,                   // Knight
+        4 => 30,                   // Silver
+        5 => 50,                   // Bishop
+        6 => 50,                   // Rook
+        7 => 50,                   // Gold
+        9 | 10 | 11 | 12 => 50,   // ProPawn..ProSilver
+        13 => 80,                  // Horse
+        14 => 80,                  // Dragon
+        _ => 0,
+    };
+    value -= pt_value;
+
+    let dc = (to.col() as i32 - king_sq.col() as i32).abs();
+    let dr = (to.row() as i32 - king_sq.row() as i32).abs();
+    value += 10 * dc.max(dr);
+
+    value
 }
 
 /// 捨て駒のみ王手ブースト(人間的枝刈り)．

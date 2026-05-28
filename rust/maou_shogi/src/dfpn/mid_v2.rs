@@ -54,6 +54,9 @@ pub struct MidSearchResult {
     pub mate_distance: u16,
     /// 初回訪問フラグ (TCA の `inc_flag--` 判定用)．
     pub is_first_visit: bool,
+    /// KH `min_depth < depth16` 相当: TT entry が shallower ply で保存されたか．
+    /// TCA `has_old_child` の精密化に使用．
+    pub is_shallow: bool,
 }
 
 impl MidSearchResult {
@@ -64,6 +67,7 @@ impl MidSearchResult {
             amount: 0,
             mate_distance: 0,
             is_first_visit: true,
+            is_shallow: false,
         }
     }
 
@@ -74,6 +78,7 @@ impl MidSearchResult {
             amount: 1,
             mate_distance,
             is_first_visit: false,
+            is_shallow: false,
         }
     }
 
@@ -84,6 +89,7 @@ impl MidSearchResult {
             amount: 1,
             mate_distance,
             is_first_visit: false,
+            is_shallow: false,
         }
     }
 
@@ -183,7 +189,7 @@ impl MidLocalExpansion {
         idx.sort_by_key(|&i| initial_results[i as usize].phi(or_node));
 
         let sum_mask = if n >= 64 { u64::MAX } else { (1u64 << n).wrapping_sub(1) };
-        let has_old_child = initial_results.iter().any(|r| !r.is_first_visit);
+        let has_old_child = initial_results.iter().any(|r| r.is_shallow);
         let mut expansion = Self {
             or_node,
             position_fh,
@@ -443,6 +449,11 @@ impl MidLocalExpansion {
     /// best 以外の child の合計 delta を考慮して，best に与える child_thdelta を計算する．
     fn new_thdelta_for_best_move(&self, thdelta: u32) -> u32 {
         let mut delta_except_best = self.sum_delta_except_best;
+        // KH local_expansion.hpp:513-514: deferred moves penalty
+        if self.moves.len() > self.idx.len() {
+            let penalty = ((self.moves.len() - self.idx.len()) / 8).max(1) as u32;
+            delta_except_best = delta_except_best.saturating_add(penalty);
+        }
         if (self.sum_mask >> (self.idx[self.excluded_moves] as u64)) & 1 == 1 {
             delta_except_best = delta_except_best.saturating_add(self.max_delta_except_best);
         }
@@ -485,6 +496,11 @@ impl MidLocalExpansion {
             if best_delta > max_delta {
                 max_delta = best_delta;
             }
+        }
+        // KH local_expansion.hpp:485-488: deferred moves penalty
+        if self.moves.len() > self.idx.len() {
+            let penalty = ((self.moves.len() - self.idx.len()) / 8).max(1) as u32;
+            sum_delta = sum_delta.saturating_add(penalty);
         }
         let raw_delta = sum_delta.saturating_add(max_delta);
         if self.excluded_moves > 0 && raw_delta == 0 {
