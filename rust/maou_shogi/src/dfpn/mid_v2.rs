@@ -140,6 +140,8 @@ pub(super) struct MidLocalExpansion {
     /// prev の final 待ち)．
     dml_prev: Vec<i32>,
     dml_next: Vec<i32>,
+    /// Phase 21: deferred penalty の除数 (0 = 無効，8 = KH 準拠)．
+    deferred_penalty_denom: u32,
 }
 
 impl MidLocalExpansion {
@@ -203,9 +205,26 @@ impl MidLocalExpansion {
             has_old_child,
             dml_prev,
             dml_next,
+            deferred_penalty_denom: 8,
         };
         expansion.recalc_delta();
         expansion
+    }
+
+    /// Phase 21: deferred penalty 除数を設定 (0 = 無効)．
+    /// 正の値の場合: penalty = deferred_count / denom (floor なし)．
+    pub(super) fn set_deferred_penalty_denom(&mut self, denom: u32) {
+        self.deferred_penalty_denom = denom;
+    }
+
+    /// Phase 21: has_old_child を !is_first_visit ベースで再計算 (旧ロジック)．
+    pub(super) fn recompute_has_old_child_any_revisit(&mut self) {
+        self.has_old_child = self.results.iter().any(|r| !r.is_first_visit);
+    }
+
+    /// Phase 21: deferred count (= moves.len() - idx.len())．
+    pub(super) fn deferred_count(&self) -> usize {
+        self.moves.len().saturating_sub(self.idx.len())
     }
 
     /// Phase 14: position_fh accessor．
@@ -450,8 +469,8 @@ impl MidLocalExpansion {
     fn new_thdelta_for_best_move(&self, thdelta: u32) -> u32 {
         let mut delta_except_best = self.sum_delta_except_best;
         // KH local_expansion.hpp:513-514: deferred moves penalty
-        if self.moves.len() > self.idx.len() {
-            let penalty = ((self.moves.len() - self.idx.len()) / 8).max(1) as u32;
+        if self.deferred_penalty_denom > 0 && self.moves.len() > self.idx.len() {
+            let penalty = ((self.moves.len() - self.idx.len()) / self.deferred_penalty_denom as usize) as u32;
             delta_except_best = delta_except_best.saturating_add(penalty);
         }
         if (self.sum_mask >> (self.idx[self.excluded_moves] as u64)) & 1 == 1 {
@@ -498,8 +517,8 @@ impl MidLocalExpansion {
             }
         }
         // KH local_expansion.hpp:485-488: deferred moves penalty
-        if self.moves.len() > self.idx.len() {
-            let penalty = ((self.moves.len() - self.idx.len()) / 8).max(1) as u32;
+        if self.deferred_penalty_denom > 0 && self.moves.len() > self.idx.len() {
+            let penalty = ((self.moves.len() - self.idx.len()) / self.deferred_penalty_denom as usize) as u32;
             sum_delta = sum_delta.saturating_add(penalty);
         }
         let raw_delta = sum_delta.saturating_add(max_delta);

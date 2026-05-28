@@ -434,6 +434,19 @@ pub struct DfPnSolver {
     /// store 時に更新，mid_v2 の has_old_child 判定で参照．
     pub(super) max_remaining_map: rustc_hash::FxHashMap<u64, u16>,
 
+    /// Phase 21: deferred penalty 除数 (0=無効, 8=KH 準拠)．
+    pub(super) param_deferred_penalty_denom: u32,
+    /// Phase 21: TCA gate を is_shallow ベースにするか (true=v0.99.0, false=旧 !is_first_visit)．
+    pub(super) param_tca_use_shallow_gate: bool,
+    /// Phase 21 診断: deferred penalty 発火フレーム数．
+    pub(super) diag_deferred_frames: u64,
+    /// Phase 21 診断: deferred penalty 合計値．
+    pub(super) diag_deferred_penalty_sum: u64,
+    /// Phase 21 診断: has_old_child=true (is_shallow gate)．
+    pub(super) diag_tca_shallow_fire: u64,
+    /// Phase 21 診断: has_old_child=false だが旧ロジックでは true になるケース．
+    pub(super) diag_tca_shallow_would_fire: u64,
+
     /// melodic-cascading-otter (v0.69.0): DAG 検出の診断カウンタ．
     /// `param_use_dag_correction=true` の場合に動作確認用．
     /// solve() 開始時にゼロクリア．
@@ -981,6 +994,12 @@ impl DfPnSolver {
             parent_meta: rustc_hash::FxHashMap::default(),
             mid_v2_visit_counts: rustc_hash::FxHashMap::default(),
             max_remaining_map: rustc_hash::FxHashMap::default(),
+            param_deferred_penalty_denom: 4,
+            param_tca_use_shallow_gate: true,
+            diag_deferred_frames: 0,
+            diag_deferred_penalty_sum: 0,
+            diag_tca_shallow_fire: 0,
+            diag_tca_shallow_would_fire: 0,
             diag_dag_calls: 0,
             diag_dag_true: 0,
             diag_dag_short_first: 0,
@@ -1445,6 +1464,29 @@ impl DfPnSolver {
     /// 配列 `[u64; 64]` で index = ply, 値 = 当該 ply で proven 確定回数．
     pub fn get_proven_per_ply(&self) -> [u64; 64] {
         self.diag_proven_per_ply
+    }
+
+    /// Phase 21: deferred penalty 除数を設定 (0=無効, 8=KH 準拠)．
+    pub fn set_deferred_penalty_denom(&mut self, denom: u32) -> &mut Self {
+        self.param_deferred_penalty_denom = denom;
+        self
+    }
+
+    /// Phase 21: TCA gate モードを設定 (true=is_shallow, false=!is_first_visit)．
+    pub fn set_tca_shallow_gate(&mut self, on: bool) -> &mut Self {
+        self.param_tca_use_shallow_gate = on;
+        self
+    }
+
+    /// Phase 21 診断: deferred penalty + TCA gate 統計を取得．
+    /// `(deferred_frames, deferred_penalty_sum, tca_shallow_fire, tca_would_fire_old)`
+    pub fn get_phase21_diag(&self) -> (u64, u64, u64, u64) {
+        (
+            self.diag_deferred_frames,
+            self.diag_deferred_penalty_sum,
+            self.diag_tca_shallow_fire,
+            self.diag_tca_shallow_would_fire,
+        )
     }
 
     /// 候補 G (v0.74.0): root child_pn_th の絶対 floor を設定．
@@ -2068,7 +2110,7 @@ impl DfPnSolver {
     fn hand_hash_for_map(&self, hand: &[u8; HAND_KINDS]) -> u64 {
         let mut h: u64 = 0;
         for (i, &v) in hand.iter().enumerate() {
-            h ^= (v as u64).wrapping_mul(0x9e3779b97f4a7c15u64.wrapping_add(i as u64 * 0x517cc1b727220a95));
+            h ^= (v as u64).wrapping_mul(0x9e3779b97f4a7c15u64.wrapping_add((i as u64).wrapping_mul(0x517cc1b727220a95)));
         }
         h
     }
@@ -7081,8 +7123,29 @@ impl DfPnSolver {
 
         // Phase 14 (v0.93.0): expansion を mid_expansion_stack に push．
         // KH の ExpansionStack 相当．eliminate_double_count で祖先を辿るために必要．
-        let expansion = MidLocalExpansion::new_with_fh(
+        let mut expansion = MidLocalExpansion::new_with_fh(
             or_node, moves_vec, initial_results, full_hash_self);
+
+        // Phase 21: parameterized deferred penalty + TCA gate
+        expansion.set_deferred_penalty_denom(self.param_deferred_penalty_denom);
+        let deferred = expansion.deferred_count();
+        if deferred > 0 && self.param_deferred_penalty_denom > 0 {
+            self.diag_deferred_frames += 1;
+            let penalty = deferred / self.param_deferred_penalty_denom as usize;
+            self.diag_deferred_penalty_sum += penalty as u64;
+        }
+        // TCA gate 診断: is_shallow vs !is_first_visit の差分
+        let has_old_shallow = expansion.does_have_old_child();
+        let has_old_any = expansion.results.iter().any(|r| !r.is_first_visit);
+        if has_old_shallow {
+            self.diag_tca_shallow_fire += 1;
+        } else if has_old_any {
+            self.diag_tca_shallow_would_fire += 1;
+        }
+        if !self.param_tca_use_shallow_gate && !has_old_shallow && has_old_any {
+            expansion.recompute_has_old_child_any_revisit();
+        }
+
         self.mid_expansion_stack.push(expansion);
         self.mid_frame_moves.push(0);
         let stack_idx = self.mid_expansion_stack.len() - 1;
@@ -7405,6 +7468,31 @@ impl DfPnSolver {
             Vec::new()
         };
         (result, pv)
+    }
+
+    /// Phase 21: mid_v2 ベースの solve を TsumeResult 互換で返す．
+    /// 既存テストの `solver.solve()` → `solver.solve_via_v2()` に機械的に置換可能．
+    pub fn solve_via_v2(&mut self, board: &mut Board) -> TsumeResult {
+        self.table.clear();
+        self.nodes_searched = 0;
+        self.timed_out = false;
+        self.max_remaining_map.clear();
+        let (result, pv) = if self.find_shortest {
+            self.solve_v2_find_shortest(board)
+        } else {
+            self.solve_v2_with_pv(board)
+        };
+        if result.pn == 0 {
+            if pv.is_empty() {
+                TsumeResult::CheckmateNoPv { nodes_searched: self.nodes_searched }
+            } else {
+                TsumeResult::Checkmate { moves: pv, nodes_searched: self.nodes_searched }
+            }
+        } else if result.dn == 0 {
+            TsumeResult::NoCheckmate { nodes_searched: self.nodes_searched }
+        } else {
+            TsumeResult::Unknown { nodes_searched: self.nodes_searched }
+        }
     }
 
     /// Phase 19 (v0.98.0): PV-walk refinement find_shortest．
