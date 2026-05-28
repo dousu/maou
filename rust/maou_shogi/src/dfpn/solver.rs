@@ -434,6 +434,8 @@ pub struct DfPnSolver {
     /// store 時に更新，mid_v2 の has_old_child 判定で参照．
     pub(super) max_remaining_map: rustc_hash::FxHashMap<u64, u16>,
 
+    /// Phase 22: 1+ε 閾値 epsilon (KH デフォルト 1; PN_UNIT スケール考慮で PN_UNIT が候補)．
+    pub(super) param_threshold_epsilon: u32,
     /// Phase 21: deferred penalty 除数 (0=無効, 8=KH 準拠)．
     pub(super) param_deferred_penalty_denom: u32,
     /// Phase 21: TCA gate を is_shallow ベースにするか (true=v0.99.0, false=旧 !is_first_visit)．
@@ -975,7 +977,7 @@ impl DfPnSolver {
             // の導入で false-NoMate が根絶されたため，adaptive を安全に default 化．
             // depth ≤ 19: 0, depth 20-22: 1, depth ≥ 23: 3 (§3.6, M-D)．
             param_disproof_remaining_threshold: DISPROOF_THRESHOLD_ADAPTIVE,
-            param_use_visit_history_dominance: false,
+            param_use_visit_history_dominance: true,
             // Tier 1 (twinkling-hatching-duckling, v0.64.0): default ON．
             // KH (`hands.hpp::HandSet`) と同じく常時 OR disproof_hand を要素 min で集約．
             // v0.57.0 で NPS 2.4× の効果実証済み (§10.2.27)．
@@ -994,8 +996,9 @@ impl DfPnSolver {
             parent_meta: rustc_hash::FxHashMap::default(),
             mid_v2_visit_counts: rustc_hash::FxHashMap::default(),
             max_remaining_map: rustc_hash::FxHashMap::default(),
-            param_deferred_penalty_denom: 4,
-            param_tca_use_shallow_gate: true,
+            param_threshold_epsilon: 2,
+            param_deferred_penalty_denom: 0,
+            param_tca_use_shallow_gate: false,
             diag_deferred_frames: 0,
             diag_deferred_penalty_sum: 0,
             diag_tca_shallow_fire: 0,
@@ -1472,10 +1475,21 @@ impl DfPnSolver {
         self
     }
 
+    /// Phase 22: 1+ε threshold epsilon を設定 (KH 1; PN_UNIT=16 試験用)．
+    pub fn set_threshold_epsilon(&mut self, eps: u32) -> &mut Self {
+        self.param_threshold_epsilon = eps.max(1);
+        self
+    }
+
     /// Phase 21: TCA gate モードを設定 (true=is_shallow, false=!is_first_visit)．
     pub fn set_tca_shallow_gate(&mut self, on: bool) -> &mut Self {
         self.param_tca_use_shallow_gate = on;
         self
+    }
+
+    /// Phase 21: mid_v2 visit count map を取得 (診断用)．
+    pub fn get_visit_counts(&self) -> &rustc_hash::FxHashMap<u64, u32> {
+        &self.mid_v2_visit_counts
     }
 
     /// Phase 21 診断: deferred penalty + TCA gate 統計を取得．
@@ -7041,6 +7055,16 @@ impl DfPnSolver {
             let captured = board.do_move(m);
             let pk = position_key(board);
             let hand = board.hand[self.attacker.index()];
+
+            // Phase 21 (v1.0.0): KH IsSuperior 相当の visit_history dominance．
+            // 祖先で同一 pos_key かつ attacker hand >= child hand なら，
+            // attacker が多い資源でも詰めなかった → child は不詰．
+            if self.is_dominated_in_path(pk, &hand) {
+                board.undo_move(m, captured);
+                initial_results.push(MidSearchResult::new_lose(0));
+                continue;
+            }
+
             let (pn_tt, dn_tt, _) =
                 self.look_up_pn_dn_md_bounded(pk, &hand, child_remaining, child_md_budget);
 
@@ -7128,6 +7152,8 @@ impl DfPnSolver {
 
         // Phase 21: parameterized deferred penalty + TCA gate
         expansion.set_deferred_penalty_denom(self.param_deferred_penalty_denom);
+        // Phase 22: 1+ε threshold epsilon (PN_UNIT-scaled?)
+        expansion.set_threshold_epsilon(self.param_threshold_epsilon);
         let deferred = expansion.deferred_count();
         if deferred > 0 && self.param_deferred_penalty_denom > 0 {
             self.diag_deferred_frames += 1;

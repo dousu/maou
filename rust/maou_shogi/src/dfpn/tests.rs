@@ -16957,3 +16957,194 @@ use crate::types::{Color, PieceType};
             .join()
             .unwrap();
     }
+
+    /// Phase 21 診断: 8g8f sub-problem の探索パターン詳細分析．
+    #[test]
+    #[ignore]
+    fn test_phase21_8g8f_search_pattern_diag() {
+        let base_sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let prefix_moves = ["S*7i", "8h9g", "8f8g+", "7h8g", "G*8f"];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut base_board = Board::new();
+                base_board.set_sfen(base_sfen).unwrap();
+                for mv_str in &prefix_moves {
+                    let mv = base_board.move_from_usi(mv_str).unwrap();
+                    base_board.do_move(mv);
+                }
+                let defender_moves = crate::movegen::generate_legal_moves(&mut base_board);
+                let dm_8g8f = *defender_moves.iter().find(|m| m.to_usi() == "8g8f").unwrap();
+
+                let mut sub = base_board.clone();
+                sub.do_move(dm_8g8f);
+                let mut solver = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
+                solver.set_tt_lookup_diag(true);
+                let t = std::time::Instant::now();
+                let (result, pv) = solver.solve_v2_with_pv(&mut sub);
+                let elapsed = t.elapsed().as_millis() as u64;
+
+                eprintln!("\n{:=<100}", "= 8g8f search pattern analysis ");
+                eprintln!("nodes={} PV_len={} time={}ms pn={} dn={}",
+                    solver.nodes_searched, pv.len(), elapsed, result.pn, result.dn);
+                if !pv.is_empty() {
+                    let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
+                    eprintln!("PV: {}", pv_usi.join(" "));
+                }
+                let (lookups, misses, proven, disproven, working) = solver.get_tt_lookup_stats();
+                eprintln!("TT: lookups={} misses={} proven={} disproven={} working={}",
+                    lookups, misses, proven, disproven, working);
+                eprintln!("TT proven_entries={}", solver.get_tt_proven_len());
+
+                // Visit count distribution
+                let vc = solver.get_visit_counts();
+                let mut counts: Vec<u32> = vc.values().copied().collect();
+                counts.sort_unstable_by(|a, b| b.cmp(a));
+                let unique = counts.len();
+                let total: u64 = counts.iter().map(|&c| c as u64).sum();
+                let revisits: u64 = total - unique as u64;
+                let max_visit = counts.first().copied().unwrap_or(0);
+                eprintln!("\nVisit distribution:");
+                eprintln!("  unique positions: {}", unique);
+                eprintln!("  total visits: {} (avg {:.1} visits/pos)", total, total as f64 / unique.max(1) as f64);
+                eprintln!("  revisits: {} ({:.1}%)", revisits, revisits as f64 / total.max(1) as f64 * 100.0);
+                eprintln!("  max visits to one position: {}", max_visit);
+
+                // Visit count buckets
+                let mut buckets = vec![0u64; 12];
+                for &c in &counts {
+                    let bucket = match c {
+                        1 => 0, 2 => 1, 3..=5 => 2, 6..=10 => 3, 11..=50 => 4,
+                        51..=100 => 5, 101..=500 => 6, 501..=1000 => 7,
+                        1001..=5000 => 8, 5001..=10000 => 9, 10001..=50000 => 10,
+                        _ => 11,
+                    };
+                    buckets[bucket] += 1;
+                }
+                let labels = ["1", "2", "3-5", "6-10", "11-50", "51-100",
+                    "101-500", "501-1K", "1K-5K", "5K-10K", "10K-50K", "50K+"];
+                eprintln!("\n  visits    positions");
+                for (i, &b) in buckets.iter().enumerate() {
+                    if b > 0 { eprintln!("  {:>8}  {:>8}", labels[i], b); }
+                }
+
+                // Top-20 most visited (sorted)
+                let mut sorted_vc: Vec<(u64, u32)> = vc.iter().map(|(&h, &c)| (h, c)).collect();
+                sorted_vc.sort_by(|a, b| b.1.cmp(&a.1));
+                eprintln!("\nTop-20 most visited:");
+                eprintln!("  {:>6}  {:>16}", "visits", "hash");
+                for (hash, count) in sorted_vc.iter().take(20) {
+                    eprintln!("  {:>6}  {:016x}", count, hash);
+                }
+
+                // Phase 21 diag
+                let (def_frm, def_sum, tca_fire, tca_skip) = solver.get_phase21_diag();
+                eprintln!("\nPhase 21: def_frames={} penalty_sum={} tca_fire={} tca_skip={}",
+                    def_frm, def_sum, tca_fire, tca_skip);
+
+                // Per-ply proven
+                let ppy = solver.get_proven_per_ply();
+                let ply_diag: Vec<String> = ppy.iter().enumerate()
+                    .filter(|(_, &c)| c > 0)
+                    .map(|(i, c)| format!("ply{}:{}", i, c))
+                    .collect();
+                eprintln!("Proven per ply: {}", ply_diag.join(" "));
+                eprintln!("{:=<100}", "");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// Phase 22 診断: PN_UNIT スケール epsilon (1+ε) の影響．
+    /// dominance 有効状態で epsilon = 1, 4, 8, 16(=PN_UNIT), 32 を比較．
+    #[test]
+    #[ignore]
+    fn test_phase22_epsilon_pn_unit_scale_diag() {
+        let base_sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let prefix_moves = ["S*7i", "8h9g", "8f8g+", "7h8g", "G*8f"];
+
+        struct Config {
+            label: &'static str,
+            epsilon: u32,
+            deferred_denom: u32,
+            tca_shallow: bool,
+        }
+
+        let configs = [
+            Config { label: "eps=1 (KH default)", epsilon: 1, deferred_denom: 0, tca_shallow: false },
+            Config { label: "eps=2", epsilon: 2, deferred_denom: 0, tca_shallow: false },
+            Config { label: "eps=3", epsilon: 3, deferred_denom: 0, tca_shallow: false },
+            Config { label: "eps=4 (best so far)", epsilon: 4, deferred_denom: 0, tca_shallow: false },
+            Config { label: "eps=5", epsilon: 5, deferred_denom: 0, tca_shallow: false },
+            Config { label: "eps=6", epsilon: 6, deferred_denom: 0, tca_shallow: false },
+            Config { label: "eps=4 + shallow TCA", epsilon: 4, deferred_denom: 0, tca_shallow: true },
+            Config { label: "eps=4 + def/4", epsilon: 4, deferred_denom: 4, tca_shallow: false },
+        ];
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut base_board = Board::new();
+                base_board.set_sfen(base_sfen).unwrap();
+                for mv_str in &prefix_moves {
+                    let mv = base_board.move_from_usi(mv_str).unwrap();
+                    base_board.do_move(mv);
+                }
+                let defender_moves = crate::movegen::generate_legal_moves(&mut base_board);
+                let dm_8g8f = *defender_moves.iter().find(|m| m.to_usi() == "8g8f").unwrap();
+                let dm_9g8f = *defender_moves.iter().find(|m| m.to_usi() == "9g8f").unwrap();
+
+                eprintln!("\n{:=<110}", "= Phase 22: PN_UNIT-scale epsilon test (dominance ON) ");
+                eprintln!("{:<40} {:>8} {:>8} {:>10} {:>4} {:>8}",
+                    "Config", "9g8f", "8g8f", "init_solve", "PV", "tsume5");
+
+                for cfg in &configs {
+                    let solve_sub = |dm: crate::moves::Move| -> u64 {
+                        let mut sub = base_board.clone();
+                        sub.do_move(dm);
+                        let mut s = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
+                        s.set_deferred_penalty_denom(cfg.deferred_denom);
+                        s.set_tca_shallow_gate(cfg.tca_shallow);
+                        s.set_threshold_epsilon(cfg.epsilon);
+                        let _ = s.solve_v2_with_pv(&mut sub);
+                        s.nodes_searched
+                    };
+
+                    let n9 = solve_sub(dm_9g8f);
+                    let n8 = solve_sub(dm_8g8f);
+
+                    let (init_nodes, pv_len) = {
+                        let mut board = Board::new();
+                        board.set_sfen(base_sfen).unwrap();
+                        let mut s = DfPnSolver::with_timeout(33, 10_000_000, 32767, 120);
+                        s.set_deferred_penalty_denom(cfg.deferred_denom);
+                        s.set_tca_shallow_gate(cfg.tca_shallow);
+                        s.set_threshold_epsilon(cfg.epsilon);
+                        let (r, pv) = s.solve_v2_with_pv(&mut board);
+                        (s.nodes_searched, if r.pn == 0 { pv.len() } else { 0 })
+                    };
+
+                    let tsume5 = {
+                        let sfen5 = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
+                        let mut b5 = Board::new();
+                        b5.set_sfen(sfen5).unwrap();
+                        let mut s = DfPnSolver::with_timeout(21, 100_000, 32767, 10);
+                        s.set_deferred_penalty_denom(cfg.deferred_denom);
+                        s.set_tca_shallow_gate(cfg.tca_shallow);
+                        s.set_threshold_epsilon(cfg.epsilon);
+                        let (r5, _) = s.solve_v2_with_pv(&mut b5);
+                        assert_eq!(r5.pn, 0, "tsume_5 must be PROVEN: {}", cfg.label);
+                        s.nodes_searched
+                    };
+
+                    eprintln!("{:<40} {:>8} {:>8} {:>10} {:>4} {:>8}",
+                        cfg.label, n9, n8, init_nodes, pv_len, tsume5);
+                }
+                eprintln!("{:=<110}", "");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }

@@ -142,6 +142,8 @@ pub(super) struct MidLocalExpansion {
     dml_next: Vec<i32>,
     /// Phase 21: deferred penalty の除数 (0 = 無効，8 = KH 準拠)．
     deferred_penalty_denom: u32,
+    /// Phase 22: 1+ε 閾値 epsilon (KH デフォルト 1; maou 試験 PN_UNIT=16)．
+    threshold_epsilon: u32,
 }
 
 impl MidLocalExpansion {
@@ -206,6 +208,7 @@ impl MidLocalExpansion {
             dml_prev,
             dml_next,
             deferred_penalty_denom: 8,
+            threshold_epsilon: 1,
         };
         expansion.recalc_delta();
         expansion
@@ -215,6 +218,11 @@ impl MidLocalExpansion {
     /// 正の値の場合: penalty = deferred_count / denom (floor なし)．
     pub(super) fn set_deferred_penalty_denom(&mut self, denom: u32) {
         self.deferred_penalty_denom = denom;
+    }
+
+    /// Phase 22: 1+ε 閾値 epsilon (`second_phi + epsilon`) を設定．
+    pub(super) fn set_threshold_epsilon(&mut self, eps: u32) {
+        self.threshold_epsilon = eps.max(1);
     }
 
     /// Phase 21: has_old_child を !is_first_visit ベースで再計算 (旧ロジック)．
@@ -446,7 +454,7 @@ impl MidLocalExpansion {
     pub(super) fn front_pn_dn_thresholds(&self, thpn: u32, thdn: u32) -> (u32, u32) {
         let (thphi, thdelta) = if self.or_node { (thpn, thdn) } else { (thdn, thpn) };
         let second_phi = self.get_second_phi();
-        let child_thphi = thphi.min(second_phi.saturating_add(1));
+        let child_thphi = thphi.min(second_phi.saturating_add(self.threshold_epsilon));
         let child_thdelta = self.new_thdelta_for_best_move(thdelta);
         if self.or_node {
             (child_thphi, child_thdelta)
