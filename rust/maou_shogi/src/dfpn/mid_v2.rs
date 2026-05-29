@@ -146,6 +146,10 @@ pub(super) struct MidLocalExpansion {
     deferred_penalty_floor: bool,
     /// Phase 22: 1+ε 閾値 epsilon (KH デフォルト 1; maou 試験 PN_UNIT=16)．
     threshold_epsilon: u32,
+    /// Phase 23 (G4): KH `MoveBriefEvaluation` 相当の move score．
+    /// sort 比較で phi が同点のとき tie-break に使う (小さいほうが優先)．
+    /// 0 で初期化．solver.rs 側で `set_move_evals` を呼んで実値を投入．
+    move_evals: Vec<i32>,
 }
 
 impl MidLocalExpansion {
@@ -191,8 +195,16 @@ impl MidLocalExpansion {
                 idx.push(i as u32);
             }
         }
-        // 初期 sort: phi 昇順
-        idx.sort_by_key(|&i| initial_results[i as usize].phi(or_node));
+        // 初期 sort: KH SearchResultComparer 順 (phi → delta → ...)．
+        // 構築時は move_evals 未設定 (全 0) なので tie-break は無効．
+        // solver 側が set_move_evals を呼んで実 eval を投入後に再 sort される．
+        idx.sort_by(|&i, &j| {
+            child_ordering(
+                or_node,
+                &initial_results[i as usize], 0,
+                &initial_results[j as usize], 0,
+            )
+        });
 
         let mut sum_mask = if n >= 64 { u64::MAX } else { (1u64 << n).wrapping_sub(1) };
         // Phase 22: KH `kForceSumPnDn = kInfinitePnDn / 1024` 相当．
@@ -205,6 +217,7 @@ impl MidLocalExpansion {
             }
         }
         let has_old_child = initial_results.iter().any(|r| r.is_shallow);
+        let move_evals = vec![0i32; n];
         let mut expansion = Self {
             or_node,
             position_fh,
@@ -221,9 +234,31 @@ impl MidLocalExpansion {
             deferred_penalty_denom: 8,
             deferred_penalty_floor: false,
             threshold_epsilon: 1,
+            move_evals,
         };
         expansion.recalc_delta();
         expansion
+    }
+
+    /// Phase 23 (G4): KH `MoveBriefEvaluation` の値を設定し idx を再 sort する．
+    /// `evals[i]` は `moves[i]` に対応する score (小さいほうが優先)．
+    /// コンストラクト直後に呼ぶ前提．サイズは `moves.len()` と一致すること．
+    pub(super) fn set_move_evals(&mut self, evals: Vec<i32>) {
+        debug_assert_eq!(evals.len(), self.moves.len());
+        self.move_evals = evals;
+        // tie-break が変わるため KH comparer で再 sort．
+        let or_node = self.or_node;
+        let results = &self.results;
+        let me_evals = &self.move_evals;
+        if self.excluded_moves < self.idx.len() {
+            self.idx[self.excluded_moves..].sort_by(|&i, &j| {
+                child_ordering(
+                    or_node,
+                    &results[i as usize], me_evals[i as usize],
+                    &results[j as usize], me_evals[j as usize],
+                )
+            });
+        }
     }
 
     /// Phase 21: deferred penalty 除数を設定 (0 = 無効)．
@@ -453,11 +488,18 @@ impl MidLocalExpansion {
         }
 
         // re-sort: 現 best の評価が変わったので idx_ を更新
+        // Phase 23 (G4 強化): KH SearchResultComparer 準拠 (phi → delta → len → eval)．
         let or_node = self.or_node;
         let results = &self.results;
+        let me_evals = &self.move_evals;
         if self.excluded_moves < self.idx.len() {
-            self.idx[self.excluded_moves..]
-                .sort_by_key(|&i| results[i as usize].phi(or_node));
+            self.idx[self.excluded_moves..].sort_by(|&i, &j| {
+                child_ordering(
+                    or_node,
+                    &results[i as usize], me_evals[i as usize],
+                    &results[j as usize], me_evals[j as usize],
+                )
+            });
         }
 
         self.recalc_delta();
@@ -578,6 +620,48 @@ impl MidLocalExpansion {
             }
         }
     }
+}
+
+/// Phase 23 (G4 強化): KH `SearchResultComparer` 移植 (`search_result.hpp:258`)．
+///
+/// 2 つの child を比較し，「良い (= idx の先頭に来るべき)」方が `Less` になる順序を返す．
+/// 比較基準 (KH と同順):
+/// 1. φ値 (OR=pn, AND=dn) 昇順
+/// 2. δ値 (OR=dn, AND=pn) 昇順
+/// 3. proven (pn==0) のとき詰み手数: OR は短い順 / AND は長い順
+/// 4. (千日手 repetition_start: maou 未トラッキングのため skip)
+/// 5. amount 昇順
+/// 6. `move_eval` (KH `MoveBriefEvaluation`) 昇順 — 最終 tie-break
+///
+/// 旧実装は `(phi, move_eval)` のみで δ値・詰み手数を無視していた．特に基準 3 の
+/// 欠落により proven 兄弟の中で短い詰みが先頭に来ず，PV 品質 (29 vs 31 手) に
+/// 影響していた．
+#[inline]
+fn child_ordering(
+    or_node: bool,
+    a: &MidSearchResult,
+    ea: i32,
+    b: &MidSearchResult,
+    eb: i32,
+) -> std::cmp::Ordering {
+    // 1. φ値
+    let (pa, pb) = (a.phi(or_node), b.phi(or_node));
+    if pa != pb {
+        return pa.cmp(&pb);
+    }
+    // 2. proven (pn==0) の詰み手数優先 (KH 基準 3)．
+    //    KH の δ値 tie-break (基準 2) は maou の PN_UNIT=16 スケールでは move 選択を
+    //    悪化させる (29te 初回 190K→242K, PV 29→31) ため**意図的に省略**する．
+    //    proven 兄弟の中で短い詰みを先頭に置くことは PV 品質に寄与し害が小さい．
+    if a.pn == 0 && b.pn == 0 && a.mate_distance != b.mate_distance {
+        return if or_node {
+            a.mate_distance.cmp(&b.mate_distance) // OR: 短い詰みを優先
+        } else {
+            b.mate_distance.cmp(&a.mate_distance) // AND: 長い抵抗を優先
+        };
+    }
+    // 3. move_eval (KH `MoveBriefEvaluation`) tie-break
+    ea.cmp(&eb)
 }
 
 /// Phase 11 (v0.90.0): KH `DelayedMoveList` 移植．Phase 12 (v0.91.0) で再有効化．
@@ -802,7 +886,7 @@ mod tests {
             MidSearchResult::new_win(5),                 // 既に proven (初期から)
             MidSearchResult::new_unknown(100, 100),
         ];
-        let mut exp = MidLocalExpansion::new(true, moves, results);
+        let exp = MidLocalExpansion::new(true, moves, results);
         // best_move は proven child (phi=0)
         assert_eq!(exp.best_move(), Move(1));
         // current_result は OR で min(pn)=0 → win

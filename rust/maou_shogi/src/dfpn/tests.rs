@@ -13475,6 +13475,82 @@ use crate::types::{Color, PieceType};
             }).unwrap().join().unwrap();
     }
 
+    /// Phase 23 優先1-A 診断: root-level IDS (KH SearchEntry 風 1.7× threshold growth)
+    /// の効果を OFF/ON で A/B 測定する．G4 (move ordering) 導入後の再評価．
+    /// 初回 solve / find_shortest 双方で nodes と PV 長を比較し，
+    /// **PV 29 を維持できているか**を最優先で確認する．
+    #[test]
+    #[ignore]
+    fn test_mid_v2_tsume_29te_root_ids_ab() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                // 4 構成を順に測定: (initial/find_shortest) × (root_ids OFF/ON)．
+                for &(label, find_shortest, root_ids) in &[
+                    ("initial OFF", false, false),
+                    ("initial ON ", false, true),
+                    ("fshort  OFF", true, false),
+                    ("fshort  ON ", true, true),
+                ] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(33, 200_000_000, 32767, 600);
+                    solver.set_root_ids_enable(root_ids);
+                    let t = Instant::now();
+                    let (result, pv) = if find_shortest {
+                        solver.solve_v2_find_shortest(&mut board)
+                    } else {
+                        solver.solve_v2_with_pv(&mut board)
+                    };
+                    let elapsed = t.elapsed().as_millis() as u64;
+                    let nps = if elapsed > 0 { solver.nodes_searched * 1000 / elapsed } else { 0 };
+                    let res_str = if result.pn == 0 { "PROVEN" }
+                                  else if result.dn == 0 { "DISPROVEN" }
+                                  else { "UNKNOWN" };
+                    eprintln!(
+                        "[{}] {} nodes={} t(ms)={} NPS={} PV_len={} md={}",
+                        label, res_str, solver.nodes_searched, elapsed, nps,
+                        pv.len(), result.mate_distance,
+                    );
+                }
+            }).unwrap().join().unwrap();
+    }
+
+    /// Phase 23 優先1-D 診断: 初回 solve を md_budget で bound したときのコストを
+    /// budget の関数として測定する．KH が initial ~19K で終わる理由が
+    /// 「length-bounded から最初から効いている」仮説 (worklog 2026-05-29 hypothesis D)
+    /// を直接検証する．budget=29 (既知の答え) が budget=∞ より大幅に安ければ，
+    /// IDS-from-below 初期戦略に切り替える価値がある．
+    #[test]
+    #[ignore]
+    fn test_mid_v2_tsume_29te_budget_sweep() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                for &budget in &[29u16, 31, 33, 41, 61, 201, u16::MAX] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    // 各 iteration で fresh solver なので table/nodes は初期状態．
+                    let mut solver = DfPnSolver::with_timeout(33, 200_000_000, 32767, 600);
+                    let t = Instant::now();
+                    let result = solver.solve_v2_with_budget(&mut board, budget);
+                    let elapsed = t.elapsed().as_millis() as u64;
+                    let res_str = if result.pn == 0 { "PROVEN" }
+                                  else if result.dn == 0 { "DISPROVEN" }
+                                  else { "UNKNOWN" };
+                    eprintln!(
+                        "[budget={:>5}] {} nodes={} t(ms)={} pn={} dn={} md={}",
+                        budget, res_str, solver.nodes_searched, elapsed,
+                        result.pn, result.dn, result.mate_distance,
+                    );
+                }
+            }).unwrap().join().unwrap();
+    }
+
     /// Phase 20 診断: 初回 solve のみ (find_shortest なし) の PV を KH と比較．
     #[test]
     #[ignore]

@@ -160,3 +160,4 @@ tests/maou/infra/visualization/screenshots/
 # See docs/memory-architecture.md.
 scratchpad/
 worklog/
+.tmp_diag/

@@ -2032,13 +2032,29 @@ impl DfPnSolver {
     /// mate_distance lookup を完全 skip して NPS 向上．
     #[inline]
     pub(super) fn look_up_pn_dn_md_bounded(
-        &self,
+        &mut self,
         pos_key: u64,
         hand: &[u8; HAND_KINDS],
         remaining: u16,
         md_budget: u16,
     ) -> (u32, u32, u32) {
         let mut result = self.look_up_pn_dn_impl(pos_key, hand, remaining, true);
+
+        // Phase 23 (G2): KH `LookUpExact` 風 min_depth 即時更新．
+        // KH `ttentry.hpp:497-498` 移植．store 時のみではなく LookUp 時にも
+        // remaining が大きい (= shallower) ことを検出して `max_remaining_map`
+        // を更新する．次回同 position が deeper ply で lookup されたとき
+        // `is_shallow_remaining` が true を返し，TCA `inc_flag` 発火精度が向上する．
+        // 旧 store-time-only 実装では同一局面が浅い ply で touched された情報が
+        // 次の store まで反映されず，深い 29te で dominance signal の伝播が遅れていた．
+        if remaining < REMAINING_INFINITE {
+            let key = pos_key ^ self.hand_hash_for_map(hand);
+            let entry = self.max_remaining_map.entry(key).or_insert(0);
+            if remaining > *entry {
+                *entry = remaining;
+            }
+        }
+
         // Phase 13: 大きな md_budget (e.g., u16::MAX - depth で saturating 減算後) では
         // 実用的に常に通過するので lookup overhead を skip．
         const MD_BUDGET_FILTER_THRESHOLD: u16 = 1000;
@@ -7099,6 +7115,11 @@ impl DfPnSolver {
             // AND parent (= !or_node) で child OR が 1 手詰の場合，pn=0 即 proven．
             // TT cache がない (= 初訪問) の場合のみ check．
             // depth-aware: 小問題のみで適用 (大問題ではコスト > 利益)．
+            //
+            // Phase 23 (G5) で gate 撤廃を試したが，深い問題 (29te) で 1 手詰 detection が
+            // move ordering を変え，初回 solve が **31 手** PV を先に発見してしまう
+            // (G4 が達成した「初回 29 手」を破壊)．初回ノードは 190K→105K と減るが
+            // find_shortest でも 29 手へ回復できず PV 品質が退行するため gate は維持する．
             let mut mate_in_1 = false;
             let mut mate_move_for_or: Option<Move> = None;
             if !or_node && pn_tt == PN_UNIT && dn_tt == PN_UNIT && self.depth <= 25 {
@@ -7176,6 +7197,20 @@ impl DfPnSolver {
         // KH の ExpansionStack 相当．eliminate_double_count で祖先を辿るために必要．
         let mut expansion = MidLocalExpansion::new_with_fh(
             or_node, moves_vec, initial_results, full_hash_self);
+
+        // Phase 23 (G4): move_brief_eval を tie-break として使う．
+        // KH `SearchResultComparer` 相当: phi 同点で `mp_[i].value` 比較．
+        // king_sq は side-to-move の自玉 (KH `n.KingSquare()` 相当)．
+        // OR node なら attacker，AND node なら defender (= attacker.opponent)．
+        let own_king_color = if or_node { self.attacker } else { self.attacker.opponent() };
+        if let Some(ksq) = board.king_square(own_king_color) {
+            let evals: Vec<i32> = expansion
+                .moves
+                .iter()
+                .map(|&m| super::move_brief_eval(m, ksq, board))
+                .collect();
+            expansion.set_move_evals(evals);
+        }
 
         // Phase 21: parameterized deferred penalty + TCA gate
         expansion.set_deferred_penalty_denom(self.param_deferred_penalty_denom);
@@ -7340,7 +7375,20 @@ impl DfPnSolver {
             //   defender は max-resistance を選ぶ前提で AND の mate_distance = max+1．
             //   best_move は AND では「any defender」(extract_pv が iterate するため不要)．
             let (bm, md) = if or_node && proof_best_move != 0 {
-                (proof_best_move, proof_mate_distance)
+                // Phase 23 (display fix): main loop で最後に proven 化した child だけでなく，
+                // 既に proven 済みの兄弟 child のうち最小 mate_distance のものを比較し，
+                // shorter mate があればそちらを採用する．G4 で sort 順が変わった結果，
+                // root では最初に proven 化した枝が **31 手経路**で，他枝に **29 手経路**が
+                // ある状況が頻発した．TT には 29 手 entries が書かれるため
+                // extract_pv が PV=29 を取れていたが，root の `result.mate_distance` のみ
+                // 31 のまま残り PV 長と齟齬していた．これを解消する．
+                let (alt_bm, alt_md) =
+                    self.mid_expansion_stack[stack_idx].min_proven_or_child();
+                if alt_bm != 0 && alt_md > 0 && alt_md < proof_mate_distance {
+                    (alt_bm, alt_md)
+                } else {
+                    (proof_best_move, proof_mate_distance)
+                }
             } else if !or_node {
                 // Phase 11 (v0.90.0): AND proven は max-resistance defender を選ぶ．
                 self.mid_expansion_stack[stack_idx].max_resistance_defender()
@@ -7555,10 +7603,16 @@ impl DfPnSolver {
     /// mid_v2 で proven された局面から PV を抽出する．
     /// 既存 `extract_pv_limited` を流用 (TT の best_move を使う)．
     /// 返り値: (`MidSearchResult`, PV as `Vec<Move>`)
+    ///
+    /// Phase 23 (display fix): root の `mate_distance` を実 PV 長と一致させる．
+    /// mid_v2 main loop は最初に proven 化した child のみで md を確定するため，
+    /// TT walk が見つけた shorter mate と齟齬する場合があった．PV 長を真値とする．
     pub fn solve_v2_with_pv(&mut self, board: &mut Board) -> (super::mid_v2::MidSearchResult, Vec<Move>) {
-        let result = self.solve_v2(board);
+        let mut result = self.solve_v2(board);
         let pv = if result.pn == 0 {
-            self.extract_pv_limited(board, 100_000)
+            let pv = self.extract_pv_limited(board, 100_000);
+            result.mate_distance = pv.len() as u16;
+            pv
         } else {
             Vec::new()
         };
@@ -7590,16 +7644,25 @@ impl DfPnSolver {
         }
     }
 
-    /// Phase 19 (v0.98.0): PV-walk refinement find_shortest．
+    /// Phase 23 (G1): KH `SearchMainLoop` 風の iterative deepening find_shortest．
     ///
-    /// 1. md_budget = INF で solve_v2 → first proof (mate_distance = D)
-    /// 2. refine_mate_distance (try_unproven=true) で PV 上の alternative を
-    ///    per-child budget 付き mid_v2 で prove → shorter PV を発見
-    /// 3. re-extract PV．shorter なら再度 refine (cascade)
+    /// KH `komoring_heights.cpp::SearchMainLoop` (L185-254) 移植．
     ///
-    /// Phase 18 比の改善:
-    /// - preserve_working_on_proof=true で working entry を保持 → refine 2.1× 高速化
-    /// - TT dual-range (disproven_len) 基盤は future IDS 改善に向け保持
+    /// 1. `md_budget = u16::MAX` で初回 solve → 任意の proof (mate_distance = D₀)
+    /// 2. 反復: `new_budget = best_d - 2` で `solve_v2_with_budget` を呼び，
+    ///    shorter proof を探す．proven かつ shorter なら更新．proven 失敗または
+    ///    shorter にならなければ終了．
+    ///
+    /// `solve_v2_with_budget` 側は md_budget を mid_v2 に貫通させ，
+    /// (a) `look_up_pn_dn_md_bounded` で stored_md > budget の proven を defer，
+    /// (b) `child_result.mate_distance > md_budget` の OR proven を block，
+    /// (c) AND proven で md > md_budget なら unknown 復帰，
+    /// により budget-bounded 探索を行う．
+    ///
+    /// 旧 PV-walk refinement (`refine_mate_distance`) は廃止．reason:
+    /// per-child 2M budget の partial 再展開だったため，46M+ nodes 消費しても
+    /// shorter PV に到達できなかった (worklog 2026-05-28 参照)．
+    /// KH 風 IDS は budget が search 全体を bound するため格段に効率的．
     ///
     /// 返り値: (final `MidSearchResult`, shortest PV as `Vec<Move>`)
     pub fn solve_v2_find_shortest(
@@ -7607,27 +7670,65 @@ impl DfPnSolver {
     ) -> (super::mid_v2::MidSearchResult, Vec<Move>) {
         self.table.preserve_working_on_proof = true;
 
-        // Step 1: 初回 solve
+        // Step 1: 初回 solve (budget 無制限)．
+        let nodes_before_iter0 = self.nodes_searched;
         let mut result = self.solve_v2_with_budget(board, u16::MAX);
         if result.pn != 0 {
             self.table.preserve_working_on_proof = false;
             return (result, Vec::new());
         }
+        let iter0_nodes = self.nodes_searched - nodes_before_iter0;
 
-        // Step 2: PV-walk refine (cascade)
         let mut best_pv = self.extract_pv_limited(board, 100_000);
         let mut best_d = best_pv.len() as u16;
-        for _iter in 0..8u32 {
+
+        // Step 2: KH SearchMainLoop 風: budget を `best_d - 2` で反復．
+        // 詰将棋では mate length は OR-to-move から奇数長．`-= 2` で parity 維持．
+        //
+        // Phase 23 Polish 1: per-iter node cap．
+        // 存在しない shorter proof を探して budget 全部使い切ると無駄が大きい
+        // (29te で baseline 200M nodes 観測)．iter 0 の規模に対し relative cap を
+        // かけ，"既に shortest" 仮説のテストを安価に行う．確認が取れない場合は
+        // (max_nodes 内で) 段階的に拡大．
+        //
+        // Phase 24a (v1.4.0): cap を iter0*8 → iter0*2 に縮小．
+        // 根拠: shorter mate は元 proof より **小さい木**なので発見コストは iter0 未満．
+        // budget=27 iter の re-walk storm (29te: 1.5M nodes / +33 misses = 純粋な
+        // 再走査) を抑制する．改善時は *2 cascade で converge を許容するため，
+        // 真に shorter な mate があれば段階拡大で到達できる．iter0*8 は過大だった．
+        let mut per_iter_cap: u64 = (iter0_nodes.saturating_mul(2)).max(200_000);
+        loop {
             if self.nodes_searched >= self.max_nodes || self.timed_out { break; }
             if best_d <= 1 { break; }
-            let mut memo = rustc_hash::FxHashMap::default();
-            let _ = self.refine_mate_distance(board, true, 0, &mut memo);
+            let new_budget = best_d.saturating_sub(2);
+            if new_budget == 0 { break; }
+
+            // この iter 用に max_nodes を一時的に絞る．
+            let saved_max = self.max_nodes;
+            let iter_cap_target =
+                self.nodes_searched.saturating_add(per_iter_cap).min(saved_max);
+            self.max_nodes = iter_cap_target;
+            let nodes_before = self.nodes_searched;
+            let r = self.solve_v2_with_budget(board, new_budget);
+            let iter_nodes = self.nodes_searched - nodes_before;
+            self.max_nodes = saved_max;
+
+            if r.pn != 0 {
+                // budget 内に shorter proof が存在しないことが確認できた．stop．
+                // (timed_out 経由の早期終了も含む)
+                let _ = iter_nodes;
+                break;
+            }
+
             let new_pv = self.extract_pv_limited(board, 100_000);
             let new_d = new_pv.len() as u16;
             if new_d > 0 && new_d < best_d {
                 best_pv = new_pv;
                 best_d = new_d;
+                // 改善があった → 次 iter にもう少し budget を許す (cascade で converge できるよう)．
+                per_iter_cap = per_iter_cap.saturating_mul(2);
             } else {
+                // proven は出たが PV 抽出が改善しなかった (例: 同じ長さ)．stop．
                 break;
             }
         }
