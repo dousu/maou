@@ -1,6 +1,6 @@
 ---
-status: approved
-applied_in: working-tree (uncommitted; v1.5.0 bump pending user commit)
+status: applied
+applied_in: 6b4a569
 date: 2026-05-30
 target: [rust/maou_shogi/src/dfpn/mid_v2.rs, rust/maou_shogi/src/dfpn/solver.rs, rust/maou_shogi/src/dfpn/tests.rs, rust/maou_shogi/Cargo.toml]
 risk: medium
