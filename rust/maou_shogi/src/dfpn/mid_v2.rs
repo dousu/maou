@@ -164,12 +164,26 @@ impl MidLocalExpansion {
         Self::new_with_fh(or_node, moves, initial_results, 0)
     }
 
-    /// Phase 14 (v0.93.0): position_fh 付き構築．
+    /// Phase 14 (v0.93.0): position_fh 付き構築．旧挙動 DML (AND drops only)．
     pub(super) fn new_with_fh(
         or_node: bool,
         moves: Vec<Move>,
         initial_results: Vec<MidSearchResult>,
         position_fh: u64,
+    ) -> Self {
+        Self::new_with_fh_dml(or_node, moves, initial_results, position_fh, false, true)
+    }
+
+    /// Phase 26: KH parity DML を選択可能にした構築．
+    /// `kh_dml=true` で非駒打ち成/不成 deferral を OR/AND 両方で有効化．
+    /// `us_is_black` は敵陣判定用 (side-to-move の色)．
+    pub(super) fn new_with_fh_dml(
+        or_node: bool,
+        moves: Vec<Move>,
+        initial_results: Vec<MidSearchResult>,
+        position_fh: u64,
+        kh_dml: bool,
+        us_is_black: bool,
     ) -> Self {
         let n = moves.len();
 
@@ -178,7 +192,8 @@ impl MidLocalExpansion {
         // KH `local_expansion.hpp:181-194` 移植．prev が TT cache から既に proven 等で
         // final なら defer しない (= 初期 idx に含める)．これで AND の curr.pn=0 が
         // chain の 1 件目だけで成立する soundness 違反を防ぐ．
-        let (dml_prev, dml_next) = build_delayed_chain(&moves, or_node);
+        // Phase 26: kh_dml=true で非駒打ち成/不成 deferral を追加 (build_delayed_chain 参照)．
+        let (dml_prev, dml_next) = build_delayed_chain(&moves, or_node, kh_dml, us_is_black);
 
         let mut idx: Vec<u32> = Vec::with_capacity(n);
         for i in 0..n {
@@ -666,34 +681,124 @@ fn child_ordering(
 
 /// Phase 11 (v0.90.0): KH `DelayedMoveList` 移植．Phase 12 (v0.91.0) で再有効化．
 ///
-/// AND ノードの同 to_sq drops を chain 化．chain 上の prev が final になるまで
-/// next を idx_ に push しない．
-fn build_delayed_chain(moves: &[Move], or_node: bool) -> (Vec<i32>, Vec<i32>) {
+/// `kh_dml=false` (旧挙動): AND ノードの同 to_sq drops のみ chain 化．
+/// `kh_dml=true` (Phase 26, KH parity): KH `delayed_move_list.hpp` を忠実移植．
+///   - 駒打ち: AND ノードでのみ delay (同 to_sq で chain)．
+///   - 非駒打ち 成/不成: 成れる駒 (歩/角/飛 + 香 rank2/8) を OR/AND 両方で chain 化
+///     ((from,to) 同一の成・不成ペアを束ね，先頭のみ展開・残りは prev final 待ち)．
+/// chain 上の prev が final になるまで next を idx_ に push しない．
+fn build_delayed_chain(
+    moves: &[Move],
+    or_node: bool,
+    kh_dml: bool,
+    us_is_black: bool,
+) -> (Vec<i32>, Vec<i32>) {
     let n = moves.len();
     let mut prev = vec![-1i32; n];
     let mut next = vec![-1i32; n];
-    if or_node {
+
+    if !kh_dml {
+        // 旧挙動: AND ノードの同 to_sq drops のみ chain．
+        if or_node {
+            return (prev, next);
+        }
+        let mut last_of_to: [u32; 81] = [0; 81];
+        for (i, m) in moves.iter().enumerate() {
+            if !m.is_drop() {
+                continue;
+            }
+            let to = m.to_sq();
+            let to_idx = (to.col() as usize) * 9 + (to.row() as usize);
+            if to_idx >= 81 {
+                continue;
+            }
+            let last = last_of_to[to_idx];
+            if last > 0 {
+                let last_i = (last - 1) as usize;
+                prev[i] = last_i as i32;
+                next[last_i] = i as i32;
+            }
+            last_of_to[to_idx] = (i + 1) as u32;
+        }
         return (prev, next);
     }
-    let mut last_of_to: [u32; 81] = [0; 81];
-    for (i, m) in moves.iter().enumerate() {
-        if !m.is_drop() {
+
+    // KH parity (Phase 26): delayed_move_list.hpp の double-linked list 構築．
+    // 各 chain の先頭 (representative move, raw index) を heads に保持 (KH kMaxLen=10)．
+    const MAX_HEADS: usize = 10;
+    let mut heads: Vec<(Move, usize)> = Vec::with_capacity(MAX_HEADS);
+    for (i, &m) in moves.iter().enumerate() {
+        if !dml_is_delayable(m, or_node, us_is_black) {
             continue;
         }
-        let to = m.to_sq();
-        let to_idx = (to.col() as usize) * 9 + (to.row() as usize);
-        if to_idx >= 81 {
-            continue;
+        let mut found = false;
+        for h in heads.iter_mut() {
+            if dml_is_same(h.0, m) {
+                next[h.1] = i as i32;
+                prev[i] = h.1 as i32;
+                *h = (m, i);
+                found = true;
+                break;
+            }
         }
-        let last = last_of_to[to_idx];
-        if last > 0 {
-            let last_i = (last - 1) as usize;
-            prev[i] = last_i as i32;
-            next[last_i] = i as i32;
+        if !found && heads.len() < MAX_HEADS {
+            heads.push((m, i));
         }
-        last_of_to[to_idx] = (i + 1) as u32;
     }
     (prev, next)
+}
+
+/// KH `DelayedMoveList::IsDelayable` 移植 (delayed_move_list.hpp:108)．
+///
+/// 「すぐ展開する必要のない手」= true．
+/// - 駒打ち: AND ノードでのみ delay (合駒は他の手の結果を見てから読む)．
+/// - 非駒打ち: from/to が敵陣 (成れる) かつ 歩/角/飛 → delay．香は rank2(黒)/rank8(白) のみ．
+#[inline]
+fn dml_is_delayable(m: Move, or_node: bool, us_is_black: bool) -> bool {
+    if m.is_drop() {
+        return !or_node;
+    }
+    let from = m.from_sq();
+    let to = m.to_sq();
+    let in_enemy = |sq: crate::types::Square| -> bool {
+        let r = sq.row();
+        if us_is_black {
+            r <= 2
+        } else {
+            r >= 6
+        }
+    };
+    if !(in_enemy(from) || in_enemy(to)) {
+        return false;
+    }
+    match m.moving_piece_type_raw() {
+        1 | 5 | 6 => true, // Pawn / Bishop / Rook
+        2 => {
+            // Lance: KH black=RANK_2(row 1), white=RANK_8(row 7)
+            if us_is_black {
+                to.row() == 1
+            } else {
+                to.row() == 7
+            }
+        }
+        _ => false,
+    }
+}
+
+/// KH `DelayedMoveList::IsSame` 移植 (delayed_move_list.hpp:143)．
+///
+/// 両者 delayable 前提．どちらかを後回しにすべきなら true．
+/// - 駒打ち同士: 同 to_sq (Phase 1; KH の「無意味な中合い」cross-square 束ねは未実装)．
+/// - 非駒打ち同士: (from,to) が同一 = 成/不成ペア．
+#[inline]
+fn dml_is_same(m1: Move, m2: Move) -> bool {
+    if m1.is_drop() && m2.is_drop() {
+        m1.to_sq() == m2.to_sq()
+    } else if !m1.is_drop() && !m2.is_drop() {
+        m1.from_sq() == m2.from_sq() && m1.to_sq() == m2.to_sq()
+    } else {
+        false
+    }
 }
 
 /// 簡易 mid_v2 (DfPnSolver と独立して単体実行できる skeleton)．

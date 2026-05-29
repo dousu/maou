@@ -436,10 +436,32 @@ pub struct DfPnSolver {
 
     /// Phase 22: 1+ε 閾値 epsilon (KH デフォルト 1; PN_UNIT スケール考慮で PN_UNIT が候補)．
     pub(super) param_threshold_epsilon: u32,
+    /// Phase 25: first-visit 初期 pn から edge_cost を外し，純 `init_pn_dn_*_kh`
+    /// (KH df-pn+ 難易度推定) のみを使う．KH は pn/dn を難易度推定に限定し move
+    /// 選好は MoveBriefEvaluation tie-break に分離する．maou は edge_cost を pn に
+    /// 折込むため pn が二重信号となり delta-sum 算術を歪める仮説のテスト用．
+    /// move_brief_eval tie-break は decouple 時も維持される (KH と同じ ordering)．
+    pub(super) param_decouple_edge_cost: bool,
+    /// Phase 25: KH `CheckObviousFinalOrNode` (1 手詰 detection) を適用する最大 depth．
+    /// `self.depth <= この値` のとき AND parent で child OR の 1 手詰を即 proven 化する．
+    /// default 25 (29te=depth33 では OFF; G5 で gate-off は初回 105K だが PV 31 退行)．
+    pub(super) param_obvious_final_max_depth: u32,
+    /// Phase 25 [keystone]: find_shortest budget 探索で blocked-proven (stored_md >
+    /// md_budget) の中間レンジ lookup を KH `LookUpExact` 準拠の `(PN_UNIT, INF)` に
+    /// する (proven entry = 絶対的に詰みなので dn=INF は sound)．false = 旧 (PN_UNIT,
+    /// PN_UNIT) リセット (subtree 全再探索)．KH dual-range の find_shortest 収束改善用．
+    pub(super) param_kh_middle_range: bool,
     /// Phase 22: TCA extension formula を KH `max(thpn, pn+1)` 形式にするか．
     pub(super) param_tca_kh_clamp: bool,
     /// Phase 22: root level IDS (KH SearchEntry 風 1.7× threshold growth) 有効．
     pub(super) param_root_ids_enable: bool,
+    /// Phase 26 (v1.5.0): KH parity DML (非駒打ち成/不成 deferral)．**default true**．
+    /// true で `build_delayed_chain` が KH `delayed_move_list.hpp` 忠実版になり，
+    /// 歩/角/飛/香(rank2/8) の成・不成ペアを OR/AND 両方で chain 化して breadth を削る．
+    /// false (旧挙動) は 29te depth=31 で **false NoMate** (811,241 nodes) を返す
+    /// soundness バグがある．kh_dml=true が正しい Mate(29) を出す (test_tsume_6_29te)．
+    /// 真因 (depth-31 depth-limit 偽反証) は未解決で別途調査中．
+    pub(super) param_kh_dml: bool,
     /// Phase 21: deferred penalty 除数 (0=無効, 8=KH 準拠)．
     pub(super) param_deferred_penalty_denom: u32,
     /// Phase 22: deferred penalty `.max(1)` floor (KH=true)．
@@ -1003,8 +1025,12 @@ impl DfPnSolver {
             mid_v2_visit_counts: rustc_hash::FxHashMap::default(),
             max_remaining_map: rustc_hash::FxHashMap::default(),
             param_threshold_epsilon: 2,
+            param_decouple_edge_cost: false,
+            param_obvious_final_max_depth: 25,
+            param_kh_middle_range: false,
             param_tca_kh_clamp: false,
             param_root_ids_enable: false,
+            param_kh_dml: true,
             param_deferred_penalty_denom: 0,
             param_deferred_penalty_floor: false,
             param_tca_use_shallow_gate: false,
@@ -1493,6 +1519,34 @@ impl DfPnSolver {
     /// Phase 22: 1+ε threshold epsilon を設定 (KH 1; PN_UNIT=16 試験用)．
     pub fn set_threshold_epsilon(&mut self, eps: u32) -> &mut Self {
         self.param_threshold_epsilon = eps.max(1);
+        self
+    }
+
+    /// Phase 26: KH parity DML (非駒打ち成/不成 deferral) を設定．
+    /// 詳細: [`DfPnSolver::param_kh_dml`]．
+    pub fn set_kh_dml(&mut self, on: bool) -> &mut Self {
+        self.param_kh_dml = on;
+        self
+    }
+
+    /// Phase 25: 1 手詰 detection (CheckObviousFinalOrNode) を適用する最大 depth．
+    /// 詳細: [`DfPnSolver::param_obvious_final_max_depth`]．
+    pub fn set_obvious_final_max_depth(&mut self, d: u32) -> &mut Self {
+        self.param_obvious_final_max_depth = d;
+        self
+    }
+
+    /// Phase 25 [keystone]: find_shortest 中間レンジ lookup を KH 準拠 (PN_UNIT, INF) に．
+    /// 詳細: [`DfPnSolver::param_kh_middle_range`]．
+    pub fn set_kh_middle_range(&mut self, on: bool) -> &mut Self {
+        self.param_kh_middle_range = on;
+        self
+    }
+
+    /// Phase 25: first-visit 初期 pn の edge_cost 折込を外し，純 KH df-pn+ にする．
+    /// 詳細: [`DfPnSolver::param_decouple_edge_cost`]．
+    pub fn set_decouple_edge_cost(&mut self, on: bool) -> &mut Self {
+        self.param_decouple_edge_cost = on;
         self
     }
 
@@ -2064,6 +2118,14 @@ impl DfPnSolver {
                     // Phase 19: disproven_len check — budget 内 proof 不在が確認済みなら即 prune
                     if self.table.is_disproven_at_budget(pos_key, hand, md_budget) {
                         result = (INF, 0, 0);
+                    } else if self.param_kh_middle_range {
+                        // Phase 25 [keystone]: KH `LookUpExact` 中間レンジ準拠．
+                        // proven entry (stored_md 存在) = この局面は len=stored_md で
+                        // 詰みが**存在する**ので絶対的に不詰化不可能 → dn=INF は sound．
+                        // pn=PN_UNIT は「この budget ではまだ短い proof 未発見」を表し,
+                        // budget 探索を shorter proof 発見へ誘導する (unit リセットの
+                        // subtree 全再探索でも OLD working の 31 ガイドでもない第三の挙動)．
+                        result = (PN_UNIT, INF, 0);
                     } else {
                         // Phase 19: default (PN_UNIT, PN_UNIT) を返す．
                         // 旧 Phase 18 の working pn/dn fallback は初回 solve の値で
@@ -7009,6 +7071,17 @@ impl DfPnSolver {
         // Phase 15 visit count 診断 (board.hash がここで使えるが path_set は後で push される)．
         *self.mid_v2_visit_counts.entry(board.hash).or_insert(0) += 1;
 
+        // Phase 25 診断 (visit_diag): per-ply unique/total 分布用に full_hash と
+        // first_ply を記録する．mid_v2 経路で visit_summary() を機能させるため．
+        #[cfg(feature = "visit_diag")]
+        {
+            let e = self.visit_counts.entry(board.hash).or_insert(0);
+            if *e == 0 {
+                self.visit_first_ply.insert(board.hash, ply.min(63) as u8);
+            }
+            *e += 1;
+        }
+
         // Budget / timeout チェック
         if self.nodes_searched >= self.max_nodes {
             return MidSearchResult::new_unknown(PN_UNIT, PN_UNIT);
@@ -7122,7 +7195,8 @@ impl DfPnSolver {
             // find_shortest でも 29 手へ回復できず PV 品質が退行するため gate は維持する．
             let mut mate_in_1 = false;
             let mut mate_move_for_or: Option<Move> = None;
-            if !or_node && pn_tt == PN_UNIT && dn_tt == PN_UNIT && self.depth <= 25 {
+            if !or_node && pn_tt == PN_UNIT && dn_tt == PN_UNIT
+                && self.depth <= self.param_obvious_final_max_depth {
                 let checks = self.generate_check_moves_cached(board);
                 if !checks.is_empty() {
                     let us = board.turn;
@@ -7150,7 +7224,15 @@ impl DfPnSolver {
                 // Phase 16: 1 手詰 detection 成功．child OR proven (pn=0, dn=INF, md=1)．
                 (0, INF, false)
             } else if pn_tt == PN_UNIT && dn_tt == PN_UNIT {
-                let (hp, hd) = if or_node {
+                let (hp, hd) = if self.param_decouple_edge_cost {
+                    // Phase 25: edge_cost を pn から外し，純 KH df-pn+ 難易度推定のみ使う．
+                    // move 選好は move_brief_eval tie-break が担う (KH と同じ分離)．
+                    if or_node {
+                        super::init_pn_dn_or_kh(board, m, self.attacker)
+                    } else {
+                        super::init_pn_dn_and_kh(board, m, self.attacker)
+                    }
+                } else if or_node {
                     let pn_h = if let Some(ksq) = target_king_sq {
                         super::edge_cost_or(m, ksq).max(clamp_value)
                     } else {
@@ -7195,8 +7277,11 @@ impl DfPnSolver {
 
         // Phase 14 (v0.93.0): expansion を mid_expansion_stack に push．
         // KH の ExpansionStack 相当．eliminate_double_count で祖先を辿るために必要．
-        let mut expansion = MidLocalExpansion::new_with_fh(
-            or_node, moves_vec, initial_results, full_hash_self);
+        // Phase 26: KH parity DML を param_kh_dml で選択．敵陣判定は side-to-move の色．
+        let us_is_black = board.turn == Color::Black;
+        let mut expansion = MidLocalExpansion::new_with_fh_dml(
+            or_node, moves_vec, initial_results, full_hash_self,
+            self.param_kh_dml, us_is_black);
 
         // Phase 23 (G4): move_brief_eval を tie-break として使う．
         // KH `SearchResultComparer` 相当: phi 同点で `mp_[i].value` 比較．

@@ -12831,12 +12831,22 @@ use crate::types::{Color, PieceType};
     fn test_tsume_29te_root_sweep() {
         let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
 
+        // Phase 26: KH parity DML (非駒打ち成/不成 deferral) の A/B．
+        // 発見: kh_dml=OFF (旧 default) は 29te で **false NoMate** (811,241 nodes) を返す
+        // 既存 soundness バグ．kh_dml=ON が正しい Mate(29) を出し，これを修正する．
+        // co-tune 仮説 (DML + deferred penalty) は棄却: pen8 で 654K→812K と退行．
+        // → 最適は kh_dml=ON + penalty OFF (denom=0)．これが v1.5.0 の新 default．
+        // fs=T (find_shortest=true) は canonical test_tsume_6_29te と同 config．
         let configs: &[(&str, fn(&mut DfPnSolver))] = &[
-            ("default",                |_s| {}),
-            ("hs_off+dml_off",         |s| {
-                s.set_use_handset_combination(false);
-                s.set_use_delayed_move_list(false);
+            ("dml_off/fs=T",           |s| { s.set_kh_dml(false); }),
+            ("dml_on/fs=T(default)",   |s| { s.set_kh_dml(true); }),
+            ("dml_on+pen8/fs=T",       |s| {
+                s.set_kh_dml(true);
+                s.set_deferred_penalty_denom(8);
+                s.set_deferred_penalty_floor(true);
             }),
+            ("dml_off/fs=F",           |s| { s.set_kh_dml(false); s.set_find_shortest(false); }),
+            ("dml_on/fs=F",            |s| { s.set_kh_dml(true); s.set_find_shortest(false); }),
         ];
 
         std::thread::Builder::new()
@@ -12851,21 +12861,76 @@ use crate::types::{Color, PieceType};
                 for (label, configure) in configs {
                     let mut board = Board::new();
                     board.set_sfen(sfen).unwrap();
+                    // depth=31 は canonical test_tsume_6_29te と同じ (dml_off で false
+                    // NoMate を露呈する境界)．depth=33 では dml_off も解ける (190,646)．
                     let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 120);
-                    solver.set_find_shortest(false);
                     configure(&mut solver);
                     let t = Instant::now();
                     let result = solver.solve_via_v2(&mut board);
                     let ms = t.elapsed().as_millis() as u64;
                     let res = match &result {
                         TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate".to_string(),
                         TsumeResult::Unknown { .. } => "Unknown".to_string(),
-                        _ => "Other".to_string(),
                     };
                     eprintln!("{:<22} {:>12} {:>10} {:<14}",
                         label, solver.nodes_searched, ms, res);
                 }
                 eprintln!("{}", "=".repeat(80));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// **[SLOW]** Phase 26 root-cause: 29te depth cliff．
+    /// dml_off は depth=31 で false NoMate になるが depth=33 で解ける．
+    /// depth margin (= depth - 29) を変えて dml_off / dml_on の境界を特定し，
+    /// depth-limit 偽反証 (look_up_pn_dn_impl remaining==0 → (INF,0)) の
+    /// margin 感度を測る．find_shortest=false で初回 solve のみ．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_depth_cliff --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_depth_cliff() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(72));
+                eprintln!(" 29te depth cliff (init solve, 50M/120s) — mate=29");
+                eprintln!("{}", "=".repeat(72));
+                eprintln!("{:>5} {:>7} {:>12} {:>9} {:<10}  {:>12} {:>9} {:<10}",
+                    "depth", "margin", "off_nodes", "off_ms", "off_res",
+                    "on_nodes", "on_ms", "on_res");
+                for depth in [29u32, 30, 31, 32, 33, 34] {
+                    let run = |kh_dml: bool| -> (u64, u64, String) {
+                        let mut board = Board::new();
+                        board.set_sfen(sfen).unwrap();
+                        let mut solver = DfPnSolver::with_timeout(depth, 50_000_000, 32767, 120);
+                        solver.set_find_shortest(false);
+                        solver.set_kh_dml(kh_dml);
+                        let t = Instant::now();
+                        let result = solver.solve_via_v2(&mut board);
+                        let ms = t.elapsed().as_millis() as u64;
+                        let res = match &result {
+                            TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                            TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                            TsumeResult::NoCheckmate { .. } => "NoMate!".to_string(),
+                            TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                        };
+                        (solver.nodes_searched, ms, res)
+                    };
+                    let (on_n, on_ms, on_r) = run(true);
+                    let (off_n, off_ms, off_r) = run(false);
+                    eprintln!("{:>5} {:>7} {:>12} {:>9} {:<10}  {:>12} {:>9} {:<10}",
+                        depth, depth as i32 - 29, off_n, off_ms, off_r, on_n, on_ms, on_r);
+                }
+                eprintln!("{}", "=".repeat(72));
             })
             .unwrap()
             .join()
@@ -13585,6 +13650,25 @@ use crate::types::{Color, PieceType};
                     .collect();
                 eprintln!("  proven_per_ply: {}", ply_diag.join(" "));
 
+                // Phase 24b 診断: visit churn vs breadth の判別．
+                // revisits 高 → TT churn / threshold thrashing (仮説 B/C/D)．
+                // unique 高 & revisits 低 → 過剰な distinct positions 探索 (heuristic/ordering)．
+                {
+                    let unique = solver.mid_v2_visit_counts.len();
+                    let total: u64 = solver.mid_v2_visit_counts.values().map(|&v| v as u64).sum();
+                    let max_v = solver.mid_v2_visit_counts.values().max().copied().unwrap_or(0);
+                    let mut revisits: u64 = 0;
+                    let mut ge2 = 0usize; let mut ge5 = 0usize; let mut ge10 = 0usize;
+                    for &v in solver.mid_v2_visit_counts.values() {
+                        if v > 1 { revisits += (v - 1) as u64; }
+                        if v >= 2 { ge2 += 1; }
+                        if v >= 5 { ge5 += 1; }
+                        if v >= 10 { ge10 += 1; }
+                    }
+                    eprintln!("  [visit] unique={} total={} revisits={} max_per_pos={} (>=2:{} >=5:{} >=10:{})",
+                        unique, total, revisits, max_v, ge2, ge5, ge10);
+                }
+
                 if result.pn == 0 {
                     let pv_usi: Vec<String> = pv.iter().map(|m| m.to_usi()).collect();
                     eprintln!("  PV length: {}", pv.len());
@@ -13625,6 +13709,245 @@ use crate::types::{Color, PieceType};
                     eprintln!("  PV: {}", pv2_usi.join(" "));
                 }
             }).unwrap().join().unwrap();
+    }
+
+    /// Phase 25 診断: 29te initial solve の per-ply unique/total 分布 +
+    /// revisit 原因内訳．KH 実測 19,270 nodes (1 thread, mate-in-29) と比較し，
+    /// 証明木(18K)の外を探索する 95K unique がどの ply に集中するか特定する．
+    ///
+    /// 実行方法:
+    /// ```bash
+    /// CARGO_TARGET_DIR=/tmp/cargo-target cargo test --release -p maou_shogi \
+    ///     --features visit_diag -- test_mid_v2_tsume_29te_visit_per_ply \
+    ///     --nocapture --ignored
+    /// ```
+    #[cfg(feature = "visit_diag")]
+    #[test]
+    #[ignore]
+    fn test_mid_v2_tsume_29te_visit_per_ply() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                let mut solver = DfPnSolver::with_timeout(33, 200_000_000, 32767, 600);
+                let t = Instant::now();
+                let (result, pv) = solver.solve_v2_with_pv(&mut board);
+                let elapsed = t.elapsed().as_millis() as u64;
+                eprintln!("[29te initial] nodes={} t(ms)={} pn={} dn={} md={} PV_len={}",
+                    solver.nodes_searched, elapsed, result.pn, result.dn,
+                    result.mate_distance, pv.len());
+                eprintln!("  proven_entries={}", solver.get_tt_proven_len());
+                let ppy = solver.get_proven_per_ply();
+                let ppy_s: Vec<String> = ppy.iter().enumerate()
+                    .filter(|(_, &c)| c > 0)
+                    .map(|(i, c)| format!("p{}:{}", i, c)).collect();
+                eprintln!("  proven_per_ply: {}", ppy_s.join(" "));
+                eprintln!("\n{}", solver.visit_summary(20));
+                eprintln!("\n{}", solver.hot_spot_summary(20));
+            }).unwrap().join().unwrap();
+    }
+
+    /// Phase 25 実験: threshold_epsilon sweep．
+    /// 仮説: maou eps/PN_UNIT = 2/16 = 0.125 < KH 1/2 = 0.5 → child 切替が
+    /// 相対的に eager すぎて thrashing．eps を上げると excursion が深くなり
+    /// thrashing 減少するか，PV=29 を保てるかを A/B する．
+    /// nodes / unique / revisits / PV_len を各 eps で測定し breadth vs revisit
+    /// のどちらに効くか (= 結合度) を判定する．
+    ///
+    /// 実行:
+    /// ```
+    /// CARGO_TARGET_DIR=/tmp/cargo-target cargo test --release -p maou_shogi \
+    ///     -- test_mid_v2_tsume_29te_epsilon_sweep --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_mid_v2_tsume_29te_epsilon_sweep() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(78));
+                eprintln!(" 29te threshold_epsilon sweep (initial solve, find_shortest=false)");
+                eprintln!(" KH baseline = 19,270 nodes (mate-in-29)");
+                eprintln!("{}", "=".repeat(78));
+                eprintln!("{:>5} {:>10} {:>9} {:>9} {:>8} {:>7}",
+                    "eps", "nodes", "unique", "revisits", "PV_len", "result");
+                for &eps in &[1u32, 2, 4, 8, 12, 16, 24, 32] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(33, 200_000_000, 32767, 120);
+                    solver.set_threshold_epsilon(eps);
+                    let (result, pv) = solver.solve_v2_with_pv(&mut board);
+                    let unique = solver.mid_v2_visit_counts.len() as u64;
+                    let total: u64 = solver.mid_v2_visit_counts.values().map(|&v| v as u64).sum();
+                    let revisits = total.saturating_sub(unique);
+                    let res = if result.pn == 0 { "PROVEN" }
+                              else if result.dn == 0 { "NoMate" } else { "UNK" };
+                    eprintln!("{:>5} {:>10} {:>9} {:>9} {:>8} {:>7}",
+                        eps, solver.nodes_searched, unique, revisits, pv.len(), res);
+                }
+                eprintln!("{}", "=".repeat(78));
+            }).unwrap().join().unwrap();
+    }
+
+    /// Phase 25 実験: edge_cost decouple A/B．
+    /// 仮説: maou は edge_cost を pn に折込む (二重信号) が KH は pn を純難易度推定に
+    /// 限定し move 選好を MoveBriefEvaluation tie-break に分離する．pn 折込が delta-sum
+    /// を歪め非 proof 探索を誘発しているなら，decouple で nodes が KH (19,270) 方向へ
+    /// 縮むはず．PV=29 維持が必須 (guidance 変更 = PV-fragile 領域)．
+    /// decouple で pn 分布が変わるため最適 eps もずれうるので eps も振る．
+    ///
+    /// 実行:
+    /// ```
+    /// CARGO_TARGET_DIR=/tmp/cargo-target cargo test --release -p maou_shogi \
+    ///     -- test_mid_v2_tsume_29te_decouple_ab --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_mid_v2_tsume_29te_decouple_ab() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(82));
+                eprintln!(" 29te edge_cost decouple A/B (initial solve)  KH baseline=19,270 / PV=29");
+                eprintln!("{}", "=".repeat(82));
+                eprintln!("{:>9} {:>5} {:>10} {:>9} {:>9} {:>7} {:>7}",
+                    "decouple", "eps", "nodes", "unique", "revisits", "PV_len", "result");
+                for &decouple in &[false, true] {
+                    for &eps in &[1u32, 2, 4, 8] {
+                        let mut board = Board::new();
+                        board.set_sfen(sfen).unwrap();
+                        let mut solver = DfPnSolver::with_timeout(33, 200_000_000, 32767, 120);
+                        solver.set_decouple_edge_cost(decouple);
+                        solver.set_threshold_epsilon(eps);
+                        let (result, pv) = solver.solve_v2_with_pv(&mut board);
+                        let unique = solver.mid_v2_visit_counts.len() as u64;
+                        let total: u64 = solver.mid_v2_visit_counts.values().map(|&v| v as u64).sum();
+                        let revisits = total.saturating_sub(unique);
+                        let res = if result.pn == 0 { "PROVEN" }
+                                  else if result.dn == 0 { "NoMate" } else { "UNK" };
+                        eprintln!("{:>9} {:>5} {:>10} {:>9} {:>9} {:>7} {:>7}",
+                            decouple, eps, solver.nodes_searched, unique, revisits, pv.len(), res);
+                    }
+                }
+                eprintln!("{}", "=".repeat(82));
+            }).unwrap().join().unwrap();
+    }
+
+    /// Phase 25 実験: obvious-final (1手詰検出) gate ON/OFF で初回 solve と
+    /// find_shortest を測定．re-design の中心仮説 = 「効率的初回 (任意長) +
+    /// find_shortest で 29 へ refine」(KH SearchMainLoop アーキ) の現状ブロッカーを
+    /// 定量化する．既知のコメント (solver.rs:7144-7147): gate-off で初回 105K だが
+    /// find_shortest でも 29 へ回復できない (= dual-range LookUpExact 欠落が原因)．
+    ///
+    /// 実行:
+    /// ```
+    /// CARGO_TARGET_DIR=/tmp/cargo-target cargo test --release -p maou_shogi \
+    ///     -- test_mid_v2_tsume_29te_obvious_final_ab --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_mid_v2_tsume_29te_obvious_final_ab() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(84));
+                eprintln!(" 29te obvious-final(1手詰) gate A/B   KH=19,270 / mate-29");
+                eprintln!("{}", "=".repeat(84));
+                eprintln!("{:>10} {:>5} {:>10} {:>8} {:>14} {:>10} {:>8}",
+                    "gate_depth", "midR", "init_nodes", "init_PV", "fshort_nodes", "fshort_PV", "result");
+                // gate_depth=25 → 29te(depth33) では OFF (現状); 99 → ON．
+                // midR (kh_middle_range): keystone — find_shortest 中間レンジ KH 準拠．
+                for &(gd, midr) in &[(25u32, false), (99, false), (99, true), (25, true)] {
+                    // (a) 初回 solve のみ
+                    let mut b1 = Board::new();
+                    b1.set_sfen(sfen).unwrap();
+                    let mut s1 = DfPnSolver::with_timeout(33, 200_000_000, 32767, 120);
+                    s1.set_obvious_final_max_depth(gd);
+                    s1.set_kh_middle_range(midr);
+                    let (r1, pv1) = s1.solve_v2_with_pv(&mut b1);
+                    let init_nodes = s1.nodes_searched;
+                    // (b) find_shortest
+                    let mut b2 = Board::new();
+                    b2.set_sfen(sfen).unwrap();
+                    let mut s2 = DfPnSolver::with_timeout(33, 200_000_000, 32767, 180);
+                    s2.set_obvious_final_max_depth(gd);
+                    s2.set_kh_middle_range(midr);
+                    let (r2, pv2) = s2.solve_v2_find_shortest(&mut b2);
+                    let res = if r1.pn == 0 && r2.pn == 0 { "PROVEN" } else { "FAIL" };
+                    eprintln!("{:>10} {:>5} {:>10} {:>8} {:>14} {:>10} {:>8}",
+                        gd, midr, init_nodes, pv1.len(), s2.nodes_searched, pv2.len(), res);
+                }
+                eprintln!("{}", "=".repeat(84));
+            }).unwrap().join().unwrap();
+    }
+
+    /// Phase 25 実験: deferred-move penalty sweep．proof-tree 圧縮を狙う．
+    /// KH ground truth: 29te を unique 2,094 / SearchImpl 5,269 で解く (maou unique
+    /// 113K / mid_v2 190K = 36-54×)．maou proof tree (18,090) >> KH 探索全体 =
+    /// 防御側冗長合駒の collapse 不全．deferred penalty (KH /8+floor) を有効化して
+    /// proven_entries が減る (= proof 圧縮) か, PV=29 を保つかを測る (aggregation
+    /// 変更なので PV-safe 期待)．現行 default は denom=0 (penalty 無効)．
+    ///
+    /// 実行:
+    /// ```
+    /// CARGO_TARGET_DIR=/tmp/cargo-target cargo test --release -p maou_shogi \
+    ///     -- test_mid_v2_tsume_29te_deferred_penalty_sweep --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_mid_v2_tsume_29te_deferred_penalty_sweep() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(80));
+                eprintln!(" 29te deferred-penalty sweep  KH: unique=2094 SearchImpl=5269 / mate-29");
+                eprintln!("{}", "=".repeat(80));
+                eprintln!("{:>6} {:>6} {:>10} {:>9} {:>10} {:>7} {:>7}",
+                    "denom", "floor", "nodes", "unique", "proven", "PV", "result");
+                for &(denom, floor) in &[(0u32, false), (4, false), (4, true), (8, true), (16, true)] {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(33, 200_000_000, 32767, 120);
+                    solver.set_deferred_penalty_denom(denom);
+                    solver.set_deferred_penalty_floor(floor);
+                    let (result, pv) = solver.solve_v2_with_pv(&mut board);
+                    let unique = solver.mid_v2_visit_counts.len() as u64;
+                    let proven = solver.get_tt_proven_len();
+                    let res = if result.pn == 0 { "PROVEN" }
+                              else if result.dn == 0 { "NoMate" } else { "UNK" };
+                    eprintln!("{:>6} {:>6} {:>10} {:>9} {:>10} {:>7} {:>7}",
+                        denom, floor, solver.nodes_searched, unique, proven, pv.len(), res);
+                }
+                eprintln!("{}", "=".repeat(80));
+            }).unwrap().join().unwrap();
+    }
+
+    /// Phase 25 補助: mate15 サブ局面 (ply24 prefix 後) の SFEN を印字する．
+    /// KH ground truth で「canonical Mate(15) vs chain-drop inflated Mate(21)」を
+    /// 確定するため．
+    #[test]
+    #[ignore]
+    fn test_print_mate15_subposition_sfen() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let prefix_pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c",
+            "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+", "2b3b",
+            "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d",
+            "3c2c", "1d1e", "P*1f", "1e1f", "P*1g", "1f1g",
+        ];
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        for usi in &prefix_pv {
+            let m = board.move_from_usi(usi).unwrap();
+            board.do_move(m);
+        }
+        eprintln!("MATE15_SUBPOS_SFEN={}", board.sfen());
     }
 
     /// mid_v2 動作確認 (v0.84.0, Phase 3)．
