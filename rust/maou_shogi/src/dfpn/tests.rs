@@ -1073,25 +1073,29 @@ use crate::types::{Color, PieceType};
     #[ignore]
     fn test_tsume_6_29te_proof_hand_diag() {
         let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
-        // (minimal_proof_hand, minimal_disproof_hand) を 4-way sweep (find_shortest=false)．
-        for &(mph, mdh) in &[(false, false), (true, false), (false, true), (true, true)] {
+        // Phase 29: baseline vs KH repetition (targeted disproof scoping)．find_shortest=false．
+        // 決定的計測: kh_repetition で unique(90K)が下がり Mate(29)維持なら GHI/repetition 層が真因．
+        let configs: &[(&str, fn(&mut DfPnSolver))] = &[
+            ("baseline      ", |_s| {}),
+            ("kh_repetition ", |s| { s.set_kh_repetition(true); }),
+        ];
+        for (label, cfg) in configs {
             let mut board = Board::new();
             board.set_sfen(sfen).unwrap();
             let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 300);
             solver.set_find_shortest(false);
-            solver.set_minimal_proof_hand(mph);
-            solver.set_minimal_disproof_hand(mdh);
+            cfg(&mut solver);
             let result = solver.solve_via_v2(&mut board);
             let (total, proof_len, conf, refut) = solver.table.proven_table_stats();
             let unique = solver.mid_v2_visit_counts.len();
             match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } => {
                     eprintln!(
-                        "[diag] mph={mph:5} mdh={mdh:5}: {} moves, {:>8} nodes, {:>7} unique | TT: {} total / {} proof / {} confirmed_disproof / {} refutable",
+                        "[diag] {label}: {} moves, {:>8} nodes, {:>7} unique | TT: {} total / {} proof / {} confirmed_disproof / {} refutable",
                         moves.len(), nodes_searched, unique, total, proof_len, conf, refut
                     );
                 }
-                other => eprintln!("[diag] mph={mph} mdh={mdh}: NON-MATE {other:?} <<< SOUNDNESS!"),
+                other => eprintln!("[diag] {label}: NON-MATE {other:?} <<< SOUNDNESS!"),
             }
         }
     }

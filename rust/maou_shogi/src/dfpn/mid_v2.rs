@@ -57,7 +57,15 @@ pub struct MidSearchResult {
     /// KH `min_depth < depth16` 相当: TT entry が shallower ply で保存されたか．
     /// TCA `has_old_child` の精密化に使用．
     pub is_shallow: bool,
+    /// KH `FinalData::repetition_start` 相当 (Phase 29)．千日手 (cycle) に依存した
+    /// disproof (dn==0) の場合，cycle が始まった ply を持つ (= taint)．`REPETITION_NONE`
+    /// (u32::MAX) なら非 repetition．disproof が `repetition_start < 自 ply` のとき cycle 内
+    /// (path-dependent) なので上へ伝播し，`>= 自 ply` で resolve する (KH local_expansion.hpp:578)．
+    pub repetition_start: u32,
 }
+
+/// `repetition_start` の sentinel: 千日手依存でない．
+pub(super) const REPETITION_NONE: u32 = u32::MAX;
 
 impl MidSearchResult {
     pub(super) fn new_unknown(pn: u32, dn: u32) -> Self {
@@ -68,6 +76,7 @@ impl MidSearchResult {
             mate_distance: 0,
             is_first_visit: true,
             is_shallow: false,
+            repetition_start: REPETITION_NONE,
         }
     }
 
@@ -79,6 +88,7 @@ impl MidSearchResult {
             mate_distance,
             is_first_visit: false,
             is_shallow: false,
+            repetition_start: REPETITION_NONE,
         }
     }
 
@@ -90,7 +100,27 @@ impl MidSearchResult {
             mate_distance,
             is_first_visit: false,
             is_shallow: false,
+            repetition_start: REPETITION_NONE,
         }
+    }
+
+    /// 千日手 (cycle) による disproof．KH `MakeRepetition` 相当 (pn=INF, dn=0 + taint)．
+    /// `rep_start` は cycle が始まった ply．
+    pub(super) fn new_repetition(rep_start: u32) -> Self {
+        Self {
+            pn: u32::MAX,
+            dn: 0,
+            amount: 1,
+            mate_distance: 0,
+            is_first_visit: false,
+            is_shallow: false,
+            repetition_start: rep_start,
+        }
+    }
+
+    /// 千日手依存の disproof か (KH `FinalData::IsRepetition`)．
+    pub(super) fn is_repetition(&self) -> bool {
+        self.dn == 0 && self.repetition_start != REPETITION_NONE
     }
 
     pub(super) fn is_final(&self) -> bool {

@@ -492,6 +492,13 @@ pub struct DfPnSolver {
     /// soundness-critical (誤ると false-NoMate) のため default false (baseline byte-identical)．
     /// `param_minimal_proof_hand` と独立に A/B 可能．
     pub(super) param_minimal_disproof_hand: bool,
+    /// Phase 29: KH 流の repetition (千日手) taint + targeted disproof scoping を使うか．
+    /// true で，disproof (dn==0) が cycle に依存する (subtree に `repetition_start < 自 ply` の
+    /// 千日手がある) 場合のみ scope 限定で store し，それ以外は confirmed (`REMAINING_INFINITE`)
+    /// で store する．`param_scope_disproof` の**全 disproof を一律 scope 限定する再探索**
+    /// (breadth 主因) を，path-dependent なものだけに精密化して置換える狙い．
+    /// soundness-critical (誤ると false-NoMate) のため default false (baseline byte-identical)．
+    pub(super) param_kh_repetition: bool,
     /// Phase 21: deferred penalty 除数 (0=無効, 8=KH 準拠)．
     pub(super) param_deferred_penalty_denom: u32,
     /// Phase 22: deferred penalty `.max(1)` floor (KH=true)．
@@ -1065,6 +1072,7 @@ impl DfPnSolver {
             param_is_sum_delta_node: false,
             param_minimal_proof_hand: false,
             param_minimal_disproof_hand: false,
+            param_kh_repetition: false,
             param_deferred_penalty_denom: 0,
             param_deferred_penalty_floor: false,
             param_tca_use_shallow_gate: false,
@@ -1621,6 +1629,13 @@ impl DfPnSolver {
     /// 詳細: [`DfPnSolver::param_minimal_disproof_hand`]．
     pub fn set_minimal_disproof_hand(&mut self, on: bool) -> &mut Self {
         self.param_minimal_disproof_hand = on;
+        self
+    }
+
+    /// Phase 29: KH 流 repetition taint + targeted disproof scoping を有効化．
+    /// 詳細: [`DfPnSolver::param_kh_repetition`]．
+    pub fn set_kh_repetition(&mut self, on: bool) -> &mut Self {
+        self.param_kh_repetition = on;
         self
     }
 
@@ -2328,17 +2343,18 @@ impl DfPnSolver {
     /// それは sound (祖先 hand == child hand も dominance に含まれる) で害は
     /// ない．
     #[inline]
-    fn is_dominated_in_path(&self, child_pos_key: u64, child_hand: &[u8; HAND_KINDS]) -> bool {
-        if !self.param_use_visit_history_dominance { return false; }
-        if self.path_len == 0 { return false; }
+    /// 祖先に同一 pos_key かつ hand >= child の node があれば，その path index (= 深さ) を返す
+    /// (KH `VisitHistory::IsInferior` 相当)．Phase 29: repetition taint の rep_start に使う．
+    fn is_dominated_in_path(&self, child_pos_key: u64, child_hand: &[u8; HAND_KINDS]) -> Option<u32> {
+        if !self.param_use_visit_history_dominance { return None; }
         for i in 0..self.path_len {
             if self.path_pos_key[i] == child_pos_key
                 && hand_gte_forward_chain(&self.path_hand[i], child_hand)
             {
-                return true;
+                return Some(i as u32);
             }
         }
-        false
+        None
     }
 
     /// GC 前に探索パス上のエントリを保護する．
@@ -4387,7 +4403,7 @@ impl DfPnSolver {
                 // v0.55.38: visit_history dominance check も同じパスで処理する
                 // (param_use_visit_history_dominance == true のとき)．
                 let is_loop_child = self.path_set.contains(&child_fh)
-                    || self.is_dominated_in_path(child_pk, child_hand);
+                    || self.is_dominated_in_path(child_pk, child_hand).is_some();
                 let (cpn, cdn, _csrc) = if is_loop_child {
                     (INF, 0, 0)
                 } else {
@@ -4686,7 +4702,7 @@ impl DfPnSolver {
                     // v0.55.38: visit_history dominance check を path_set.contains に
                     // 併用 (H4-A 補完，OR multi-child loop も含める)．
                     let is_loop_or_dominated_child = self.path_set.contains(&child_fh)
-                        || self.is_dominated_in_path(child_pk, child_hand);
+                        || self.is_dominated_in_path(child_pk, child_hand).is_some();
                     let (cpn, cdn, csrc) =
                         if is_loop_or_dominated_child {
                             loop_child_count += 1;
@@ -5000,7 +5016,7 @@ impl DfPnSolver {
                     // v0.55.38: visit_history dominance check は identity loop と
                     // 同じパスで処理 (経路依存反証として store される)．
                     let is_loop_child = self.path_set.contains(&child_fh)
-                        || self.is_dominated_in_path(child_pk, child_hand);
+                        || self.is_dominated_in_path(child_pk, child_hand).is_some();
                     let (cpn, cdn, csrc) =
                         if is_loop_child {
                             (INF, 0, 0)
@@ -7164,10 +7180,19 @@ impl DfPnSolver {
         let pos_key_self = position_key(board);
         let att_hand_self = board.hand[self.attacker.index()];
         let full_hash_self = board.hash;
+        // Phase 29: この node の path index (= 深さ)．push 前に確定させ，repetition taint の
+        // resolve 判定 (`rep_start < my_depth`) に使う．
+        let my_depth = self.path_len as u32;
         // 既に path 上 → 千日手 → 攻め方失敗 (OR) / 防御成功 (AND)
         if self.path_set.contains(&full_hash_self) {
             return if or_node {
-                MidSearchResult::new_lose(0)
+                // OR cycle = 攻め方失敗 (disproof, dn=0)．Phase 29: cycle 開始 ply を taint．
+                let rep_start = self.path[..self.path_len]
+                    .iter()
+                    .position(|&h| h == full_hash_self)
+                    .map(|i| i as u32)
+                    .unwrap_or(my_depth);
+                MidSearchResult::new_repetition(rep_start)
             } else {
                 MidSearchResult::new_win(0)
             };
@@ -7255,9 +7280,11 @@ impl DfPnSolver {
             // Phase 21 (v1.0.0): KH IsSuperior 相当の visit_history dominance．
             // 祖先で同一 pos_key かつ attacker hand >= child hand なら，
             // attacker が多い資源でも詰めなかった → child は不詰．
-            if self.is_dominated_in_path(pk, &hand) {
+            if let Some(dom_depth) = self.is_dominated_in_path(pk, &hand) {
                 board.undo_move(m, captured);
-                initial_results.push(MidSearchResult::new_lose(0));
+                // Phase 29: dominance (IsInferior) も path-dependent な disproof なので
+                // 千日手 taint を付ける (rep_start = 支配祖先の深さ)．
+                initial_results.push(MidSearchResult::new_repetition(dom_depth));
                 continue;
             }
 
@@ -7687,6 +7714,23 @@ impl DfPnSolver {
                 && self.table.has_proof(pos_key_self, &att_hand_self)
             {
                 self.table.update_disproven_len(pos_key_self, &att_hand_self, md_budget);
+            } else if self.param_kh_repetition {
+                // Phase 29: KH targeted scoping．dn==0 children に `rep_start < my_depth` の
+                // 千日手があれば，この disproof は cycle 依存 (path-dependent) → scope 限定で
+                // store し taint を上へ伝播．無ければ非 path-dependent → confirmed で store．
+                // `param_scope_disproof` の全 disproof 一律 scope 限定 (breadth 源) を精密化する．
+                let rep_taint = self.mid_expansion_stack[stack_idx]
+                    .results
+                    .iter()
+                    .filter(|r| r.is_repetition() && r.repetition_start < my_depth)
+                    .map(|r| r.repetition_start)
+                    .min();
+                if let Some(rs) = rep_taint {
+                    curr.repetition_start = rs;
+                    self.store(pos_key_self, disproof_hand, INF, 0, remaining, pos_key_self as u32);
+                } else {
+                    self.store(pos_key_self, disproof_hand, INF, 0, REMAINING_INFINITE, pos_key_self as u32);
+                }
             } else if self.param_scope_disproof {
                 // Phase 26b (root cause fix): 集約 disproof を REMAINING_INFINITE (confirmed,
                 // 絶対) ではなく remaining scope で store する．depth-limit 偽反証 (remaining==0)
