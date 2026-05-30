@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in: pending-commit
+applied_in: 6a37070
 date: 2026-05-30
 target: [rust/maou_shogi/src/dfpn/solver.rs, rust/maou_shogi/src/dfpn/tests.rs, rust/maou_shogi/Cargo.toml]
 risk: medium
