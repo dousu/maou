@@ -12904,31 +12904,32 @@ use crate::types::{Color, PieceType};
                 eprintln!("\n{}", "=".repeat(72));
                 eprintln!(" 29te depth cliff (init solve, 50M/120s) — mate=29");
                 eprintln!("{}", "=".repeat(72));
-                eprintln!("{:>5} {:>7} {:>12} {:>9} {:<10}  {:>12} {:>9} {:<10}",
-                    "depth", "margin", "off_nodes", "off_ms", "off_res",
-                    "on_nodes", "on_ms", "on_res");
+                // Phase 26b: 集約 disproof の remaining-scope 化 (param_scope_disproof) の検証．
+                // 列: dml_off (旧, 偽反証あり) / dml_off+scope (root cause fix) / dml_on (workaround)．
+                eprintln!("{:>5} {:>6}  {:>11} {:<9}  {:>11} {:<9}  {:>12} {:<9}",
+                    "depth", "margin", "off_n", "off", "off+scope_n", "off+scope", "on+scope_n", "on+scope");
                 for depth in [29u32, 30, 31, 32, 33, 34] {
-                    let run = |kh_dml: bool| -> (u64, u64, String) {
+                    let run = |kh_dml: bool, scope: bool| -> (u64, String) {
                         let mut board = Board::new();
                         board.set_sfen(sfen).unwrap();
                         let mut solver = DfPnSolver::with_timeout(depth, 50_000_000, 32767, 120);
                         solver.set_find_shortest(false);
                         solver.set_kh_dml(kh_dml);
-                        let t = Instant::now();
+                        solver.set_scope_disproof(scope);
                         let result = solver.solve_via_v2(&mut board);
-                        let ms = t.elapsed().as_millis() as u64;
                         let res = match &result {
                             TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
                             TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
                             TsumeResult::NoCheckmate { .. } => "NoMate!".to_string(),
                             TsumeResult::Unknown { .. } => "Unknown".to_string(),
                         };
-                        (solver.nodes_searched, ms, res)
+                        (solver.nodes_searched, res)
                     };
-                    let (on_n, on_ms, on_r) = run(true);
-                    let (off_n, off_ms, off_r) = run(false);
-                    eprintln!("{:>5} {:>7} {:>12} {:>9} {:<10}  {:>12} {:>9} {:<10}",
-                        depth, depth as i32 - 29, off_n, off_ms, off_r, on_n, on_ms, on_r);
+                    let (off_n, off_r) = run(false, false);
+                    let (scope_n, scope_r) = run(false, true);
+                    let (onsc_n, onsc_r) = run(true, true); // 新 default 候補
+                    eprintln!("{:>5} {:>6}  {:>11} {:<9}  {:>11} {:<9}  {:>12} {:<9}",
+                        depth, depth as i32 - 29, off_n, off_r, scope_n, scope_r, onsc_n, onsc_r);
                 }
                 eprintln!("{}", "=".repeat(72));
             })

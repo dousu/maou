@@ -458,10 +458,19 @@ pub struct DfPnSolver {
     /// Phase 26 (v1.5.0): KH parity DML (非駒打ち成/不成 deferral)．**default true**．
     /// true で `build_delayed_chain` が KH `delayed_move_list.hpp` 忠実版になり，
     /// 歩/角/飛/香(rank2/8) の成・不成ペアを OR/AND 両方で chain 化して breadth を削る．
-    /// false (旧挙動) は 29te depth=31 で **false NoMate** (811,241 nodes) を返す
-    /// soundness バグがある．kh_dml=true が正しい Mate(29) を出す (test_tsume_6_29te)．
-    /// 真因 (depth-31 depth-limit 偽反証) は未解決で別途調査中．
+    /// false (旧挙動) は 29te depth=31 で **false NoMate** (811,241 nodes) を返していた
+    /// soundness バグがあった．真因は depth-limit 偽反証の TT 汚染で，v1.6.0 の
+    /// [`DfPnSolver::param_scope_disproof`] が根治した．kh_dml は guidance robustness 改善として
+    /// 併用 (on+scope が 29te depth=31 で最速 162K)．
     pub(super) param_kh_dml: bool,
+    /// Phase 26b (root cause fix, v1.6.0): mid_v2 の集約 disproof (curr.dn==0) を絶対
+    /// (REMAINING_INFINITE = ProvenTT confirmed) ではなく **remaining scope** で store する
+    /// (**default true**)．depth-limit 偽反証 (`look_up_pn_dn_impl` remaining==0 → (INF,0)) が
+    /// 伝播して生じた集約 disproof が WorkingTT に scope 付きで入り，より深い ply (= remaining 大)
+    /// の transposition lookup では再探索される (tt.rs:1267 `e.remaining()>=remaining`)．
+    /// これで 29te depth=31 の false NoMate (811,241 nodes) を根治する．KH disproven_len scope 相当．
+    /// false (旧挙動) は horizon disproof を confirmed 化し TT を汚染する soundness バグ．
+    pub(super) param_scope_disproof: bool,
     /// Phase 21: deferred penalty 除数 (0=無効, 8=KH 準拠)．
     pub(super) param_deferred_penalty_denom: u32,
     /// Phase 22: deferred penalty `.max(1)` floor (KH=true)．
@@ -1031,6 +1040,7 @@ impl DfPnSolver {
             param_tca_kh_clamp: false,
             param_root_ids_enable: false,
             param_kh_dml: true,
+            param_scope_disproof: true,
             param_deferred_penalty_denom: 0,
             param_deferred_penalty_floor: false,
             param_tca_use_shallow_gate: false,
@@ -1526,6 +1536,13 @@ impl DfPnSolver {
     /// 詳細: [`DfPnSolver::param_kh_dml`]．
     pub fn set_kh_dml(&mut self, on: bool) -> &mut Self {
         self.param_kh_dml = on;
+        self
+    }
+
+    /// Phase 26b: 集約 disproof を remaining scope で store する (root cause fix)．
+    /// 詳細: [`DfPnSolver::param_scope_disproof`]．
+    pub fn set_scope_disproof(&mut self, on: bool) -> &mut Self {
+        self.param_scope_disproof = on;
         self
     }
 
@@ -7504,6 +7521,12 @@ impl DfPnSolver {
                 && self.table.has_proof(pos_key_self, &att_hand_self)
             {
                 self.table.update_disproven_len(pos_key_self, &att_hand_self, md_budget);
+            } else if self.param_scope_disproof {
+                // Phase 26b (root cause fix): 集約 disproof を REMAINING_INFINITE (confirmed,
+                // 絶対) ではなく remaining scope で store する．depth-limit 偽反証 (remaining==0)
+                // が伝播して生じた disproof が WorkingTT に入り，より深い ply の transposition
+                // (= remaining 大) lookup では再探索される (tt.rs:1267)．false NoMate 根治．
+                self.store(pos_key_self, att_hand_self, INF, 0, remaining, pos_key_self as u32);
             } else {
                 self.store(pos_key_self, att_hand_self, INF, 0, REMAINING_INFINITE, pos_key_self as u32);
             }
