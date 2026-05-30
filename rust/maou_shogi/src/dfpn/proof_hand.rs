@@ -27,7 +27,7 @@
 use crate::attack;
 use crate::bitboard::Bitboard;
 use crate::board::Board;
-use crate::types::{Color, PieceType, HAND_KINDS};
+use crate::types::{Color, PieceType, Square, HAND_KINDS};
 
 /// 要素ごとの max (KH `HandSet::Update`, ProofHand 用)．
 #[inline]
@@ -162,6 +162,108 @@ impl ProofHandSet {
     }
 }
 
+// ===================== 反証駒 (disproof hand) — KH DisproofHand 側 =====================
+
+/// 攻め方 (`us`) が駒種 `pr` を打って防御側玉 (`king_sq`) に王手できるマス集合．
+///
+/// `compute_checkers_at` (board.rs:154) の逆利きロジックを忠実に鏡像化する．王手の完全性
+/// (= 王手できるマスを取りこぼさない) が反証駒 soundness の要諦 (取りこぼすと false-NoMate)．
+/// `defender` は玉の色 (= `us.opponent()`)，方向性のある駒 (歩/桂/香) の利き反転に使う．
+#[inline]
+fn drop_check_squares(board: &Board, pr: PieceType, king_sq: Square, defender: Color) -> Bitboard {
+    let occ = board.all_occupied();
+    match pr {
+        PieceType::Pawn => attack::step_attacks(defender, PieceType::Pawn, king_sq),
+        PieceType::Knight => attack::step_attacks(defender, PieceType::Knight, king_sq),
+        PieceType::Silver => attack::step_attacks(defender, PieceType::Silver, king_sq),
+        PieceType::Gold => attack::step_attacks(defender, PieceType::Gold, king_sq),
+        PieceType::Lance => attack::lance_attacks(defender, king_sq, occ),
+        PieceType::Bishop => attack::bishop_attacks(king_sq, occ),
+        PieceType::Rook => attack::rook_attacks(king_sq, occ),
+        _ => Bitboard::EMPTY,
+    }
+}
+
+/// KH `RemoveIfHandGivesOtherChecks` (hands.hpp:137)．反証駒の soundness keystone．
+///
+/// OR ノード (攻め側手番) で不詰が判明したとき，子局面の反証駒を集約した `dh` から，
+/// 「攻め方が今持っていないが，持てば新たな王手 (駒打ち) ができてしまう駒種」を**除く**．
+/// その駒種は子探索に含まれていない王手手を生むため，「その駒があっても不詰」とは言えない．
+///
+/// - `us` = `board.turn` = 攻め側．`them` = 防御側 (玉)．
+/// - 攻め方が既に持っている駒種 (`board.hand[us][hi] != 0`) は対象外 (子探索に含まれている)．
+/// - 歩は二歩 (玉の筋に攻め方の歩が既にある) なら打てないので除かない．
+pub(super) fn remove_if_hand_gives_other_checks(
+    board: &Board,
+    dh: [u8; HAND_KINDS],
+) -> [u8; HAND_KINDS] {
+    let us = board.turn;
+    let them = us.opponent();
+    let king_sq = match board.king_square(them) {
+        Some(k) => k,
+        None => return dh,
+    };
+    let droppable = !board.all_occupied();
+
+    let mut dh = dh;
+    for (hi, &pr) in PieceType::HAND_PIECES.iter().enumerate() {
+        if board.hand[us.index()][hi] != 0 || dh[hi] == 0 {
+            // 攻め方が既に持っている or 反証駒に元々入っていない → 対象外．
+            continue;
+        }
+        if pr == PieceType::Pawn {
+            let us_pawns = board.piece_bb[us.index()][PieceType::Pawn as usize];
+            if (us_pawns & Bitboard::file_mask(king_sq.col())).is_not_empty() {
+                // 二歩で歩を打てない → 反証駒から除かない．
+                continue;
+            }
+        }
+        if (drop_check_squares(board, pr, king_sq, them) & droppable).is_not_empty() {
+            // pr を持てば駒打ち王手ができる → 「pr があっても不詰」は言えない → 除く．
+            dh[hi] = 0;
+        }
+    }
+    dh
+}
+
+/// 終端 (攻め側に王手手なし = 不詰) OR ノードの反証駒．
+///
+/// KH `HandSet{DisproofHandTag}.Get` の子なし版 = `remove_if(max, board)`．攻め方が打って
+/// 王手できる駒種を最大集合から除いた残り (= 「これらの駒を持っていても王手すらできない」)．
+#[inline]
+pub(super) fn disproof_hand_terminal_or(board: &Board) -> [u8; HAND_KINDS] {
+    remove_if_hand_gives_other_checks(board, PieceType::MAX_HAND_COUNT)
+}
+
+/// KH `HandSet{DisproofHandTag}` 相当の反証駒集約器 (OR ノード用)．
+///
+/// init は各駒種最大枚数．`update` で各子の反証駒を要素 min し，`get` で
+/// `RemoveIfHandGivesOtherChecks` 補正を施す．
+pub(super) struct DisproofHandSet {
+    val: [u8; HAND_KINDS],
+}
+
+impl DisproofHandSet {
+    #[inline]
+    pub(super) fn new() -> Self {
+        Self {
+            val: PieceType::MAX_HAND_COUNT,
+        }
+    }
+
+    /// 子局面の反証駒を要素 min で取り込む (KH `HandSet::Update` DisproofHand)．
+    #[inline]
+    pub(super) fn update(&mut self, child: &[u8; HAND_KINDS]) {
+        self.val = hand_min(&self.val, child);
+    }
+
+    /// 現局面 (OR, 攻め側手番) の反証駒を取得する (KH `HandSet::Get` DisproofHand)．
+    #[inline]
+    pub(super) fn get(&self, board: &Board) -> [u8; HAND_KINDS] {
+        remove_if_hand_gives_other_checks(board, self.val)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,5 +361,44 @@ mod tests {
         set.update(&[2, 0, 0, 0, 0, 0, 0]);
         set.update(&[1, 0, 0, 2, 0, 0, 0]);
         assert_eq!(set.get(&b), [2, 0, 0, 2, 0, 0, 0]);
+    }
+
+    // ---- 反証駒 (disproof hand) ----
+
+    #[test]
+    fn disproof_hand_set_init_and_min() {
+        assert_eq!(DisproofHandSet::new().val, PieceType::MAX_HAND_COUNT);
+        let mut set = DisproofHandSet::new();
+        set.update(&[1, 2, 3, 4, 2, 1, 1]);
+        set.update(&[2, 1, 0, 4, 2, 2, 0]);
+        assert_eq!(set.val, [1, 1, 0, 4, 2, 1, 0]); // 要素 min
+    }
+
+    #[test]
+    fn remove_if_removes_checkable_rook_when_attacker_lacks_it() {
+        // 黒玉 9a，白玉 5e (露出)，黒番 (攻め)．黒は飛を持っていない．
+        // 飛を打てば 5e に筋/段で王手できる → 反証駒から飛を除く．
+        let b = board("K8/9/9/9/4k4/9/9/9/9 b - 1");
+        assert_eq!(b.turn, Color::Black);
+        assert!(b.king_square(Color::White).is_some());
+        let out = remove_if_hand_gives_other_checks(&b, [0, 0, 0, 0, 0, 0, 2]);
+        assert_eq!(out[6], 0, "rook removed (droppable check on exposed king)");
+    }
+
+    #[test]
+    fn remove_if_keeps_rook_attacker_already_holds() {
+        // 黒が飛を持っている → 飛打ちは子探索に含まれる → 反証駒から除かない．
+        let b = board("K8/9/9/9/4k4/9/9/9/9 b R 1");
+        let out = remove_if_hand_gives_other_checks(&b, [0, 0, 0, 0, 0, 0, 2]);
+        assert_eq!(out[6], 2, "held rook is kept");
+    }
+
+    #[test]
+    fn remove_if_keeps_nifu_pawn_but_removes_rook() {
+        // 白玉 1a，黒歩が筋1 (1e) にある，黒番．二歩で歩打ち不可 → 歩は残す，飛は除く．
+        let b = board("8k/9/9/9/8P/9/9/9/K8 b - 1");
+        let out = remove_if_hand_gives_other_checks(&b, [5, 0, 0, 0, 0, 0, 2]);
+        assert_eq!(out[0], 5, "pawn kept by nifu");
+        assert_eq!(out[6], 0, "rook removed (can drop-check 1a)");
     }
 }

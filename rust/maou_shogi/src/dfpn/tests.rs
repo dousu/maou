@@ -1073,25 +1073,25 @@ use crate::types::{Color, PieceType};
     #[ignore]
     fn test_tsume_6_29te_proof_hand_diag() {
         let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
-        for &fs in &[false, true] {
-            for &on in &[false, true] {
-                let mut board = Board::new();
-                board.set_sfen(sfen).unwrap();
-                let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 300);
-                solver.set_find_shortest(fs);
-                solver.set_minimal_proof_hand(on);
-                let result = solver.solve_via_v2(&mut board);
-                let (total, proof_len, conf, refut) = solver.table.proven_table_stats();
-                let unique = solver.mid_v2_visit_counts.len();
-                match &result {
-                    TsumeResult::Checkmate { moves, nodes_searched } => {
-                        eprintln!(
-                            "[diag] find_shortest={fs:5} mph={on:5}: {} moves, {:>8} nodes, {:>7} unique | TT: {} total / {} proof / {} confirmed_disproof / {} refutable",
-                            moves.len(), nodes_searched, unique, total, proof_len, conf, refut
-                        );
-                    }
-                    other => eprintln!("[diag] find_shortest={fs} mph={on}: NON-MATE {other:?}"),
+        // (minimal_proof_hand, minimal_disproof_hand) を 4-way sweep (find_shortest=false)．
+        for &(mph, mdh) in &[(false, false), (true, false), (false, true), (true, true)] {
+            let mut board = Board::new();
+            board.set_sfen(sfen).unwrap();
+            let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 300);
+            solver.set_find_shortest(false);
+            solver.set_minimal_proof_hand(mph);
+            solver.set_minimal_disproof_hand(mdh);
+            let result = solver.solve_via_v2(&mut board);
+            let (total, proof_len, conf, refut) = solver.table.proven_table_stats();
+            let unique = solver.mid_v2_visit_counts.len();
+            match &result {
+                TsumeResult::Checkmate { moves, nodes_searched } => {
+                    eprintln!(
+                        "[diag] mph={mph:5} mdh={mdh:5}: {} moves, {:>8} nodes, {:>7} unique | TT: {} total / {} proof / {} confirmed_disproof / {} refutable",
+                        moves.len(), nodes_searched, unique, total, proof_len, conf, refut
+                    );
                 }
+                other => eprintln!("[diag] mph={mph} mdh={mdh}: NON-MATE {other:?} <<< SOUNDNESS!"),
             }
         }
     }

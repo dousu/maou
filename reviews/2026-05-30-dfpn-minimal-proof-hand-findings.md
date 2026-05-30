@@ -65,18 +65,44 @@ KH は**反証駒 (maximal disproof hand) + confirmed disproof** の hand-domina
 **false-NoMate (GHI 汚染)** を避ける soundness 由来の妥協であり，代償として反証が弱く再利用されず
 失敗ラインが別 ply / 別経路で再展開され 86K の distinct 局面になっている．
 
-## 次 (候補A = 反証側の本格実装, ユーザ選択)
+## Phase 28b: 反証側 (候補A) も実装 → **同様に棄却** (v1.9.0)
 
-`proof_hand.rs` の鏡像として:
-1. `check_squares(pr)` board helper を新設 (`compute_checkers_at` board.rs:154 逆算)．
-2. `DisproofHandSet` (要素 **min** 集約) + `remove_if_hand_gives_other_checks` (hands.hpp:137)．
-3. mid_v2 の disproof store を `param_minimal_disproof_hand` (default off) 後ろに配線．
-4. gate (soundness 不変) + 効率診断 (unique 90K が縮むか実測)．
-- **制約**: confirmed disproof reuse は GHI false-NoMate を再発させうる (`scope_disproof` の存在理由)．
-  反証駒の効果が頭打ちなら，候補B (KH TCA + path-aware confirmation で GHI を正しく解く) が前提となる．
+ユーザ選択を受け `proof_hand.rs` の鏡像で反証駒も実装した:
+- `drop_check_squares` (`compute_checkers_at` board.rs:154 逆利き忠実鏡像) + `DisproofHandSet`
+  (要素 **min** 集約) + `remove_if_hand_gives_other_checks` (hands.hpp:137)．単体テスト 4 本 green．
+- mid_v2 disproof store を `param_minimal_disproof_hand` (default off) 後ろに配線:
+  終端 OR (王手なし) = `disproof_hand_terminal_or`，集約 (curr.dn==0, OR) = 子要素 min +
+  BeforeHand + RemoveIf．AND は att_hand_self 踏襲．scope_disproof と併用で GHI-safe．
+
+**4-way sweep (29te, find_shortest=false, 全て Mate(29) — false-NoMate なし):**
+
+| proof | disproof | nodes | unique |
+|---|---|---|---|
+| off | off | **162,550** | **90,029** |
+| on | off | 187,815 (+15.5%) | 103,835 |
+| **off** | **on** | **199,739 (+22.9%)** | **111,294** |
+| on | on | 185,331 (+14.0%) | 100,550 |
+
+→ 反証駒も **+23%**．**証明駒・反証駒の両方が棄却された．**
+
+## 統一結論: hand 値極小化は 19K の lever ではない
+
+- **total/unique = 1.8×** → 失敗ライン 86K は**再訪されていない**．問題は「弱い反証で再探索」では
+  なく，そもそも 86K の失敗局面を 1 回ずつ**展開してしまう selectivity**．
+- 証明駒/反証駒は TT dominance を介して子 pn/dn を決める = **guidance そのもの**．guidance は
+  Phase 22–27 で枯渇が実証済みの deep local optimum．故に hand 値をいじると proof でも disproof でも
+  dominance ベース guidance が撹乱され**必ず悪化**する．
+- **19K ギャップ = どの子を展開するかの selectivity = 探索制御の構造**．hand 値の極小性ではない．
+
+## 残る道 (要ユーザ判断)
+
+1. **KH SearchImpl 一体移植** (MovePicker + df-pn+ + TCA + GHI を統合体として)．piece-by-piece の
+   re-derivation では届かない＝「本格的な回収」．数週間・高 soundness リスク．
+2. **162K を operating point として受容** (sound・約1秒・production 十分)．
 
 ## 健全性メモ
 
-- 実装は完全 default-off (OFF 路は att_hand_self をそのまま渡す byte-identical)．dfpn lib 101 tests pass．
+- proof/disproof 共に完全 default-off (OFF 路 byte-identical)．**dfpn lib 105 tests pass**
+  (単体テスト 12 本含む)．4-way sweep 全構成 Mate(29)．
 - 既存 doctest `param_root_trace` (solver.rs バレ ``` fence) は **HEAD 由来の pre-existing 破損**で
   本変更と無関係 (pre-commit は cargo doctest を走らせない)．

@@ -485,6 +485,13 @@ pub struct DfPnSolver {
     /// (29te で KH 比 9× の bloat を縮める)．soundness-critical のため default false
     /// (baseline byte-identical)．効果・健全性確認後に default 化を検討する．
     pub(super) param_minimal_proof_hand: bool,
+    /// Phase 28b: KH 流の極大反証駒 (maximal disproof hand) を mid_v2 の disproof store に
+    /// 適用するか．true で不詰局面を「実際の攻め方持ち駒」ではなく [`super::proof_hand`] が計算する
+    /// **極大反証駒** (子の要素 min + `RemoveIfHandGivesOtherChecks` 補正) で store する．
+    /// disproof の hand-dominance が広がり失敗ライン (29te で unique 90K) を刈る狙い．
+    /// soundness-critical (誤ると false-NoMate) のため default false (baseline byte-identical)．
+    /// `param_minimal_proof_hand` と独立に A/B 可能．
+    pub(super) param_minimal_disproof_hand: bool,
     /// Phase 21: deferred penalty 除数 (0=無効, 8=KH 準拠)．
     pub(super) param_deferred_penalty_denom: u32,
     /// Phase 22: deferred penalty `.max(1)` floor (KH=true)．
@@ -1057,6 +1064,7 @@ impl DfPnSolver {
             param_scope_disproof: true,
             param_is_sum_delta_node: false,
             param_minimal_proof_hand: false,
+            param_minimal_disproof_hand: false,
             param_deferred_penalty_denom: 0,
             param_deferred_penalty_floor: false,
             param_tca_use_shallow_gate: false,
@@ -1606,6 +1614,13 @@ impl DfPnSolver {
     /// 詳細: [`DfPnSolver::param_minimal_proof_hand`]．
     pub fn set_minimal_proof_hand(&mut self, on: bool) -> &mut Self {
         self.param_minimal_proof_hand = on;
+        self
+    }
+
+    /// Phase 28b: KH 流の極大反証駒 (maximal disproof hand) を有効化．
+    /// 詳細: [`DfPnSolver::param_minimal_disproof_hand`]．
+    pub fn set_minimal_disproof_hand(&mut self, on: bool) -> &mut Self {
+        self.param_minimal_disproof_hand = on;
         self
     }
 
@@ -7202,7 +7217,14 @@ impl DfPnSolver {
                     pos_key_self, proof_hand, 0, INF, REMAINING_INFINITE,
                     pos_key_self as u32, 0, 0);
             } else {
-                self.store(pos_key_self, att_hand_self, result.pn, result.dn,
+                // Phase 28b: 終端 OR (王手手なし = 不詰) の極大反証駒 = RemoveIf(max)．
+                // 王手すらできない駒種を最大集合から除いた残り (confirmed, depth 非依存で sound)．
+                let disproof_hand = if self.param_minimal_disproof_hand {
+                    super::proof_hand::disproof_hand_terminal_or(board)
+                } else {
+                    att_hand_self
+                };
+                self.store(pos_key_self, disproof_hand, result.pn, result.dn,
                     REMAINING_INFINITE, pos_key_self as u32);
             }
             // path pop (push されていた場合のみ)
@@ -7635,6 +7657,30 @@ impl DfPnSolver {
                 pos_key_self, proof_hand, 0, INF, REMAINING_INFINITE,
                 pos_key_self as u32, bm, md);
         } else if curr.dn == 0 {
+            // Phase 28b: 極大反証駒を計算．OR proven-fail は全攻め手が不詰 → 子の反証駒を
+            // 要素 min (BeforeHand) + RemoveIfHandGivesOtherChecks．AND は単一逃れ手で，
+            // minimal 化が複雑なため att_hand_self を踏襲 (sound)．scope_disproof と併用すれば
+            // horizon disproof は scope 限定のまま極大化され GHI-safe．
+            let disproof_hand = if self.param_minimal_disproof_hand {
+                if or_node {
+                    let moves: Vec<Move> =
+                        self.mid_expansion_stack[stack_idx].moves.clone();
+                    let mut set = super::proof_hand::DisproofHandSet::new();
+                    for m in moves {
+                        let cap = board.do_move(m);
+                        let cpk = position_key(board);
+                        let chand = board.hand[self.attacker.index()];
+                        let cdh = self.table.get_disproof_hand(cpk, &chand);
+                        board.undo_move(m, cap);
+                        set.update(&adjust_hand_for_move(m, &cdh));
+                    }
+                    set.get(board)
+                } else {
+                    att_hand_self
+                }
+            } else {
+                att_hand_self
+            };
             // Phase 19: budget-bounded search で proven 局面の dn=0 は
             // confirmed disproof ではなく disproven_len 更新
             if md_budget != u16::MAX && md_budget <= 1000
@@ -7646,9 +7692,9 @@ impl DfPnSolver {
                 // 絶対) ではなく remaining scope で store する．depth-limit 偽反証 (remaining==0)
                 // が伝播して生じた disproof が WorkingTT に入り，より深い ply の transposition
                 // (= remaining 大) lookup では再探索される (tt.rs:1267)．false NoMate 根治．
-                self.store(pos_key_self, att_hand_self, INF, 0, remaining, pos_key_self as u32);
+                self.store(pos_key_self, disproof_hand, INF, 0, remaining, pos_key_self as u32);
             } else {
-                self.store(pos_key_self, att_hand_self, INF, 0, REMAINING_INFINITE, pos_key_self as u32);
+                self.store(pos_key_self, disproof_hand, INF, 0, REMAINING_INFINITE, pos_key_self as u32);
             }
         } else {
             self.store(pos_key_self, att_hand_self, curr.pn, curr.dn, remaining, pos_key_self as u32);
