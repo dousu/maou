@@ -37,6 +37,8 @@ mod pns;
 mod delayed_move_list;
 mod mid_v2;
 mod proof_hand;
+mod path_key;
+mod repetition_memo;
 #[cfg(test)]
 mod tests;
 

@@ -28,7 +28,7 @@ use super::{
 };
 
 /// path 配列の容量．depth の最大値(41) + マージン．
-const PATH_CAPACITY: usize = 48;
+pub(super) const PATH_CAPACITY: usize = 48;
 
 /// 局面ごとの mid() exit 種別内訳 (visit_diag feature)．
 ///
