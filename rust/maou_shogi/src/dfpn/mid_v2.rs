@@ -365,6 +365,34 @@ impl MidLocalExpansion {
         }
     }
 
+    /// Phase 27: KH `IsSumDeltaNode`=false の child を max 集約に切替える．
+    /// `force_max_raw` は sum→max にすべき move の raw index 列 (`super::is_sum_delta_node`
+    /// が `false` を返した手)．KH `local_expansion.hpp:177` の `!IsSumDeltaNode(...)` 分岐相当で，
+    /// **非 final** の child のみ sum_mask を reset する．1 件でも reset したら `recalc_delta` する．
+    /// solver 側で board を参照して force-max 集合を計算し，`set_move_evals` の **後** に呼ぶ前提
+    /// (recalc が最終 idx 順序を反映するため)．
+    pub(super) fn apply_force_max(&mut self, force_max_raw: &[u32]) -> bool {
+        let mut changed = false;
+        for &i in force_max_raw {
+            let iu = i as usize;
+            if iu >= self.results.len() {
+                continue;
+            }
+            if self.results[iu].is_final() {
+                continue;
+            }
+            let bit = 1u64 << (i as u64);
+            if (self.sum_mask & bit) != 0 {
+                self.sum_mask &= !bit;
+                changed = true;
+            }
+        }
+        if changed {
+            self.recalc_delta();
+        }
+        changed
+    }
+
     /// BestMove: `idx_[excluded_moves_]` の手を返す．
     pub(super) fn best_move(&self) -> Move {
         let raw = self.idx[self.excluded_moves] as usize;

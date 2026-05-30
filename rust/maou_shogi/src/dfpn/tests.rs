@@ -12938,6 +12938,167 @@ use crate::types::{Color, PieceType};
             .unwrap();
     }
 
+    /// **[SLOW]** Phase 27: 29te init solve で KH `IsSumDeltaNode` の A/B．
+    /// depth=31 (canonical, margin2), find_shortest=false, kh_dml+scope=ON (新 default)．
+    /// `is_sum_delta_node` OFF (baseline ≈162K / Mate(29)) vs ON でノード数・PV 長を比較する．
+    /// 仮説: OR 香成/不成 near-duplicate を max 集約することで delta 発散 (= breadth) が縮む．
+    /// **必ず PV 長 (Mate(29)) が維持されることを確認する** (鉄則: efficiency↑ は PV 29→31 を壊しやすい)．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_is_sum_delta_ab --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_is_sum_delta_ab() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(72));
+                eprintln!(" 29te init solve: IsSumDeltaNode A/B (depth=31, 50M/120s) — mate=29");
+                eprintln!("{}", "=".repeat(72));
+                eprintln!("{:<24} {:>12} {:>10} {:<12}", "config", "nodes", "time(ms)", "result");
+                let run = |sdn: bool| -> (u64, u64, String) {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 120);
+                    solver.set_find_shortest(false);
+                    solver.set_is_sum_delta_node(sdn);
+                    let t = Instant::now();
+                    let result = solver.solve_via_v2(&mut board);
+                    let ms = t.elapsed().as_millis() as u64;
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate!".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    (solver.nodes_searched, ms, res)
+                };
+                for (label, sdn) in [("sdn=OFF (baseline)", false), ("sdn=ON", true)] {
+                    let (n, ms, res) = run(sdn);
+                    eprintln!("{:<24} {:>12} {:>10} {:<12}", label, n, ms, res);
+                }
+                eprintln!("{}", "=".repeat(72));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// **[SLOW]** Phase 27: 29te init solve breadth sweep．
+    /// 未測定の構造 lever (root-level IDS) と scale-matched epsilon を一括測定する．
+    /// maou は pn/dn を PN_UNIT=16 倍 scale するため，KH `second_phi+1` 相当の epsilon は
+    /// maou では `+16` になる (現 default は +2)．eps の最適点を scale 込みで再探索する．
+    /// 全 config depth=31, find_shortest=false, kh_dml+scope=ON (新 default)．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_breadth_sweep --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_breadth_sweep() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let configs: &[(&str, fn(&mut DfPnSolver))] = &[
+            ("default(eps2)",      |_s| {}),
+            ("root_ids",           |s| { s.set_root_ids_enable(true); }),
+            ("eps=4",              |s| { s.set_threshold_epsilon(4); }),
+            ("eps=8",              |s| { s.set_threshold_epsilon(8); }),
+            ("eps=16",             |s| { s.set_threshold_epsilon(16); }),
+            ("eps=32",             |s| { s.set_threshold_epsilon(32); }),
+            ("root_ids+eps8",      |s| { s.set_root_ids_enable(true); s.set_threshold_epsilon(8); }),
+            ("defpen8_floor",      |s| { s.set_deferred_penalty_denom(8); s.set_deferred_penalty_floor(true); }),
+        ];
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(72));
+                eprintln!(" 29te init solve breadth sweep (depth=31, 50M/120s) — mate=29");
+                eprintln!("{}", "=".repeat(72));
+                eprintln!("{:<20} {:>12} {:>10} {:<12}", "config", "nodes", "time(ms)", "result");
+                for (label, configure) in configs {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 120);
+                    solver.set_find_shortest(false);
+                    configure(&mut solver);
+                    let t = Instant::now();
+                    let result = solver.solve_via_v2(&mut board);
+                    let ms = t.elapsed().as_millis() as u64;
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate!".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    eprintln!("{:<20} {:>12} {:>10} {:<12}", label, solver.nodes_searched, ms, res);
+                }
+                eprintln!("{}", "=".repeat(72));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    /// **[SLOW]** Phase 27: 29te KH-faithful OR-node ensemble sweep．
+    /// 単体では効かない KH mechanism を **組合せ** て co-tuned ensemble を再現できるか試す．
+    /// 背景: default は OR pn に maou edge_cost を KH 増分の上に折込む (二重信号)．
+    /// decouple_edge_cost=true で純 KH init になり -16% だが PV31 退行 (Phase 25)．
+    /// 純 KH init + IsSumDeltaNode (KH delta 集約) を **併用** すれば KH 同様
+    /// narrow かつ Mate(29) になる仮説のテスト．maou は init ratio が KH と一致 (U/2U)
+    /// するため epsilon も scale して併せて掃く．
+    /// 全 config depth=31, find_shortest=false, kh_dml+scope=ON．**PV 長を必ず確認**．
+    ///
+    /// 実行:
+    /// ```
+    /// cargo test --release -p maou_shogi -- test_tsume_29te_kh_ensemble_sweep --nocapture --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn test_tsume_29te_kh_ensemble_sweep() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let configs: &[(&str, fn(&mut DfPnSolver))] = &[
+            ("default",                |_s| {}),
+            ("decouple",               |s| { s.set_decouple_edge_cost(true); }),
+            ("decouple+sdn",           |s| { s.set_decouple_edge_cost(true); s.set_is_sum_delta_node(true); }),
+            ("decouple+sdn+eps4",      |s| { s.set_decouple_edge_cost(true); s.set_is_sum_delta_node(true); s.set_threshold_epsilon(4); }),
+            ("decouple+sdn+eps8",      |s| { s.set_decouple_edge_cost(true); s.set_is_sum_delta_node(true); s.set_threshold_epsilon(8); }),
+            ("decouple+eps8",          |s| { s.set_decouple_edge_cost(true); s.set_threshold_epsilon(8); }),
+            ("sdn+eps8",               |s| { s.set_is_sum_delta_node(true); s.set_threshold_epsilon(8); }),
+        ];
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                eprintln!("\n{}", "=".repeat(72));
+                eprintln!(" 29te KH-faithful OR ensemble sweep (depth=31, 50M/120s) — mate=29");
+                eprintln!("{}", "=".repeat(72));
+                eprintln!("{:<22} {:>12} {:>10} {:<12}", "config", "nodes", "time(ms)", "result");
+                for (label, configure) in configs {
+                    let mut board = Board::new();
+                    board.set_sfen(sfen).unwrap();
+                    let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 120);
+                    solver.set_find_shortest(false);
+                    configure(&mut solver);
+                    let t = Instant::now();
+                    let result = solver.solve_via_v2(&mut board);
+                    let ms = t.elapsed().as_millis() as u64;
+                    let res = match &result {
+                        TsumeResult::Checkmate { moves, .. } => format!("Mate({})", moves.len()),
+                        TsumeResult::CheckmateNoPv { .. } => "MateNoPV".to_string(),
+                        TsumeResult::NoCheckmate { .. } => "NoMate!".to_string(),
+                        TsumeResult::Unknown { .. } => "Unknown".to_string(),
+                    };
+                    eprintln!("{:<22} {:>12} {:>10} {:<12}", label, solver.nodes_searched, ms, res);
+                }
+                eprintln!("{}", "=".repeat(72));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// **[SLOW]** 29te を KH PV に沿って 1 手ずつ進めて maou のノード数を測定．
     /// tsume_5 と同様の backward-step 分析を 29te に対して行う．
     ///

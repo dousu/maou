@@ -471,6 +471,13 @@ pub struct DfPnSolver {
     /// これで 29te depth=31 の false NoMate (811,241 nodes) を根治する．KH disproven_len scope 相当．
     /// false (旧挙動) は horizon disproof を confirmed 化し TT を汚染する soundness バグ．
     pub(super) param_scope_disproof: bool,
+    /// Phase 27: KH `IsSumDeltaNode` (`initial_estimation.hpp:227`) を適用するか．
+    /// true で OR ノードの香成/不成 near-duplicate child を **max 集約** に切替え，δ値の
+    /// 二重計上 (= breadth 発散) を抑える．KH `local_expansion.hpp:177` の
+    /// `!IsSumDeltaNode(...)` 分岐相当．maou は従来この分岐が未実装で，香車王手の多い
+    /// 局面で delta が過大になり distinct-position breadth が KH より発散していた仮説の検証用．
+    /// default false (baseline 不変)．効果確認後に default 化を検討する．
+    pub(super) param_is_sum_delta_node: bool,
     /// Phase 21: deferred penalty 除数 (0=無効, 8=KH 準拠)．
     pub(super) param_deferred_penalty_denom: u32,
     /// Phase 22: deferred penalty `.max(1)` floor (KH=true)．
@@ -1041,6 +1048,7 @@ impl DfPnSolver {
             param_root_ids_enable: false,
             param_kh_dml: true,
             param_scope_disproof: true,
+            param_is_sum_delta_node: false,
             param_deferred_penalty_denom: 0,
             param_deferred_penalty_floor: false,
             param_tca_use_shallow_gate: false,
@@ -1576,6 +1584,13 @@ impl DfPnSolver {
     /// Phase 22: root level IDS (KH SearchEntry) を有効化．
     pub fn set_root_ids_enable(&mut self, on: bool) -> &mut Self {
         self.param_root_ids_enable = on;
+        self
+    }
+
+    /// Phase 27: KH `IsSumDeltaNode` (OR 香成/不成 max 集約) を有効化．
+    /// 詳細: [`DfPnSolver::param_is_sum_delta_node`]．
+    pub fn set_is_sum_delta_node(&mut self, on: bool) -> &mut Self {
+        self.param_is_sum_delta_node = on;
         self
     }
 
@@ -7312,6 +7327,27 @@ impl DfPnSolver {
                 .map(|&m| super::move_brief_eval(m, ksq, board))
                 .collect();
             expansion.set_move_evals(evals);
+        }
+
+        // Phase 27: KH `IsSumDeltaNode` — OR 香成/不成 near-duplicate を max 集約に切替える．
+        // KH は LocalExpansion 構築時に sum_mask を reset するが (`local_expansion.hpp:177`)，
+        // maou は board を持たない expansion 内で判定できないため solver 側で force-max 集合を
+        // 計算する．`set_move_evals` の **後** に呼ぶことで apply_force_max の recalc_delta が
+        // 最終 idx 順序を反映する．
+        if self.param_is_sum_delta_node && or_node {
+            let defender_king = board.king_square(self.attacker.opponent());
+            let force_max: Vec<u32> = expansion
+                .moves
+                .iter()
+                .enumerate()
+                .filter(|(_, &m)| {
+                    !super::is_sum_delta_node(m, or_node, us_is_black, defender_king, board)
+                })
+                .map(|(i, _)| i as u32)
+                .collect();
+            if !force_max.is_empty() {
+                expansion.apply_force_max(&force_max);
+            }
         }
 
         // Phase 21: parameterized deferred penalty + TCA gate

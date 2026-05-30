@@ -461,6 +461,62 @@ pub(super) fn move_brief_eval(m: Move, king_sq: Square, board: &Board) -> i32 {
     value
 }
 
+/// KH `initial_estimation.hpp:227 IsSumDeltaNode` 移植 (Phase 27)．
+///
+/// δ値を **和 (sum)** で計上すべき子なら `true`，**最大値 (max)** で計上すべきなら `false`．
+/// KH 同様，ほぼ全ての手で `true` を返し，OR ノードの香成/不成 near-duplicate のみ `false`：
+///
+/// > 似た子局面になる手が複数あると，δ値を定義通り sum すると局面を過小評価
+/// > (実値より大きく出る) ことがある．→ そのような手は max で計上する．
+///
+/// 具体条件 (`false` を返す = max 集約)：
+/// - OR ノード (攻め方手番)
+/// - 駒打ちでない香車の移動 (移動元の駒種が Lance)
+/// - 行き先 `to` が敵陣の rank 2/3 (先手) または rank 7/8 (後手)
+///   (maou 行座標: 先手 row∈{1,2}，後手 row∈{6,7}; row 0 = rank 1)
+/// - 敵玉が `to` の真正面 (先手は 1 つ上=row-1，後手は 1 つ下=row+1) の同一筋にいる
+///
+/// この配置では香成と香不成が同一マスへ向かう near-duplicate child となり，両者を
+/// sum 計上すると delta が二重に膨れて breadth が発散する (KH の本質的な breadth 抑制)．
+///
+/// `defender_king` は OR ノードの受け方 (敵) 玉位置．`None` なら `true` (安全側)．
+pub(super) fn is_sum_delta_node(
+    m: Move,
+    or_node: bool,
+    us_is_black: bool,
+    defender_king: Option<Square>,
+    board: &Board,
+) -> bool {
+    if m.is_drop() || !or_node {
+        return true;
+    }
+    // 移動元が (不成の) 香車か．成香 (raw 10) は除外され true を返す．
+    if (board.piece_at(m.from_sq()) & 0x0F) != 2 {
+        return true;
+    }
+    let to = m.to_sq();
+    let king = match defender_king {
+        Some(k) => k,
+        None => return true,
+    };
+    if king.col() != to.col() {
+        return true;
+    }
+    let r = to.row();
+    if us_is_black {
+        // 先手香は row 0 方向 (敵陣) へ進む．玉は to の 1 つ手前 (row-1)．
+        if (r == 1 || r == 2) && king.row() + 1 == r {
+            return false;
+        }
+    } else {
+        // 後手香は row 8 方向 (敵陣) へ進む．玉は to の 1 つ手前 (row+1)．
+        if (r == 6 || r == 7) && r + 1 == king.row() {
+            return false;
+        }
+    }
+    true
+}
+
 /// 捨て駒のみ王手ブースト(人間的枝刈り)．
 ///
 /// OR ノード(攻め方手番)で利用可能な全王手が「支えなし」の捨て駒である場合，
