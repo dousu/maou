@@ -478,6 +478,13 @@ pub struct DfPnSolver {
     /// 局面で delta が過大になり distinct-position breadth が KH より発散していた仮説の検証用．
     /// default false (baseline 不変)．効果確認後に default 化を検討する．
     pub(super) param_is_sum_delta_node: bool,
+    /// Phase 28: KH 流の極小証明駒 (minimal proof hand) を mid_v2 の proof store に適用するか．
+    /// true で proven 局面を「実際の攻め方持ち駒」ではなく [`super::proof_hand`] が計算する
+    /// **極小証明駒** (子の要素 max + `AddIfHandGivesOtherEvasions` 補正) で store する．
+    /// hand-dominance (`hand_gte_forward_chain`) の集約が強まり proof tree を圧縮する狙い
+    /// (29te で KH 比 9× の bloat を縮める)．soundness-critical のため default false
+    /// (baseline byte-identical)．効果・健全性確認後に default 化を検討する．
+    pub(super) param_minimal_proof_hand: bool,
     /// Phase 21: deferred penalty 除数 (0=無効, 8=KH 準拠)．
     pub(super) param_deferred_penalty_denom: u32,
     /// Phase 22: deferred penalty `.max(1)` floor (KH=true)．
@@ -1049,6 +1056,7 @@ impl DfPnSolver {
             param_kh_dml: true,
             param_scope_disproof: true,
             param_is_sum_delta_node: false,
+            param_minimal_proof_hand: false,
             param_deferred_penalty_denom: 0,
             param_deferred_penalty_floor: false,
             param_tca_use_shallow_gate: false,
@@ -1591,6 +1599,13 @@ impl DfPnSolver {
     /// 詳細: [`DfPnSolver::param_is_sum_delta_node`]．
     pub fn set_is_sum_delta_node(&mut self, on: bool) -> &mut Self {
         self.param_is_sum_delta_node = on;
+        self
+    }
+
+    /// Phase 28: KH 流の極小証明駒 (minimal proof hand) を有効化．
+    /// 詳細: [`DfPnSolver::param_minimal_proof_hand`]．
+    pub fn set_minimal_proof_hand(&mut self, on: bool) -> &mut Self {
+        self.param_minimal_proof_hand = on;
         self
     }
 
@@ -7172,8 +7187,19 @@ impl DfPnSolver {
             };
             // Terminal proven は best_move + mate_distance 付きで store．
             if result.pn == 0 {
+                // Phase 28: AND 終端 (防御 0 手 = 即詰) の極小証明駒．
+                // = AddIfHandGivesOtherEvasions(空)．接触王手なら空，離れ王手なら
+                // 攻め方が独占する合駒駒を記録する (false-mate 回避の keystone)．
+                let proof_hand = if self.param_minimal_proof_hand {
+                    super::proof_hand::hand_clip(
+                        &super::proof_hand::proof_hand_terminal_and(board),
+                        &att_hand_self,
+                    )
+                } else {
+                    att_hand_self
+                };
                 self.store_with_best_move_and_distance(
-                    pos_key_self, att_hand_self, 0, INF, REMAINING_INFINITE,
+                    pos_key_self, proof_hand, 0, INF, REMAINING_INFINITE,
                     pos_key_self as u32, 0, 0);
             } else {
                 self.store(pos_key_self, att_hand_self, result.pn, result.dn,
@@ -7240,8 +7266,24 @@ impl DfPnSolver {
             }
             // OR 局面自体を TT に store (PV 抽出が proven を確認できるように)．
             if mate_in_1 {
+                // Phase 28: KH CheckMate1Ply の極小証明駒 = BeforeHand(詰み手, 終端 AddIf)．
+                // board は child OR 局面 (do_move(m) 済)．詰み手を指して終端の証明駒を計算し，
+                // BeforeHand (= adjust_hand_for_move) で詰み手を逆算する．`hand` は child OR の
+                // 攻め方持ち駒 (line 上で取得済) なので clip もそれで行う．
+                let proof_hand = if self.param_minimal_proof_hand {
+                    if let Some(mm) = mate_move_for_or {
+                        let cap2 = board.do_move(mm);
+                        let leaf = super::proof_hand::proof_hand_terminal_and(board);
+                        board.undo_move(mm, cap2);
+                        super::proof_hand::hand_clip(&adjust_hand_for_move(mm, &leaf), &hand)
+                    } else {
+                        hand
+                    }
+                } else {
+                    hand
+                };
                 self.store_with_best_move_and_distance(
-                    pk, hand, 0, INF, REMAINING_INFINITE,
+                    pk, proof_hand, 0, INF, REMAINING_INFINITE,
                     pk as u32,
                     mate_move_for_or.map(|m| m.to_move16()).unwrap_or(0),
                     1,
@@ -7547,8 +7589,50 @@ impl DfPnSolver {
                 return super::mid_v2::MidSearchResult::new_unknown(PN_UNIT, PN_UNIT);
             }
             curr.mate_distance = md;
+            // Phase 28: 極小証明駒で store．
+            // - OR proven: 証明駒 = BeforeHand(bm, child 証明駒)．
+            // - AND proven: 全子の証明駒を要素 max 集約 + AddIfHandGivesOtherEvasions．
+            //   KH (local_expansion.hpp:548-642) は AND 集約で children に BeforeHand を
+            //   掛けない (攻め方持ち駒は防御手番では不変なため)．
+            let proof_hand = if self.param_minimal_proof_hand {
+                if or_node {
+                    let bm_move = self.mid_expansion_stack[stack_idx]
+                        .moves
+                        .iter()
+                        .copied()
+                        .find(|mv| mv.to_move16() == bm);
+                    if let Some(m) = bm_move {
+                        let cap = board.do_move(m);
+                        let cpk = position_key(board);
+                        let chand = board.hand[self.attacker.index()];
+                        let cph = self.table.get_proof_hand(cpk, &chand);
+                        board.undo_move(m, cap);
+                        super::proof_hand::hand_clip(
+                            &adjust_hand_for_move(m, &cph),
+                            &att_hand_self,
+                        )
+                    } else {
+                        att_hand_self
+                    }
+                } else {
+                    let moves: Vec<Move> =
+                        self.mid_expansion_stack[stack_idx].moves.clone();
+                    let mut set = super::proof_hand::ProofHandSet::new();
+                    for m in moves {
+                        let cap = board.do_move(m);
+                        let cpk = position_key(board);
+                        let chand = board.hand[self.attacker.index()];
+                        let cph = self.table.get_proof_hand(cpk, &chand);
+                        board.undo_move(m, cap);
+                        set.update(&cph);
+                    }
+                    super::proof_hand::hand_clip(&set.get(board), &att_hand_self)
+                }
+            } else {
+                att_hand_self
+            };
             self.store_with_best_move_and_distance(
-                pos_key_self, att_hand_self, 0, INF, REMAINING_INFINITE,
+                pos_key_self, proof_hand, 0, INF, REMAINING_INFINITE,
                 pos_key_self as u32, bm, md);
         } else if curr.dn == 0 {
             // Phase 19: budget-bounded search で proven 局面の dn=0 は

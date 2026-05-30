@@ -36,6 +36,7 @@ mod solver;
 mod pns;
 mod delayed_move_list;
 mod mid_v2;
+mod proof_hand;
 #[cfg(test)]
 mod tests;
 

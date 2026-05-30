@@ -1016,6 +1016,86 @@ use crate::types::{Color, PieceType};
         }
     }
 
+    /// **[SLOW]** Phase 28: 極小証明駒 (minimal proof hand) ON で 29te を解く gate + 効率診断．
+    ///
+    /// `set_minimal_proof_hand(true)` で proven 局面を KH 流の極小証明駒で store する．
+    /// soundness gate: **Mate(29)** を維持し，27 手詰めへの分岐 (8i7g) を含まないこと．
+    /// 効率: nodes_searched を default (約 162K) と比較し proof tree 圧縮効果を測る．
+    /// release 必須 (debug ではノード/時間制限超過)．
+    #[test]
+    #[ignore]
+    fn test_tsume_6_29te_minimal_proof_hand() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+
+        let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 300);
+        solver.set_minimal_proof_hand(true);
+        let result = solver.solve_via_v2(&mut board);
+
+        match &result {
+            TsumeResult::Checkmate {
+                moves,
+                nodes_searched,
+            } => {
+                let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                eprintln!(
+                    "[minimal_proof_hand] tsume6: {} moves, {} nodes (default baseline ~162,550)",
+                    pv.len(),
+                    nodes_searched
+                );
+                eprintln!("[minimal_proof_hand] PV: {}", pv.join(" "));
+                assert_eq!(
+                    pv.len(),
+                    29,
+                    "minimal_proof_hand: expected 29-move checkmate, got {} moves: {}",
+                    pv.len(),
+                    pv.join(" ")
+                );
+                assert!(
+                    !pv.contains(&"8i7g".to_string()),
+                    "minimal_proof_hand: PV must not contain 8i7g (leads to 27-move mate): {}",
+                    pv.join(" "),
+                );
+            }
+            other => panic!(
+                "minimal_proof_hand: expected Checkmate for tsume6, got {:?}",
+                other
+            ),
+        }
+    }
+
+    /// **[SLOW]** Phase 28: 極小証明駒の効果診断．OFF/ON で nodes + proven entries を比較する．
+    ///
+    /// 仮説検証: 極小証明駒で proof tree (proven entries) が KH 相当 (~2,094) へ縮むか，
+    /// そして nodes が減るか．release 必須．
+    #[test]
+    #[ignore]
+    fn test_tsume_6_29te_proof_hand_diag() {
+        let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        for &fs in &[false, true] {
+            for &on in &[false, true] {
+                let mut board = Board::new();
+                board.set_sfen(sfen).unwrap();
+                let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 300);
+                solver.set_find_shortest(fs);
+                solver.set_minimal_proof_hand(on);
+                let result = solver.solve_via_v2(&mut board);
+                let (total, proof_len, conf, refut) = solver.table.proven_table_stats();
+                let unique = solver.mid_v2_visit_counts.len();
+                match &result {
+                    TsumeResult::Checkmate { moves, nodes_searched } => {
+                        eprintln!(
+                            "[diag] find_shortest={fs:5} mph={on:5}: {} moves, {:>8} nodes, {:>7} unique | TT: {} total / {} proof / {} confirmed_disproof / {} refutable",
+                            moves.len(), nodes_searched, unique, total, proof_len, conf, refut
+                        );
+                    }
+                    other => eprintln!("[diag] find_shortest={fs} mph={on}: NON-MATE {other:?}"),
+                }
+            }
+        }
+    }
+
     /// 29手詰め: PNS なし(IDS-MID のみ)のロバストネステスト．
     ///
     /// PNS は浅い詰みの発見に使われ，IDS-MID は深い詰みに使われる．
