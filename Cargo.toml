@@ -18,8 +18,8 @@ polars = { version = "0.53", features = [
     "dtype-date",  # Used for timestamp fields
     # u64 is a core type, no feature flag needed
 ] }
-arrow = { version = "58.0", features = ["ipc", "ipc_compression"] }
-arrow-pyarrow = { version = "58.0" }
+arrow = { version = "58.3", features = ["ipc", "ipc_compression"] }
+arrow-pyarrow = { version = "58.3" }
 numpy = { version = "0.28" }
 thiserror = "2.0"
 rustc-hash = "2.1"
