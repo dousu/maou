@@ -252,6 +252,13 @@ pub struct DfPnSolver {
     /// 全 OR ノードの未証明子を追加証明し，最短手順を保証する．
     /// false の場合，最初に見つかった詰み手順をそのまま返す．
     pub(super) find_shortest: bool,
+    /// Phase 31: find_shortest の per-iter refinement cap を override する (0 = 旧 formula
+    /// `max(iter0*2, 200_000)`)．canonical (fs=T) cost は core でなくこの ~200K refinement
+    /// floor が支配する (config 不問でほぼ一定 ~200K)．budget=best_d-2 の iter は 29te で
+    /// cap を使い切って give-up し iter0 の最短を信頼するだけ (実際の shorter 確認はしていない)．
+    /// → cap を下げれば canonical が core に漸近する (29te は iter0 が既に最短 29 を発見)．
+    /// 注: shorter mate が cap 内で見つかる他問題では非最短を返しうる (find_shortest 品質 tradeoff)．
+    pub(super) param_refine_iter_cap: u64,
     /// PV 復元フェーズで未証明子1つあたりに割り当てるノード予算(デフォルト: 1024)．
     ///
     /// 長手数の詰将棋で [`TsumeResult::CheckmateNoPv`] が返る場合，
@@ -428,6 +435,8 @@ pub struct DfPnSolver {
     /// Phase 15 (v0.94.0): tsume_5 micro-tuning 診断用．
     /// position_fh → visit count．mid_v2 で各 entry 時にインクリメント．
     pub(super) mid_v2_visit_counts: rustc_hash::FxHashMap<u64, u32>,
+    /// Phase 30 診断: ply 別の初回訪問 (= unique) ノード数．breadth 局在化用．
+    pub(super) mid_v2_first_ply_count: [u64; 64],
 
     /// Phase 20 (v0.99.0): KH `min_depth` 相当の max_remaining トラッキング．
     /// (pos_key, hand_hash) → max_remaining (= shallowest ply で stored)．
@@ -451,6 +460,65 @@ pub struct DfPnSolver {
     /// する (proven entry = 絶対的に詰みなので dn=INF は sound)．false = 旧 (PN_UNIT,
     /// PN_UNIT) リセット (subtree 全再探索)．KH dual-range の find_shortest 収束改善用．
     pub(super) param_kh_middle_range: bool,
+    /// Phase 30: KH coherent scale mode．ON で mid_v2 の seed を KH `kPnDnUnit=2`
+    /// スケールに揃え (pure InitialPnDn / (PN_UNIT/2))，MidLocalExpansion の
+    /// 完全 KH comparer (δ tie-break) を有効化する．epsilon=1 / tca_kh_clamp /
+    /// deferred_penalty(/8) / is_sum_delta と併用して KH の統合 selectivity を
+    /// coherent whole として再現する (個別 piece は Phase 22-28 で全敗)．
+    pub(super) param_kh_scale: bool,
+    /// Phase 30: MidLocalExpansion の完全 KH comparer (δ tie-break + amount) を
+    /// unit-16 でも有効化する (kh_scale とは独立)．
+    pub(super) param_kh_full_comparer: bool,
+    /// Phase 31 (**反証済**): kh_full_comparer の δ tie-break を **AND ノードのみ**に限定する仮説．
+    /// OR の δ は王手選択を変え非最短 (Mate-31) を誘発するが deep breadth 主因は AND fan-out なので
+    /// AND のみ δ を効かせれば最短 29 維持 + defender selectivity を得られると期待した．
+    ///
+    /// **実測 (29te, WDC fs=F)**: WDC 56,689 / fullcmp 39,324(Mate31) / fc+andonly **66,953(Mate29, +18%)**．
+    /// = Mate-29 は保つ (δ-at-OR が 31 の原因と確認) が AND-δ は breadth を**増やす**．
+    /// fullcmp の効率 (39K) は OR-δ 由来で 31 と不可分．かつ 31 手詰は 29 手詰より proof tree が
+    /// **小さい** (39K<57K) — δ は「証明が楽な (が長い) 詰み」へ誘導する．最短 29 には使えない．default OFF．
+    pub(super) param_kh_comparer_and_only: bool,
+    /// Phase 30: mid_v2 の OR 子展開で合駒 capture cross-deduction を有効化する．
+    /// first-visit OR 子が取り王手で既証明局面に到達するなら，hand dominance で
+    /// 展開せず証明確定する (`try_capture_tt_proof`)．old `mid` の合駒共有を mid_v2 に
+    /// 移植し，深い ply の合駒 fan-out (29te の breadth 主因) を削る目的．
+    pub(super) param_capture_dedup: bool,
+    /// Phase 31 (**反証済**): 子の seed pn を king-escape 難易度で enrich する仮説．
+    /// 詰める側 (`attacker.opponent()`) の玉の safe_escapes を pn に加算し，玉の機動性を
+    /// 奪う王手を seed 段階で優先させる狙いだった (KH InitialPnDn の位置難易度に相当)．
+    ///
+    /// **実測 (29te, fs=F)**: W+rich = 88,603 nodes / 58,056 unique (W 77K/50K **比 +15%/+16% 悪化**)．
+    /// eps interaction (decisive): W+rich+eps8 = 145K(**Mate 31**), W+rich+eps32 = 463K(**Mate 31**)．
+    /// → ordering が改善するなら deep commitment (eps 大) が breadth を減らすはずが逆に爆発．
+    /// = rich_seed は front child を正しくしておらず，むしろ edge_cost の鋭い差別化に noise を
+    /// 加えて悪化させる．**seed quality は lever でない** (kh_scale 反証と整合)．default OFF 据置．
+    ///
+    /// **Phase 31 再検証 (decouple seed の tie 割り)**: trace で decouple seed は多数の王手に同一
+    /// (pn=32,dn=16) を与え best-child flicker を起こすと判明．rich_escape で tie を割る実験
+    /// (WDC+rich) = 61,294/30,926/**Mate-31** (footprint 不減, 31 手化)．= tie を割っても「詰め手」を
+    /// 先頭にしなければ探索量は減らない (escape 順は詰め手を当てない)．→ 真因は「詰め手同定 =
+    /// move-ordering 品質」で，安価な heuristic では埋まらない (KH も同 heuristic)．残差は scale dynamics．
+    pub(super) param_rich_seed: bool,
+    /// Phase 31 (**反証済**): mid_v2 の AND ノードで一般 合駒 cross-deduction を有効化する．
+    /// drop 合駒 defense が refute (child pn=0) された直後に，同一マスの兄弟 drop 合駒を
+    /// `cross_deduce_children` (capture 後局面の hand-dominance proof 転用) で展開せず証明する狙い．
+    ///
+    /// **実測 (29te, WDC ベース)**: WDC 56,689/29,938 → WDC+xdedup 58,662/30,963 (**+3.5% 悪化**)．
+    /// Mate-29 維持 (sound) だが deep AND breadth は不変 (ply19:2512→2667)．= 29te の deep AND fan-out は
+    /// 同一マス drop 兄弟の proof 共有では削れない (defender breadth は king 逃げ/capture/別マス合駒が主)．
+    /// Phase 28 hand-minimization 同様「reuse 強化はコストのみ増」パターン．default OFF 据置．
+    pub(super) param_cross_dedup: bool,
+    /// Phase 31: mid_v2 の AND ノード move 生成に PNS の 無駄合い filter を適用する．
+    /// mid_v2 は従来 `movegen::generate_legal_moves` で**全**合法手 (無駄合い含む) を生成し，
+    /// deep AND (ply 17+) の 合駒 fan-out が breadth 爆発の主因だった (unique gap 14× vs KH)．
+    /// `generate_defense_moves_inner` (pns.rs) は futile 合駒を除外し chain マスは歩のみ生成する
+    /// 既存・検証済の 無駄合い filter．KH の 駒強奪 (g_stolen_pr) 無駄合防止に相当する maou の機構．
+    ///
+    /// **実測 (29te, WDC fs=F)**: WDC 56,689/29,938 → WDC+muda 57,447/30,098 (**ほぼ無変化, Mate-29**)．
+    /// = 29te の deep AND breadth は futile 無駄合い でなく **genuine な防御 (玉移動/駒取り) +
+    /// 攻め方の drop 王手の多様性** (R2G2P 持駒) 由来で，無駄合い filter では削れない．
+    /// → 「mid_v2 が 無駄合い filter を欠く」ことは事実だが 29te の breadth 主因ではない (反証)．
+    pub(super) param_muda_filter: bool,
     /// Phase 22: TCA extension formula を KH `max(thpn, pn+1)` 形式にするか．
     pub(super) param_tca_kh_clamp: bool,
     /// Phase 22: root level IDS (KH SearchEntry 風 1.7× threshold growth) 有効．
@@ -507,6 +575,61 @@ pub struct DfPnSolver {
     pub(super) param_tca_use_shallow_gate: bool,
     /// Phase 21 診断: deferred penalty 発火フレーム数．
     pub(super) diag_deferred_frames: u64,
+    /// Phase 31 診断: ノードあたりの「展開した子 (= 実際に mid_v2 再帰した子) 数」を OR/AND 別に集計．
+    /// avg = recursions/nodes．理想は OR≈1 (詰め手のみ), AND≈防御手数．KH との selectivity 差の定量化用．
+    pub(super) diag_or_nodes: u64,
+    pub(super) diag_or_recursions: u64,
+    pub(super) diag_and_nodes: u64,
+    pub(super) diag_and_recursions: u64,
+    /// Phase 31 診断: best-child 選択 trace log の総行数 cap (爆発防止)．
+    pub(super) diag_trace_count: u32,
+    /// Phase 32: mid_v3 (ground-up KH コア port, unit-2 scale) 専用の exact-match TT．
+    /// key = board.hash (全局面 hash, 手番・持駒含む)．mid_v2 の TT baggage を排した clean store．
+    pub(super) v3_tt: rustc_hash::FxHashMap<u64, super::mid_v3::V3Entry>,
+    /// mid_v3 探索パス上の board.hash → ply (千日手検出 + 参照祖先 ply 特定用)．
+    pub(super) v3_path: rustc_hash::FxHashMap<u64, u32>,
+    /// mid_v3 探索ノード数 (= search_v3 呼び出し回数)．
+    pub(super) v3_nodes: u64,
+    /// Phase 33: mid_v3 で検証済 `MidLocalExpansion` (DML/sum_mask/comparer/deferred) を
+    /// per-node に駆動する (案②)．`false` = classic df-pn 集約 (sound 181K baseline)．
+    /// `true` = LocalExpansion refinement + clean TT + unit-2 + 非累積 extend + root IDS の合成．
+    pub(super) param_v3_local_exp: bool,
+    /// Phase 33b: KH `RepetitionTable` 相当．LE path で repetition 依存の disproof を
+    /// path_key でキャッシュし (clean TT は absolute 結果のみ)，sound GHI + reuse を実現する．
+    pub(super) v3_rep_memo: super::repetition_memo::RepetitionMemo,
+    /// Phase 33b: LE path で IsInferior dominance (KH VisitHistory) を有効化するか．
+    /// RepetitionMemo + path_key で sound 化された前提で breadth を削る．
+    pub(super) param_v3_dominance: bool,
+    /// Phase 33b 診断: dominance 発火数 / RepetitionMemo insert / hit．
+    pub(super) v3_dom_fires: u64,
+    pub(super) v3_rep_inserts: u64,
+    pub(super) v3_rep_hits: u64,
+    /// Phase 33k: LE path で cycle-dependent disproof を path_key で RepetitionMemo にキャッシュするか
+    /// (KH RepetitionTable; dominance 無しの base でも有効)．clean TT は skip する taint 付き disproof を
+    /// path_key で再利用し，再降下の thrash を抑える．
+    pub(super) param_v3_rep_cache: bool,
+    /// Phase 33c: LE path で KH EliminateDoubleCount (DAG δ 二重計上除去) を有効化するか．
+    pub(super) param_v3_dag: bool,
+    /// Phase 33c 診断: double-count 補正の発火数．
+    pub(super) v3_dag_resets: u64,
+    /// Phase 33d: LE path の hand-aware proof/disproof reuse (KH proof_hand)．
+    /// pos_key (持駒抜き盤面) → [(proof_hand, len, best16)]．`hand >= proof_hand` の transposition は
+    /// 同じ証明を再利用できる (攻め方が多い駒で詰むなら少ない要求でも詰む)．absolute proof のみ格納．
+    pub(super) param_v3_proof_hand: bool,
+    pub(super) v3_proven: rustc_hash::FxHashMap<u64, Vec<([u8; HAND_KINDS], u16, u16)>>,
+    /// pos_key → [disproof_hand]．`disproof_hand >= hand` の transposition も不詰 (少ない駒で詰まないなら
+    /// 更に少なくても詰まない)．absolute disproof のみ格納 (repetition は RepetitionMemo)．
+    pub(super) v3_disproven: rustc_hash::FxHashMap<u64, Vec<[u8; HAND_KINDS]>>,
+    /// Phase 33d 診断: hand-aware reuse hit 数．
+    pub(super) v3_ph_hits: u64,
+    /// Phase 33g 診断: per-ply total/unique 訪問数 (KHPLY trace と比較用)．
+    pub(super) v3_ply_total: [u64; 64],
+    pub(super) v3_ply_unique: [u64; 64],
+    pub(super) v3_ply_seen: rustc_hash::FxHashSet<(u32, u64)>,
+    /// Phase 33k 診断: KHSEL per-ply first-visit dump で各 ply を 1 度だけ出力するためのフラグ．
+    pub(super) v3_sel_dumped: [u8; 8],
+    /// Phase 33n 診断: V3TRACE chronological per-expansion trace のカウンタ．
+    pub(super) v3_trace_cnt: u32,
     /// Phase 21 診断: deferred penalty 合計値．
     pub(super) diag_deferred_penalty_sum: u64,
     /// Phase 21 診断: has_old_child=true (is_shallow gate)．
@@ -1009,6 +1132,7 @@ impl DfPnSolver {
             draw_ply,
             timeout: Duration::from_secs(timeout_secs),
             find_shortest: true,
+            param_refine_iter_cap: 0,
             pv_nodes_per_child: 1024,
             chain_bb_cache: Bitboard::EMPTY,
             pv_extraction_incomplete: false,
@@ -1060,11 +1184,19 @@ impl DfPnSolver {
             parent_map: rustc_hash::FxHashMap::default(),
             parent_meta: rustc_hash::FxHashMap::default(),
             mid_v2_visit_counts: rustc_hash::FxHashMap::default(),
+            mid_v2_first_ply_count: [0u64; 64],
             max_remaining_map: rustc_hash::FxHashMap::default(),
             param_threshold_epsilon: 2,
             param_decouple_edge_cost: false,
             param_obvious_final_max_depth: 25,
             param_kh_middle_range: false,
+            param_kh_scale: false,
+            param_kh_full_comparer: false,
+            param_capture_dedup: false,
+            param_rich_seed: false,
+            param_cross_dedup: false,
+            param_kh_comparer_and_only: false,
+            param_muda_filter: false,
             param_tca_kh_clamp: false,
             param_root_ids_enable: false,
             param_kh_dml: true,
@@ -1077,6 +1209,32 @@ impl DfPnSolver {
             param_deferred_penalty_floor: false,
             param_tca_use_shallow_gate: false,
             diag_deferred_frames: 0,
+            diag_or_nodes: 0,
+            diag_or_recursions: 0,
+            diag_and_nodes: 0,
+            diag_and_recursions: 0,
+            diag_trace_count: 0,
+            v3_tt: rustc_hash::FxHashMap::default(),
+            v3_path: rustc_hash::FxHashMap::default(),
+            v3_nodes: 0,
+            param_v3_local_exp: true,
+            v3_rep_memo: super::repetition_memo::RepetitionMemo::new(1 << 16),
+            param_v3_dominance: false,
+            v3_dom_fires: 0,
+            v3_rep_inserts: 0,
+            v3_rep_hits: 0,
+            param_v3_rep_cache: false,
+            param_v3_dag: true,
+            v3_dag_resets: 0,
+            param_v3_proof_hand: false,
+            v3_proven: rustc_hash::FxHashMap::default(),
+            v3_disproven: rustc_hash::FxHashMap::default(),
+            v3_ph_hits: 0,
+            v3_ply_total: [0; 64],
+            v3_ply_unique: [0; 64],
+            v3_ply_seen: rustc_hash::FxHashSet::default(),
+            v3_sel_dumped: [0; 8],
+            v3_trace_cnt: 0,
             diag_deferred_penalty_sum: 0,
             diag_tca_shallow_fire: 0,
             diag_tca_shallow_would_fire: 0,
@@ -1571,6 +1729,35 @@ impl DfPnSolver {
         self
     }
 
+    /// Phase 33: mid_v3 で LocalExpansion refinement を駆動するか (案②)．
+    /// 詳細: [`DfPnSolver::param_v3_local_exp`]．
+    pub fn set_v3_local_exp(&mut self, on: bool) -> &mut Self {
+        self.param_v3_local_exp = on;
+        self
+    }
+
+    /// Phase 33b: LE path で KH IsInferior dominance + RepetitionMemo を有効化する．
+    /// 詳細: [`DfPnSolver::param_v3_dominance`]．**注意**: 29te では sound だが clean TT が
+    /// path 依存 dominance 結果を再利用できず逆に遅くなる (119K→776K) ことが実測済 (gated, default off)．
+    pub fn set_v3_dominance(&mut self, on: bool) -> &mut Self {
+        self.param_v3_dominance = on;
+        self
+    }
+
+    /// Phase 33c: LE path で KH EliminateDoubleCount (DAG δ 二重計上除去) を有効化する．
+    /// 詳細: [`DfPnSolver::param_v3_dag`]．
+    pub fn set_v3_dag(&mut self, on: bool) -> &mut Self {
+        self.param_v3_dag = on;
+        self
+    }
+
+    /// Phase 33d: LE path で hand-aware proof/disproof reuse (KH proof_hand) を有効化する．
+    /// 詳細: [`DfPnSolver::param_v3_proof_hand`]．
+    pub fn set_v3_proof_hand(&mut self, on: bool) -> &mut Self {
+        self.param_v3_proof_hand = on;
+        self
+    }
+
     /// Phase 26b: 集約 disproof を remaining scope で store する (root cause fix)．
     /// 詳細: [`DfPnSolver::param_scope_disproof`]．
     pub fn set_scope_disproof(&mut self, on: bool) -> &mut Self {
@@ -1602,6 +1789,49 @@ impl DfPnSolver {
     /// Phase 22: TCA extension formula を KH `max(thpn, pn+1)` clamp 式にするか．
     pub fn set_tca_kh_clamp(&mut self, on: bool) -> &mut Self {
         self.param_tca_kh_clamp = on;
+        self
+    }
+
+    /// Phase 30: KH coherent scale mode を有効化 (seed unit=2 + 完全 comparer)．
+    /// 詳細: [`DfPnSolver::param_kh_scale`]．
+    pub fn set_kh_scale(&mut self, on: bool) -> &mut Self {
+        self.param_kh_scale = on;
+        self
+    }
+
+    /// Phase 30: 完全 KH comparer (δ tie-break) を unit-16 でも有効化．
+    pub fn set_kh_full_comparer(&mut self, on: bool) -> &mut Self {
+        self.param_kh_full_comparer = on;
+        self
+    }
+
+    /// Phase 30: mid_v2 の OR 子展開で合駒 capture cross-deduction を有効化．
+    pub fn set_capture_dedup(&mut self, on: bool) -> &mut Self {
+        self.param_capture_dedup = on;
+        self
+    }
+
+    /// Phase 31: 子の seed pn を king-escape 難易度で enrich する (default OFF)．
+    pub fn set_rich_seed(&mut self, on: bool) -> &mut Self {
+        self.param_rich_seed = on;
+        self
+    }
+
+    /// Phase 31: mid_v2 AND ノードで一般 合駒 cross-deduction を有効化 (default OFF)．
+    pub fn set_cross_dedup(&mut self, on: bool) -> &mut Self {
+        self.param_cross_dedup = on;
+        self
+    }
+
+    /// Phase 31: kh_full_comparer の δ tie-break を AND ノードのみに限定 (default OFF)．
+    pub fn set_kh_comparer_and_only(&mut self, on: bool) -> &mut Self {
+        self.param_kh_comparer_and_only = on;
+        self
+    }
+
+    /// Phase 31: mid_v2 AND ノードに PNS の 無駄合い filter を適用 (default OFF)．
+    pub fn set_muda_filter(&mut self, on: bool) -> &mut Self {
+        self.param_muda_filter = on;
         self
     }
 
@@ -1957,6 +2187,12 @@ impl DfPnSolver {
     /// 最短手数探索の有無を設定する．
     ///
     /// `false` にすると最初に見つかった詰み手順をそのまま返す(高速化)．
+    /// Phase 31: find_shortest の per-iter refinement cap override (0 = 旧 formula)．
+    pub fn set_refine_iter_cap(&mut self, cap: u64) -> &mut Self {
+        self.param_refine_iter_cap = cap;
+        self
+    }
+
     pub fn set_find_shortest(&mut self, v: bool) -> &mut Self {
         self.find_shortest = v;
         self
@@ -2257,10 +2493,16 @@ impl DfPnSolver {
             self.table.look_up(pos_key, hand, remaining, neighbor_scan)
         };
         if result.0 == PN_UNIT && result.1 == PN_UNIT && result.2 == 0 {
-            // TT ミス: Deep df-pn バイアスを適用(深い ply のみ)
+            // TT ミス: Deep df-pn バイアスを適用(深い ply のみ)．
+            // Phase 31: kh_scale (unit-2 coherent) では適用しない．この PN_UNIT スケール
+            // バイアスは TT-miss を sentinel `(PN_UNIT,PN_UNIT)` から `(PN_UNIT+k·PN_UNIT,..)` へ
+            // 書き換え，seed-branch の guard `pn_tt==PN_UNIT` を bypass させる．結果 deep ply の
+            // 子に unit-16 値が unit-2 閾値系へ注入され爆発する (旧 kh_scale 反証の confound)．
             let ply = (self.depth as u32).saturating_sub(remaining as u32);
             let half_depth = self.depth / 2;
-            if ply > half_depth {
+            // Phase 31: kh_scale も decouple も init_pn_dn_kh seed を使うため，bias の
+            // unit-16 注入は両者の seed guard を bypass する．両 mode で gate off する．
+            if ply > half_depth && !self.param_kh_scale && !self.param_decouple_edge_cost {
                 let biased_pn = PN_UNIT + (ply - half_depth) / self.param_deep_dfpn_r * PN_UNIT;
                 (biased_pn, PN_UNIT, 0)
             } else {
@@ -2345,7 +2587,7 @@ impl DfPnSolver {
     #[inline]
     /// 祖先に同一 pos_key かつ hand >= child の node があれば，その path index (= 深さ) を返す
     /// (KH `VisitHistory::IsInferior` 相当)．Phase 29: repetition taint の rep_start に使う．
-    fn is_dominated_in_path(&self, child_pos_key: u64, child_hand: &[u8; HAND_KINDS]) -> Option<u32> {
+    pub(super) fn is_dominated_in_path(&self, child_pos_key: u64, child_hand: &[u8; HAND_KINDS]) -> Option<u32> {
         if !self.param_use_visit_history_dominance { return None; }
         for i in 0..self.path_len {
             if self.path_pos_key[i] == child_pos_key
@@ -7147,7 +7389,13 @@ impl DfPnSolver {
         use super::mid_v2::{MidLocalExpansion, MidSearchResult};
 
         // Phase 15 visit count 診断 (board.hash がここで使えるが path_set は後で push される)．
-        *self.mid_v2_visit_counts.entry(board.hash).or_insert(0) += 1;
+        {
+            let e = self.mid_v2_visit_counts.entry(board.hash).or_insert(0);
+            if *e == 0 {
+                self.mid_v2_first_ply_count[(ply as usize).min(63)] += 1;
+            }
+            *e += 1;
+        }
 
         // Phase 25 診断 (visit_diag): per-ply unique/total 分布用に full_hash と
         // first_ply を記録する．mid_v2 経路で visit_summary() を機能させるため．
@@ -7211,8 +7459,12 @@ impl DfPnSolver {
         };
 
         // children 生成 (OR: check moves, AND: legal moves)
+        // Phase 31: AND ノードで param_muda_filter なら PNS の 無駄合い filter 付き
+        // evasion generator を使い，futile 合駒を除外して deep AND breadth を削る．
         let moves_vec: Vec<Move> = if or_node {
             self.generate_check_moves_cached(board).into_iter().collect()
+        } else if self.param_muda_filter {
+            self.generate_defense_moves_inner(board, false).into_iter().collect()
         } else {
             movegen::generate_legal_moves(board)
         };
@@ -7302,14 +7554,26 @@ impl DfPnSolver {
             // find_shortest でも 29 手へ回復できず PV 品質が退行するため gate は維持する．
             let mut mate_in_1 = false;
             let mut mate_move_for_or: Option<Move> = None;
-            if !or_node && pn_tt == PN_UNIT && dn_tt == PN_UNIT
-                && self.depth <= self.param_obvious_final_max_depth {
-                let checks = self.generate_check_moves_cached(board);
-                if !checks.is_empty() {
-                    let us = board.turn;
-                    if let Some(mm) = board.mate_move_in_1ply(checks.as_slice(), us) {
-                        mate_in_1 = true;
-                        mate_move_for_or = Some(mm);
+            let mut capture_proven = false;
+            if !or_node && pn_tt == PN_UNIT && dn_tt == PN_UNIT {
+                let obvious_gate = self.depth <= self.param_obvious_final_max_depth;
+                if obvious_gate || self.param_capture_dedup {
+                    let checks = self.generate_check_moves_cached(board);
+                    if !checks.is_empty() {
+                        if obvious_gate {
+                            let us = board.turn;
+                            if let Some(mm) = board.mate_move_in_1ply(checks.as_slice(), us) {
+                                mate_in_1 = true;
+                                mate_move_for_or = Some(mm);
+                            }
+                        }
+                        // Phase 30: 合駒 capture cross-deduction．1 手詰でない first-visit OR 子で，
+                        // 取り王手後が既証明 (hand dominance) なら展開せず証明確定 (try_capture_tt_proof
+                        // が child OR を proven で store する)．md は下の init_pn==0 分岐で TT から復元．
+                        if !mate_in_1 && self.param_capture_dedup
+                            && self.try_capture_tt_proof(board, &checks, child_remaining) {
+                            capture_proven = true;
+                        }
                     }
                 }
             }
@@ -7339,6 +7603,22 @@ impl DfPnSolver {
                 );
             }
 
+            // Phase 31: rich seed — 詰める側 (attacker.opponent) の玉 safe_escapes を
+            // pn enrich 用に child 局面で計算 (gated)．heuristic_and_pn と同じ X-ray danger 法．
+            let rich_escape_pn: u32 = if self.param_rich_seed {
+                let mated = self.attacker.opponent();
+                if let Some(ksq) = board.king_square(mated) {
+                    let kmoves = attack::step_attacks(mated, PieceType::King, ksq);
+                    let our_occ = board.occupied[mated.index()];
+                    let danger = board.compute_king_danger(mated, ksq);
+                    (kmoves & !our_occ & !danger).count() as u32 * PN_UNIT
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
             board.undo_move(m, captured);
 
             // Phase 15 (v0.94.0): clamp を problem 規模で調整．
@@ -7346,15 +7626,35 @@ impl DfPnSolver {
             let (init_pn, init_dn, is_first) = if mate_in_1 {
                 // Phase 16: 1 手詰 detection 成功．child OR proven (pn=0, dn=INF, md=1)．
                 (0, INF, false)
+            } else if capture_proven {
+                // Phase 30: 合駒 capture cross-deduction で証明済 (TT に store 済)．
+                // md は下の init_pn==0 分岐で TT から復元する．
+                (0, INF, false)
             } else if pn_tt == PN_UNIT && dn_tt == PN_UNIT {
-                let (hp, hd) = if self.param_decouple_edge_cost {
-                    // Phase 25: edge_cost を pn から外し，純 KH df-pn+ 難易度推定のみ使う．
-                    // move 選好は move_brief_eval tie-break が担う (KH と同じ分離)．
-                    if or_node {
+                let (hp, hd) = if self.param_kh_scale {
+                    // Phase 30: KH coherent scale．純 KH InitialPnDn を kPnDnUnit=2
+                    // スケールへ縮約 (PN_UNIT/2 = 8 で除算)．これにより MidLocalExpansion
+                    // の epsilon=1 / extend +1 / deferred floor=1 が KH の絶対定数と
+                    // 完全一致し，δ tie-break (set_kh_full_comparer) が意味を持つ．
+                    let (p, d) = if or_node {
                         super::init_pn_dn_or_kh(board, m, self.attacker)
                     } else {
                         super::init_pn_dn_and_kh(board, m, self.attacker)
-                    }
+                    };
+                    let div = (PN_UNIT / 2).max(1);
+                    ((p / div).max(1), (d / div).max(1))
+                } else if self.param_decouple_edge_cost {
+                    // Phase 25: edge_cost を pn から外し，純 KH df-pn+ 難易度推定のみ使う．
+                    // move 選好は move_brief_eval tie-break が担う (KH と同じ分離)．
+                    // Phase 31: decouple seed は多数の王手で (pn,dn) が tie し best-child flicker を
+                    // 起こす (trace で確認: 同一 pn=32,dn=16 の兄弟が回転)．rich_escape_pn (詰める側
+                    // 玉の機動性) を pn に加算して tie を割り，commit を安定させる (rich_seed ON 時のみ)．
+                    let (p, d) = if or_node {
+                        super::init_pn_dn_or_kh(board, m, self.attacker)
+                    } else {
+                        super::init_pn_dn_and_kh(board, m, self.attacker)
+                    };
+                    (p.saturating_add(rich_escape_pn), d)
                 } else if or_node {
                     let pn_h = if let Some(ksq) = target_king_sq {
                         super::edge_cost_or(m, ksq).max(clamp_value)
@@ -7363,11 +7663,12 @@ impl DfPnSolver {
                     };
                     let (pn_kh, dn_kh) = super::init_pn_dn_or_kh(board, m, self.attacker);
                     let pn_h2 = if pn_kh > PN_UNIT { pn_h.saturating_add(pn_kh - PN_UNIT) } else { pn_h };
-                    (pn_h2, dn_kh)
+                    // Phase 31: king-escape 難易度を pn に加算 (rich_seed OFF なら 0)．
+                    (pn_h2.saturating_add(rich_escape_pn), dn_kh)
                 } else {
                     let pn_h = super::edge_cost_and(m).max(clamp_value);
                     let (_pn_kh, dn_kh) = super::init_pn_dn_and_kh(board, m, self.attacker);
-                    (pn_h, dn_kh)
+                    (pn_h.saturating_add(rich_escape_pn), dn_kh)
                 };
                 (hp, hd, true)
             } else {
@@ -7406,12 +7707,16 @@ impl DfPnSolver {
             or_node, moves_vec, initial_results, full_hash_self,
             self.param_kh_dml, us_is_black);
 
+        // Phase 30: KH coherent comparer (δ tie-break)．set_move_evals の前に設定する．
+        expansion.set_kh_full_comparer(self.param_kh_scale || self.param_kh_full_comparer);
+        expansion.set_kh_full_and_only(self.param_kh_comparer_and_only);
+
         // Phase 23 (G4): move_brief_eval を tie-break として使う．
         // KH `SearchResultComparer` 相当: phi 同点で `mp_[i].value` 比較．
-        // king_sq は side-to-move の自玉 (KH `n.KingSquare()` 相当)．
-        // OR node なら attacker，AND node なら defender (= attacker.opponent)．
-        let own_king_color = if or_node { self.attacker } else { self.attacker.opponent() };
-        if let Some(ksq) = board.king_square(own_king_color) {
+        // king_sq は KH `n.KingSquare()` = **常に受け方 (詰まされる側) の玉** (= attacker.opponent)．
+        // Phase 33l: OR ノードで attacker 自玉を使う旧実装はバグ (KH は AndColor 玉固定)．距離項が
+        // 反転し OR ノードの move ordering が KH と乖離していた (mid_v3 でも同型バグを発見・修正)．
+        if let Some(ksq) = board.king_square(self.attacker.opponent()) {
             let evals: Vec<i32> = expansion
                 .moves
                 .iter()
@@ -7473,6 +7778,8 @@ impl DfPnSolver {
         let orig_inc_flag = *inc_flag;
         let mut cur_thpn = thpn;
         let mut cur_thdn = thdn;
+        // Phase 31 診断: このノードで実際に mid_v2 再帰した子の数．
+        let mut recursions_this_node: u64 = 0;
 
         let mut curr = self.mid_expansion_stack[stack_idx].current_result();
         if self.mid_expansion_stack[stack_idx].does_have_old_child() {
@@ -7522,6 +7829,7 @@ impl DfPnSolver {
                 {
                     initial
                 } else {
+                    recursions_this_node += 1;
                     self.mid_v2(board, child_thpn, child_thdn, ply + 1, !or_node, inc_flag,
                                 child_md_budget)
                 }
@@ -7536,12 +7844,47 @@ impl DfPnSolver {
                 {
                     cached
                 } else {
+                    recursions_this_node += 1;
                     self.mid_v2(board, child_thpn, child_thdn, ply + 1, !or_node, inc_flag,
                                 child_md_budget)
                 }
             };
 
             board.undo_move(best_move, captured);
+
+            // Phase 31: 一般 合駒 cross-deduction (gated)．AND ノードで drop 合駒 defense が
+            // refute (child pn=0) された直後，同一マスの兄弟 drop を `cross_deduce_children`
+            // (capture 後局面の hand-dominance proof 転用) で展開せず証明する．
+            // old `mid` の inline cross-deduce (solver.rs:6085) を mid_v2 へ移植．board は
+            // undo 後に AND 親局面へ戻っているため cross_deduce_children の前提を満たす．
+            if self.param_cross_dedup
+                && !or_node
+                && best_move.is_drop()
+                && child_result.pn == 0
+            {
+                let target_sq = best_move.to_sq();
+                let sibling_drops: Vec<Move> = self.mid_expansion_stack[stack_idx]
+                    .moves
+                    .iter()
+                    .copied()
+                    .filter(|mj| mj.is_drop() && mj.to_sq() == target_sq)
+                    .collect();
+                if sibling_drops.len() >= 2 {
+                    let node_remaining = (self.depth.saturating_sub(ply)) as u16;
+                    let mut children: ArrayVec<(Move, u64, u64, [u8; HAND_KINDS]), MAX_MOVES> =
+                        ArrayVec::new();
+                    for mj in &sibling_drops {
+                        let cap = board.do_move(*mj);
+                        let cpk = position_key(board);
+                        let chand = board.hand[self.attacker.index()];
+                        board.undo_move(*mj, cap);
+                        if children.try_push((*mj, 0, cpk, chand)).is_err() {
+                            break;
+                        }
+                    }
+                    self.cross_deduce_children(board, best_move, &children, node_remaining);
+                }
+            }
 
             // KH multi_pv=1 相当: child.phi(or_node)==0 で immediate proof/refutation．
             let child_phi = child_result.phi(or_node);
@@ -7589,6 +7932,41 @@ impl DfPnSolver {
             } else if *inc_flag == 0 && orig_inc_flag > 0 {
                 break;
             }
+        }
+
+        // Phase 31 診断: ノードあたり展開子数を OR/AND 別に集計．
+        if or_node {
+            self.diag_or_nodes += 1;
+            self.diag_or_recursions += recursions_this_node;
+        } else {
+            self.diag_and_nodes += 1;
+            self.diag_and_recursions += recursions_this_node;
+        }
+
+        // Phase 31 診断: best-child 選択 trace (bounded)．param_root_trace 時，ply<=param_trace_ply の
+        // ノードで，各訪問の選択 best child + 上位 3 子の (pn,dn,eval) を出力．再訪間で best が変われば
+        // unfocused re-descent (KH と分岐する点) を可視化する．
+        let trace_visit = if self.param_root_trace && (ply as u32) <= self.param_trace_ply {
+            self.mid_v2_visit_counts.get(&board.hash).copied().unwrap_or(0)
+        } else {
+            0
+        };
+        // 再訪 (visit>=2) のみ log: re-descent 間の best-child flicker を可視化する．
+        if trace_visit >= 2 && self.diag_trace_count < 400 {
+            let visit = trace_visit;
+            let exp = &self.mid_expansion_stack[stack_idx];
+            let best = if exp.empty() { "-".to_string() } else { exp.best_move().to_usi() };
+            let kids_str: String = exp
+                .trace_children(3)
+                .iter()
+                .map(|(m, pn, dn, ev)| format!(" {}({},{},e{})", m.to_usi(), pn, dn, ev))
+                .collect();
+            eprintln!(
+                "[trace] ply{} n{:04x} v{} {} pn={} dn={} best={} |{}",
+                ply, board.hash & 0xFFFF, visit, if or_node { "OR " } else { "AND" },
+                curr.pn, curr.dn, best, kids_str
+            );
+            self.diag_trace_count += 1;
         }
 
         *inc_flag = (*inc_flag).min(orig_inc_flag);
@@ -7877,10 +8255,12 @@ impl DfPnSolver {
         // KH `komoring_heights.cpp::NextPnDnThresholds`．
         // param_root_ids_enable=false で INF-1 直接 (旧挙動)．
         let result = if self.param_root_ids_enable {
-            let mut thpn: u32 = PN_UNIT;
-            let mut thdn: u32 = PN_UNIT;
+            // Phase 30: KH coherent scale では kPnDnUnit=2 から開始 (KH SearchEntry 相当)．
+            let start_th: u32 = if self.param_kh_scale { 2 } else { PN_UNIT };
+            let mut thpn: u32 = start_th;
+            let mut thdn: u32 = start_th;
             let mut inc_flag = 0u32;
-            let mut last = super::mid_v2::MidSearchResult::new_unknown(PN_UNIT, PN_UNIT);
+            let mut last = super::mid_v2::MidSearchResult::new_unknown(start_th, start_th);
             loop {
                 inc_flag = 0;
                 let r = self.mid_v2(board, thpn, thdn, 0, true, &mut inc_flag, md_budget);
@@ -8014,7 +8394,11 @@ impl DfPnSolver {
         // budget=27 iter の re-walk storm (29te: 1.5M nodes / +33 misses = 純粋な
         // 再走査) を抑制する．改善時は *2 cascade で converge を許容するため，
         // 真に shorter な mate があれば段階拡大で到達できる．iter0*8 は過大だった．
-        let mut per_iter_cap: u64 = (iter0_nodes.saturating_mul(2)).max(200_000);
+        let mut per_iter_cap: u64 = if self.param_refine_iter_cap > 0 {
+            self.param_refine_iter_cap
+        } else {
+            (iter0_nodes.saturating_mul(2)).max(200_000)
+        };
         loop {
             if self.nodes_searched >= self.max_nodes || self.timed_out { break; }
             if best_d <= 1 { break; }

@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 64dcd44
 date: 2026-05-30
 target: [rust/maou_shogi/src/dfpn/proof_hand.rs, rust/maou_shogi/src/dfpn/solver.rs, rust/maou_shogi/src/dfpn/mod.rs, rust/maou_shogi/src/dfpn/tests.rs]
 risk: high

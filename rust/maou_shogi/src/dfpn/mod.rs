@@ -36,6 +36,7 @@ mod solver;
 mod pns;
 mod delayed_move_list;
 mod mid_v2;
+mod mid_v3;
 mod proof_hand;
 mod path_key;
 mod repetition_memo;
@@ -313,6 +314,20 @@ fn edge_cost_and(m: Move) -> u32 {
 /// OR ノード(攻め方の王手)の per-move (pn, dn) tuple を返す．
 /// KH `initial_estimation.hpp:87-119` と等価．
 ///
+/// KH `attackers_to(to)` は玉を含むため，玉が `to` に隣接していれば support を +1 する
+/// (compute_checkers_at は玉を除外するので，InitialPnDn を KH と一致させる補正)．
+#[inline]
+pub(super) fn king_supports(board: &Board, to: Square, color: crate::types::Color) -> u32 {
+    match board.king_square(color) {
+        Some(k) => {
+            let dc = (k.col() as i32 - to.col() as i32).abs();
+            let dr = (k.row() as i32 - to.row() as i32).abs();
+            u32::from(dc <= 1 && dr <= 1 && (dc != 0 || dr != 0))
+        }
+        None => 0,
+    }
+}
+
 /// パラメータは KH デフォルト (all = PN_UNIT) を使用．
 /// - 受け駒 ≥ 2: pn += PN_UNIT (後回し)
 /// - 攻め支援 + drop_bonus > 受け支援: dn += PN_UNIT (探索優先)
@@ -330,8 +345,10 @@ pub(super) fn init_pn_dn_or_kh(
     let to = m.to_sq();
     let att_bb = board.compute_checkers_at(to, attacker);
     let def_bb = board.compute_checkers_at(to, attacker.opponent());
-    let attack_support = att_bb.count();
-    let defense_support = def_bb.count();
+    // KH `attackers_to(to)` は玉も含む (compute_checkers_at は玉を除外する) ので，
+    // KH InitialPnDn と一致させるため玉が `to` に隣接していれば support に +1 する．
+    let attack_support = att_bb.count() + king_supports(board, to, attacker);
+    let defense_support = def_bb.count() + king_supports(board, to, attacker.opponent());
     let drop_bonus: u32 = if m.is_drop() { 1 } else { 0 };
 
     if defense_support >= 2 {
@@ -392,8 +409,9 @@ pub(super) fn init_pn_dn_and_kh(
     let to = m.to_sq();
     let att_bb = board.compute_checkers_at(to, attacker);
     let def_bb = board.compute_checkers_at(to, defender);
-    let attack_support = att_bb.count();
-    let defense_support = def_bb.count();
+    // KH `attackers_to` は玉も含むので，玉が `to` 隣接なら support に +1 (KH InitialPnDn 一致)．
+    let attack_support = att_bb.count() + king_supports(board, to, attacker);
+    let defense_support = def_bb.count() + king_supports(board, to, defender);
     let drop_bonus: u32 = if m.is_drop() { 1 } else { 0 };
 
     if attack_support < defense_support + drop_bonus {

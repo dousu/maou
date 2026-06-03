@@ -1075,27 +1075,59 @@ use crate::types::{Color, PieceType};
         let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
         // Phase 29: baseline vs KH repetition (targeted disproof scoping)．find_shortest=false．
         // 決定的計測: kh_repetition で unique(90K)が下がり Mate(29)維持なら GHI/repetition 層が真因．
-        let configs: &[(&str, fn(&mut DfPnSolver))] = &[
-            ("baseline      ", |_s| {}),
-            ("kh_repetition ", |s| { s.set_kh_repetition(true); }),
+        // Phase 30 epsilon sweep: 既存 unit-16 baseline で commitment-depth (epsilon)
+        // が breadth を動かすか直接プローブ．eps 大 = best child へ深くコミット (depth-first)．
+        // Phase 30 deferred-penalty sweep (unit-16 baseline)．KH の合駒爆発抑制機構．
+        // 現 default は denom=0 (OFF)．29te は合駒重 → penalty が breadth を削るか．
+        // Phase 30: W = d2+obvious+is_sum_delta (77K, -53%) を tune + 追加機構を探る．
+        // W は各 config で展開 (fn ポインタなのでクロージャ capture 不可)．
+        // Phase 30: W (77K) に δ-comparer 他を追加して compounding を探る．
+        // Phase 30: 29te core (fs=F)．W + 合駒 capture cross-deduction の効果を測る．
+        fn w(s: &mut DfPnSolver) { s.set_deferred_penalty_denom(2); s.set_deferred_penalty_floor(true); s.set_obvious_final_max_depth(99); s.set_is_sum_delta_node(true); }
+        // W = d2+obvious+is_sum_delta (77K, -53%)．capdedup = 合駒 capture cross-deduction (71K)．
+        // Phase 31 COHERENT kh_scale 再検証: 旧 kh_scale 反証 (268K unique) は deep_dfpn bias が
+        // unit-16 値を unit-2 閾値系へ注入する confound だった．bias を kh_scale 下で gate off し，
+        // epsilon=1 (KH default) / KH clamp extend / root IDS ratchet を coherent に積む．
+        // Phase 31 検証済プログレッション (全 Mate-29, find_shortest=false core):
+        //   base 162,550/90,029 → W 77,112/50,197 → W+decouple 61,668/32,127 → WDC 56,689/29,938．
+        // decouple = init_pn_dn_kh seed (phi 平坦) + move_brief_eval **主導** ordering (KH MovePicker
+        // primacy proxy)．単体では悪化 (220K) だが W (branching collapse) と compound で −36% unique．
+        // capdedup = 合駒 capture cross-deduction (additive −7%)．
+        // NOTE: eps≠2 / denom≠2 は node を減らすが core PV を Mate-31 に変える (soundness gate 不可)．
+        fn wdc(s: &mut DfPnSolver) { w(s); s.set_decouple_edge_cost(true); s.set_capture_dedup(true); }
+        // Phase 31 検証済 (全 Mate-29):
+        //   core (fs=F): base 162,550 → W 77,112 → W+decouple 61,668 → WDC 56,689 (−65%, unique 90K→29,938)．
+        //   canonical (fs=T, KH 19,270 と同指標=最短 29): refine_iter_cap で ~200K floor 除去 →
+        //     WDC cap=5K = 61,689 (旧 256,689 から −76%)．canonical ≈ core を達成．
+        // 反証: rich_seed/cross_dedup/kh_scale(coherent 80K)/fullcmp(Mate31)/andonly(+18%)/eps≠2/denom≠2．
+        // 残ギャップ = core selectivity (unique 29,938 vs KH 2,094 = 14×) = KH MovePicker(SEE/history) 相当．
+        // Phase 31 診断結論: per-node selectivity は KH 等価 (OR_expand=1.33≈理想)．残 14× は
+        // global footprint/reuse (1visit 71%, reuse 1.89× vs KH 9.2×)．trace で best-child flicker
+        // (tied pn=32,dn=16 の兄弟が回転) を確認したが tie 割り (rich) は footprint 不減・Mate-31 化．
+        // → 真因 = 詰め手同定 (move-ordering 品質) + scale dynamics．coherent KH core port が要．
+        let configs: &[(&str, bool, u64, fn(&mut DfPnSolver))] = &[
+            ("base   core ", false, 0, |_s| {}),
+            ("W      core ", false, 0, |s| { w(s); }),
+            ("WDC    core ", false, 0, |s| { wdc(s); }),
+            ("WDC    canon", true,  5_000, |s| { wdc(s); }),
         ];
-        for (label, cfg) in configs {
+        for (label, fs, cap, cfg) in configs {
             let mut board = Board::new();
             board.set_sfen(sfen).unwrap();
-            let mut solver = DfPnSolver::with_timeout(31, 50_000_000, 32767, 300);
-            solver.set_find_shortest(false);
+            let mut solver = DfPnSolver::with_timeout(31, 10_000_000, 32767, 120);
+            solver.set_find_shortest(*fs);
             cfg(&mut solver);
+            if *cap > 0 { solver.set_refine_iter_cap(*cap); }
             let result = solver.solve_via_v2(&mut board);
-            let (total, proof_len, conf, refut) = solver.table.proven_table_stats();
             let unique = solver.mid_v2_visit_counts.len();
+            let or_w = if solver.diag_or_nodes > 0 { solver.diag_or_recursions as f64 / solver.diag_or_nodes as f64 } else { 0.0 };
             match &result {
                 TsumeResult::Checkmate { moves, nodes_searched } => {
-                    eprintln!(
-                        "[diag] {label}: {} moves, {:>8} nodes, {:>7} unique | TT: {} total / {} proof / {} confirmed_disproof / {} refutable",
-                        moves.len(), nodes_searched, unique, total, proof_len, conf, refut
-                    );
+                    eprintln!("[diag] {label}: {:>2} moves, {:>8} nodes, {:>7} unique | OR_expand={:.2} reuse={:.2}x",
+                        moves.len(), nodes_searched, unique, or_w,
+                        *nodes_searched as f64 / unique.max(1) as f64);
                 }
-                other => eprintln!("[diag] {label}: NON-MATE {other:?} <<< SOUNDNESS!"),
+                other => eprintln!("[diag] {label}: NON-SOLVE {} nodes ({other:?})", solver.nodes_searched),
             }
         }
     }
@@ -1166,6 +1198,69 @@ use crate::types::{Color, PieceType};
 
         if root_pn != 0 {
             panic!("IDS-MID only should prove 29te checkmate, got pn={}", root_pn);
+        }
+    }
+
+    /// Phase 32: mid_v3 (ground-up KH コア port) の correctness + 29te 計測．
+    ///
+    /// **[SLOW]** 29te を解く．
+    #[test]
+    #[ignore]
+    fn test_mid_v3() {
+        // 1 手詰 correctness．
+        {
+            let mut b = Board::empty();
+            b.set_sfen("8k/9/7G1/9/9/9/9/9/9 b G 1").unwrap();
+            let mut s = DfPnSolver::with_timeout(3, 1_000_000, 32767, 30);
+            match s.solve_via_v3(&mut b) {
+                TsumeResult::Checkmate { moves, nodes_searched } => eprintln!(
+                    "[v3] 1te: {} moves ({}), {} nodes",
+                    moves.len(), moves.first().map(|m| m.to_usi()).unwrap_or_default(), nodes_searched),
+                other => eprintln!("[v3] 1te FAIL: {other:?}"),
+            }
+        }
+        // 3 手詰 correctness．
+        {
+            let mut b = Board::empty();
+            b.set_sfen("8k/9/6R2/9/9/9/9/9/9 b G 1").unwrap();
+            let mut s = DfPnSolver::with_timeout(7, 1_000_000, 32767, 30);
+            match s.solve_via_v3(&mut b) {
+                TsumeResult::Checkmate { moves, nodes_searched } => {
+                    let u: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                    eprintln!("[v3] 3te: {} moves {:?}, {} nodes", moves.len(), u, nodes_searched);
+                }
+                other => eprintln!("[v3] 3te FAIL: {other:?}"),
+            }
+        }
+        // 29te 計測 (budget 制限つき; v3 初版なので爆発時は budget で止める)．
+        {
+            let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+            let mut b = Board::new();
+            b.set_sfen(sfen).unwrap();
+            let mut s = DfPnSolver::with_timeout(31, 5_000_000, 32767, 120);
+            match s.solve_via_v3(&mut b) {
+                TsumeResult::Checkmate { moves, nodes_searched } => {
+                    let usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                    eprintln!("[v3] 29te: {} moves, {} nodes, {} tt | PV {:?}",
+                        moves.len(), nodes_searched, s.v3_tt.len(), usi);
+                    // PV を辿った終局面が本当に詰みか (合法手なし) 検証 = false mate 検出．
+                    let mut chk = Board::new();
+                    chk.set_sfen(sfen).unwrap();
+                    for m in &moves { chk.do_move(*m); }
+                    let final_legal = movegen::generate_legal_moves(&mut chk).len();
+                    let in_check = chk.is_in_check(chk.turn());
+                    eprintln!("[v3] 29te final: in_check={in_check}, legal_moves={final_legal} (詰み=in_check&&legal==0)");
+                    // Phase 33: LE path soundness 回帰ガード．canonical mate-29 + 真の詰み．
+                    // Phase 33k/l: KH 比較で seed 玉 support 欠落 + move_brief_eval 玉 (OR で攻め方自玉
+                    // を誤用) の 2 バグを発見・修正 → 75,351 → 53,902 nodes, canonical mate-29 復帰．
+                    // soundness ガード: 真の詰み (in_check && legal==0) + 奇数長 + 妥当長 + node 上限．
+                    assert!(in_check && final_legal == 0, "LE path PV 終局面は真の詰みであるべき (false mate 検出)");
+                    assert!(moves.len() % 2 == 1 && (29..=35).contains(&moves.len()),
+                        "LE path は妥当長の sound 詰み (29..=35, 奇数) を返すべき: {}", moves.len());
+                    assert!(nodes_searched < 60_000, "LE path 29te は < 60K nodes であるべき (seed+eval 修正で実測 ~54K)");
+                }
+                other => panic!("[v3] 29te NON-SOLVE: {other:?}, {} nodes, {} tt", s.v3_nodes, s.v3_tt.len()),
+            }
         }
     }
 

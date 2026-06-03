@@ -180,6 +180,15 @@ pub(super) struct MidLocalExpansion {
     /// sort 比較で phi が同点のとき tie-break に使う (小さいほうが優先)．
     /// 0 で初期化．solver.rs 側で `set_move_evals` を呼んで実値を投入．
     move_evals: Vec<i32>,
+    /// KH coherent mode (Phase 30): `child_ordering` で KH `SearchResultComparer`
+    /// の δ値 (基準 2) と amount (基準 5) tie-break を有効化する．既存 (false) は
+    /// δ tie-break を省略していた (PN_UNIT=16 スケールでは move 選択を悪化させたため)．
+    /// KH 同等の unit=2 スケール (param_kh_scale) と併用して初めて正しく機能する．
+    kh_full_comparer: bool,
+    /// Phase 31: `kh_full_comparer` を AND ノードのみに限定する．δ tie-break は OR ノードでは
+    /// 王手選択を変え非最短 (Mate-31) を誘発するが，deep breadth の主因は AND (defender) fan-out．
+    /// AND のみ δ を効かせれば mate 長 (OR の選択) を保ったまま defender selectivity を上げられる仮説．
+    kh_full_and_only: bool,
 }
 
 impl MidLocalExpansion {
@@ -215,6 +224,29 @@ impl MidLocalExpansion {
         kh_dml: bool,
         us_is_black: bool,
     ) -> Self {
+        Self::new_with_fh_dml_chuai(
+            or_node,
+            moves,
+            initial_results,
+            position_fh,
+            kh_dml,
+            us_is_black,
+            None,
+        )
+    }
+
+    /// Phase 33m: KH cross-square「無意味な中合い」束ねを有効化できる構築版．
+    /// `chuai` を渡すと build_delayed_chain_chuai 経由で合駒の breadth collapse を行う
+    /// (delayed_move_list.hpp:151-156)．`None` なら従来の same-to_sq のみ chain．
+    pub(super) fn new_with_fh_dml_chuai(
+        or_node: bool,
+        moves: Vec<Move>,
+        initial_results: Vec<MidSearchResult>,
+        position_fh: u64,
+        kh_dml: bool,
+        us_is_black: bool,
+        chuai: Option<&[bool]>,
+    ) -> Self {
         let n = moves.len();
 
         // Phase 11 (v0.90.0): DelayedMoveList chain 構築．AND ノードの同 to_sq
@@ -223,7 +255,7 @@ impl MidLocalExpansion {
         // final なら defer しない (= 初期 idx に含める)．これで AND の curr.pn=0 が
         // chain の 1 件目だけで成立する soundness 違反を防ぐ．
         // Phase 26: kh_dml=true で非駒打ち成/不成 deferral を追加 (build_delayed_chain 参照)．
-        let (dml_prev, dml_next) = build_delayed_chain(&moves, or_node, kh_dml, us_is_black);
+        let (dml_prev, dml_next) = build_delayed_chain_chuai(&moves, or_node, kh_dml, us_is_black, chuai);
 
         let mut idx: Vec<u32> = Vec::with_capacity(n);
         for i in 0..n {
@@ -280,6 +312,8 @@ impl MidLocalExpansion {
             deferred_penalty_floor: false,
             threshold_epsilon: 1,
             move_evals,
+            kh_full_comparer: false,
+            kh_full_and_only: false,
         };
         expansion.recalc_delta();
         expansion
@@ -293,14 +327,16 @@ impl MidLocalExpansion {
         self.move_evals = evals;
         // tie-break が変わるため KH comparer で再 sort．
         let or_node = self.or_node;
+        let kh_full = self.effective_kh_full();
         let results = &self.results;
         let me_evals = &self.move_evals;
         if self.excluded_moves < self.idx.len() {
             self.idx[self.excluded_moves..].sort_by(|&i, &j| {
-                child_ordering(
+                child_ordering_ex(
                     or_node,
                     &results[i as usize], me_evals[i as usize],
                     &results[j as usize], me_evals[j as usize],
+                    kh_full,
                 )
             });
         }
@@ -320,6 +356,23 @@ impl MidLocalExpansion {
     /// Phase 22: deferred penalty floor (`.max(1)`) を設定．
     pub(super) fn set_deferred_penalty_floor(&mut self, floor: bool) {
         self.deferred_penalty_floor = floor;
+    }
+
+    /// Phase 30: KH 完全 comparer (δ値 + amount tie-break) を有効化する．
+    /// `set_move_evals` の **前** に呼ぶこと (re-sort がこの flag を参照するため)．
+    pub(super) fn set_kh_full_comparer(&mut self, on: bool) {
+        self.kh_full_comparer = on;
+    }
+
+    /// Phase 31: kh_full_comparer を AND ノードのみに限定する (δ tie-break を OR で無効化)．
+    pub(super) fn set_kh_full_and_only(&mut self, on: bool) {
+        self.kh_full_and_only = on;
+    }
+
+    /// 現フレームで有効な kh_full 値 (and_only なら AND ノードのみ true)．
+    #[inline]
+    fn effective_kh_full(&self) -> bool {
+        self.kh_full_comparer && (!self.kh_full_and_only || !self.or_node)
     }
 
     /// Phase 21: has_old_child を !is_first_visit ベースで再計算 (旧ロジック)．
@@ -427,6 +480,19 @@ impl MidLocalExpansion {
     pub(super) fn best_move(&self) -> Move {
         let raw = self.idx[self.excluded_moves] as usize;
         self.moves[raw]
+    }
+
+    /// Phase 31 診断: idx 順 (探索順) 上位 k 子の (move, pn, dn, move_eval) を返す．
+    pub(super) fn trace_children(&self, k: usize) -> Vec<(Move, u32, u32, i32)> {
+        self.idx
+            .iter()
+            .skip(self.excluded_moves)
+            .take(k)
+            .map(|&i| {
+                let r = i as usize;
+                (self.moves[r], self.results[r].pn, self.results[r].dn, self.move_evals[r])
+            })
+            .collect()
     }
 
     /// FrontResult: 現在 best とされている child の SearchResult．
@@ -563,14 +629,16 @@ impl MidLocalExpansion {
         // re-sort: 現 best の評価が変わったので idx_ を更新
         // Phase 23 (G4 強化): KH SearchResultComparer 準拠 (phi → delta → len → eval)．
         let or_node = self.or_node;
+        let kh_full = self.effective_kh_full();
         let results = &self.results;
         let me_evals = &self.move_evals;
         if self.excluded_moves < self.idx.len() {
             self.idx[self.excluded_moves..].sort_by(|&i, &j| {
-                child_ordering(
+                child_ordering_ex(
                     or_node,
                     &results[i as usize], me_evals[i as usize],
                     &results[j as usize], me_evals[j as usize],
+                    kh_full,
                 )
             });
         }
@@ -717,15 +785,39 @@ fn child_ordering(
     b: &MidSearchResult,
     eb: i32,
 ) -> std::cmp::Ordering {
+    child_ordering_ex(or_node, a, ea, b, eb, false)
+}
+
+/// Phase 30: `kh_full` で KH `SearchResultComparer` 完全準拠 (δ値 + amount tie-break)．
+///
+/// `kh_full=false` (旧 default): φ値 → proven 詰み手数 → move_eval．δ値を省略する
+/// (PN_UNIT=16 スケールでは move 選択を悪化させたため: 29te 初回 190K→242K)．
+///
+/// `kh_full=true` (KH coherent, unit=2 スケール併用前提): KH 基準どおり
+/// φ値 (1) → δ値 (2) → proven 詰み手数 (3) → amount (5) → move_eval．unit=2 では
+/// δ値が小さい整数となり KH 本来の細かい ordering を再現する．
+#[inline]
+fn child_ordering_ex(
+    or_node: bool,
+    a: &MidSearchResult,
+    ea: i32,
+    b: &MidSearchResult,
+    eb: i32,
+    kh_full: bool,
+) -> std::cmp::Ordering {
     // 1. φ値
     let (pa, pb) = (a.phi(or_node), b.phi(or_node));
     if pa != pb {
         return pa.cmp(&pb);
     }
-    // 2. proven (pn==0) の詰み手数優先 (KH 基準 3)．
-    //    KH の δ値 tie-break (基準 2) は maou の PN_UNIT=16 スケールでは move 選択を
-    //    悪化させる (29te 初回 190K→242K, PV 29→31) ため**意図的に省略**する．
-    //    proven 兄弟の中で短い詰みを先頭に置くことは PV 品質に寄与し害が小さい．
+    // 2. δ値 (KH 基準 2)．kh_full のみ．
+    if kh_full {
+        let (da, db) = (a.delta(or_node), b.delta(or_node));
+        if da != db {
+            return da.cmp(&db);
+        }
+    }
+    // 3. proven (pn==0) の詰み手数優先 (KH 基準 3)．
     if a.pn == 0 && b.pn == 0 && a.mate_distance != b.mate_distance {
         return if or_node {
             a.mate_distance.cmp(&b.mate_distance) // OR: 短い詰みを優先
@@ -733,7 +825,13 @@ fn child_ordering(
             b.mate_distance.cmp(&a.mate_distance) // AND: 長い抵抗を優先
         };
     }
-    // 3. move_eval (KH `MoveBriefEvaluation`) tie-break
+    // 4. KH 基準 4 (disproven dn==0 の repetition_start 優先) は maou では未採用:
+    //    実測で一部テストが非終了化 (selection 変化で探索が発散) する一方 29te には無効だったため．
+    // 5. amount (KH 基準 5)．kh_full のみ．
+    if kh_full && a.amount != b.amount {
+        return a.amount.cmp(&b.amount);
+    }
+    // 6. move_eval (KH `MoveBriefEvaluation`) tie-break
     ea.cmp(&eb)
 }
 
@@ -745,11 +843,24 @@ fn child_ordering(
 ///   - 非駒打ち 成/不成: 成れる駒 (歩/角/飛 + 香 rank2/8) を OR/AND 両方で chain 化
 ///     ((from,to) 同一の成・不成ペアを束ね，先頭のみ展開・残りは prev final 待ち)．
 /// chain 上の prev が final になるまで next を idx_ に push しない．
-fn build_delayed_chain(
+pub(super) fn build_delayed_chain(
     moves: &[Move],
     or_node: bool,
     kh_dml: bool,
     us_is_black: bool,
+) -> (Vec<i32>, Vec<i32>) {
+    build_delayed_chain_chuai(moves, or_node, kh_dml, us_is_black, None)
+}
+
+/// `build_delayed_chain` の拡張版．`chuai` を渡すと KH `IsSame` の cross-square「無意味な中合い」
+/// 束ね (delayed_move_list.hpp:151-156) を有効化する．`chuai[i] == true` = move i が
+/// 「support 0 かつ 逆王手でない drop 中合い」= KH が後回しにすべきと判定する手．
+pub(super) fn build_delayed_chain_chuai(
+    moves: &[Move],
+    or_node: bool,
+    kh_dml: bool,
+    us_is_black: bool,
+    chuai: Option<&[bool]>,
 ) -> (Vec<i32>, Vec<i32>) {
     let n = moves.len();
     let mut prev = vec![-1i32; n];
@@ -791,7 +902,12 @@ fn build_delayed_chain(
         }
         let mut found = false;
         for h in heads.iter_mut() {
-            if dml_is_same(h.0, m) {
+            let same = if let Some(c) = chuai {
+                dml_is_same_chuai(h.0, m, c[h.1], c[i])
+            } else {
+                dml_is_same(h.0, m)
+            };
+            if same {
                 next[h.1] = i as i32;
                 prev[i] = h.1 as i32;
                 *h = (m, i);
@@ -852,6 +968,20 @@ fn dml_is_delayable(m: Move, or_node: bool, us_is_black: bool) -> bool {
 fn dml_is_same(m1: Move, m2: Move) -> bool {
     if m1.is_drop() && m2.is_drop() {
         m1.to_sq() == m2.to_sq()
+    } else if !m1.is_drop() && !m2.is_drop() {
+        m1.from_sq() == m2.from_sq() && m1.to_sq() == m2.to_sq()
+    } else {
+        false
+    }
+}
+
+/// `dml_is_same` の KH 完全版 (delayed_move_list.hpp:143-164)．
+/// `chuai1`/`chuai2` = それぞれの手が「support 0 かつ 逆王手でない drop 中合い」か．
+/// 駒打ち同士は，**同 to_sq** または **両者が無意味な中合い (cross-square)** なら後回し対象．
+#[inline]
+fn dml_is_same_chuai(m1: Move, m2: Move, chuai1: bool, chuai2: bool) -> bool {
+    if m1.is_drop() && m2.is_drop() {
+        m1.to_sq() == m2.to_sq() || (chuai1 && chuai2)
     } else if !m1.is_drop() && !m2.is_drop() {
         m1.from_sq() == m2.from_sq() && m1.to_sq() == m2.to_sq()
     } else {
