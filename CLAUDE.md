@@ -72,6 +72,7 @@ Full spec: [docs/memory-architecture.md](docs/memory-architecture.md).
 |---|---|---|
 | `reviews/YYYY-MM-DD-<title>.md` | Proposals + audit trail. `status:` in frontmatter. | yes |
 | `scratchpad/current.md` | Authoritative current state. | no (`.gitignore`d) |
+| `scratchpad/compass.md` | Curated campaign invariants + north-star metrics. Always loaded; prunable. | no (`.gitignore`d) |
 | `worklog/YYYY-MM-DD-HHMMSS.md` | One file per checkpoint, JST, immutable. | no (`.gitignore`d) |
 | `.claude/commands/checkpoint-context.md` | The only writer. | yes |
 | `.claude/commands/resume-context.md` | Read-only resume. | yes |
@@ -89,6 +90,13 @@ Full spec: [docs/memory-architecture.md](docs/memory-architecture.md).
 - MUST run `/checkpoint-context` before any context reset, long break,
   or handoff.
 - MUST use JST (`Asia/Tokyo`) for all timestamps and filenames.
+- MUST load `scratchpad/compass.md` at `/resume-context` and treat its
+  Invariants as binding guardrails (evaluate values against the SHA for
+  staleness).
+- MUST curate `scratchpad/compass.md` at every `/checkpoint-context`:
+  update North-star numbers (or write "unchanged"), add new do-not-redo
+  conclusions, delete/edit overturned invariants, and evict when over the
+  size cap. Never append-only.
 
 ## Code Exploration Policy (MUST)
 

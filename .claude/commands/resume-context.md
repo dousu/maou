@@ -45,6 +45,7 @@ Call the resolved path `$WL`.
 
 - `CLAUDE.md` (full)
 - `scratchpad/current.md` (full, if it exists)
+- `scratchpad/compass.md` (full, if it exists — 常時ロード)
 - `$WL` (full — one file, not all history)
 - `git status --short`
 - `git log -10 --oneline`
@@ -70,6 +71,9 @@ Surface drift in the brief; do not silently reconcile.
   todos, detected drift, and the names of `reviews/*.md` with
   `status: pending` (proposals, NOT policy).
 
+`compass.md` の Invariants は binding guardrail として扱う．North-star の値は
+Assumed（SHA で staleness を判定）．
+
 ### 5. Emit a compact brief (~30-40 lines)
 
 ```
@@ -77,6 +81,10 @@ Surface drift in the brief; do not silently reconcile.
 
 ### Focus
 <one sentence reconstructed from current.md "Focus">
+
+### Charter in force [from compass.md]
+- Active metric + current best + gap（値は 1 checkpoint stale の可能性）
+- Invariants（再実行禁止の guardrail を 1 行ずつ）
 
 ### Next concrete step
 <verbatim from current.md, marked [from current.md] or [from $WL]>

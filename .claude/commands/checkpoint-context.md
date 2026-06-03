@@ -57,6 +57,17 @@ Overwrite. Target ~100-150 lines. A cold reader must be able to pick
 up without reading any worklog. Use the shape defined in
 `docs/memory-architecture.md` § "current.md shape".
 
+### 3.5. Curate `scratchpad/compass.md`
+
+上書きではなく**剪定**する（`docs/memory-architecture.md` § "compass.md — the
+curated layer"）:
+- North-star: active metric の現在値・現状最良を更新．変化なしなら
+  "unchanged" を明記する（指標を失わないため）．
+- Invariants: 今セッションが do-not-redo 結論を確立したら追加（Est. に worklog/SHA）．
+  今セッションが既存不変則を **覆した** なら該当行を delete/edit（append しない）．
+- 上限 ~45 行 / 不変則 ~12 件を超えたら，最も load-bearing でない項目を evict．
+- 末尾 `## Last curated:` を現 SHA @ JST 日付に更新．
+
 ### 4. Detect architectural decisions
 
 A change is **architectural** if ANY of:
@@ -102,6 +113,7 @@ let the user pick which to handle now; the rest stay pending.
 
 - New worklog: `worklog/$STAMP.md`
 - `scratchpad/current.md` updated (line count)
+- `compass.md` curated: scoreboard updated / N invariants added / N removed
 - New proposal filed: path or "none"
 - Pending reviews handled: N approved / N rejected / N deferred / N left pending
 - One-line **resume hint** for the next `/resume-context`

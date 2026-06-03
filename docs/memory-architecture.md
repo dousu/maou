@@ -16,6 +16,7 @@ layers**.
 | `docs/memory-architecture.md` | Full spec (this file). | yes |
 | `reviews/YYYY-MM-DD-<title>.md` | Proposals + audit trail. Status in frontmatter. | yes |
 | `scratchpad/current.md` | Authoritative current working state. | no — `.gitignore`d |
+| `scratchpad/compass.md` | Curated campaign invariants + north-star metrics. Always loaded; prunable. | no — `.gitignore`d |
 | `worklog/YYYY-MM-DD-HHMMSS.md` | One file per checkpoint, JST. Immutable. | no — `.gitignore`d |
 | `.claude/commands/checkpoint-context.md` | The only writer. | yes |
 | `.claude/commands/resume-context.md` | Read-only resume. | yes |
@@ -139,6 +140,30 @@ Overwritten on every checkpoint. Target ~100-150 lines.
 - Including "what NOT to redo"
 ```
 
+## compass.md — the curated layer
+
+`current.md`（毎回全上書き）でも worklog（immutable・1 つだけロード）でもない
+**第 3 のモード = curated**．常時ロードされ，編集・削除で剪定される．
+
+設計空間 (mutable↔immutable) × (常時ロード↔オンデマンド) の，これまで空いていた
+「mutable・常時ロード・campaign を貫く durable」セルを埋める．
+
+2 セクションのみ:
+- **North-star**: goal / target / active metric / 現状最良 / 残ギャップの性質．
+  毎 checkpoint で数値を更新するか "unchanged" を明記する（指標を失わないため）．
+- **Invariants**: 「破ると 1 セッション無駄になる」do-not-redo 結論．各項に Est.（出所）
+  を付け，evidence で覆ったら **delete/edit** する（append しない＝墓場を作らない）．
+
+不変則 2 種の寿命の違い: Invariants は *sticky だが evidence で上書き可*，
+North-star の値は *毎回更新される*．
+
+肥大化対策（必須）:
+1. ハード上限 ~45 行 / 不変則 ~12 件．超えたら最も load-bearing でない項目を evict．
+2. スロット正当化: 「破ると 1 セッション無駄になる」もののみ．豆知識は worklog/MEMORY 行き．
+3. curation は checkpoint の必須ステップ（§ "Steps" step 3.5）．
+4. supersede = 削除．覆れた不変則は消す．「覆れた事実」を残すのは将来また再追加されて
+   しまう場合のみ 1 行で．
+
 ## Review proposal shape
 
 One file per proposal. Filename: `reviews/YYYY-MM-DD-<kebab-title>.md`.
@@ -214,6 +239,7 @@ audited fact with model-authored prose.
 |---|---|---|
 | `CLAUDE.md` | ~300 | always loaded |
 | `scratchpad/current.md` | ~150 | always loaded |
+| `scratchpad/compass.md` | ~45 | always loaded |
 | one `worklog/*.md` snapshot | ~100-200 | one file only |
 | `git status / log -10 / rev-parse` | ~30 | always |
 | `ls reviews/` | ~20 names | open files on demand |
@@ -240,3 +266,6 @@ you are over-loading history — stop and re-evaluate.
 - Silently editing `CLAUDE.md` without a `reviews/` trail.
 - Generic checkpoint summaries that hide failed experiments.
 - Treating `status: pending` reviews as policy.
+- `compass.md` を append-only で扱う（剪定せず積み上げる）．
+- 覆れた不変則を残して「墓場」を作る．
+- North-star の数値を checkpoint で更新し忘れる（"unchanged" すら書かない）．
