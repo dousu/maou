@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 54b3af5
 date: 2026-06-03
 target: [docs/memory-architecture.md, CLAUDE.md, .claude/commands/resume-context.md, .claude/commands/checkpoint-context.md]
 risk: low
