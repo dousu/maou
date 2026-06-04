@@ -594,6 +594,11 @@ pub struct DfPnSolver {
     /// per-node に駆動する (案②)．`false` = classic df-pn 集約 (sound 181K baseline)．
     /// `true` = LocalExpansion refinement + clean TT + unit-2 + 非累積 extend + root IDS の合成．
     pub(super) param_v3_local_exp: bool,
+    /// Phase 36: KH `CheckObviousFinalOrNode` 先読み (AND-child OR 局面で `mate_move_in_1ply` →
+    /// 詰めば absolute proof を v3_tt へ格納)．default `true`．`mate_move_in_1ply` の false
+    /// mate-1 バグ (ピン軸取り返し / 逆王手 drop / 開き王手) 根治後に default 化．
+    /// [[project_dfpn_domoff_none_mate1_bugs]]．
+    pub(super) param_v3_lookahead: bool,
     /// Phase 33b: KH `RepetitionTable` 相当．LE path で repetition 依存の disproof を
     /// path_key でキャッシュし (clean TT は absolute 結果のみ)，sound GHI + reuse を実現する．
     pub(super) v3_rep_memo: super::repetition_memo::RepetitionMemo,
@@ -1218,8 +1223,9 @@ impl DfPnSolver {
             v3_path: rustc_hash::FxHashMap::default(),
             v3_nodes: 0,
             param_v3_local_exp: true,
+            param_v3_lookahead: true,
             v3_rep_memo: super::repetition_memo::RepetitionMemo::new(1 << 16),
-            param_v3_dominance: false,
+            param_v3_dominance: true,
             v3_dom_fires: 0,
             v3_rep_inserts: 0,
             v3_rep_hits: 0,
@@ -1733,6 +1739,13 @@ impl DfPnSolver {
     /// 詳細: [`DfPnSolver::param_v3_local_exp`]．
     pub fn set_v3_local_exp(&mut self, on: bool) -> &mut Self {
         self.param_v3_local_exp = on;
+        self
+    }
+
+    /// Phase 36: mid_v3 で KH `CheckObviousFinalOrNode` 先読みを有効化するか (default true)．
+    /// 詳細: [`DfPnSolver::param_v3_lookahead`]．
+    pub fn set_v3_lookahead(&mut self, on: bool) -> &mut Self {
+        self.param_v3_lookahead = on;
         self
     }
 

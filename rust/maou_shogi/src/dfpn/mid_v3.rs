@@ -246,7 +246,8 @@ impl DfPnSolver {
         // OR ノード 1 手詰判定 (KH CheckObviousFinalOrNode 相当)．absolute．
         if or_node {
             let checks_av = self.generate_check_moves_cached(board);
-            if let Some(mm) = board.mate_move_in_1ply(checks_av.as_slice(), board.turn) {
+            let bturn = board.turn;
+            if let Some(mm) = board.mate_move_in_1ply(checks_av.as_slice(), bturn) {
                 self.v3_tt.insert(hash, V3Entry { pn: 0, dn: V3_INF, len: 1, best: mm.to_move16(), min_depth: 0 });
                 return (0, V3_INF, 1, u32::MAX);
             }
@@ -531,9 +532,12 @@ impl DfPnSolver {
 
     /// Phase 33 (案②): LE path の root IDS．u32 unit-2 で `search_v3_le` を駆動する．
     fn solve_via_v3_le(&mut self, board: &mut Board) -> TsumeResult {
-        // Phase 33k 実験用 env override (seed-fix 後の dominance/proof_hand 再測定)．
-        if std::env::var("V3_DOM").is_ok() {
-            self.param_v3_dominance = true;
+        // Phase 36: dominance + look-ahead は default ON．A/B デバッグ用に env で個別 OFF 可能．
+        if std::env::var("V3_NO_DOM").is_ok() {
+            self.param_v3_dominance = false;
+        }
+        if std::env::var("V3_NO_OBV").is_ok() {
+            self.param_v3_lookahead = false;
         }
         if std::env::var("V3_PH").is_ok() {
             self.param_v3_proof_hand = true;
@@ -742,7 +746,8 @@ impl DfPnSolver {
 
         if or_node {
             let checks_av = self.generate_check_moves_cached(board);
-            if let Some(mm) = board.mate_move_in_1ply(checks_av.as_slice(), board.turn) {
+            let bturn = board.turn;
+            if let Some(mm) = board.mate_move_in_1ply(checks_av.as_slice(), bturn) {
                 let md = self.v3_min_depth(hash, ply);
                 self.v3_tt.insert(
                     hash,
@@ -771,6 +776,12 @@ impl DfPnSolver {
         let want_chuai = !or_node && std::env::var("V3_CHUAI").is_ok();
         let defender_for_chuai = self.attacker.opponent();
         let mut chuai: Vec<bool> = Vec::with_capacity(moves.len());
+        let v3selx_target = std::env::var("V3SELX").unwrap_or_default();
+        let dump_this = !v3selx_target.is_empty()
+            && board.sfen().starts_with(v3selx_target.as_str());
+        if dump_this {
+            eprintln!("V3SELX node or={} ply={} sfen={}", or_node, ply, board.sfen());
+        }
         for &m in &moves {
             let (sp, sd) = if or_node {
                 super::init_pn_dn_or_kh(board, m, self.attacker)
@@ -854,7 +865,7 @@ impl DfPnSolver {
             } else {
                 None
             };
-            let r = if let Some(&anc_ply) = self.v3_path.get(&ch) {
+            let mut r = if let Some(&anc_ply) = self.v3_path.get(&ch) {
                 MidSearchResult::new_repetition(anc_ply)
             } else if let Some(dom_ply) = dom_rep {
                 MidSearchResult::new_repetition(dom_ply)
@@ -887,7 +898,42 @@ impl DfPnSolver {
                 r.is_first_visit = true;
                 r
             };
+            // KH CheckObviousFinalOrNode 先読み (local_expansion.hpp:206-213)．
+            // AND ノードの first-visit child は子が OR node (攻め方手番)．攻め方の手を進めずに
+            // (board は do_move 済 = 子局面) 1 手詰／詰み無を先読みし，proven/disproven で seed する．
+            // KH はこれで「詰む応手」を展開せず除外し，「逃れる応手」を即 disproof する．maou は
+            // 従来 seed (2,2) のまま展開して再導出していた (AND node の pn 集約も過大 → breadth)．
+            if !or_node && r.is_first_visit && self.param_v3_lookahead {
+                let cks = self.generate_check_moves_cached(board);
+                let cmd = self.v3_min_depth(ch, ply + 1);
+                let bturn = board.turn;
+                if let Some(mm) = board.mate_move_in_1ply(cks.as_slice(), bturn) {
+                    // 子 OR node が 1 手詰 → この応手は proven (mate-1)．absolute なので TT へ格納
+                    // (KH `query.SetResult` 相当; 格納しないと PV/伝播が不整合 → false mate)．
+                    self.v3_tt.insert(
+                        ch,
+                        V3Entry { pn: 0, dn: V3_INF_U as u64, len: 1, best: mm.to_move16(), min_depth: cmd },
+                    );
+                    r = MidSearchResult::new_win(1);
+                    r.is_first_visit = false;
+                } else if cks.is_empty() && std::env::var("V3_OBV_D").is_ok() {
+                    // 攻め方に王手手段なし → 詰み不可能 → この応手は逃れ (disproven, absolute)．
+                    self.v3_tt.insert(
+                        ch,
+                        V3Entry { pn: V3_INF_U as u64, dn: 0, len: 0, best: 0, min_depth: cmd },
+                    );
+                    r = MidSearchResult::new_lose(0);
+                    r.is_first_visit = false;
+                }
+            }
             board.undo_move(m, captured);
+            if dump_this {
+                eprintln!(
+                    "V3SELX   {:7} sp={} sd={} spn={} sdn={} rpn={} rdn={} fv={} eval={} drop={}",
+                    m.to_usi(), sp, sd, seed_pn, seed_dn, r.pn, r.dn,
+                    r.is_first_visit as u8, eval, m.is_drop() as u8,
+                );
+            }
             initial_results.push(r);
             evals.push(eval);
         }

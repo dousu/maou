@@ -1201,6 +1201,85 @@ use crate::types::{Color, PieceType};
         }
     }
 
+    /// `mate_move_in_1ply` の false mate-1 回帰テスト．
+    ///
+    /// `is_checkmate_after_bb` / `generate_check_moves` には以下 3 つの false mate-1 バグがあり，
+    /// mid_v3 の look-ahead (`CheckObviousFinalOrNode`) が多数の局面で `mate_move_in_1ply` を
+    /// 呼ぶため偽の証明を TT に汚染し，dom-off で STRICT VERIFY None を生んでいた．
+    /// 各局面で「攻め方は真の 1 手詰を持たない」ことを `generate_legal_moves` で確認する．
+    ///
+    /// 1. **ピン軸上の取り返し** (`can_capture_checker_bb`): 香で縦ピンされた金が同じ筋に
+    ///    打たれた歩 (王手駒) を取れるのに，ピン駒を一律除外して詰みと誤判定していた．
+    /// 2. **逆王手中の駒打ち** (`generate_check_moves`): 攻め方自身が王手されている局面で，
+    ///    自玉の王手を解消しない駒打ちを (非合法なのに) 王手手として生成していた．
+    /// 3. **開き王手** (`is_checkmate_after_bb`): 動いた駒を唯一の王手駒と仮定するため，
+    ///    開き王手で受け方が真の王手駒を取れるのに詰みと誤判定していた．
+    #[test]
+    fn test_mate_move_in_1ply_no_false_mate() {
+        // (sfen, ラベル) — いずれも攻め方手番 (OR 局面) で真の 1 手詰は存在しない．
+        let cases = [
+            // 1. ピン軸上の取り返し: 香(9a)が金(9b)を玉(9d)へ縦ピン．P*9c は金 9b9c で取れる．
+            ("ln1+P5/G1k4+L1/2p1p2B1/K1gp1spN1/1n2Ps3/P1PP2P2/2+bS5/1g3+p3/L1s6 w 2RGNL3P4p 37",
+             "pinned-capture-along-ray (P*9c)"),
+            // 2. 逆王手: 後手 R*9b が先手玉(7b)を王手．N*8a は自玉の王手を解消しないため非合法．
+            ("l2+P5/R1k4+L1/K1p1p2B1/2gp1spN1/1n2Ps3/P1PP2P2/2+bS5/1g3+p3/L1s6 w R2GNL3Pn4p 35",
+             "counter-check illegal drop (N*8a)"),
+            // 3. 開き王手: 飛 8h8i+ は玉(7b)を直接王手しない (開き王手)．受け方は逃れ可．
+            ("l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PGPP2P2/K2S5/1r3+p3/LN+b6 w R2GNLPgs5p 9",
+             "discovered check (8h8i+)"),
+        ];
+        for (sfen, label) in cases {
+            let mut b = Board::new();
+            b.set_sfen(sfen).unwrap();
+            let s = DfPnSolver::with_timeout(31, 1_000, 32767, 5);
+            let checks = s.generate_check_moves_cached(&mut b);
+            // 真の 1 手詰の有無を generate_legal_moves で確定する (ground truth)．
+            let mut real_mate1 = false;
+            for &c in checks.iter() {
+                let cap = b.do_move(c);
+                let mated = b.is_in_check(b.turn()) && movegen::generate_legal_moves(&mut b).is_empty();
+                b.undo_move(c, cap);
+                if mated { real_mate1 = true; break; }
+            }
+            assert!(!real_mate1, "{label}: テスト局面は本来 1 手詰でないはず ({sfen})");
+            let turn = b.turn;
+            let claimed = b.mate_move_in_1ply(checks.as_slice(), turn);
+            assert!(
+                claimed.is_none(),
+                "{label}: mate_move_in_1ply が false mate-1 を返した: {} ({sfen})",
+                claimed.map(|m| m.to_usi()).unwrap_or_default(),
+            );
+        }
+    }
+
+    /// 逆王手 (counter-check) 詰将棋の回帰テスト．攻め方 (先手) 自身が後手龍に王手されている
+    /// 局面で，王手を解消しつつ詰ます mate-7．逆王手 drop filter (`generate_check_moves`) と
+    /// mate_move_in_1ply の counter-check 健全性を守る．[[project_dfpn_domoff_none_mate1_bugs]]．
+    #[test]
+    fn test_mid_v3_counter_check_example() {
+        let sfen = "7l1/5n1k1/7+RP/6sK1/7L1/9/9/9/9 w r2b4g3s3n2l17p 2";
+        let mut b = Board::new();
+        b.set_sfen(sfen).unwrap();
+        // 前提: 攻め方自身が王手されている (逆王手局面)．
+        assert!(b.is_in_check(b.turn), "テスト前提: 攻め方が王手されている逆王手局面のはず");
+        let mut s = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
+        match s.solve_via_v3(&mut b) {
+            TsumeResult::Checkmate { moves, .. } => {
+                // 終局面が真の詰みか検証 (false mate 検出)．
+                let mut chk = Board::new();
+                chk.set_sfen(sfen).unwrap();
+                for m in &moves { chk.do_move(*m); }
+                let in_check = chk.is_in_check(chk.turn());
+                let legal = movegen::generate_legal_moves(&mut chk).len();
+                assert!(in_check && legal == 0,
+                    "逆王手例題 PV 終局面は真の詰みであるべき: in_check={in_check} legal={legal}");
+                assert_eq!(moves.len(), 7,
+                    "逆王手例題は mate-7 のはず: {:?}", moves.iter().map(|m| m.to_usi()).collect::<Vec<_>>());
+            }
+            other => panic!("逆王手例題 NON-SOLVE: {other:?}"),
+        }
+    }
+
     /// Phase 32: mid_v3 (ground-up KH コア port) の correctness + 29te 計測．
     ///
     /// **[SLOW]** 29te を解く．
@@ -1250,14 +1329,15 @@ use crate::types::{Color, PieceType};
                     let final_legal = movegen::generate_legal_moves(&mut chk).len();
                     let in_check = chk.is_in_check(chk.turn());
                     eprintln!("[v3] 29te final: in_check={in_check}, legal_moves={final_legal} (詰み=in_check&&legal==0)");
-                    // Phase 33: LE path soundness 回帰ガード．canonical mate-29 + 真の詰み．
-                    // Phase 33k/l: KH 比較で seed 玉 support 欠落 + move_brief_eval 玉 (OR で攻め方自玉
-                    // を誤用) の 2 バグを発見・修正 → 75,351 → 53,902 nodes, canonical mate-29 復帰．
-                    // soundness ガード: 真の詰み (in_check && legal==0) + 奇数長 + 妥当長 + node 上限．
+                    // Phase 36: look-ahead (CheckObviousFinalOrNode) + dominance を default 化．
+                    // mate_move_in_1ply の false mate-1 3 バグ (ピン軸取り返し/逆王手 drop/開き王手)
+                    // 根治後，dom-on look-ahead で canonical mate-29 を 18,531 nodes (< KH 19,270) で
+                    // sound に解く ([[project_dfpn_domoff_none_mate1_bugs]])．
+                    // soundness ガード: 真の詰み (in_check && legal==0) + canonical mate-29 + KH parity．
                     assert!(in_check && final_legal == 0, "LE path PV 終局面は真の詰みであるべき (false mate 検出)");
-                    assert!(moves.len() % 2 == 1 && (29..=35).contains(&moves.len()),
-                        "LE path は妥当長の sound 詰み (29..=35, 奇数) を返すべき: {}", moves.len());
-                    assert!(nodes_searched < 60_000, "LE path 29te は < 60K nodes であるべき (seed+eval 修正で実測 ~54K)");
+                    assert_eq!(moves.len(), 29, "default は canonical mate-29 を返すべき: {}", moves.len());
+                    assert!(nodes_searched <= 19_270,
+                        "default 29te は KH (19,270 nodes) 以下で解くべき: {}", nodes_searched);
                 }
                 other => panic!("[v3] 29te NON-SOLVE: {other:?}, {} nodes, {} tt", s.v3_nodes, s.v3_tt.len()),
             }

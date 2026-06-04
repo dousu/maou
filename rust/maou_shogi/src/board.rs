@@ -575,7 +575,7 @@ impl Board {
     /// 2. 王手駒を取り返せないか(ピン判定含む)
     /// 3. 合い駒が効かないか(飛び駒の王手のみ)
     pub fn mate_move_in_1ply(
-        &self,
+        &mut self,
         checks: &[Move],
         attacker: Color,
     ) -> Option<Move> {
@@ -595,19 +595,37 @@ impl Board {
         let pinned = self.compute_pinned(defender, king_sq);
 
         for &m in checks {
-            if self.is_checkmate_after_bb(
+            match self.is_checkmate_after_bb(
                 m, attacker, defender, king_sq, king_bb, king_step,
                 all_occ, att_occ, def_occ, att_idx, def_idx, &pinned,
             ) {
-                return Some(m);
+                Some(true) => return Some(m),
+                Some(false) => {}
+                None => {
+                    // 開き王手 / 両王手 / 非王手: ビットボード判定の前提外なので do_move +
+                    // 合法手生成で確定検証する (正確だが低速; これらの手は稀)．
+                    let captured = self.do_move(m);
+                    let mated = self.is_in_check(defender)
+                        && crate::movegen::generate_legal_moves(self).is_empty();
+                    self.undo_move(m, captured);
+                    if mated {
+                        return Some(m);
+                    }
+                }
             }
         }
         None
     }
 
-    /// 指定した王手手を指した後に詰みになるかビットボードで判定する．
+    /// 指定した王手手を指した後に詰みになるかビットボード演算のみで判定する．
     ///
-    /// 盤面を変更せず，ビットボード演算のみで判定する．
+    /// 戻り値:
+    /// - `Some(true)`  = 単一の直接王手で詰み (ビットボードで確定)．
+    /// - `Some(false)` = 単一の直接王手で詰みでない (ビットボードで確定)．
+    /// - `None`        = 開き王手 (discovered) / 両王手 (double check) / 非王手．真の王手駒が
+    ///                   to_sq 以外にあり捕獲・合駒判定がこの関数の前提 (動いた駒=唯一の王手駒)
+    ///                   を満たさないため，呼び出し側 (`mate_move_in_1ply`) が do_move + 合法手
+    ///                   生成で確定検証する．盤面は変更しない．
     #[allow(clippy::too_many_arguments)]
     fn is_checkmate_after_bb(
         &self,
@@ -623,7 +641,7 @@ impl Board {
         att_idx: usize,
         def_idx: usize,
         pinned: &Bitboard,
-    ) -> bool {
+    ) -> Option<bool> {
         let to_sq = m.to_sq();
         let to_bb = Bitboard::from_square(to_sq);
 
@@ -660,6 +678,19 @@ impl Board {
         // 王手駒の利きを計算(玉を除いた占有で)
         let checker_attacks = attack::piece_attacks(attacker, checker_pt, to_sq, occ_no_king);
 
+        // この判定は「動いた駒 (to_sq) が唯一の王手駒 = 単一の直接王手」を前提とする．
+        // 開き王手 (discovered) / 両王手 (double check) / 非王手 は真の王手駒が to_sq 以外に
+        // あり，捕獲・合駒判定がこの前提を満たさない (例: 飛が成りつつ移動して背後の駒が開き
+        // 王手 → 受け方は開き王手駒を取れるのに to_sq の駒の捕獲だけ調べて誤判定)．これらは
+        // `None` を返し，呼び出し側が do_move + 合法手生成で確定検証する．
+        let direct_check = checker_attacks.contains(king_sq);
+        let other_checker = self.is_sq_attacked_after_move(
+            king_sq, attacker, occ_no_king, att_idx, def_idx, from_opt, to_sq, false,
+        );
+        if !direct_check || other_checker {
+            return None;
+        }
+
         // 各逃げ先が安全かチェック
         for esc_sq in king_targets {
             if esc_sq == to_sq {
@@ -669,7 +700,7 @@ impl Board {
                     esc_sq, attacker, occ_esc, att_idx, def_idx,
                     from_opt, to_sq, true,
                 ) {
-                    return false; // 玉が王手駒を取って逃げられる
+                    return Some(false); // 玉が王手駒を取って逃げられる
                 }
             } else if checker_attacks.contains(esc_sq) {
                 // 王手駒の利きに入っている → 逃げられない(他の駒も確認不要)
@@ -680,7 +711,7 @@ impl Board {
                     esc_sq, attacker, occ_no_king, att_idx, def_idx,
                     from_opt, to_sq, false,
                 ) {
-                    return false; // 安全な逃げ場がある
+                    return Some(false); // 安全な逃げ場がある
                 }
             }
         }
@@ -690,7 +721,7 @@ impl Board {
         if self.can_capture_checker_bb(
             to_sq, king_sq, defender, occ_after, def_occ, def_idx, pinned,
         ) {
-            return false;
+            return Some(false);
         }
 
         // === 3. 合い駒チェック(飛び駒の王手のみ) ===
@@ -702,11 +733,11 @@ impl Board {
                     def_idx, att_idx, pinned, from_opt,
                 )
             {
-                return false;
+                return Some(false);
             }
         }
 
-        true // 詰み!
+        Some(true) // 詰み!
     }
 
     /// 飛び駒かどうか判定する．
@@ -840,7 +871,7 @@ impl Board {
     fn can_capture_checker_bb(
         &self,
         checker_sq: Square,
-        _king_sq: Square,
+        king_sq: Square,
         defender: Color,
         occ: Bitboard,
         _def_occ: Bitboard,
@@ -849,10 +880,17 @@ impl Board {
     ) -> bool {
         let attacker = defender.opponent();
 
+        // ピンされた駒でも，王手駒がそのピン軸(玉とその駒を通る直線)上にあれば取れる
+        // (取った後も玉とピン駒の間を遮り続けるため合法)．王手駒に利く駒が玉・ピン駒と
+        // 一直線上にあれば，その取り返しはピン軸に沿うので合法．
+        // 例: 香で縦ピンされた金が，同じ筋に打たれた歩(王手駒)を取る場合．
+        let pin_ray = attack::line_through(king_sq, checker_sq);
+        let eligible = !*pinned | (*pinned & pin_ray);
+
         // 歩
         if (attack::step_attacks(attacker, PieceType::Pawn, checker_sq)
             & self.piece_bb[def_idx][PieceType::Pawn as usize]
-            & !*pinned)
+            & eligible)
             .is_not_empty()
         {
             return true;
@@ -860,7 +898,7 @@ impl Board {
         // 桂
         if (attack::step_attacks(attacker, PieceType::Knight, checker_sq)
             & self.piece_bb[def_idx][PieceType::Knight as usize]
-            & !*pinned)
+            & eligible)
             .is_not_empty()
         {
             return true;
@@ -868,7 +906,7 @@ impl Board {
         // 銀
         if (attack::step_attacks(attacker, PieceType::Silver, checker_sq)
             & self.piece_bb[def_idx][PieceType::Silver as usize]
-            & !*pinned)
+            & eligible)
             .is_not_empty()
         {
             return true;
@@ -879,7 +917,7 @@ impl Board {
             | self.piece_bb[def_idx][PieceType::ProLance as usize]
             | self.piece_bb[def_idx][PieceType::ProKnight as usize]
             | self.piece_bb[def_idx][PieceType::ProSilver as usize])
-            & !*pinned;
+            & eligible;
         if (attack::step_attacks(attacker, PieceType::Gold, checker_sq) & gold_movers)
             .is_not_empty()
         {
@@ -888,7 +926,7 @@ impl Board {
         // 馬・龍(ステップ部分) - 玉は除外(玉での取り返しは逃げ場チェックで処理済み)
         let step_pieces = (self.piece_bb[def_idx][PieceType::Horse as usize]
             | self.piece_bb[def_idx][PieceType::Dragon as usize])
-            & !*pinned;
+            & eligible;
         let king_step = attack::step_attacks(attacker, PieceType::King, checker_sq);
         if (king_step & step_pieces).is_not_empty() {
             return true;
@@ -896,7 +934,7 @@ impl Board {
         // 香
         if (attack::lance_attacks(attacker, checker_sq, occ)
             & self.piece_bb[def_idx][PieceType::Lance as usize]
-            & !*pinned)
+            & eligible)
             .is_not_empty()
         {
             return true;
@@ -905,7 +943,7 @@ impl Board {
         if (attack::bishop_attacks(checker_sq, occ)
             & (self.piece_bb[def_idx][PieceType::Bishop as usize]
                 | self.piece_bb[def_idx][PieceType::Horse as usize])
-            & !*pinned)
+            & eligible)
             .is_not_empty()
         {
             return true;
@@ -914,7 +952,7 @@ impl Board {
         if (attack::rook_attacks(checker_sq, occ)
             & (self.piece_bb[def_idx][PieceType::Rook as usize]
                 | self.piece_bb[def_idx][PieceType::Dragon as usize])
-            & !*pinned)
+            & eligible)
             .is_not_empty()
         {
             return true;

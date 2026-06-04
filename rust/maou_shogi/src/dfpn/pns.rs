@@ -653,6 +653,11 @@ impl DfPnSolver {
         let us = board.turn;
         let them = us.opponent();
         let has_own_king = board.king_square(us).is_some();
+        // 逆王手 (counter-check): 攻め方自身が王手されている場合，駒打ちでも自玉の
+        // 王手を解消しないものは非合法 (打った駒が王手を遮らない限り王手放置になる)．
+        // 自玉が王手されていなければ駒打ちは決して自玉を王手に晒さない (駒を動かさない
+        // ため開き王手も起きない) ので従来通り検証を省く．
+        let own_in_check = has_own_king && board.is_in_check(us);
 
         let king_sq = match board.king_square(them) {
             Some(sq) => sq,
@@ -714,7 +719,11 @@ impl DfPnSolver {
                 if pt == PieceType::Pawn && movegen::is_pawn_drop_mate(board, m) {
                     continue;
                 }
-                // 駒打ちは自玉への王手放置にならない(片玉でも両玉でも)
+                // 通常は駒打ちで自玉への王手放置は起きないが，逆王手中は打った駒が
+                // 王手を遮らなければ非合法 (`own_in_check` のときだけ検証する)．
+                if own_in_check && !self.is_legal_quick(board, m, has_own_king) {
+                    continue;
+                }
                 push_move(&mut moves, m);
             }
         }
