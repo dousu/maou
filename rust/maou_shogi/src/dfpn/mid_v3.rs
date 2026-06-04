@@ -164,7 +164,7 @@ impl DfPnSolver {
             }
         }
 
-        let (pn, _dn, _len, _rep) = last;
+        let (pn, dn, _len, _rep) = last;
         if pn == 0 {
             if std::env::var("V3_DIAG").is_ok() {
                 let mut path = Vec::new();
@@ -179,8 +179,15 @@ impl DfPnSolver {
                 moves: pv,
                 nodes_searched: nodes,
             }
-        } else {
+        } else if dn == 0 {
+            // dn==0 = root が反証された (真の不詰)．
             TsumeResult::NoCheckmate {
+                nodes_searched: self.v3_nodes,
+            }
+        } else {
+            // pn>0 && dn>0 = ノード予算/タイムアウト/overflow による未解決．
+            // NoCheckmate (= 不詰確定) と混同してはならない (false NoMate soundness)．
+            TsumeResult::Unknown {
                 nodes_searched: self.v3_nodes,
             }
         }
@@ -576,6 +583,7 @@ impl DfPnSolver {
         let mut thpn: u32 = 1;
         let mut thdn: u32 = 1;
         let mut last_pn: u32 = V3_INF_U;
+        let mut last_dn: u32 = V3_INF_U;
         loop {
             if self.v3_nodes >= self.max_nodes || self.is_timed_out() {
                 self.timed_out = self.is_timed_out();
@@ -584,6 +592,7 @@ impl DfPnSolver {
             let mut inc_flag = 0u32;
             let (pn, dn, _len, _rep) = self.search_v3_le(board, thpn, thdn, 0, 0u64, &mut inc_flag);
             last_pn = pn;
+            last_dn = dn;
             if std::env::var("V3_DIAG").is_ok() {
                 let rlen = self.v3_tt.get(&board.hash).map(|e| e.len).unwrap_or(0);
                 eprintln!("[v3le] th=({thpn},{thdn}) -> pn={pn} dn={dn} rootlen={rlen} nodes={} tt={}",
@@ -643,8 +652,15 @@ impl DfPnSolver {
                 moves: pv,
                 nodes_searched: self.v3_nodes,
             }
-        } else {
+        } else if last_dn == 0 {
+            // dn==0 = root が反証された (真の不詰)．
             TsumeResult::NoCheckmate {
+                nodes_searched: self.v3_nodes,
+            }
+        } else {
+            // pn>0 && dn>0 = ノード予算/タイムアウト/overflow による未解決．
+            // NoCheckmate (= 不詰確定) と混同してはならない (false NoMate soundness)．
+            TsumeResult::Unknown {
                 nodes_searched: self.v3_nodes,
             }
         }

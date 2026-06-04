@@ -34,6 +34,7 @@ mod entry;
 mod tt;
 mod solver;
 mod pns;
+mod node_movegen;
 mod delayed_move_list;
 mod local_expansion;
 mod mid_v3;
