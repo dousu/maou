@@ -13,7 +13,7 @@ use arrayvec::ArrayVec;
 
 use crate::board::Board;
 use crate::moves::Move;
-use crate::types::{Color, Piece, Square, HAND_KINDS};
+use crate::types::{Color, Square, HAND_KINDS};
 
 /// `eprintln!` の `verbose` feature ガード版．
 ///
@@ -184,23 +184,6 @@ pub(super) const DISPROOF_THRESHOLD_ADAPTIVE: u16 = u16::MAX;
 /// 実用上の depth は 31〜127 であり 32767 は十分に大きい．
 const REMAINING_INFINITE: u16 = 0x7FFF;
 
-/// NM remaining 伝播: 子ノードの NM remaining から親ノードの remaining を計算する．
-///
-/// - 子が `REMAINING_INFINITE` → 親も `REMAINING_INFINITE`(真の不詰)
-/// - 子が有限値 → `min(子の remaining + 1, 現在の remaining)` で伝播
-///
-/// OR ノードでは `child_min_remaining` は全子の NM remaining の最小値．
-/// AND ノードでは単一子の NM remaining．
-#[inline]
-fn propagate_nm_remaining(child_min_remaining: u16, current_remaining: u16) -> u16 {
-    if child_min_remaining == REMAINING_INFINITE {
-        REMAINING_INFINITE
-    } else {
-        let propagated = child_min_remaining.saturating_add(1);
-        propagated.min(current_remaining)
-    }
-}
-
 
 /// DFPN-E (Kishimoto et al., NeurIPS 2019) エッジコスト型ヒューリスティック．
 ///
@@ -212,103 +195,6 @@ fn propagate_nm_remaining(child_min_remaining: u16, current_remaining: u16) -> u
 /// 詰将棋での手の質:
 /// - OR ノードの王手: 成+取 > 取/成 > 近い静か手 > 遠い静か手
 /// - AND ノードの応手: 合駒(攻め方有利) < 駒取り < 玉の逃げ
-
-/// OR ノード(攻め方の王手)のエッジコストを計算する(DFPN-E)．
-///
-/// 有力な王手ほどコストが低く(pn に加算される量が少ない)，
-/// ソルバーがその手を優先的に深く探索する．
-///
-/// - 成+取王手: 0 (最有力)
-/// - 成王手/取王手: 0
-/// - 近い静か王手(距離≤2): 1
-/// - 遠い静か王手(距離≥3): 2
-#[inline]
-fn edge_cost_or(m: Move, king_sq: Square) -> u32 {
-    let promo = m.is_promotion();
-    let capture = m.captured_piece_raw() > 0;
-    if promo || capture {
-        return 0;
-    }
-    let to = m.to_sq();
-    let dc = (to.col() as i8 - king_sq.col() as i8).unsigned_abs();
-    let dr = (to.row() as i8 - king_sq.row() as i8).unsigned_abs();
-    let dist = dc.max(dr);
-    let base = if dist <= 2 { PN_UNIT } else { 2 * PN_UNIT };
-    let drop_penalty = if m.is_drop() { PN_UNIT / 2 } else { 0 };
-    base + drop_penalty
-}
-
-/// `edge_cost_or` の KH 風 per-move 差別化版 (twinkling-hatching-duckling, v0.67.0)．
-///
-/// `compute_checkers_at` で `to_sq` の attack_support / defense_support を
-/// 算出し，KH `InitialPnDnPlusOrNode` 相当の調整を加算する:
-///
-/// - 受け駒 ≥ 2: pn += 2*PN_UNIT (後回し)
-/// - 攻め駒 + (drop ? 1 : 0) > 受け駒: 調整なし (good move)
-/// - その他: pn += PN_UNIT (mild penalty)
-///
-/// この差別化により root level の OR move 選択が改善し，tsume_5 root の
-/// 13K→数K nodes 削減を狙う．
-///
-/// `attacker` は OR ノードの攻め方 (board.turn と一致するが明示)．
-#[inline]
-fn edge_cost_or_with_support(
-    m: Move,
-    king_sq: Square,
-    board: &crate::board::Board,
-    attacker: crate::types::Color,
-) -> u32 {
-    let base = edge_cost_or(m, king_sq);
-    let promo = m.is_promotion();
-    let capture = m.captured_piece_raw() > 0;
-    if promo || capture {
-        // promo/capture は base==0 のままで強制優先 (元の意味論を維持)
-        return base;
-    }
-    let to = m.to_sq();
-    let att_bb = board.compute_checkers_at(to, attacker);
-    let def_bb = board.compute_checkers_at(to, attacker.opponent());
-    let mut attack_support = att_bb.count();
-    if m.is_drop() {
-        // KH 流: drop 時は dropped piece 自体が +1 attacker として扱う
-        attack_support += 1;
-    }
-    let defense_support = def_bb.count();
-    let support_penalty = if defense_support >= 2 {
-        // 受け駒多い → 後回し
-        2 * PN_UNIT
-    } else if attack_support > defense_support {
-        // 攻め支援 > 受け支援 → good (penalty なし)
-        0
-    } else {
-        // 拮抗 → 軽い penalty
-        PN_UNIT
-    };
-    base + support_penalty
-}
-
-/// AND ノード(守備側の応手)のエッジコストを計算する(DFPN-E)．
-///
-/// 攻め方にとって有利な応手(=詰ませやすい応手)ほどコストが低く，
-/// ソルバーがその応手の子ツリーを優先的に探索する．
-///
-/// - 合駒(drop): 0 (攻め方が取って攻撃続行可能)
-/// - 駒取り(応手で攻め駒を取る): 2 (攻め方の戦力が減り危険)
-/// - 玉の逃げ(非合駒・非取り): 1
-#[inline]
-fn edge_cost_and(m: Move) -> u32 {
-    if m.is_drop() {
-        // 合駒: 攻め方が取って持ち駒に加えられるため有利
-        return 0;
-    }
-    let capture = m.captured_piece_raw() > 0;
-    if capture {
-        // 駒取り: 攻め駒を除去するため攻め方にとって不利
-        return 2 * PN_UNIT;
-    }
-    // 玉の逃げ・駒移動合い
-    PN_UNIT
-}
 
 /// KH `InitialPnDnPlusOrNode` 移植 (v0.89.0, Phase 10).
 ///
@@ -540,205 +426,6 @@ pub(super) fn is_sum_delta_node(
     true
 }
 
-/// 捨て駒のみ王手ブースト(人間的枝刈り)．
-///
-/// OR ノード(攻め方手番)で利用可能な全王手が「支えなし」の捨て駒である場合，
-/// 人間が直感的に「不詰」と見切るのと同様に pn を加算して探索優先度を下げる．
-///
-/// 「支え」の判定: 王手後のマス(`to_sq`)に攻め方の他の駒が利いているか．
-/// 駒移動の場合は移動元を除外して判定する．
-///
-/// 全王手が捨て駒の場合，王手数に比例するブースト(最低2)を返す．
-/// 捨て駒でない王手が1つでもあれば 0 を返す．
-fn sacrifice_check_boost(board: &Board, checks: &[Move]) -> u32 {
-    if checks.is_empty() {
-        return 0;
-    }
-    let attacker = board.turn;
-    for m in checks {
-        let to = m.to_sq();
-        let excluded = if m.is_drop() { None } else { Some(m.from_sq()) };
-        // 攻め方の他の駒が to に利いていれば支えあり → 捨て駒ではない
-        if board.is_attacked_by_excluding(to, attacker, false, excluded) {
-            return 0;
-        }
-    }
-    // 全王手が捨て駒 → 詰ませにくい(上限2: 大きくしすぎると不詰証明が遅延)
-    2 * PN_UNIT
-}
-
-/// pn に対して平方根逆比例する初期 dn ヒューリスティック (df-pn+ 連続スケーリング)．
-///
-/// `dn ∝ 1/√pn` により，pn が大きい範囲でも dn に差がつく．
-/// v0.43.0 で `heuristic_or_pn` の上限が 512S→2048S に拡大されたことに対応して
-/// clamp 下限を 4S→1S に拡張 (pn∈[256S, 4096S] が dn∈[1S, 4S) を取る)．
-///
-///   dn = sqrt(C² / pn),  C = 64·PN_UNIT·√PN_UNIT = 4096
-///   pn =    1S → dn = 64S  (上限)
-///   pn =    4S → dn = 32S
-///   pn =   16S → dn = 16S  (対称点)
-///   pn =   64S → dn =  8S
-///   pn =  256S → dn =  4S
-///   pn = 1024S → dn =  2S  (v0.43.0 以降の逆王手後開放局面で生じる範囲)
-///   pn = 4096S → dn =  1S  (下限 = PN_UNIT)
-///
-/// v0.39.0 での 1S 緩和失敗は旧 `1/pn` 式での実験であり，現行 `1/√pn` 式では
-/// pn≤256S の範囲は変わらず，pn>256S (v0.43.0 新規域) のみ新たな分化が生まれる．
-#[inline]
-pub(super) fn heuristic_dn_from_pn(pn: u32) -> u32 {
-    // C² = (64 · PN_UNIT · √PN_UNIT)² = 64² · PN_UNIT³ = 4096² = 16_777_216
-    const C2: u64 = 4096 * 4096;
-    let dn = ((C2 / pn.max(1) as u64) as f64).sqrt() as u32;
-    dn.clamp(PN_UNIT, 64 * PN_UNIT)
-}
-
-/// OR ノード専用の初期 dn ヒューリスティック (v0.52.1, v0.53.2)．
-///
-/// pn に依存せず (safe_escapes, num_checks) から直接 dn を決定する．
-/// 逃げ場が少ない → 不詭めを示しにくい → dn 大．王手数が多い → dn 大．
-///
-/// `attacker_in_check=true` (逆王手局面): 攻め方の合法王手は「自玉危機解除 AND
-/// 後手玉への王手」を同時に満たす手のみに限定される．nc≤4 では探索木が極めて
-/// 小さく不詭めを示しやすいため，dn を引き下げる (v0.53.2)．
-///
-/// se=0-3 の値は v0.51.1 `heuristic_dn_from_pn(final_pn)` の実値に精密に合わせ
-/// 回帰を防ぐ．se>=4 (開放局面) は v0.51.1 の ≈22 (bucket 4) から bucket 5-7
-/// へ改善し bucket 5 への全集中を解消する (詳細は pn-dn-distribution.md §4.4)．
-///
-/// ```text
-/// se\nc |   1   | 2-3  | 4-7  |  8+     (dn, v0.51.1 実値)
-/// ------+-------+------+------+------
-///   0   |  640  |  640 |  640 |  640   (v0.51.1 591-724, bucket 9)
-///   1   |  352  |  448 |  640 |  640   (v0.51.1 341-648, bucket 8-9)
-///   2   |  240  |  352 |  448 |  448   (v0.51.1 248-458, bucket 7-8)
-///   3   |  240  |  288 |  288 |  352   (v0.51.1 248-341, bucket 7-8)
-///   4   |   64  |   80 |   96 |  128   (v0.51.1 ≈22, bucket 6-7)
-///   5   |   48  |   64 |   80 |   80   (v0.51.1 ≈22, bucket 5-6)
-///  6+   |   32  |   48 |   64 |   64   (v0.51.1 ≈22, bucket 5-6)
-///
-/// 逆王手オーバーライド (attacker_in_check=true, nc≤4):
-///   nc 1-2: 32  (b5)
-///   nc 3-4: 64  (b6)
-/// ```
-#[inline]
-pub(super) fn heuristic_or_dn(safe_escapes: u32, num_checks: u32, attacker_in_check: bool) -> u32 {
-    // 逆王手局面: nc が小さい場合は探索木が極めて浅く不詭めを示しやすい
-    if attacker_in_check && num_checks <= 4 {
-        return match num_checks {
-            1..=2 => 2 * PN_UNIT, // 32  (b5)
-            _ => 4 * PN_UNIT,     // 64  (b6) for nc=3..=4
-        };
-    }
-    let dn: u32 = match safe_escapes {
-        // se=0: bucket 9 全域 — nc 差異が小さいため統一
-        0 => 40 * PN_UNIT, // 640
-        // se=1: bucket 8-9
-        1 => match num_checks {
-            1 => 22 * PN_UNIT, // 352 (b8)  v0.51.1≈341
-            2..=3 => 28 * PN_UNIT, // 448 (b8)  v0.51.1≈458
-            _ => 40 * PN_UNIT,     // 640 (b9)  v0.51.1≈648
-        },
-        // se=2: bucket 7-8
-        2 => match num_checks {
-            1 => 15 * PN_UNIT,     // 240 (b7)  v0.51.1≈248
-            2..=3 => 22 * PN_UNIT, // 352 (b8)  v0.51.1≈341
-            _ => 28 * PN_UNIT,     // 448 (b8)  v0.51.1≈458
-        },
-        // se=3: bucket 7-8
-        3 => match num_checks {
-            1 => 15 * PN_UNIT,     // 240 (b7)  v0.51.1≈248
-            2..=7 => 18 * PN_UNIT, // 288 (b8)  v0.51.1≈284-309
-            _ => 22 * PN_UNIT,     // 352 (b8)  v0.51.1≈341
-        },
-        // se=4: bucket 6-7 (v0.51.1 比大幅改善)
-        4 => match num_checks {
-            1 => 4 * PN_UNIT,      //  64 (b6)
-            2..=3 => 5 * PN_UNIT,  //  80 (b6)
-            4..=7 => 6 * PN_UNIT,  //  96 (b6)
-            _ => 8 * PN_UNIT,      // 128 (b7)
-        },
-        // se=5: bucket 5-6
-        5 => match num_checks {
-            1 => 3 * PN_UNIT,     // 48 (b5)
-            2..=3 => 4 * PN_UNIT, // 64 (b6)
-            _ => 5 * PN_UNIT,     // 80 (b6)
-        },
-        // se=6+: bucket 5-6
-        _ => match num_checks {
-            1 => 2 * PN_UNIT,     // 32 (b5)
-            2..=3 => 3 * PN_UNIT, // 48 (b5)
-            _ => 4 * PN_UNIT,     // 64 (b6)
-        },
-    };
-    dn.clamp(PN_UNIT, 64 * PN_UNIT)
-}
-
-/// SNDA (Kishimoto 2010) の積極的ソースグループ集約．
-///
-/// `(source, value)` ペアのリストと通常の sum を受け取り，
-/// 同一 source グループの重複分を控除する．
-///
-/// 積極的 max 集約方式: 同一 source グループ内で最大値のみを残し，
-/// 残りを全て控除する(`deduction = sum(group) - max(group)`)．
-/// DAG 合流で共有されるリーフの重複カウントを排除し，
-/// 過大評価をより正確に補正する．
-///
-/// TCA(過小評価対策)が実装済みのため，積極的方式による
-/// 過小評価リスクは TCA の閾値拡張で緩和される．
-///
-/// `source == 0` のペアは独立ノード(TT ミス)としてスキップする．
-///
-/// ## 39手詰め計測結果 (50M nodes)
-///
-/// - 呼び出し: 981,397 回
-/// - deduction > 0: 6,558 回 (0.67%)
-/// - うち max_cpn floor に吸収: 6,358 回 (96.9%)
-/// - 実際に pn/dn を削減: 119 回 (0.012%)
-///
-/// WPN 後に適用されるため deduction のほとんどが max_cpn に抑えられ，
-/// 分布への実効的な影響は無視できる水準 (§3.15 参照)．
-///
-/// ## Kishimoto 2010 正規実装 (SNDA→WPN) を採用しない理由 (§3.17)
-///
-/// 正規実装では raw sum から deduction して WPN を適用する．
-/// しかし raw sum には TT ミス子 (初期 cdn が heuristic 値で大きい) が含まれ，
-/// effective_dn = raw_dn - ded が max_cdn より遥かに大きくなる．
-/// 結果として WPN 後の OR dn が激増し，不詰検出に 20M+ ノードが必要になった
-/// (旧実装は ~2M ノードで解決)．
-///
-/// 旧実装の floor (`.max(max_cdn)`) は SNDA fire 時に TT ミス子の寄与を
-/// 打ち消して max_cdn に戻す副作用を持ち，これが不詰検出の効率に不可欠だった．
-/// 正確さより探索効率を優先し，WPN→SNDA→floor の順序を維持する．
-#[inline]
-fn snda_dedup(pairs: &mut [(u32, u32)], raw_sum: u32) -> u32 {
-    pairs.sort_unstable_by_key(|&(s, _)| s);
-    let mut deduction: u64 = 0;
-    let mut i = 0;
-    while i < pairs.len() {
-        let source = pairs[i].0;
-        if source == 0 {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        let mut group_max = pairs[i].1;
-        let mut group_sum: u64 = pairs[i].1 as u64;
-        i += 1;
-        while i < pairs.len() && pairs[i].0 == source {
-            group_max = group_max.max(pairs[i].1);
-            group_sum += pairs[i].1 as u64;
-            i += 1;
-        }
-        let group_size = i - start;
-        if group_size > 1 {
-            // 積極的 max 集約: グループ合計から最大値を引いた分を控除
-            deduction =
-                deduction.saturating_add(group_sum - group_max as u64);
-        }
-    }
-    (raw_sum as u64).saturating_sub(deduction).max(PN_UNIT as u64) as u32
-}
-
 /// 持ち駒の要素ごと比較: a の全要素が b 以上なら true．
 ///
 /// 証明駒の優越判定に使用: 持ち駒が多い方が有利(攻め方)．
@@ -816,47 +503,6 @@ fn position_key(board: &Board) -> u64 {
     board.board_hash
 }
 
-/// 指し手に応じて子ノードの持ち駒情報を親ノード視点に変換する．
-///
-/// 指し手による持ち駒の入出を補正する汎用関数．
-/// 証明駒・反証駒の両方に同じロジックが適用できる:
-/// 駒打ちは持ち駒を消費し，駒取りは持ち駒を増やすため，
-/// 親ノード視点では打った駒を加算，取った駒を減算する．
-///
-/// - 駒打ち: 子の駒 + 打った駒種1枚(持ち駒を消費するため)
-/// - 駒取り: 子の駒 - 取った駒種1枚(持ち駒が増えるため)
-/// - それ以外: 子の駒をそのまま使用
-#[inline]
-fn adjust_hand_for_move(
-    m: Move,
-    child_proof: &[u8; HAND_KINDS],
-) -> [u8; HAND_KINDS] {
-    let mut ph = *child_proof;
-    if m.is_drop() {
-        if let Some(pt) = m.drop_piece_type() {
-            if let Some(hi) = pt.hand_index() {
-                ph[hi] = ph[hi].saturating_add(1);
-            }
-        }
-    } else {
-        let cap = m.captured_piece_raw();
-        if cap > 0 {
-            // captured_piece_raw() は Piece 値(色付き)を返す．
-            // 白駒はオフセット 16 が加算されている．
-
-            let piece = Piece::from_raw_u8(cap);
-            if let Some(pt) = piece.piece_type() {
-                let base_pt =
-                    pt.unpromoted().unwrap_or(pt);
-                if let Some(hi) = base_pt.hand_index() {
-                    ph[hi] = ph[hi].saturating_sub(1);
-                }
-            }
-        }
-    }
-    ph
-}
-
 // --- 王手生成キャッシュ (E2 最適化) ---
 
 /// 王手生成キャッシュのサイズ(2^13 = 8192 エントリ，direct-mapped)．
@@ -900,15 +546,6 @@ impl CheckCache {
             table.push(CheckCacheEntry::default());
         }
         Self { table: std::cell::UnsafeCell::new(table) }
-    }
-
-    /// キャッシュをクリアする．
-    pub(super) fn clear(&self) {
-        let table = unsafe { &mut *self.table.get() };
-        for entry in table.iter_mut() {
-            entry.hash = 0;
-            entry.moves.clear();
-        }
     }
 
     /// キャッシュから王手リストを取得し，ヒットした場合はコピーを返す．

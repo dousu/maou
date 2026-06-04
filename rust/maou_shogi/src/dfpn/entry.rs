@@ -213,29 +213,6 @@ impl ProvenEntry {
         }
     }
 
-    /// disproven_len を取得する (proof entry のみ有効)．
-    ///
-    /// TT dual-range: この proof entry の局面で「len <= disproven_len の詰みは
-    /// 存在しない」ことが IDS で確認された最大の len．
-    /// meta bits 10-15 に格納 (6 bits, 0-63)．0 = 未設定．
-    #[inline(always)]
-    pub(super) fn disproven_len(&self) -> u16 {
-        if self.is_proof() {
-            ((self.meta >> DISPROVEN_LEN_SHIFT) & DISPROVEN_LEN_MASK) as u16
-        } else {
-            0
-        }
-    }
-
-    /// disproven_len を更新する (proof entry のみ)．
-    #[inline(always)]
-    pub(super) fn set_disproven_len(&mut self, len: u16) {
-        debug_assert!(self.is_proof(), "set_disproven_len on non-proof entry");
-        let clamped = len.min(63) as u16;
-        self.meta = (self.meta & !(DISPROVEN_LEN_MASK << DISPROVEN_LEN_SHIFT))
-            | (clamped << DISPROVEN_LEN_SHIFT);
-    }
-
     /// エントリの eviction priority (高いほど保持優先)．
     ///
     /// - ABSOLUTE proof with distance: `0x80 | min(distance, 63)` → 128..191
