@@ -1,9 +1,10 @@
 ---
 title: "Phase 33: mid_v3 LE path (案②) を sound 化 — clean-TT 仮説の精緻化と 19K への道筋"
 date: 2026-06-02
-status: pending
+status: applied
+applied_in: cdcd830
 crate: maou_shogi
-version: 1.12.0
+version: 1.13.0
 ---
 
 # Phase 33: mid_v3 LE path を sound 化 (114K, mate-29) + clean-TT 仮説の精緻化
