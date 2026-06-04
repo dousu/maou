@@ -678,7 +678,7 @@ impl DfPnSolver {
         if let Some(&anc_ply) = self.v3_path.get(&hash) {
             return (V3_INF_U, 0, 0, anc_ply);
         }
-        if ply >= V3_MAX_PLY {
+        if ply >= v3_max_ply() {
             return (V3_INF_U, 0, 0, ply);
         }
         // KH RepetitionTable: この経路 (path_key) が過去に repetition 不詰と判明していれば再利用．
@@ -717,7 +717,10 @@ impl DfPnSolver {
         // NOTE (Phase 33j): df-pn の探索は move 生成順に acutely sensitive (実測: normal 75K /
         // reversed 5M+ 未解決 / to-square 82K / move16 2M = ~66× span)．maou の native 生成順が
         // 単純順では最良．KH の 19K は YaneuraOu movegen の特定順由来で，完全一致には movegen 順の
-        // bit 再現が要る (df-pn 公式の外)．これが残 gap の正体 (emergent でなく movegen 順)．
+        // bit 再現が要る (df-pn 公式の外)．
+        // NOTE (Phase 34, 訂正): 上記「残 gap = movegen 順」説は KHTRACE per-expansion 照合で**反証**された．
+        // KH 生成順への並べ替え (board-before-drop / piece-type 順) は node を減らさず (68,649〜2.93M)，
+        // 真因は探索動力学の breadth (maou unique ~22K vs KH ~2K, reuse 2× vs 9×)．move 順は非レバー．
         let moves: Vec<Move> = if or_node {
             self.generate_check_moves_cached(board).into_iter().collect()
         } else {
@@ -751,6 +754,12 @@ impl DfPnSolver {
 
         let us_is_black = board.turn == crate::types::Color::Black;
         let defender_king = board.king_square(self.attacker.opponent());
+
+        // Phase 34 (棄却): 完全同点手の movegen tie-break を KH 生成順 (board-before-drop /
+        // YaneuraOu generate_checks/evasions 順) に揃える実験は KHTRACE 照合で **node lever でない**
+        // と確定し revert した．board-before-drop = 68,649 nodes (baseline 53,902 より悪化)，
+        // from-square 順 = 2.93M に爆発．真因 = selection 順でなく探索動力学 (breadth: maou は KH の
+        // ~10× の unique node を訪問; reuse 2× vs KH 9×)．詳細は worklog 2026-06-03 を参照．
 
         // 子の初期化: seed (unit-2) / clean TT 値 / 千日手．
         let div = PN_UNIT_SCALE.max(1);
@@ -951,7 +960,7 @@ impl DfPnSolver {
             }
         }
         // V3TRACE: chronological per-expansion trace (KH KHTRACE と 1 構築ごとに突き合わせる)．
-        if std::env::var("V3TRACE").is_ok() && self.v3_trace_cnt < 80 {
+        if std::env::var("V3TRACE").is_ok() && self.v3_trace_cnt < 200_000 {
             self.v3_trace_cnt += 1;
             let bi = expansion.idx[0] as usize;
             let r = &expansion.results[bi];
@@ -1404,6 +1413,20 @@ fn v3_pv_best(children: &[V3Child], or_node: bool, node_pn: u64) -> u16 {
     // fallback: min-phi 子．
     let idx = v3_best_idx(children, or_node);
     children[idx].mv.to_move16()
+}
+
+/// LE path の最大 ply cutoff．既定 `V3_MAX_PLY`．`V3_MAXPLY` env で上書き可（Phase 34 実験:
+/// mate-length bound が breadth を prune するか = KH `MateLen len` thread の価値を測る安価なプローブ）．
+/// 注意: v3_tt は len 非依存 key なので tight cutoff は false NoMate を生み得る（STRICT VERIFY で要確認）．
+fn v3_max_ply() -> u32 {
+    use std::sync::OnceLock;
+    static CAP: OnceLock<u32> = OnceLock::new();
+    *CAP.get_or_init(|| {
+        std::env::var("V3_MAXPLY")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(V3_MAX_PLY)
+    })
 }
 
 /// best 子の index (active 子のみ): phi 最小．

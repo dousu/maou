@@ -468,6 +468,7 @@ pub(super) fn move_brief_eval(m: Move, king_sq: Square, board: &Board) -> i32 {
         5 => 50,                   // Bishop
         6 => 50,                   // Rook
         7 => 50,                   // Gold
+        8 => 80,                   // King (KH tl_pt_values[KING]=80; 欠落で AND 玉捕獲手の tie-break が乖離していた)
         9 | 10 | 11 | 12 => 50,   // ProPawn..ProSilver
         13 => 80,                  // Horse
         14 => 80,                  // Dragon
