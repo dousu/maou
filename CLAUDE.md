@@ -165,14 +165,15 @@ cargo test --release -p maou_shogi -- <test_name> --nocapture --ignored
 
 | テスト名 | バジェット | 備考 |
 |---|---|---|
-| `test_tsume_39te_ply24_mate15_regression` | 1M nodes / 600s | PV 正確性の回帰テスト |
-| `test_tsume_39te_ply24_mate15_soundness_depth25` | 3M nodes / 300s | soundness ガード |
-| `test_tsume_39te_ply2_no_false_nomate` | 10M nodes / 600s | false NoMate 回帰テスト |
-| `test_tsume_39te_backward_1m` | 1M nodes × 複数局面 | 逆順解析 (ログ出力) |
-| `test_ply24_diagnostic` | 250K × 6局面 | 診断用ログ出力 |
-| `test_ply24_tt_sharing_effectiveness` | 500K × 8ペア | TT共有効果測定 |
+| `test_mid_v3` | - | mid_v3 1te/3te/29te canonical (18,539 nodes / mate-29 / STRICT Some(29)) |
+| `test_mid_v3_counter_check_example` | - | 逆王手詰将棋 mate-7 健全性 |
 | `test_counter_check_diagnostic` | - | 診断用ログ出力 |
 | `test_no_checkmate_counter_check_probe` | 10M nodes | ノード予算プローブ |
+
+> **v2.0.0 (2026-06-05) で mid_v2 廃止に伴い 6 件削除**: `test_tsume_39te_ply24_mate15_regression` /
+> `..._soundness_depth25` / `test_tsume_39te_ply2_no_false_nomate` / `test_tsume_39te_backward_1m` /
+> `test_ply24_diagnostic` / `test_ply24_tt_sharing_effectiveness`（mid_v2 探索本体に依存．うち 39te ply24
+> soundness guard 3 件は mid_v3 で未 pass = 既知 gap, 別 review 参照）．
 
 ## Quick Reference
 

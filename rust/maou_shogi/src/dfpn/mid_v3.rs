@@ -257,7 +257,7 @@ impl DfPnSolver {
         let us_is_black = board.turn == crate::types::Color::Black;
         let defender_king = board.king_square(self.attacker.opponent());
         // KH DML: 同一マス合駒 / 成不成ペアの chain を構築．head のみ active で開始．
-        let (dml_prev, dml_next) = super::mid_v2::build_delayed_chain(&moves, or_node, true, us_is_black);
+        let (dml_prev, dml_next) = super::local_expansion::build_delayed_chain(&moves, or_node, true, us_is_black);
 
         // 子の初期化: seed (unit-2) または TT 値．
         let mut children: Vec<V3Child> = Vec::with_capacity(moves.len());
@@ -663,7 +663,7 @@ impl DfPnSolver {
         path_key: u64,
         inc_flag: &mut u32,
     ) -> (u32, u32, u16, u32) {
-        use super::mid_v2::{MidLocalExpansion, MidSearchResult, REPETITION_NONE};
+        use super::local_expansion::{MidLocalExpansion, MidSearchResult, REPETITION_NONE};
 
         self.v3_nodes += 1;
         if self.v3_nodes >= self.max_nodes || (self.v3_nodes & 0x3FF == 0 && self.is_timed_out()) {
@@ -1353,8 +1353,8 @@ fn tt_dn_u32(e: &V3Entry) -> u32 {
 /// rep != NONE の disproof は repetition，それ以外の dn==0 は通常 lose．unknown には
 /// rep taint を伝播させ (GHI), node_rep_min が上へ届くようにする．
 #[inline]
-fn mk_result_u32(cp: u32, cd: u32, cl: u16, cr: u32) -> super::mid_v2::MidSearchResult {
-    use super::mid_v2::{MidSearchResult, REPETITION_NONE};
+fn mk_result_u32(cp: u32, cd: u32, cl: u16, cr: u32) -> super::local_expansion::MidSearchResult {
+    use super::local_expansion::{MidSearchResult, REPETITION_NONE};
     // win (cp==0) は absolute (tsume の詰みは千日手依存になり得ない) なので taint を持たせない．
     // disproof (cd==0) と unknown は cycle 依存 (cr<NONE) を保持し，GHI caching を制御する．
     if cp == 0 {

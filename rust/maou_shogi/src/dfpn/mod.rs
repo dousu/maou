@@ -35,7 +35,7 @@ mod tt;
 mod solver;
 mod pns;
 mod delayed_move_list;
-mod mid_v2;
+mod local_expansion;
 mod mid_v3;
 mod proof_hand;
 mod path_key;
