@@ -74,3 +74,34 @@ version: 2.0.0 (breaking; Phase 1 = mid_v2 廃止のみ実施済, 2026-06-05)
 - **v1 `mid()` 削除 + production `solve()`/`solve_tsume*` を mid_v3 へ配線**（現状 production は依然 v1 mid．Rust 単体テストは v1 を 1 件も叩いていない点に注意）．
 - **mid_v3 39te ply24 gap 調査**（find_shortest 無視・budget 切れ NoCheckmate 報告）．
 - 残 dead-code（entry/tt `disproven_len`, proof_hand Phase-28, mid_v3 `phi/delta`, tests.rs `print_result`）の整理．
+
+---
+
+## 実施結果 — Phase 2: pns movegen 分離 + production→mid_v3 配線 + v1/PNS 削除 (2026-06-05, committed)
+
+ユーザ指示「必要な部分は別モジュールに切り出す」「mid も廃止」「v1 の代わりに mid_v3 を使う」で一気に Phase 2/3 を実施．
+
+### commit 列
+- `5664a8c` **v2.1.0** — production→mid_v3 配線 + movegen ヘルパ分離 + Unknown soundness fix．
+- `04ab1ac` **v2.1.1** — dead v1 mid + PNS 探索エンジン削除 (102 関数, pns.rs 2,375→149)．
+- `b117bb0` **v2.1.2** — cascade dead code (定数/構造体 17 件) 整理．
+
+### やったこと
+1. **movegen ヘルパ分離 → `node_movegen.rs`**: `generate_check_moves`/`generate_defense_moves(_inner)`/`is_legal_quick`/`generate_interpositions` 等 11 メソッドを pns.rs から切り出し (mid_v3 + legacy 両方が依存する恒久部)．pns.rs は public `solve_tsume*` + `nodes_searched` のみ．
+2. **production → mid_v3**: `DfPnSolver::solve()` を `solve_via_v3` へ委譲 (250 行→7 行)．`solve_tsume*` 経由で mid_v3 が production エンジンに．
+3. **Unknown soundness fix**: `solve_via_v3`/`solve_via_v3_le` の未解決 (pn>0 && dn>0 = budget/timeout) を **`NoCheckmate` でなく `Unknown`** を返すよう修正．従来は budget 切れを不詰確定と誤報告 (false NoMate)．
+4. **v1/PNS 削除**: solver.rs v1 `mid()` + 41 ヘルパ (look_up_*/store_*/refutable_*/cross_deduce_*/has_mate_in_1_with 等), tt.rs v1 TT 48 メソッド (gc_*/retain_*/store_* 等), mod.rs v1 ヘルパ/定数, entry.rs PnsNode + PNS 定数 — 計 102 関数 + 17 定数/構造体．v1/PNS テスト 6 件 (bench_pns_nps 含む) も削除．
+5. **test_tsume_4** を mid_v3 の canonical longest-defense mate-11 ending (玉2三逃げ `1b2c,4b2b`) に更新 (STRICT VERIFY Some(11))．
+
+### 計画からの逸脱 / 重要判断
+- **v1 TT (`self.table`/`DfPnEntry`/`ProvenEntry`) は vestigial で存続**: `collect_pn_dn_dist`（公開 `solve_tsume_and_collect_pn_dn_dist` 経由）と `test_proven_table_*` が使用．mid_v3 は self.table を touch せず → ⚠ collect は mid_v3 で空ヒストグラムを返す (semantically degraded)．完全撤去は別フェーズ (collect API/maou_rust binding の扱い要判断)．
+- **dead_code 除去は `--tests` ビルドの dead 集合のみ対象**: lib-only build は test-used (PROOF_TAG_* 等) を誤検出する．一度 lib-build warnings で削除し 50 errors を出して revert・教訓化．
+
+### 検証
+- 非 ignored suite: **169 passed / 0 failed**（release, `--test-threads=1`）．
+- production `solve_tsume` 18 テスト全 pass（test_tsume_4 は ending 更新）．no_checkmate 系は Unknown fix 後も全 pass（真の dn==0 disproof）．
+
+### 残課題
+- 残 dead fields (PostCaptureSummary.proof_hands / DfPnSolver v1 state / tt hint_ply) + assoc const 3 件 (def+init 結合で保留)．
+- v1 TT subsystem 完全撤去．
+- mid_v3 39te ply24 gap (find_shortest)．
