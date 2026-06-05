@@ -6,7 +6,6 @@
 use super::*;
 use super::solver::*;
 use super::pns::*;
-use std::time::Instant;
 use crate::attack;
 use crate::movegen;
 use crate::types::PieceType;

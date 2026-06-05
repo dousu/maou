@@ -12,8 +12,6 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg(test)]
-use rustc_hash::FxHashMap;
 
 use crate::types::{HAND_KINDS, PieceType};
 
@@ -37,25 +35,6 @@ pub(super) static NEIGHBOR_DIAG: [AtomicU64; 4] = [
 pub(super) static WORKING_DIAG: [AtomicU64; 2] = [
     AtomicU64::new(0), AtomicU64::new(0),
 ];
-
-/// ProvenTT HashMap の GC トリガー閾値 (refutable エントリ数)．
-/// この値を超えると gc_proven() が呼ばれる．
-const PROVEN_MAP_GC_CAPACITY: usize = 500_000;
-
-/// ProvenTT proof エントリの GC トリガー閾値 (NPS 保護)．
-/// proof がこの値を超えると gc_proofs() が amount 昇順で evict を行う．
-const PROOF_MAP_GC_CAPACITY: usize = 2_000_000;
-
-/// gc_proofs() 後の proof エントリ目標数 (PROOF_MAP_GC_CAPACITY の 60%)．
-const PROOF_MAP_GC_TARGET: usize = 1_200_000;
-
-/// ProvenTT confirmed disproof エントリの GC トリガー閾値．
-/// confirmed がこの値を超えると gc_confirmed() が disproof_depth 昇順で evict を行う．
-/// depth が低い = 浅い IDS で確認 = 再導出コストが安い → 優先的に削除．
-const CONFIRMED_MAP_GC_CAPACITY: usize = 2_000_000;
-
-/// gc_confirmed() 後の confirmed エントリ目標数 (CONFIRMED_MAP_GC_CAPACITY の 60%)．
-const CONFIRMED_MAP_GC_TARGET: usize = 1_200_000;
 
 /// WorkingTT の 1 クラスタあたりのエントリ数．
 ///
@@ -90,23 +69,6 @@ const LEAF_CLUSTER_SIZE: usize = 4;
 /// LeafDisproofTT のクラスタ数 (2^19 = 512K クラスタ)．
 /// 512K × 4 entries × 16B = 32MB．WorkingTT overflow の remaining≤2 専用バッファ．
 const LEAF_NUM_CLUSTERS: usize = 1 << 19;
-
-/// IDS 引継ぎ時に pn=INF (WPN 飽和 / depth-limited) エントリの pn を
-/// 値落としするキャップ値．
-///
-/// pn=INF のまま引き継ぐと AND ノードで pn が爆発するため (n children × INF)，
-/// heuristic_or_pn の典型値域 (O(512)) に近い小さい値に置き換える．
-/// dn は有限なら保持し，INF の場合のみ同値でキャップする．
-const RETAIN_INF_PN_CAP: u32 = 32 * PN_UNIT;
-
-/// pn=INF エントリを IDS 引継ぎに含める最大 delta_remaining 値．
-///
-/// delta が大きい IDS ステップ (例: 4→17, delta=13) では，
-/// depth=D の pn=INF エントリは depth=D+delta でも依然 INF である可能性が高く，
-/// 未検証のヒントを大量注入して TT を汚染する．
-/// delta が小さい場合 (例: 16→17, delta=1) は「直前の depth 限界に近い」
-/// エントリのみが対象となり，汚染リスクが低い．
-const RETAIN_INF_MAX_DELTA: u16 = 4;
 
 /// FrontierTT: remaining ≤ この値の intermediate エントリを専用プールに格納する (案4, v0.55.7)．
 ///

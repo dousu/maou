@@ -1,8 +1,6 @@
 //! Df-Pn のデータ構造定義．
 
-use std::collections::VecDeque;
 
-use crate::moves::Move;
 use crate::types::HAND_KINDS;
 
 /// remaining_flags のビット 15: path_dependent フラグ．
@@ -134,11 +132,6 @@ const PROOF_TAG_MASK: u16 = 0x000F;
 const TAG_DEPTH_MASK: u16 = 0x003F;
 /// tag_depth のビット位置．
 const TAG_DEPTH_SHIFT: u16 = 4;
-/// disproven_len のビット位置 (meta bits 10-15)．
-const DISPROVEN_LEN_SHIFT: u16 = 10;
-/// disproven_len のマスク (6 bits, 0-63)．
-const DISPROVEN_LEN_MASK: u16 = 0x003F;
-
 const _: () = assert!(
     std::mem::size_of::<ProvenEntry>() == 12,
     "ProvenEntry must be 12 bytes"
@@ -441,45 +434,6 @@ impl DfPnEntry {
     }
 }
 
-/// Best-First Proof Number Search (PNS) のノード．
-///
-/// PNS では探索木を明示的にメモリ上に保持し，
-/// 常に最も有望なリーフ(most-proving node)を展開する．
-/// df-pn の閾値ベースの深さ優先探索と異なり，
-/// グローバルに最適なノード選択を行うため thrashing が発生しない．
-///
-/// 参考: Allis (1994), Seo, Iida & Uiterwijk (2001, PN*)
-pub(super) struct PnsNode {
-    /// 盤面ハッシュ(持ち駒除外)．TT キー．
-    pub(super) pos_key: u64,
-    /// 完全ハッシュ(持ち駒込み)．ループ検出用．
-    pub(super) full_hash: u64,
-    /// 攻め方の持ち駒．
-    pub(super) hand: [u8; HAND_KINDS],
-    /// 証明数．
-    pub(super) pn: u32,
-    /// 反証数．
-    pub(super) dn: u32,
-    /// 親ノードのインデックス(`u32::MAX` = ルート)．
-    pub(super) parent: u32,
-    /// 親から到達する手．
-    pub(super) move_from_parent: Move,
-    /// OR ノード(攻め方手番)か AND ノード(玉方手番)か．
-    pub(super) or_node: bool,
-    /// 展開済みフラグ．
-    pub(super) expanded: bool,
-    /// 子ノードのインデックス(アリーナ内)．
-    pub(super) children: Vec<u32>,
-    /// 最善子ノードのキャッシュ(backup 時に更新)．
-    /// OR ノード: min(pn, dn) の子，AND ノード: min(dn, pn) の子．
-    pub(super) cached_best: u32,
-    /// 残り探索深さ．
-    pub(super) remaining: u16,
-    /// AND ノード用: 逐次活性化待ちの合駒(drop)手．
-    /// 弱い駒から順に1つずつ子ノードとして展開する．
-    pub(super) deferred_drops: VecDeque<Move>,
-}
-
 /// PNS アリーナの**デフォルト**最大ノード数(メモリ上限)．
 ///
 /// 1ノード ≈ 80〜120 bytes(children Vec 含む)．
@@ -489,8 +443,3 @@ pub(super) struct PnsNode {
 /// この定数はデフォルト値および初期 `Vec::with_capacity` の上限として使用する．
 pub(super) const PNS_MAX_ARENA_NODES: usize = 5_000_000;
 
-/// PNS アリーナの初期確保容量上限 (1M ノード)．
-///
-/// `param_pns_arena_max` を大きく設定しても起動時の物理メモリ確保は
-/// この値で抑えて成長は Vec 自動拡張に任せる．
-pub(super) const PNS_INIT_CAPACITY_CAP: usize = 1024 * 1024;

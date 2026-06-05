@@ -61,9 +61,6 @@ fn push_move<T, const N: usize>(buf: &mut ArrayVec<T, N>, val: T) {
     debug_assert!(result.is_ok(), "move buffer overflow: capacity {N} exceeded");
 }
 
-/// 証明数・反証数の無限大を表す定数．
-const INF: u32 = u32::MAX;
-
 /// pn/dn の 1 単位を表す定数．
 ///
 /// 全ての pn/dn 初期値・加算定数・フロア値はこの定数の倍数で表現する．
@@ -81,51 +78,6 @@ const INF: u32 = u32::MAX;
 /// 盤面状態の比較(safe_escapes >= 4 等)，ループカウンタ．
 const PN_UNIT: u32 = 16;
 
-/// WPN スケールドサム: AND pn および OR dn の非最大子寄与率 (1/2^WPN_GAMMA_SHIFT)．
-///
-///   AND pn = max(child_pn) + (sum(child_pn) - max(child_pn)) >> WPN_GAMMA_SHIFT
-///   OR  dn = max(child_dn) + (sum(child_dn) - max(child_dn)) >> WPN_GAMMA_SHIFT
-///
-/// 旧式 `sum` は DAG で過大評価される．`max + (count-1)*PN_UNIT` は非最大子の
-/// 変化を伝播しない．スケールドサムは実際の子の値を使いつつ DAG 二重カウントを
-/// SNDA と協調して割り引く中間的近似．
-/// SNDA は直接の兄弟の重複のみ補正するため，深い DAG 合流には WPN が必要．
-/// 初期 pn/dn 値域拡大 (v0.30.0) により OR dn WPN の効果が安定した．
-///
-/// crossover 点: max = PN_UNIT * 2^WPN_GAMMA_SHIFT
-///   (これより小さい max では旧式より保守的，大きい max では旧式より積極的)
-/// GAMMA_SHIFT=6 → crossover = 1024 (bucket 10)
-///
-/// v0.51.0 で GAMMA_SHIFT=7 を試みたが，WPN 和の貢献を半減させると
-/// 収束が遅くなり AND pn テールが逆に爆発した (depth=20 で 217K→2.4M エントリ)．
-/// KL も全 depth で悪化したため 6 に戻した (v0.51.1, pn-dn-distribution.md §4.5 参照)．
-///
-/// OR dn 専用 γ_dn の分離も試みた (v0.39.0, γ_dn=4) が，AND-min 伝播が支配的であり
-/// σ_ln の改善は得られなかった．OR dn 緩和は AND ノードで即座に min されて消えるため，
-/// WPN_GAMMA_SHIFT は pn/dn 共通で 6 を維持する (pn-dn-distribution.md §3.10 参照)．
-const WPN_GAMMA_SHIFT: u32 = 3;
-
-/// AND ノードで合駒(drop)を後回しにするための dn バイアス．
-///
-/// AND ノード(玉方手番)で王の移動・駒取りなどの非合駒応手を先に
-/// 展開すると，それらの証明エントリが転置表に蓄積される．
-/// その後に合駒の分岐を探索する際，攻め方が合駒を取った後の
-/// 局面が既に証明済みになっていることが多く，高速に証明できる．
-///
-/// 旧値 (v0.53.2 以前): 8*PN_UNIT=128．`heuristic_or_dn` が返す値域
-/// [PN_UNIT, 40*PN_UNIT]=[16, 640] に対して不十分であり，
-/// se=0 の非合駒応手(dn=640)が合駒有効 dn(128+128=256)より大きくなり
-/// バイアスが逆転するケースがあった (双玉逆王手局面等)．
-///
-/// 新値 (v0.53.3): `heuristic_or_dn` の実用上限 40*PN_UNIT=640 と等値に設定．
-///
-///   非合駒(board move): effective_dn = heuristic_or_dn(se, nc) ∈ [16, 640]
-///   合駒(drop):        effective_dn = heuristic_or_dn(se, nc) + 640 ∈ [656, 1280]
-///
-/// これにより heuristic_or_dn の初期値域全体で board move < drop の順序が保証される．
-/// DFPN の閾値制御により board move の dn が 640 を超えた段階で drop の探索が始まる．
-const INTERPOSE_DN_BIAS: u32 = 40 * PN_UNIT;
-
 // MID ループの dn 閾値フロア(スラッシング防止)は v0.24.41 で
 // `DfPnSolver::param_dn_floor_mult` (デフォルト 100) に移行した．
 // 旧 `const DN_FLOOR: u32 = 100 * PN_UNIT;` は削除．
@@ -133,37 +85,11 @@ const INTERPOSE_DN_BIAS: u32 = 40 * PN_UNIT;
 // 進捗のない空転が発生するため，dn_threshold を最低
 // `param_dn_floor_mult * PN_UNIT` まで引き上げる．
 
-/// TCA (Threshold Controlling Algorithm, Kishimoto & Müller 2008; Kishimoto 2010)
-/// 過小評価対策．
-///
-/// 巡回グラフ(DCG)上の df-pn では，ループ検出により子ノードが
-/// (INF, 0) を返し，兄弟ノードの pn/dn が過小評価されうる．
-/// TCA は OR ノードでループ子が存在する場合に MID ループの閾値を
-/// 加算的に拡張し，兄弟のより深い探索を促す．
-///
-/// 拡張量 = `threshold / TCA_EXTEND_DENOM + 1` (約 25% の加算)．
-/// 乗算的拡張(2×)は再帰で指数的に増大するが，加算的拡張は
-/// 各レベルで独立に適用されるため膨張を抑える．
-const TCA_EXTEND_DENOM: u32 = 4;
-
 /// Deep df-pn (Song Zhang et al. 2017) の深さ係数 R．
 ///
 /// 深い位置ほど初期 pn を高く設定し，浅い分岐の探索を優先させる．
 /// `look_up_pn_dn` で TT ミス時に `ply > depth/2` の場合に適用される．
 const DEEP_DFPN_R: u32 = 4;
-
-/// MID ループのゼロ進捗検出閾値．
-///
-/// 子 `mid()` が消費するノード数が連続して0の回数がこの値を超えると
-/// MID ループを脱出し，上位ノードに制御を戻す(`dn_floor` 由来の空転防止)．
-const ZERO_PROGRESS_LIMIT: u32 = 16;
-
-/// MID ループの停滞検出閾値．
-///
-/// best child の pn/dn と閾値が連続して変化しない回数がこの値を超えると
-/// MID ループを脱出する．同じ子に同じ予算で `mid()` を呼んでも
-/// 結果が変わらないケースを検出する．
-const STAGNATION_LIMIT: u32 = 4;
 
 /// `param_epsilon_denom` の depth-adaptive モードを示すセンチネル値．
 ///
