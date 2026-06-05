@@ -1,7 +1,8 @@
 ---
 title: "CLAUDE.md [SLOW] テスト表の更新 (mid_v2 削除で 6 件消失) + mid_v3 39te ply24 gap の follow-up 記録"
 date: 2026-06-05
-status: approved
+status: applied
+applied_in: af9cbcd
 crate: maou_shogi
 applies_to: CLAUDE.md
 ---
