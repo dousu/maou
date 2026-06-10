@@ -53,6 +53,16 @@ pub use pns::{solve_tsume, solve_tsume_with_timeout, solve_tsume_and_collect_pn_
 /// 合法手上限に合わせる．
 const MAX_MOVES: usize = 593;
 
+/// V3_KHPAR: KH/yaneuraou parity の手生成順 (王手 = 盤上移動→駒打ち raw 順,
+/// AND 合駒 drop = 歩→桂→香→… 順) を有効化する experiment gate．
+/// default off = committed 挙動 (29te 18,539 canonical を維持)．
+/// 39te campaign では V3_KHPAR=1 V3_CHUAI=1 で計測する (worklog 参照)．
+/// process 内で 1 回だけ読む (hot path の env::var 回避)．
+pub(super) fn kh_parity_order() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V3_KHPAR").is_ok())
+}
+
 /// `ArrayVec::try_push` のラッパー．
 /// デバッグビルドでは容量超過時にパニックし，リリースビルドでは無音で破棄する．
 #[inline(always)]

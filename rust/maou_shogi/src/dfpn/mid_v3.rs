@@ -17,6 +17,37 @@ use crate::board::Board;
 use crate::moves::Move;
 use super::solver::{DfPnSolver, TsumeResult};
 
+/// 診断 env (sfen prefix gate) を process 内で 1 回だけ読む．
+/// hot path (per-node/per-child) での `std::env::var` は NPS を 1-2 桁落とすため必須．
+macro_rules! diag_env_str {
+    ($fn_name:ident, $env:literal) => {
+        #[inline]
+        fn $fn_name() -> Option<&'static str> {
+            static C: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+            C.get_or_init(|| std::env::var($env).ok().filter(|s| !s.is_empty()))
+                .as_deref()
+        }
+    };
+}
+/// 診断 env (bool gate) を process 内で 1 回だけ読む．
+macro_rules! diag_env_flag {
+    ($fn_name:ident, $env:literal) => {
+        #[inline]
+        fn $fn_name() -> bool {
+            static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            *C.get_or_init(|| std::env::var($env).is_ok())
+        }
+    };
+}
+diag_env_str!(env_v3selx, "V3SELX");
+diag_env_str!(env_v3th, "V3TH");
+diag_env_str!(env_v3thx, "V3THX");
+diag_env_flag!(env_v3chuai, "V3_CHUAI");
+diag_env_flag!(env_v3droplast, "V3_DROPLAST");
+diag_env_flag!(env_v3obvd, "V3_OBV_D");
+diag_env_flag!(env_khsel, "KHSEL");
+diag_env_flag!(env_v3trace, "V3TRACE");
+
 /// kPnDnUnit 相当．
 pub(super) const V3_U: u64 = 2;
 /// kInfinitePnDn 相当 (u64::MAX/2-1)．
@@ -313,12 +344,10 @@ impl DfPnSolver {
         let orig_inc_flag = *inc_flag;
 
         // V3TH: per-node received threshold dump (sfen-prefix gated) for ③ hunting (KHTH と突合)．
-        if let Ok(th_t) = std::env::var("V3TH") {
-            if !th_t.is_empty() {
-                let th_s = board.sfen();
-                if th_s.starts_with(th_t.as_str()) {
-                    eprintln!("V3TH depth={} thpn={} thdn={} sfen={}", ply, thpn, thdn, th_s);
-                }
+        if let Some(th_t) = env_v3th() {
+            let th_s = board.sfen();
+            if th_s.starts_with(th_t) {
+                eprintln!("V3TH depth={} thpn={} thdn={} sfen={}", ply, thpn, thdn, th_s);
             }
         }
 
@@ -799,12 +828,10 @@ impl DfPnSolver {
         // Phase 33m: KH DelayedMoveList の cross-square「無意味な中合い」検出 (delayed_move_list.hpp:151)．
         // AND ノードで，support 0 (受け方の他駒に守られない) かつ 逆王手でない drop = 後回し対象．
         // 実験 (V3_CHUAI) 時のみ計算 (default は overhead 回避のため skip)．
-        let want_chuai = !or_node && std::env::var("V3_CHUAI").is_ok();
+        let want_chuai = !or_node && env_v3chuai();
         let defender_for_chuai = self.attacker.opponent();
         let mut chuai: Vec<bool> = Vec::with_capacity(moves.len());
-        let v3selx_target = std::env::var("V3SELX").unwrap_or_default();
-        let dump_this = !v3selx_target.is_empty()
-            && board.sfen().starts_with(v3selx_target.as_str());
+        let dump_this = env_v3selx().is_some_and(|t| board.sfen().starts_with(t));
         if dump_this {
             eprintln!("V3SELX node or={} ply={} sfen={}", or_node, ply, board.sfen());
         }
@@ -830,7 +857,7 @@ impl DfPnSolver {
                     let mut e = super::move_brief_eval(m, ksq, board);
                     // Phase 33n 実験: KH movegen は同点で board-move を drop より前に出す傾向．
                     // eval は 10 刻みなので +1 は完全同点のみ崩し drop を後ろへ送る．
-                    if std::env::var("V3_DROPLAST").is_ok() && m.is_drop() {
+                    if env_v3droplast() && m.is_drop() {
                         e += 1;
                     }
                     e
@@ -942,7 +969,7 @@ impl DfPnSolver {
                     );
                     r = MidSearchResult::new_win(1);
                     r.is_first_visit = false;
-                } else if cks.is_empty() && std::env::var("V3_OBV_D").is_ok() {
+                } else if cks.is_empty() && env_v3obvd() {
                     // 攻め方に王手手段なし → 詰み不可能 → この応手は逃れ (disproven, absolute)．
                     self.v3_tt.insert(
                         ch,
@@ -968,7 +995,7 @@ impl DfPnSolver {
         // Phase 33m: cross-square「無意味な中合い」束ね (KH delayed_move_list.hpp:151)．
         // 実測では 29te で効果なし (−0.3%) かつ mate-29→31 退行 — d3-d7 の breadth は
         // AND(中合い) だけでなく OR(王手) でも膨らむため．V3_CHUAI で実験有効化 (default off)．
-        let chuai_opt: Option<&[bool]> = if std::env::var("V3_CHUAI").is_ok() {
+        let chuai_opt: Option<&[bool]> = if env_v3chuai() {
             Some(chuai.as_slice())
         } else {
             None
@@ -1017,7 +1044,7 @@ impl DfPnSolver {
         // Phase 33k: per-ply 1 階更新ごとの node selection 比較 (ユーザ指示)．
         // 各 ply の **初回 first-visit** node の children seed を sorted 順で dump．
         // sfen で KH の同一局面と突き合わせる (KHSEL と比較)．
-        if std::env::var("KHSEL").is_ok() && (ply as usize) <= 7 && self.v3_sel_dumped[ply as usize] == 0 {
+        if env_khsel() && (ply as usize) <= 7 && self.v3_sel_dumped[ply as usize] == 0 {
             self.v3_sel_dumped[ply as usize] = 1;
             eprintln!("V3SEL ply={} or={} sfen={}", ply, or_node, board.sfen());
             for (k, &ir) in expansion.idx.iter().enumerate().take(12) {
@@ -1032,7 +1059,7 @@ impl DfPnSolver {
             }
         }
         // V3TRACE: chronological per-expansion trace (KH KHTRACE と 1 構築ごとに突き合わせる)．
-        if std::env::var("V3TRACE").is_ok() && self.v3_trace_cnt < 200_000 {
+        if env_v3trace() && self.v3_trace_cnt < 200_000 {
             self.v3_trace_cnt += 1;
             let bi = expansion.idx[0] as usize;
             let r = &expansion.results[bi];
@@ -1055,12 +1082,10 @@ impl DfPnSolver {
         let mut cur_thdn = thdn;
 
         // V3TH: per-node received threshold dump (sfen-prefix gated) for ③ hunting (KHTH と突合)．
-        if let Ok(th_t) = std::env::var("V3TH") {
-            if !th_t.is_empty() {
-                let th_s = board.sfen();
-                if th_s.starts_with(th_t.as_str()) {
-                    eprintln!("V3TH depth={} thpn={} thdn={} sfen={}", ply, thpn, thdn, th_s);
-                }
+        if let Some(th_t) = env_v3th() {
+            let th_s = board.sfen();
+            if th_s.starts_with(th_t) {
+                eprintln!("V3TH depth={} thpn={} thdn={} sfen={}", ply, thpn, thdn, th_s);
             }
         }
 
@@ -1107,24 +1132,19 @@ impl DfPnSolver {
             let captured = board.do_move(best_mv);
             // V3THX (計測専用): 親が target child へ降りる瞬間の閾値 breakdown を dump．
             // probe_hit = この child が target prefix に一致 (= 戻り値/exit 理由も dump 対象)．
-            let probe_hit = std::env::var("V3THX").ok()
-                .filter(|t| !t.is_empty())
-                .map(|t| board.sfen().starts_with(t.as_str()))
-                .unwrap_or(false);
+            let probe_hit = env_v3thx().is_some_and(|t| board.sfen().starts_with(t));
             let probe_inc_before = *inc_flag;
-            if let Ok(tgt) = std::env::var("V3THX") {
-                if !tgt.is_empty() && board.sfen().starts_with(tgt.as_str()) {
-                    let exp = &self.mid_expansion_stack[stack_idx];
-                    let kids: Vec<String> = exp.dbg_children().iter()
-                        .map(|(m, phi, delta, fv)| format!("{}:{}/{}{}", m.to_usi(), phi, delta, if *fv {"*"} else {""}))
-                        .collect();
-                    eprintln!(
-                        "V3THX 2ndphi={} sumd={} cthpn={} cthdn={} best={} | kids[phi/delta]: {}",
-                        exp.dbg_second_phi(),
-                        exp.dbg_sum_delta_except_best(),
-                        cthpn, cthdn, best_mv.to_usi(), kids.join(" "),
-                    );
-                }
+            if probe_hit {
+                let exp = &self.mid_expansion_stack[stack_idx];
+                let kids: Vec<String> = exp.dbg_children().iter()
+                    .map(|(m, phi, delta, fv)| format!("{}:{}/{}{}", m.to_usi(), phi, delta, if *fv {"*"} else {""}))
+                    .collect();
+                eprintln!(
+                    "V3THX 2ndphi={} sumd={} cthpn={} cthdn={} best={} | kids[phi/delta]: {}",
+                    exp.dbg_second_phi(),
+                    exp.dbg_sum_delta_except_best(),
+                    cthpn, cthdn, best_mv.to_usi(), kids.join(" "),
+                );
             }
             // KH EliminateDoubleCount: child が祖先 frame から到達可能 (DAG) なら，その祖先の
             // branch sum_mask を max へ reset し δ 二重計上を防ぐ．
