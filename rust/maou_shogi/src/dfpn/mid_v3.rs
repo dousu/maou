@@ -42,11 +42,20 @@ macro_rules! diag_env_flag {
 diag_env_str!(env_v3selx, "V3SELX");
 diag_env_str!(env_v3th, "V3TH");
 diag_env_str!(env_v3thx, "V3THX");
+/// V3RET=<max_ply>: `search_v3_le` の返り値を ply≤max_ply で時系列 dump する
+/// (KH 計測ビルドの KHRET と突合する return-value 乖離 hunting 用)．
+fn env_v3ret() -> Option<u32> {
+    static C: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V3RET").ok().and_then(|s| s.parse().ok()))
+}
+/// V3RET の出力行数 cap (KHRET と同じ 100K)．
+static V3RET_CNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 diag_env_flag!(env_v3chuai, "V3_CHUAI");
 diag_env_flag!(env_v3droplast, "V3_DROPLAST");
 diag_env_flag!(env_v3obvd, "V3_OBV_D");
 diag_env_flag!(env_khsel, "KHSEL");
 diag_env_flag!(env_v3trace, "V3TRACE");
+diag_env_flag!(env_v3rootkeep, "V3_ROOTKEEP");
 
 /// kPnDnUnit 相当．
 pub(super) const V3_U: u64 = 2;
@@ -705,74 +714,20 @@ impl DfPnSolver {
         }
     }
 
-    /// Phase 33 (案②): 検証済 `MidLocalExpansion` を per-node に駆動する SearchImpl．
-    /// mid_v2 production loop (solver.rs:7292) の **コアループのみ** を抽出し，
-    /// maou TT/proof-hand/DAG baggage を排して mid_v3 の clean TT + 非累積 extend +
-    /// root IDS + GHI (rep_min) と合成する．戻り値 (pn, dn, mate_len, rep_min) は u32 unit-2．
-    fn search_v3_le(
+    /// `search_v3_le` の子局面展開フェーズ (movegen → seed/look-ahead →
+    /// `MidLocalExpansion` 構築 → expansion stack へ push)．
+    /// 戻り値: Ok(stack_idx) / Err(早期確定 (合法手なし・1手詰) の返り値 tuple)．
+    /// V3_ROOTKEEP の root 持続時は呼ばれない (既存 frame を再利用する)．
+    fn build_v3_le_expansion(
         &mut self,
         board: &mut Board,
-        thpn: u32,
-        thdn: u32,
         ply: u32,
+        or_node: bool,
+        hash: u64,
         path_key: u64,
-        inc_flag: &mut u32,
-    ) -> (u32, u32, u16, u32) {
+    ) -> Result<usize, (u32, u32, u16, u32)> {
         use super::local_expansion::{MidLocalExpansion, MidSearchResult, REPETITION_NONE};
 
-        self.v3_nodes += 1;
-        if self.v3_nodes >= self.max_nodes || (self.v3_nodes & 0x3FF == 0 && self.is_timed_out()) {
-            return (V3_U_U32, V3_U_U32, 0, REPETITION_NONE);
-        }
-
-        let hash = board.hash;
-        // Phase 33g: per-ply total/unique 訪問計測 (KHPLY trace 比較用)．
-        {
-            let p = (ply as usize).min(63);
-            self.v3_ply_total[p] += 1;
-            if self.v3_ply_seen.insert((ply, hash)) {
-                self.v3_ply_unique[p] += 1;
-            }
-        }
-        if let Some(&anc_ply) = self.v3_path.get(&hash) {
-            return (V3_INF_U, 0, 0, anc_ply);
-        }
-        if ply >= v3_max_ply() {
-            return (V3_INF_U, 0, 0, ply);
-        }
-        // KH RepetitionTable: この経路 (path_key) が過去に repetition 不詰と判明していれば再利用．
-        // dominance / rep_cache のいずれか有効時．戻り値 rep_min = 記録された repetition_start．
-        if self.param_v3_dominance || self.param_v3_rep_cache {
-            if let Some((rep_depth, _len)) = self.v3_rep_memo.contains(path_key, 0) {
-                self.v3_rep_hits += 1;
-                return (V3_INF_U, 0, 0, rep_depth);
-            }
-        }
-        if let Some(e) = self.v3_tt.get(&hash) {
-            if e.is_final() {
-                return (tt_pn_u32(e), tt_dn_u32(e), e.len, REPETITION_NONE);
-            }
-        }
-        // Phase 33d: hand-aware reuse — 同一盤面 (pos_key) を異なる持駒で先に解いていれば再利用．
-        if self.param_v3_proof_hand {
-            let pk = super::position_key(board);
-            let att_hand = board.hand[self.attacker.index()];
-            if let Some((len, best)) = self.v3_proof_lookup(pk, &att_hand) {
-                self.v3_ph_hits += 1;
-                // PV 抽出用に exact key へも書き戻す．
-                let md = self.v3_min_depth(hash, ply);
-                self.v3_tt.insert(hash, V3Entry { pn: 0, dn: V3_INF_U as u64, len, best, min_depth: md });
-                return (0, V3_INF_U, len, REPETITION_NONE);
-            }
-            if self.v3_disproof_lookup(pk, &att_hand) {
-                self.v3_ph_hits += 1;
-                let md = self.v3_min_depth(hash, ply);
-                self.v3_tt.insert(hash, V3Entry { pn: V3_INF_U as u64, dn: 0, len: 0, best: 0, min_depth: md });
-                return (V3_INF_U, 0, 0, REPETITION_NONE);
-            }
-        }
-
-        let or_node = board.turn == self.attacker;
         // NOTE (Phase 33j): df-pn の探索は move 生成順に acutely sensitive (実測: normal 75K /
         // reversed 5M+ 未解決 / to-square 82K / move16 2M = ~66× span)．maou の native 生成順が
         // 単純順では最良．KH の 19K は YaneuraOu movegen の特定順由来で，完全一致には movegen 順の
@@ -796,7 +751,7 @@ impl DfPnSolver {
             };
             let md = self.v3_min_depth(hash, ply);
             self.v3_tt.insert(hash, V3Entry { pn: p as u64, dn: d as u64, len: l, best: 0, min_depth: md });
-            return (p, d, l, REPETITION_NONE);
+            return Err((p, d, l, REPETITION_NONE));
         }
 
         if or_node {
@@ -808,7 +763,7 @@ impl DfPnSolver {
                     hash,
                     V3Entry { pn: 0, dn: V3_INF_U as u64, len: 1, best: mm.to_move16(), min_depth: md },
                 );
-                return (0, V3_INF_U, 1, REPETITION_NONE);
+                return Err((0, V3_INF_U, 1, REPETITION_NONE));
             }
         }
 
@@ -1073,7 +1028,91 @@ impl DfPnSolver {
         // mid_v2 と LE は同時実行しないため mid_expansion_stack を共用 (solve 開始時に clear 済)．
         self.mid_expansion_stack.push(expansion);
         self.mid_frame_moves.push(0);
-        let stack_idx = self.mid_expansion_stack.len() - 1;
+        Ok(self.mid_expansion_stack.len() - 1)
+    }
+
+    /// Phase 33 (案②): 検証済 `MidLocalExpansion` を per-node に駆動する SearchImpl．
+    /// mid_v2 production loop (solver.rs:7292) の **コアループのみ** を抽出し，
+    /// maou TT/proof-hand/DAG baggage を排して mid_v3 の clean TT + 非累積 extend +
+    /// root IDS + GHI (rep_min) と合成する．戻り値 (pn, dn, mate_len, rep_min) は u32 unit-2．
+    fn search_v3_le(
+        &mut self,
+        board: &mut Board,
+        thpn: u32,
+        thdn: u32,
+        ply: u32,
+        path_key: u64,
+        inc_flag: &mut u32,
+    ) -> (u32, u32, u16, u32) {
+        use super::local_expansion::{MidLocalExpansion, MidSearchResult, REPETITION_NONE};
+
+        self.v3_nodes += 1;
+        if self.v3_nodes >= self.max_nodes || (self.v3_nodes & 0x3FF == 0 && self.is_timed_out()) {
+            return (V3_U_U32, V3_U_U32, 0, REPETITION_NONE);
+        }
+
+        let hash = board.hash;
+        // Phase 33g: per-ply total/unique 訪問計測 (KHPLY trace 比較用)．
+        {
+            let p = (ply as usize).min(63);
+            self.v3_ply_total[p] += 1;
+            if self.v3_ply_seen.insert((ply, hash)) {
+                self.v3_ply_unique[p] += 1;
+            }
+        }
+        if let Some(&anc_ply) = self.v3_path.get(&hash) {
+            return (V3_INF_U, 0, 0, anc_ply);
+        }
+        if ply >= v3_max_ply() {
+            return (V3_INF_U, 0, 0, ply);
+        }
+        // KH RepetitionTable: この経路 (path_key) が過去に repetition 不詰と判明していれば再利用．
+        // dominance / rep_cache のいずれか有効時．戻り値 rep_min = 記録された repetition_start．
+        if self.param_v3_dominance || self.param_v3_rep_cache {
+            if let Some((rep_depth, _len)) = self.v3_rep_memo.contains(path_key, 0) {
+                self.v3_rep_hits += 1;
+                return (V3_INF_U, 0, 0, rep_depth);
+            }
+        }
+        if let Some(e) = self.v3_tt.get(&hash) {
+            if e.is_final() {
+                return (tt_pn_u32(e), tt_dn_u32(e), e.len, REPETITION_NONE);
+            }
+        }
+        // Phase 33d: hand-aware reuse — 同一盤面 (pos_key) を異なる持駒で先に解いていれば再利用．
+        if self.param_v3_proof_hand {
+            let pk = super::position_key(board);
+            let att_hand = board.hand[self.attacker.index()];
+            if let Some((len, best)) = self.v3_proof_lookup(pk, &att_hand) {
+                self.v3_ph_hits += 1;
+                // PV 抽出用に exact key へも書き戻す．
+                let md = self.v3_min_depth(hash, ply);
+                self.v3_tt.insert(hash, V3Entry { pn: 0, dn: V3_INF_U as u64, len, best, min_depth: md });
+                return (0, V3_INF_U, len, REPETITION_NONE);
+            }
+            if self.v3_disproof_lookup(pk, &att_hand) {
+                self.v3_ph_hits += 1;
+                let md = self.v3_min_depth(hash, ply);
+                self.v3_tt.insert(hash, V3Entry { pn: V3_INF_U as u64, dn: 0, len: 0, best: 0, min_depth: md });
+                return (V3_INF_U, 0, 0, REPETITION_NONE);
+            }
+        }
+
+        let or_node = board.turn == self.attacker;
+        // KH SearchEntry parity (V3_ROOTKEEP): root expansion を IDS iteration 間で持続する．
+        // KH は SearchEntry で root LocalExpansion を 1 回だけ Emplace し，全 threshold
+        // iteration (SearchImplForRoot) で再利用する．maou の毎 iteration 再構築は
+        // tainted unknown (TT 非保存) の root children 値を喪失し cycle 再探索の
+        // breadth を生むため，KH に合わせ持続できるようにする (experiment gate)．
+        let root_keep = ply == 0 && env_v3rootkeep();
+        let stack_idx = if root_keep && !self.mid_expansion_stack.is_empty() {
+            0
+        } else {
+            match self.build_v3_le_expansion(board, ply, or_node, hash, path_key) {
+                Ok(idx) => idx,
+                Err(ret) => return ret,
+            }
+        };
 
         let orig_thpn = thpn;
         let orig_thdn = thdn;
@@ -1258,8 +1297,12 @@ impl DfPnSolver {
             .unwrap_or(REPETITION_NONE);
 
         // KH ExpansionStack: frame を pop (push と対称)．
-        self.mid_expansion_stack.pop();
-        self.mid_frame_moves.pop();
+        // V3_ROOTKEEP: root frame は SearchEntry 相当の IDS loop 全体で持続させる
+        // (KH は SearchEntry で Emplace/Pop し iteration 毎には触らない)．
+        if !root_keep {
+            self.mid_expansion_stack.pop();
+            self.mid_frame_moves.pop();
+        }
 
         // KH 流ルーティング: 結果は **absolute** か **repetition** のいずれか．
         //   - proof (pn=0): 常に absolute (詰みは千日手依存になり得ない) → clean TT．
@@ -1308,6 +1351,19 @@ impl DfPnSolver {
             // 格納すると別経路の child seed (mid_v3.rs:921) を誤らせ 29te が +20% 退行する
             // (本セッション Change A 実験 + 旧 V3_CACHE_TAINT で確認済 = position-keyed 再利用は不可)．
             ret_rep_min = node_rep_min;
+        }
+        // V3RET: KHRET (KH SearchImpl 返り値 dump) との突合用．main exit のみ
+        // (early return は KH では SearchImpl 非到達のケースに相当するため対象外)．
+        if let Some(d) = env_v3ret() {
+            if ply <= d {
+                let c = V3RET_CNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if c <= 100_000 {
+                    eprintln!(
+                        "V3RET {} ply={} pn={} dn={} sfen={}",
+                        c, ply, pn, dn, board.sfen()
+                    );
+                }
+            }
         }
         (pn, dn, len, ret_rep_min)
     }
