@@ -312,6 +312,16 @@ impl DfPnSolver {
         let orig_thdn = thdn;
         let orig_inc_flag = *inc_flag;
 
+        // V3TH: per-node received threshold dump (sfen-prefix gated) for ③ hunting (KHTH と突合)．
+        if let Ok(th_t) = std::env::var("V3TH") {
+            if !th_t.is_empty() {
+                let th_s = board.sfen();
+                if th_s.starts_with(th_t.as_str()) {
+                    eprintln!("V3TH depth={} thpn={} thdn={} sfen={}", ply, thpn, thdn, th_s);
+                }
+            }
+        }
+
         // DoesHaveOldChild: 既訪問 (is_first=false) かつ non-final な子があれば TCA 延長．
         let does_have_old = children.iter().any(|c| !c.is_first && !c.is_final);
         if does_have_old {
@@ -1044,6 +1054,16 @@ impl DfPnSolver {
         let mut cur_thpn = thpn;
         let mut cur_thdn = thdn;
 
+        // V3TH: per-node received threshold dump (sfen-prefix gated) for ③ hunting (KHTH と突合)．
+        if let Ok(th_t) = std::env::var("V3TH") {
+            if !th_t.is_empty() {
+                let th_s = board.sfen();
+                if th_s.starts_with(th_t.as_str()) {
+                    eprintln!("V3TH depth={} thpn={} thdn={} sfen={}", ply, thpn, thdn, th_s);
+                }
+            }
+        }
+
         let mut curr = self.mid_expansion_stack[stack_idx].current_result();
         if self.mid_expansion_stack[stack_idx].does_have_old_child() {
             *inc_flag = inc_flag.saturating_add(1);
@@ -1085,6 +1105,27 @@ impl DfPnSolver {
             self.mid_frame_moves[stack_idx] = best_mv.to_move16();
 
             let captured = board.do_move(best_mv);
+            // V3THX (計測専用): 親が target child へ降りる瞬間の閾値 breakdown を dump．
+            // probe_hit = この child が target prefix に一致 (= 戻り値/exit 理由も dump 対象)．
+            let probe_hit = std::env::var("V3THX").ok()
+                .filter(|t| !t.is_empty())
+                .map(|t| board.sfen().starts_with(t.as_str()))
+                .unwrap_or(false);
+            let probe_inc_before = *inc_flag;
+            if let Ok(tgt) = std::env::var("V3THX") {
+                if !tgt.is_empty() && board.sfen().starts_with(tgt.as_str()) {
+                    let exp = &self.mid_expansion_stack[stack_idx];
+                    let kids: Vec<String> = exp.dbg_children().iter()
+                        .map(|(m, phi, delta, fv)| format!("{}:{}/{}{}", m.to_usi(), phi, delta, if *fv {"*"} else {""}))
+                        .collect();
+                    eprintln!(
+                        "V3THX 2ndphi={} sumd={} cthpn={} cthdn={} best={} | kids[phi/delta]: {}",
+                        exp.dbg_second_phi(),
+                        exp.dbg_sum_delta_except_best(),
+                        cthpn, cthdn, best_mv.to_usi(), kids.join(" "),
+                    );
+                }
+            }
             // KH EliminateDoubleCount: child が祖先 frame から到達可能 (DAG) なら，その祖先の
             // branch sum_mask を max へ reset し δ 二重計上を防ぐ．
             if self.param_v3_dag {
@@ -1115,6 +1156,25 @@ impl DfPnSolver {
                     mk_result_u32(cp, cd, cl, cr)
                 }
             };
+            // V3THX 戻り値/exit 理由: 子が cthdn まで届かず返る (UNDER) のか，閾値到達 (THHIT) か，
+            // 千日手 (REP)/確定 (FINAL) かを分類 — 「rotate しない＝progress 不足」の原因切り分け用．
+            if probe_hit {
+                let (cp, cd) = (child_result.pn, child_result.dn);
+                let reason = if child_result.is_final() {
+                    "FINAL"
+                } else if child_result.is_repetition() {
+                    "REP"
+                } else if cp >= cthpn || cd >= cthdn {
+                    "THHIT"
+                } else {
+                    "UNDER(inc_break/budget)"
+                };
+                eprintln!(
+                    "V3THXR first={} cthpn={} cthdn={} -> ret pn={} dn={} rep_min={} | {} | inc {}->{}",
+                    is_first as u8, cthpn, cthdn, cp, cd, child_result.repetition_start,
+                    reason, probe_inc_before, *inc_flag,
+                );
+            }
             board.undo_move(best_mv, captured);
 
             // KH multi_pv=1 相当: child の phi が 0 になった瞬間に即 proof/disproof 確定して break．
@@ -1218,14 +1278,16 @@ impl DfPnSolver {
                 }
                 ret_rep_min = REPETITION_NONE;
             }
+        } else if node_rep_min == REPETITION_NONE || node_rep_min >= ply {
+            // 非 taint unknown のみ clean TT へ格納する．
+            self.v3_tt
+                .insert(hash, V3Entry { pn: pn as u64, dn: dn as u64, len, best: best16, min_depth: md_self });
+            ret_rep_min = REPETITION_NONE;
         } else {
-            if node_rep_min == REPETITION_NONE || node_rep_min >= ply {
-                self.v3_tt
-                    .insert(hash, V3Entry { pn: pn as u64, dn: dn as u64, len, best: best16, min_depth: md_self });
-                ret_rep_min = REPETITION_NONE;
-            } else {
-                ret_rep_min = node_rep_min;
-            }
+            // GHI-tainted unknown (node_rep_min < ply): path 依存推定値は **破棄** する．
+            // 格納すると別経路の child seed (mid_v3.rs:921) を誤らせ 29te が +20% 退行する
+            // (本セッション Change A 実験 + 旧 V3_CACHE_TAINT で確認済 = position-keyed 再利用は不可)．
+            ret_rep_min = node_rep_min;
         }
         (pn, dn, len, ret_rep_min)
     }

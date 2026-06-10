@@ -555,6 +555,10 @@ impl DfPnSolver {
             (4, PieceType::Gold),   // hand_idx=4
             (6, PieceType::Rook),   // hand_idx=6
         ];
+        // 3 カテゴリの代表を一旦集めてから push する (DML chain head = 最初に push された手なので，
+        // KH parity 実験 V3_KH_INT 時に並べ替えできるように)．
+        let mut cat1: Option<Move> = None;
+        let mut cat1_is_pawn = false;
         for &(hand_idx, pt) in &FORWARD_PIECES {
             if board.hand[di][hand_idx] == 0 {
                 continue;
@@ -572,27 +576,59 @@ impl DfPnSolver {
                 if movegen::is_pawn_drop_mate(board, m) {
                     continue; // 打ち歩詰め
                 }
-                push_move(moves, m);
+                cat1 = Some(m);
+                cat1_is_pawn = true;
             } else {
-                push_move(moves, Move::new_drop(to, pt));
+                cat1 = Some(Move::new_drop(to, pt));
             }
             break; // カテゴリ内最弱で代表
         }
 
         // カテゴリ2: 角
         let bishop_idx = 5; // HAND_PIECES[5] = Bishop
-        if board.hand[di][bishop_idx] > 0
+        let cat2: Option<Move> = if board.hand[di][bishop_idx] > 0
             && !movegen::must_promote(defender, PieceType::Bishop, to)
         {
-            push_move(moves, Move::new_drop(to, PieceType::Bishop));
-        }
+            Some(Move::new_drop(to, PieceType::Bishop))
+        } else {
+            None
+        };
 
         // カテゴリ3: 桂
         let knight_idx = 2; // HAND_PIECES[2] = Knight
-        if board.hand[di][knight_idx] > 0
+        let cat3: Option<Move> = if board.hand[di][knight_idx] > 0
             && !movegen::must_promote(defender, PieceType::Knight, to)
         {
-            push_move(moves, Move::new_drop(to, PieceType::Knight));
+            Some(Move::new_drop(to, PieceType::Knight))
+        } else {
+            None
+        };
+
+        // KH parity: 歩が打てない (二歩等) chain マスでは，DML chain head を桂にする．
+        // KH は同状況で N*6c を代表に選び (maou 既定は cat1 の香 L*6c)，これに揃えると 39te の
+        // deep frontier が 4-6% 縮む (p9 -5.2% / p11 -6.0% / p13 -4.2%; 29te は 18,539 で不変)．
+        // 健全性: DML chain は全合い駒を保持し head 順のみ変える (defer された手は head 確定後に
+        // activate される) ため集合は不変＝合法性に影響なし．[[guidance pivot: 中合い代表 lever]]
+        if !cat1_is_pawn && cat3.is_some() {
+            // 桂を先頭に: knight, cat1(香等), bishop
+            push_move(moves, cat3.unwrap());
+            if let Some(m) = cat1 {
+                push_move(moves, m);
+            }
+            if let Some(m) = cat2 {
+                push_move(moves, m);
+            }
+        } else {
+            // 既定順: cat1, bishop, knight
+            if let Some(m) = cat1 {
+                push_move(moves, m);
+            }
+            if let Some(m) = cat2 {
+                push_move(moves, m);
+            }
+            if let Some(m) = cat3 {
+                push_move(moves, m);
+            }
         }
     }
 

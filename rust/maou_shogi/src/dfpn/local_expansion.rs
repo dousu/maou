@@ -511,6 +511,33 @@ impl MidLocalExpansion {
         self.has_old_child
     }
 
+    /// 計測専用 (V3THX): 閾値伝播の micro-lever 確定用 internal accessor．
+    pub(super) fn dbg_second_phi(&self) -> u32 {
+        self.get_second_phi()
+    }
+    pub(super) fn dbg_sum_delta_except_best(&self) -> u32 {
+        self.sum_delta_except_best
+    }
+    pub(super) fn dbg_max_delta_except_best(&self) -> u32 {
+        self.max_delta_except_best
+    }
+    pub(super) fn dbg_active_count(&self) -> usize {
+        self.idx.len().saturating_sub(self.excluded_moves)
+    }
+    pub(super) fn dbg_deferred_count(&self) -> usize {
+        self.moves.len().saturating_sub(self.idx.len())
+    }
+    /// 計測専用: active children を idx (sorted) 順で (move, phi, delta, is_first) で返す．
+    pub(super) fn dbg_children(&self) -> Vec<(Move, u32, u32, bool)> {
+        self.idx[self.excluded_moves..]
+            .iter()
+            .map(|&i| {
+                let r = &self.results[i as usize];
+                (self.moves[i as usize], r.phi(self.or_node), r.delta(self.or_node), r.is_first_visit)
+            })
+            .collect()
+    }
+
     /// AND proven 時の max mate_distance を計算する．
     /// AND の場合 defender は max-resistance を選ぶので max(child.mate_distance)+1．
     pub(super) fn max_mate_distance_over_children(&self) -> u16 {

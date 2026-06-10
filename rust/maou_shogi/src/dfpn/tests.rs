@@ -935,6 +935,53 @@ use crate::types::PieceType;
         }
     }
 
+    /// TEMP (削除予定): mid_v3 の 39te baseline 計測．
+    /// KH v1.1.0 実測: proof(None)=7,454,827 nodes/mate-33 PV; MinLength=52M/mate-47(無駄合い込み);
+    /// tsume 正解=39 手．mid_v3 の現状 (nodes/可否/PV/手数) を測る．assert なし．
+    #[test]
+    #[ignore]
+    fn test_mid_v3_39te_measure() {
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let mut b = Board::new();
+        b.set_sfen(sfen).unwrap();
+        // 計測専用: budget/timeout を env で上書き可能に (lever 比較用)．
+        let budget: u64 = std::env::var("V3_BUDGET").ok().and_then(|s| s.parse().ok()).unwrap_or(1_000_000);
+        let secs: u64 = std::env::var("V3_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(120);
+        let mut s = DfPnSolver::with_timeout(47, budget, 32767, secs);
+        let t0 = std::time::Instant::now();
+        let result = s.solve_via_v3(&mut b);
+        let elapsed = t0.elapsed();
+        match result {
+            TsumeResult::Checkmate { moves, nodes_searched } => {
+                let usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                eprintln!(
+                    "[v3] 39te SOLVE: {} moves, {} nodes, {} tt, {:.1}s | PV {:?}",
+                    moves.len(), nodes_searched, s.v3_tt.len(), elapsed.as_secs_f64(), usi);
+                let mut chk = Board::new();
+                chk.set_sfen(sfen).unwrap();
+                for m in &moves { chk.do_move(*m); }
+                let final_legal = movegen::generate_legal_moves(&mut chk).len();
+                let in_check = chk.is_in_check(chk.turn());
+                eprintln!(
+                    "[v3] 39te final: in_check={in_check}, legal_moves={final_legal} (詰み=in_check&&legal==0)");
+            }
+            other => {
+                eprintln!(
+                    "[v3] 39te NON-SOLVE: {other:?}, {} nodes, {} tt, {:.1}s",
+                    s.v3_nodes, s.v3_tt.len(), elapsed.as_secs_f64());
+                // breadth lever 比較用: per-ply total/unique 訪問数．
+                let mut summary = String::new();
+                for p in 0..20usize {
+                    let t = s.v3_ply_total[p];
+                    let u = s.v3_ply_unique[p];
+                    if t == 0 { continue; }
+                    summary.push_str(&format!("p{p}:{u}/{t} "));
+                }
+                eprintln!("[v3] 39te per-ply unique/total: {summary}");
+            }
+        }
+    }
+
     /// 後手番1手詰め．
     ///
     /// 先手攻め test_tsume_1te の盤面を180度回転+色反転した局面．
