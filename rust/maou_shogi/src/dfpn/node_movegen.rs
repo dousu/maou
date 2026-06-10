@@ -494,6 +494,10 @@ impl DfPnSolver {
             }
 
             // --- 駒打ちによる合い駒 ---
+            // NOTE (2026-06-11, 棄却): KH parity の full-drop 生成 (futile/chain マスでも
+            // 全駒生成し DML chain に委ねる) を試したが 39te @3M deep frontier +21% 退行
+            // (p13 77,791→94,355) かつ標的の 29te iter2 G*7g pn 乖離も不変で revert．
+            // deferred 数 (mp-idx) 由来の penalty 差仮説は当該乖離の真因ではない．
             if futile.contains(to) {
                 // 完全無駄合い: スキップ
                 continue;

@@ -56,6 +56,7 @@ diag_env_flag!(env_v3obvd, "V3_OBV_D");
 diag_env_flag!(env_khsel, "KHSEL");
 diag_env_flag!(env_v3trace, "V3TRACE");
 diag_env_flag!(env_v3rootkeep, "V3_ROOTKEEP");
+diag_env_flag!(env_v3rooti, "V3ROOTI");
 
 /// kPnDnUnit 相当．
 pub(super) const V3_U: u64 = 2;
@@ -632,6 +633,8 @@ impl DfPnSolver {
         let mut thdn: u32 = 1;
         let mut last_pn: u32 = V3_INF_U;
         let mut last_dn: u32 = V3_INF_U;
+        // V3ROOTI 用 iteration counter (診断)．
+        let mut rooti_iter: u32 = 0;
         loop {
             if self.v3_nodes >= self.max_nodes || self.is_timed_out() {
                 self.timed_out = self.is_timed_out();
@@ -645,6 +648,24 @@ impl DfPnSolver {
                 let rlen = self.v3_tt.get(&board.hash).map(|e| e.len).unwrap_or(0);
                 eprintln!("[v3le] th=({thpn},{thdn}) -> pn={pn} dn={dn} rootlen={rlen} nodes={} tt={}",
                     self.v3_nodes, self.v3_tt.len());
+            }
+            // V3ROOTI: root IDS iteration 毎の root children dump (KH KHROOT と突合する
+            // return-value 乖離 hunting 用)．root expansion が iteration 後も残る
+            // V3_ROOTKEEP 時のみ有効 (off だと pop 済みで dump 不可)．
+            if env_v3rooti() {
+                rooti_iter += 1;
+                if let Some(exp) = self.mid_expansion_stack.first() {
+                    eprintln!("V3ROOTI iter={rooti_iter} th=({thpn},{thdn}) -> pn={pn} dn={dn}");
+                    for &ir in exp.idx.iter().take(16) {
+                        let r = &exp.results[ir as usize];
+                        eprintln!(
+                            "V3ROOTI   {} pn={} dn={}",
+                            exp.moves[ir as usize].to_usi(),
+                            r.pn,
+                            r.dn
+                        );
+                    }
+                }
             }
             if pn == 0 || dn == 0 {
                 break;
