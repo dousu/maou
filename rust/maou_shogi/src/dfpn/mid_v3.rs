@@ -1044,7 +1044,7 @@ impl DfPnSolver {
         path_key: u64,
         inc_flag: &mut u32,
     ) -> (u32, u32, u16, u32) {
-        use super::local_expansion::{MidLocalExpansion, MidSearchResult, REPETITION_NONE};
+        use super::local_expansion::{MidSearchResult, REPETITION_NONE};
 
         self.v3_nodes += 1;
         if self.v3_nodes >= self.max_nodes || (self.v3_nodes & 0x3FF == 0 && self.is_timed_out()) {
