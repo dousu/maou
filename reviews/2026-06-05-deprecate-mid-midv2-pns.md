@@ -1,7 +1,7 @@
 ---
 title: "mid / mid_v2 の配線を全削除して廃止・全テストを mid_v3 へ移行・pns を deprecated 化"
 date: 2026-06-05
-status: approved
+status: applied
 crate: maou_shogi
 version: 2.0.0 (breaking; Phase 1 = mid_v2 廃止のみ実施済, 2026-06-05)
 ---
