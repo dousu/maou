@@ -112,6 +112,93 @@ pub fn generate_legal_moves(board: &mut Board) -> Vec<Move> {
     legal_moves
 }
 
+/// 合法手が 1 手でも存在するか (early-exit 版)．
+///
+/// `generate_legal_moves(board).is_empty()` の否定と**同値** (同一の filter 条件) だが，
+/// 全合法手を materialize せず最初の合法手で打ち切る．さらに玉移動の存在は
+/// 疑似合法手の生成自体を省いて bitboard で先に判定する (`king_step & !own & !danger` は
+/// `generate_legal_moves` が玉移動に適用する条件と同一)．
+/// 詰み判定 (`mate_move_in_1ply` の確定検証等) のホットパス用．
+pub(crate) fn has_any_legal_move(board: &mut Board) -> bool {
+    let us = board.turn;
+    let king_sq = match board.king_square(us) {
+        Some(sq) => sq,
+        None => {
+            // 片玉フォールバック: generate_legal_moves_fallback と同一条件の early-exit．
+            let pseudo_moves = generate_pseudo_legal_moves(board);
+            return pseudo_moves.into_iter().any(|m| is_legal(board, m));
+        }
+    };
+
+    let them = us.opponent();
+    let pinned = board.compute_pinned(us, king_sq);
+    let king_danger = board.compute_king_danger(us, king_sq);
+    let checkers = board.compute_checkers_at(king_sq, them);
+    let in_check = checkers.is_not_empty();
+    let double_check = checkers.count() > 1;
+
+    // 1. 玉移動: pseudo 生成なしで存在判定 (大半の局面はここで確定)．
+    let own_occ = board.occupied[us.index()];
+    let king_step = attack::step_attacks(us, PieceType::King, king_sq);
+    if (king_step & !own_occ & !king_danger).is_not_empty() {
+        return true;
+    }
+
+    // 2. 残り: generate_legal_moves と同一 filter の early-exit 走査．
+    let pseudo_moves = generate_pseudo_legal_moves(board);
+    for m in pseudo_moves {
+        if m.is_drop() {
+            if double_check {
+                continue;
+            }
+            if in_check {
+                let checker_sq = checkers.lsb().unwrap();
+                let between = attack::between_bb(checker_sq, king_sq);
+                if !between.contains(m.to_sq()) {
+                    continue;
+                }
+            }
+            if m.drop_piece_type() == Some(PieceType::Pawn) {
+                let to = m.to_sq();
+                if let Some(opp_king) = board.king_square(them) {
+                    let pawn_attack = attack::step_attacks(us, PieceType::Pawn, to);
+                    if pawn_attack.contains(opp_king) && is_pawn_drop_mate(board, m) {
+                        continue;
+                    }
+                }
+            }
+            return true;
+        } else {
+            let from = m.from_sq();
+            let to = m.to_sq();
+            if from == king_sq {
+                // 玉移動はステップ 1 で判定済み (条件同一のため必ず不成立)．
+                continue;
+            } else if double_check {
+                continue;
+            } else if in_check {
+                if pinned.contains(from) {
+                    continue;
+                }
+                let checker_sq = checkers.lsb().unwrap();
+                let valid_targets = attack::between_bb(checker_sq, king_sq);
+                if to != checker_sq && !valid_targets.contains(to) {
+                    continue;
+                }
+                return true;
+            } else if pinned.contains(from) {
+                let line = attack::line_through(king_sq, from);
+                if line.contains(to) {
+                    return true;
+                }
+            } else {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// 玉がない局面用のフォールバック(従来の do_move/undo_move 方式)．
 fn generate_legal_moves_fallback(board: &mut Board) -> Vec<Move> {
     let pseudo_moves = generate_pseudo_legal_moves(board);
@@ -263,16 +350,31 @@ pub(crate) fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
     // 相手(手番交代後の現在手番)の合法手があるかチェック
     // 1手でも見つかれば詰みではない
     let them = board.turn; // 歩を打たれた側
+    let pawn_sq = pawn_drop.to_sq();
     let pseudo_moves = generate_pseudo_legal_moves(board);
 
+    // 歩打ち王手 (玉に隣接) の逃れは「玉移動」か「王手歩の捕獲」のみ (合駒不可)．
+    // 判定集合は従来どおり全疑似合法手だが，逃れになり得る手を先に試すことで
+    // 大半のケース (打ち歩詰めでない) を 1〜数回の do/undo で確定させる．
+    // 結果 (has_legal) は走査順に依存しないため従来と同一．
+    let likely_evasion = |m: &Move| {
+        m.to_sq() == pawn_sq
+            || (!m.is_drop() && m.moving_piece_type_raw() == PieceType::King as u8)
+    };
+
     let mut has_legal = false;
-    for m in pseudo_moves {
-        let cap2 = board.do_move(m);
-        let evades_check = !board.is_in_check(them);
-        board.undo_move(m, cap2);
-        if evades_check {
-            has_legal = true;
-            break;
+    'pass: for likely_pass in [true, false] {
+        for &m in &pseudo_moves {
+            if likely_evasion(&m) != likely_pass {
+                continue;
+            }
+            let cap2 = board.do_move(m);
+            let evades_check = !board.is_in_check(them);
+            board.undo_move(m, cap2);
+            if evades_check {
+                has_legal = true;
+                break 'pass;
+            }
         }
     }
 

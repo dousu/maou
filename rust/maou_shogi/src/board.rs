@@ -606,7 +606,7 @@ impl Board {
                     // 合法手生成で確定検証する (正確だが低速; これらの手は稀)．
                     let captured = self.do_move(m);
                     let mated = self.is_in_check(defender)
-                        && crate::movegen::generate_legal_moves(self).is_empty();
+                        && !crate::movegen::has_any_legal_move(self);
                     self.undo_move(m, captured);
                     if mated {
                         return Some(m);
