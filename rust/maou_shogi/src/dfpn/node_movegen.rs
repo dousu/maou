@@ -733,6 +733,15 @@ impl DfPnSolver {
         let all_occ = board.all_occupied();
         let empty = !all_occ;
 
+        // 自玉露出の fast path 用 (v2.8.0): 王手中でなく，動かす駒が pin されておらず
+        // 玉自身でもない盤上移動は自玉を王手に晒し得ない (取りでも取られた駒のマスを
+        // 自駒が塞ぐため開き露出は起きない) → per-move の do/undo 検証を省略できる．
+        let own_king_sq = board.king_square(us);
+        let pinned_own = match own_king_sq {
+            Some(k) => board.compute_pinned(us, k),
+            None => Bitboard::EMPTY,
+        };
+
         // 各駒種について「このマスに置くと玉に王手がかかる」ターゲットを事前計算
         // step_attacks(them, pt, king_sq) は「玉から見た逆利き」= 王手元になれるマス
 
@@ -747,6 +756,29 @@ impl DfPnSolver {
         // そこから移動すると開き王手になりうる
         let discoverers = board.compute_discoverers(us, king_sq);
 
+        // 逆利き (王手元マス) bitboard の駒種別 lazy cache (NPS 軸 v2.8.0)．
+        // rev_check(pt) = {to | piece_attacks(us, pt, to, all_occ).contains(king_sq)}
+        // stepper は白黒の利きが点対称なので them 側 step，slider は対称性で king 起点
+        // (駒打ち生成と同一の逆利き idiom)．従来は per-target で attacks_square
+        // (利きテーブル参照) を呼んでおり movegen が KH 比 12-16× 遅い主因だった．
+        let mut rev_cache: [Option<Bitboard>; 15] = [None; 15];
+        let mut rev_check = |pt: PieceType| -> Bitboard {
+            let i = pt as usize;
+            if let Some(bb) = rev_cache[i] {
+                return bb;
+            }
+            let bb = match pt {
+                PieceType::Lance => attack::lance_attacks(them, king_sq, all_occ),
+                PieceType::Bishop => attack::bishop_attacks(king_sq, all_occ),
+                PieceType::Rook => attack::rook_attacks(king_sq, all_occ),
+                PieceType::Horse => attack::horse_attacks(them, king_sq, all_occ),
+                PieceType::Dragon => attack::dragon_attacks(them, king_sq, all_occ),
+                _ => attack::step_attacks(them, pt, king_sq),
+            };
+            rev_cache[i] = Some(bb);
+            bb
+        };
+
         let mut our_bb = our_occ;
         while our_bb.is_not_empty() {
             let from = our_bb.pop_lsb();
@@ -757,7 +789,27 @@ impl DfPnSolver {
 
             let is_discoverer = discoverers.contains(from);
 
-            for to in targets {
+            // 直接王手になり得る to の mask (成り可能駒は成駒分も union)．
+            // 非 discoverer は mask 外の to が王手にならないため事前に枝刈りする．
+            // bitboard 昇順の subset 走査なので生成順・生成列は従来と完全一致．
+            let scan = if is_discoverer {
+                targets
+            } else {
+                let mut mask = rev_check(pt);
+                if pt.can_promote() {
+                    mask |= rev_check(pt.promoted().unwrap());
+                }
+                targets & mask
+            };
+
+            // この駒の移動が自玉を露出させ得ないなら per-move の do/undo 検証
+            // (is_legal_quick) を省略する (結果は同値; 上記コメント参照)．
+            let fast_legal = !has_own_king
+                || (!own_in_check
+                    && Some(from) != own_king_sq
+                    && !pinned_own.contains(from));
+
+            for to in scan {
                 let captured_piece = board.squares[to.index()];
                 let captured_raw = captured_piece.0;
                 let in_promo_zone = to.is_promotion_zone(us) || from.is_promotion_zone(us);
@@ -767,33 +819,33 @@ impl DfPnSolver {
                 let gives_discovered = is_discoverer
                     && !attack::line_through(from, king_sq).contains(to);
 
-                // 成り先の駒種での王手チェック
+                // 成り先の駒種での王手チェック (逆利き mask の O(1) contains;
+                // attacks_square と同値)
                 if pt.can_promote() && in_promo_zone {
                     let promoted_pt = pt.promoted().unwrap();
-                    let gives_direct = self.attacks_square(us, promoted_pt, to, all_occ, king_sq);
+                    let gives_direct = rev_check(promoted_pt).contains(to);
                     if gives_direct || gives_discovered {
                         let m = Move::new_move(from, to, true, captured_raw, pt as u8);
-                        if self.is_legal_quick(board, m, has_own_king) {
+                        if fast_legal || self.is_legal_quick(board, m, has_own_king) {
                             push_move(&mut moves, m);
                         }
                     }
 
                     // 不成
                     if !movegen::must_promote(us, pt, to) {
-                        let gives_direct =
-                            self.attacks_square(us, pt, to, all_occ, king_sq);
+                        let gives_direct = rev_check(pt).contains(to);
                         if gives_direct || gives_discovered {
                             let m = Move::new_move(from, to, false, captured_raw, pt as u8);
-                            if self.is_legal_quick(board, m, has_own_king) {
+                            if fast_legal || self.is_legal_quick(board, m, has_own_king) {
                                 push_move(&mut moves, m);
                             }
                         }
                     }
                 } else if !movegen::must_promote(us, pt, to) {
-                    let gives_direct = self.attacks_square(us, pt, to, all_occ, king_sq);
+                    let gives_direct = rev_check(pt).contains(to);
                     if gives_direct || gives_discovered {
                         let m = Move::new_move(from, to, false, captured_raw, pt as u8);
-                        if self.is_legal_quick(board, m, has_own_king) {
+                        if fast_legal || self.is_legal_quick(board, m, has_own_king) {
                             push_move(&mut moves, m);
                         }
                     }
