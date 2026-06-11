@@ -2087,3 +2087,87 @@ use crate::types::PieceType;
     // Step 2: 1d1e 全ペア ProvenTT ヒット診断 (v0.55.35)
     // ======================================================================
 
+    /// **[SLOW]** primitive micro-bench (KH 主動作比較用, 2026-06-11)．
+    ///
+    /// 39te root に PV プレフィックスを適用した同一局面群 (OR/AND 混在) で
+    /// 王手生成 / 応手生成 / do+undo / 1 手詰判定 の ns/op を計測する．
+    /// KH 側は同じ `position sfen <root> moves <prefix>` を適用した primbench
+    /// (計測ビルド) と突合し，per-node コスト差 (~8.5×) を primitive 単位に分解する．
+    /// 実行: `cargo test --release -p maou_shogi -- bench_primitives --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_primitives() {
+        use std::hint::black_box;
+        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        let pv = [
+            "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c", "N*1e", "2c1d",
+            "8g8d", "P*7d", "8d7d", "P*5d", "7d5d",
+        ];
+        let prefixes: [usize; 6] = [0, 1, 2, 3, 12, 13];
+        let mut solver = DfPnSolver::new(3, 1_000_000, 32767);
+        for &k in &prefixes {
+            let mut b = Board::empty();
+            b.set_sfen(sfen).unwrap();
+            for usi in pv.iter().take(k) {
+                let m = b.move_from_usi(usi).expect("pv move");
+                b.do_move(m);
+            }
+            let or_node = (k % 2) == 0; // root = 先手 (攻め方) 手番 = OR
+            if or_node {
+                let n = 200_000u32;
+                let t = std::time::Instant::now();
+                let mut acc = 0u64;
+                for _ in 0..n {
+                    let mv = solver.generate_check_moves(&mut b);
+                    acc += black_box(mv.len() as u64);
+                }
+                let e = t.elapsed().as_nanos() as f64 / n as f64;
+                eprintln!("BENCH k={k:2} or=1 gen_checks   {e:9.1} ns/op (moves={})", acc / n as u64);
+
+                // 1 手詰 (checks 前提)．KH mate_1ply は self-contained のため
+                // gen+mate 合算も併記する (構造差の可視化)．
+                let checks = solver.generate_check_moves(&mut b);
+                let turn = b.turn;
+                let t = std::time::Instant::now();
+                let mut hits = 0u64;
+                for _ in 0..n {
+                    if black_box(b.mate_move_in_1ply(checks.as_slice(), turn)).is_some() {
+                        hits += 1;
+                    }
+                }
+                let e = t.elapsed().as_nanos() as f64 / n as f64;
+                eprintln!("BENCH k={k:2} or=1 mate1ply     {e:9.1} ns/op (mate={})", hits > 0);
+
+                let t = std::time::Instant::now();
+                for _ in 0..n {
+                    let cks = solver.generate_check_moves(&mut b);
+                    black_box(b.mate_move_in_1ply(cks.as_slice(), turn));
+                }
+                let e = t.elapsed().as_nanos() as f64 / n as f64;
+                eprintln!("BENCH k={k:2} or=1 gen+mate1ply {e:9.1} ns/op");
+            } else {
+                let n = 200_000u32;
+                let t = std::time::Instant::now();
+                let mut acc = 0u64;
+                for _ in 0..n {
+                    let mv = solver.generate_defense_moves_inner(&mut b, false);
+                    acc += black_box(mv.len() as u64);
+                }
+                let e = t.elapsed().as_nanos() as f64 / n as f64;
+                eprintln!("BENCH k={k:2} or=0 gen_evasions {e:9.1} ns/op (moves={})", acc / n as u64);
+            }
+            // do+undo (合法手の先頭)
+            let legal = movegen::generate_legal_moves(&mut b);
+            if let Some(&m) = legal.first() {
+                let n = 1_000_000u32;
+                let t = std::time::Instant::now();
+                for _ in 0..n {
+                    let cap = b.do_move(black_box(m));
+                    b.undo_move(m, cap);
+                }
+                let e = t.elapsed().as_nanos() as f64 / n as f64;
+                eprintln!("BENCH k={k:2} do+undo      {e:9.1} ns/op ({})", m.to_usi());
+            }
+        }
+    }
+
