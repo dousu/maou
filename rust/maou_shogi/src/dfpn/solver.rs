@@ -614,7 +614,7 @@ pub struct DfPnSolver {
     /// 主要 metrics を eprintln! でダンプする (feature flag 不要)．
     ///
     /// 出力例 (interval=10000 nodes):
-    /// ```
+    /// ```text
     /// [root_trace ply0 iter=42 nodes=100000] children=23 best_idx=3 best_move=S*7i
     ///   current_pn=156 current_dn=89 pn_th=200 dn_th=200
     ///   child[0] move=S*7i pn=124 dn=45 (root_visits=520)

@@ -47,6 +47,38 @@ pub struct Board {
     pub(crate) board_hash: u64,
 }
 
+/// 1 手詰判定 (`mate_move_in_1ply`) の per-position 文脈．
+///
+/// 全王手候補で共有する事前計算を保持し，per-candidate の全駒利きスキャンを
+/// bit 演算に置き換える．escape マスの利き情報 (`EscInfo`) は最初に必要になった
+/// 候補で lazy に計算する (候補が 1 手でも escape 検査へ到達すれば元が取れる)．
+struct Mate1plyCtx {
+    /// 開き王手候補 (攻め方 slider と受け方玉の間の唯一の攻め方駒)．
+    /// ここに無い from の盤上移動・駒打ちは第二の王手駒を生み得ない．
+    discoverers: Bitboard,
+    /// 移動前占有から受け方玉を除いた occupancy (escape 利き情報の基準)．
+    occ_nk_pre: Bitboard,
+    /// king_step & !def_occ の escape 候補マス (esc==to の捕獲ケースは別扱い)．
+    esc_sqs: [Square; 8],
+    esc_n: usize,
+    esc_info: [Option<EscInfo>; 8],
+}
+
+/// escape マス 1 つ分の攻め方利き情報 (移動前 `occ_nk_pre` 基準)．
+///
+/// per-candidate には from 除外 (`& !from`) と to による遮断 (`to ∈ between`)，
+/// from 退去による開き (`from ∈ qvis` のときのみ可能) で補正して使う．
+#[derive(Clone, Copy)]
+struct EscInfo {
+    /// esc を攻撃する攻め方 step 駒 (歩桂銀金系・玉・馬龍の step 部)．占有非依存で正確．
+    steps: Bitboard,
+    /// esc を攻撃する攻め方 slider (香・角馬・飛龍の slide 部)．
+    sliders: Bitboard,
+    /// esc から見える queen-line マス (rook|bishop rays)．from/to がここに
+    /// 無ければその着手はこの esc への利きを変えられない．
+    qvis: Bitboard,
+}
+
 impl Board {
     /// 平手初期局面で生成する．
     pub fn new() -> Board {
@@ -563,6 +595,45 @@ impl Board {
     // ビットボードベースの1手詰め判定 (mateMoveIn1Ply 相当)
     // ============================================================
 
+    /// escape マス `esc` への攻め方利き情報を計算する (`is_checkmate_after_bb` 用)．
+    ///
+    /// `occ_nk` は移動前占有から受け方玉を除いたもの (玉貫通 X-ray)．
+    /// step 部と slider 部を分けて返す (step は占有非依存なので per-candidate
+    /// 補正が from 除外だけで済む)．qvis は slider 補正用の可視マスク．
+    fn compute_esc_info(
+        &self,
+        esc: Square,
+        defender: Color,
+        att_idx: usize,
+        occ_nk: Bitboard,
+    ) -> EscInfo {
+        let pb = &self.piece_bb[att_idx];
+        let mut steps = attack::step_attacks(defender, PieceType::Pawn, esc)
+            & pb[PieceType::Pawn as usize];
+        steps |= attack::step_attacks(defender, PieceType::Knight, esc)
+            & pb[PieceType::Knight as usize];
+        steps |= attack::step_attacks(defender, PieceType::Silver, esc)
+            & pb[PieceType::Silver as usize];
+        let gold_movers = pb[PieceType::Gold as usize]
+            | pb[PieceType::ProPawn as usize]
+            | pb[PieceType::ProLance as usize]
+            | pb[PieceType::ProKnight as usize]
+            | pb[PieceType::ProSilver as usize];
+        steps |= attack::step_attacks(defender, PieceType::Gold, esc) & gold_movers;
+        let kingish = pb[PieceType::King as usize]
+            | pb[PieceType::Horse as usize]
+            | pb[PieceType::Dragon as usize];
+        steps |= attack::step_attacks(defender, PieceType::King, esc) & kingish;
+
+        let ba = attack::bishop_attacks(esc, occ_nk);
+        let ra = attack::rook_attacks(esc, occ_nk);
+        let sliders = (attack::lance_attacks(defender, esc, occ_nk)
+            & pb[PieceType::Lance as usize])
+            | (ba & (pb[PieceType::Bishop as usize] | pb[PieceType::Horse as usize]))
+            | (ra & (pb[PieceType::Rook as usize] | pb[PieceType::Dragon as usize]));
+        EscInfo { steps, sliders, qvis: ba | ra }
+    }
+
     /// ビットボード演算のみで1手詰めを判定する(do_move/undo_move 不要)．
     ///
     /// cshogi の `mateMoveIn1Ply()` に相当する高速版．
@@ -579,25 +650,38 @@ impl Board {
         checks: &[Move],
         attacker: Color,
     ) -> Option<Move> {
+        if checks.is_empty() {
+            return None;
+        }
         let defender = attacker.opponent();
         let king_sq = self.king_square(defender)?;
         let all_occ = self.all_occupied();
         let att_idx = attacker.index();
         let def_idx = defender.index();
-        let att_occ = self.occupied[att_idx];
         let def_occ = self.occupied[def_idx];
         let king_bb = Bitboard::from_square(king_sq);
 
         // 玉の移動先候補(ステップ利き)
         let king_step = attack::step_attacks(defender, PieceType::King, king_sq);
 
-        // 攻め方と玉の間にいる守備駒(ピン候補) - 王手駒の捕獲可否判定に使用
-        let pinned = self.compute_pinned(defender, king_sq);
+        // per-position 文脈: 開き王手候補 + escape マス利き情報 (lazy)．
+        // 全候補手で共有し，per-candidate の全駒利きスキャンを bit 演算に置き換える．
+        let mut ctx = Mate1plyCtx {
+            discoverers: self.compute_discoverers(attacker, king_sq),
+            occ_nk_pre: all_occ & !king_bb,
+            esc_sqs: [king_sq; 8],
+            esc_n: 0,
+            esc_info: [None; 8],
+        };
+        for esc in king_step & !def_occ {
+            ctx.esc_sqs[ctx.esc_n] = esc;
+            ctx.esc_n += 1;
+        }
 
         for &m in checks {
             match self.is_checkmate_after_bb(
                 m, attacker, defender, king_sq, king_bb, king_step,
-                all_occ, att_occ, def_occ, att_idx, def_idx, &pinned,
+                all_occ, def_occ, att_idx, def_idx, &mut ctx,
             ) {
                 Some(true) => return Some(m),
                 Some(false) => {}
@@ -621,8 +705,8 @@ impl Board {
     ///
     /// 戻り値:
     /// - `Some(true)`  = 単一の直接王手で詰み (ビットボードで確定)．
-    /// - `Some(false)` = 単一の直接王手で詰みでない (ビットボードで確定)．
-    /// - `None`        = 開き王手 (discovered) / 両王手 (double check) / 非王手．真の王手駒が
+    /// - `Some(false)` = 単一の直接王手で詰みでない / 非王手 (ビットボードで確定)．
+    /// - `None`        = 開き王手 (discovered) / 両王手 (double check)．真の王手駒が
     ///                   to_sq 以外にあり捕獲・合駒判定がこの関数の前提 (動いた駒=唯一の王手駒)
     ///                   を満たさないため，呼び出し側 (`mate_move_in_1ply`) が do_move + 合法手
     ///                   生成で確定検証する．盤面は変更しない．
@@ -636,11 +720,10 @@ impl Board {
         king_bb: Bitboard,
         king_step: Bitboard,
         all_occ: Bitboard,
-        _att_occ: Bitboard,
         def_occ: Bitboard,
         att_idx: usize,
         def_idx: usize,
-        pinned: &Bitboard,
+        ctx: &mut Mate1plyCtx,
     ) -> Option<bool> {
         let to_sq = m.to_sq();
         let to_bb = Bitboard::from_square(to_sq);
@@ -668,65 +751,145 @@ impl Board {
         // 守備側の占有(駒取りの場合は to_sq が除去される)
         let def_occ_after = def_occ & !to_bb;
 
-        // === 1. 玉の逃げ場チェック ===
         // 玉を除去した占有(X-ray: 飛び駒が玉を貫通)
         let occ_no_king = occ_after & !king_bb;
-
-        // 玉の移動先候補: 味方駒がいないマス
-        let king_targets = king_step & !def_occ_after;
 
         // 王手駒の利きを計算(玉を除いた占有で)
         let checker_attacks = attack::piece_attacks(attacker, checker_pt, to_sq, occ_no_king);
 
+        // === 0. 単一直接王手の確定 ===
         // この判定は「動いた駒 (to_sq) が唯一の王手駒 = 単一の直接王手」を前提とする．
-        // 開き王手 (discovered) / 両王手 (double check) / 非王手 は真の王手駒が to_sq 以外に
-        // あり，捕獲・合駒判定がこの前提を満たさない (例: 飛が成りつつ移動して背後の駒が開き
-        // 王手 → 受け方は開き王手駒を取れるのに to_sq の駒の捕獲だけ調べて誤判定)．これらは
-        // `None` を返し，呼び出し側が do_move + 合法手生成で確定検証する．
+        // 第二の王手駒 (開き王手) は from が discoverers のときだけ生じ得る:
+        //  - 駒打ちは盤上の駒を動かさず，to への配置は利きを遮るだけで開きを生まない．
+        //  - 盤上移動でも from が攻め方 slider の唯一の遮蔽駒でなければ from 退去で
+        //    玉への新しい利きは生じない (着手前に受け方玉へ王手が無いことは局面の合法性が保証)．
+        // よって discoverers 外の手は玉マスへの全駒利きスキャンを省略できる (結果は同値)．
         let direct_check = checker_attacks.contains(king_sq);
-        let other_checker = self.is_sq_attacked_after_move(
-            king_sq, attacker, occ_no_king, att_idx, def_idx, from_opt, to_sq, false,
-        );
-        if !direct_check || other_checker {
+        let other_checker = match from_opt {
+            Some(from) if ctx.discoverers.contains(from) => self.is_sq_attacked_after_move(
+                king_sq, attacker, occ_no_king, att_idx, def_idx, from_opt, to_sq, false,
+            ),
+            _ => false,
+        };
+        if other_checker {
+            // 開き王手 / 両王手: 捕獲・合駒判定の前提外 → 呼び出し側が do_move 検証
             return None;
         }
+        if !direct_check {
+            // 王手でない手は詰みでない (従来の None → do_move 検証と同値; 検証を省略)
+            return Some(false);
+        }
 
-        // 各逃げ先が安全かチェック
-        for esc_sq in king_targets {
-            if esc_sq == to_sq {
-                // 玉が王手駒を取る場合: 王手駒を除去した状態でチェック
-                let occ_esc = occ_no_king & !to_bb;
-                if !self.is_sq_attacked_after_move(
-                    esc_sq, attacker, occ_esc, att_idx, def_idx,
-                    from_opt, to_sq, true,
-                ) {
-                    return Some(false); // 玉が王手駒を取って逃げられる
+        // === 1. 玉の逃げ場チェック ===
+        // 各 escape マスの攻め方利きは per-position の EscInfo (occ_nk_pre 基準) を
+        // from/to で補正して判定する．step 利きは占有非依存なので from 除外だけで正確．
+        // slider 利きは to による遮断 (to ∈ between) と from 退去による開き
+        // (from ∈ qvis のときのみ可能) を補正する．
+        let from_mask = match from_opt {
+            Some(f) => !Bitboard::from_square(f),
+            None => Bitboard::ALL,
+        };
+        for slot in 0..ctx.esc_n {
+            let esc = ctx.esc_sqs[slot];
+            if esc == to_sq {
+                continue; // 玉が王手駒を取るケースは下で別扱い
+            }
+            if checker_attacks.contains(esc) {
+                continue; // 王手駒の利きに入っている → 逃げられない
+            }
+            let info = match ctx.esc_info[slot] {
+                Some(i) => i,
+                None => {
+                    let i = self.compute_esc_info(esc, defender, att_idx, ctx.occ_nk_pre);
+                    ctx.esc_info[slot] = Some(i);
+                    i
                 }
-            } else if checker_attacks.contains(esc_sq) {
-                // 王手駒の利きに入っている → 逃げられない(他の駒も確認不要)
+            };
+            if (info.steps & from_mask).is_not_empty() {
+                continue; // step 駒が利いている (占有非依存で正確)
+            }
+            let surv = info.sliders & from_mask;
+            let mut covered = false;
+            if surv.is_not_empty() {
+                if !info.qvis.contains(to_sq) {
+                    // to は esc へのどの ray 上にもない → 遮断は起き得ない
+                    covered = true;
+                } else {
+                    for s in surv {
+                        if !attack::between_bb(s, esc).contains(to_sq) {
+                            covered = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if covered {
                 continue;
-            } else {
-                // 他の攻め方駒の利きがあるか確認
-                if !self.is_sq_attacked_after_move(
-                    esc_sq, attacker, occ_no_king, att_idx, def_idx,
-                    from_opt, to_sq, false,
-                ) {
-                    return Some(false); // 安全な逃げ場がある
+            }
+            // 既存利きなし (または全て to に遮られた)．残るは from 退去による開き利きのみで，
+            // それは from が esc から slider-visible のときしか起き得ない．
+            match from_opt {
+                Some(f) if info.qvis.contains(f) => {
+                    if !self.is_sq_attacked_after_move(
+                        esc, attacker, occ_no_king, att_idx, def_idx, from_opt, to_sq, false,
+                    ) {
+                        return Some(false); // 安全な逃げ場がある
+                    }
+                }
+                _ => return Some(false), // 安全な逃げ場がある
+            }
+        }
+
+        // 玉が王手駒を取るケース (to が玉の隣接マスのとき; def_occ_after は to を含まない
+        // ため to は常に king_targets 相当に入る)．王手駒を除いた状態で to への利きを確認する．
+        // to への既存 slider 利きは終点の占有に依らず有効なので EscInfo がそのまま使える．
+        if king_step.contains(to_sq) {
+            let mut info_opt = None;
+            for slot in 0..ctx.esc_n {
+                if ctx.esc_sqs[slot] == to_sq {
+                    info_opt = Some(match ctx.esc_info[slot] {
+                        Some(i) => i,
+                        None => {
+                            let i = self.compute_esc_info(
+                                to_sq, defender, att_idx, ctx.occ_nk_pre,
+                            );
+                            ctx.esc_info[slot] = Some(i);
+                            i
+                        }
+                    });
+                    break;
+                }
+            }
+            // to が受け方駒のマス (捕獲) の場合は esc_sqs に無いので ad hoc 計算
+            let info = info_opt.unwrap_or_else(|| {
+                self.compute_esc_info(to_sq, defender, att_idx, ctx.occ_nk_pre)
+            });
+            let covered = (info.steps & from_mask).is_not_empty()
+                || (info.sliders & from_mask).is_not_empty();
+            if !covered {
+                match from_opt {
+                    Some(f) if info.qvis.contains(f) => {
+                        let occ_esc = occ_no_king & !to_bb;
+                        if !self.is_sq_attacked_after_move(
+                            to_sq, attacker, occ_esc, att_idx, def_idx, from_opt, to_sq, true,
+                        ) {
+                            return Some(false); // 玉が王手駒を取って逃げられる
+                        }
+                    }
+                    _ => return Some(false), // 玉が王手駒を取って逃げられる
                 }
             }
         }
 
         // === ピンの再計算 (移動後配置) ===
-        // 呼び出し元から渡される `pinned` は移動**前**の盤面で計算されている．
-        // 王手駒自身が pinner だった場合 (例: 1e の龍が 1f の金を file 1 に pin して
-        // いた状態から 1e2f と王手)，移動後は pin が解除され金は横移動で王手駒を
-        // 取り返せる．移動前 pin を使うとこの防御を見落とし**偽 1 手詰**になる
-        // (39te 偽証明 @17.9M nodes の真因, 2026-06-11)．移動後の攻め方 slider
+        // 移動**前**の盤面の pin は使わない: 王手駒自身が pinner だった場合 (例: 1e の龍が
+        // 1f の金を file 1 に pin していた状態から 1e2f と王手)，移動後は pin が解除され
+        // 金は横移動で王手駒を取り返せる．移動前 pin を使うとこの防御を見落とし**偽 1 手詰**
+        // になる (39te 偽証明 @17.9M nodes の真因, 2026-06-11)．移動後の攻め方 slider
         // 配置 (from 除去・to 追加, 成り考慮) で pin を再計算する．
         let pinned_after = self.compute_pinned_after_bb(
             defender, king_sq, occ_after, def_occ_after, from_opt, to_sq, checker_pt,
         );
-        let _ = pinned; // 移動前 pin は本判定では使用しない
 
         // === 2. 王手駒の捕獲チェック(玉以外) ===
         // ピンされていない守備駒で王手駒を取れるか
