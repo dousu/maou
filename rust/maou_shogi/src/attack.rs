@@ -258,6 +258,35 @@ struct PextTable {
 impl PextTable {
     #[inline(always)]
     fn lookup(&self, sq: Square, occ: Bitboard) -> Bitboard {
+        // コンパイル時に bmi2 が無効でも，実行時検出で HW pext へ dispatch する
+        // (検出結果は std_detect が cache するため per-call コストは branch 1 つ)．
+        // SW fallback は mask bit 数 (≤14) に比例するループで，dfpn 探索の
+        // hot path では支配的コストになる (Zen3 実測 leaf 33%)．
+        // 注意: Zen1/Zen2 の HW pext はマイクロコードで遅い既知問題があるが，
+        // 本プロジェクトの実行環境 (Zen3+/Haswell+) では HW 優先が常に有利．
+        #[cfg(all(target_arch = "x86_64", not(target_feature = "bmi2")))]
+        {
+            if std::arch::is_x86_feature_detected!("bmi2") {
+                return unsafe { self.lookup_bmi2(sq, occ) };
+            }
+        }
+        self.lookup_generic(sq, occ)
+    }
+
+    /// HW pext (BMI2) 直接使用版．`is_x86_feature_detected!("bmi2")` 確認後のみ呼ぶこと．
+    #[cfg(all(target_arch = "x86_64", not(target_feature = "bmi2")))]
+    #[target_feature(enable = "bmi2")]
+    unsafe fn lookup_bmi2(&self, sq: Square, occ: Bitboard) -> Bitboard {
+        let e = unsafe { self.entries.get_unchecked(sq.index()) };
+        let lo_idx = std::arch::x86_64::_pext_u64(occ.lo, e.mask_lo) as usize;
+        let hi_idx = std::arch::x86_64::_pext_u64(occ.hi, e.mask_hi) as usize;
+        let idx = lo_idx | (hi_idx << e.lo_popcount);
+        unsafe { *self.attacks.get_unchecked(e.offset as usize + idx) }
+    }
+
+    /// コンパイル時 target_feature に従う従来版 (bmi2 有効ビルドでは HW pext に解決)．
+    #[inline(always)]
+    fn lookup_generic(&self, sq: Square, occ: Bitboard) -> Bitboard {
         let e = unsafe { self.entries.get_unchecked(sq.index()) };
         let lo_idx = pext(occ.lo, e.mask_lo) as usize;
         let hi_idx = pext(occ.hi, e.mask_hi) as usize;
