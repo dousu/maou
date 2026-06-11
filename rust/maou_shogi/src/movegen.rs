@@ -373,17 +373,42 @@ pub(crate) fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
         }
     }
 
-    // 玉移動で逃れられないときのみ全疑似合法手を走査 (従来経路; 玉移動の再試行は
-    // 冗長だが結果不変)．
+    // 玉移動で逃れられないときは王手駒 (打たれた歩) の捕獲だけを試す．
+    // 王手駒 = 隣接の歩 (単一; 駒打ちは開き王手を生まない) なので合駒は存在せず，
+    // 玉移動 (上で試行済み) 以外の唯一の逃れは歩の捕獲のみ．捕獲候補 = to に利く
+    // 受け方の駒 (compute_checkers_at は玉を含まない)．判定述語 (do/undo +
+    // is_in_check) は従来の疑似合法手走査と同一なので has_legal は同値
+    // (非捕獲の盤上移動・駒打ちは隣接歩王手を解消できず evades_check になり得ない)．
     if !has_legal {
-        let pseudo_moves = generate_pseudo_legal_moves(board);
-        for m in pseudo_moves {
-            let cap2 = board.do_move(m);
-            let evades_check = !board.is_in_check(them);
-            board.undo_move(m, cap2);
-            if evades_check {
-                has_legal = true;
-                break;
+        if board.is_in_check(them) {
+            let to = pawn_drop.to_sq();
+            let mut cands = board.compute_checkers_at(to, them);
+            while cands.is_not_empty() {
+                let from = cands.pop_lsb();
+                let pt = board.squares[from.index()].piece_type().unwrap();
+                let promote = must_promote(them, pt, to);
+                let captured_raw = board.squares[to.index()].0;
+                let m = Move::new_move(from, to, promote, captured_raw, pt as u8);
+                let cap2 = board.do_move(m);
+                let evades_check = !board.is_in_check(them);
+                board.undo_move(m, cap2);
+                if evades_check {
+                    has_legal = true;
+                    break;
+                }
+            }
+        } else {
+            // 打った歩が相手玉への王手になっていない (kingless 攻め方への合駒 drop 等)．
+            // 王手解消の構造が使えないため従来経路の疑似合法手走査で判定する．
+            let pseudo_moves = generate_pseudo_legal_moves(board);
+            for m in pseudo_moves {
+                let cap2 = board.do_move(m);
+                let evades_check = !board.is_in_check(them);
+                board.undo_move(m, cap2);
+                if evades_check {
+                    has_legal = true;
+                    break;
+                }
             }
         }
     }
