@@ -598,6 +598,14 @@ impl DfPnSolver {
         if std::env::var("V3_PH").is_ok() {
             self.param_v3_proof_hand = true;
         }
+        // V3_XHAND: KH cross-hand unknown bound 合成 (ttentry LookUpSuperior/Inferior)．
+        if std::env::var("V3_XHAND").is_ok() {
+            self.param_v3_xhand = true;
+        }
+        if self.param_v3_xhand {
+            self.v3_xh.clear();
+            self.v3_xh_hits = 0;
+        }
         // proof_hand hand-aware reuse は `set_v3_proof_hand(true)` で有効化 (default off)．
         // Phase 33g: per-ply 計測リセット (KHPLY 比較診断)．
         self.v3_ply_total = [0; 64];
@@ -731,6 +739,93 @@ impl DfPnSolver {
             // NoCheckmate (= 不詰確定) と混同してはならない (false NoMate soundness)．
             TsumeResult::Unknown {
                 nodes_searched: self.v3_nodes,
+            }
+        }
+    }
+
+    /// V3_XHAND: KH `Query::LookUp` の cross-hand 合成 (ttentry.hpp LookUpSuperior/
+    /// LookUpInferior) を unknown bound に適用する．同一盤面 (pos_key) の異持駒 entry
+    /// について，現 hand が**優等** (hand ⊇ entry) なら dn=max(dn, entry.dn)，
+    /// **劣等** (hand ⊆ entry) なら pn=max(pn, entry.pn)．KH と同じく
+    /// `entry.min_depth <= depth` の entry のみ使用し，`min_depth < depth` の entry を
+    /// 使ったら shallow (KH use_old_child = TCA trigger) を立てる．
+    /// final 判定には一切影響しない (unknown 推定の引き上げのみ) ため sound．
+    fn v3_xh_bounds(
+        &mut self,
+        pos_key: u64,
+        hand: &[u8; crate::types::HAND_KINDS],
+        depth: u32,
+        pn: &mut u32,
+        dn: &mut u32,
+        shallow: &mut bool,
+    ) {
+        let Some(bucket) = self.v3_xh.get(&pos_key) else {
+            return;
+        };
+        let mut hit = false;
+        for (eh, epn, edn, emd) in bucket.iter() {
+            if (*emd as u32) > depth {
+                continue;
+            }
+            if eh == hand {
+                continue; // exact は通常 TT が担当
+            }
+            if super::hand_gte(hand, eh) {
+                // 現局面が優等: 優等は不詰を示しづらい → dn 下界を移送
+                if *edn > *dn {
+                    *dn = *edn;
+                    hit = true;
+                    if (*emd as u32) < depth {
+                        *shallow = true;
+                    }
+                }
+            } else if super::hand_gte(eh, hand) {
+                // 現局面が劣等: 劣等は詰みを示しづらい → pn 下界を移送
+                if *epn > *pn {
+                    *pn = *epn;
+                    hit = true;
+                    if (*emd as u32) < depth {
+                        *shallow = true;
+                    }
+                }
+            }
+        }
+        if hit {
+            self.v3_xh_hits += 1;
+        }
+    }
+
+    /// V3_XHAND: 非 taint unknown を (pos_key, hand) 別 bucket へ upsert する．
+    /// final 化したら該当 hand の entry を除去する (stale 推定の移送を防ぐ)．
+    fn v3_xh_store(
+        &mut self,
+        pos_key: u64,
+        hand: [u8; crate::types::HAND_KINDS],
+        pn: u32,
+        dn: u32,
+        min_depth: u16,
+        final_result: bool,
+    ) {
+        const V3_XH_CAP: usize = 8;
+        let bucket = self.v3_xh.entry(pos_key).or_default();
+        if let Some(slot) = bucket.iter_mut().find(|(h, ..)| *h == hand) {
+            if final_result {
+                let h = hand;
+                bucket.retain(|(eh, ..)| *eh != h);
+            } else {
+                *slot = (hand, pn, dn, min_depth);
+            }
+            return;
+        }
+        if final_result {
+            return;
+        }
+        if bucket.len() < V3_XH_CAP {
+            bucket.push((hand, pn, dn, min_depth));
+        } else {
+            // cap 超過: 最も情報量の小さい (pn+dn 最小) entry を置換する．
+            if let Some(idx) = (0..bucket.len()).min_by_key(|&i| bucket[i].1 as u64 + bucket[i].2 as u64) {
+                bucket[idx] = (hand, pn, dn, min_depth);
             }
         }
     }
@@ -914,17 +1009,35 @@ impl DfPnSolver {
                     r.is_shallow = shallow;
                     r
                 } else {
-                    let mut r = MidSearchResult::new_unknown(cpn, cdn);
+                    // V3_XHAND: exact unknown にも cross-hand bound を累積 (KH Query::LookUp
+                    // は exact と superior/inferior entry を同一 loop で merge する)．
+                    let (mut bpn, mut bdn, mut bsh) = (cpn, cdn, shallow);
+                    let e_len = e.len;
+                    if self.param_v3_xhand {
+                        let cpk = super::position_key(board);
+                        let chand = board.hand[self.attacker.index()];
+                        self.v3_xh_bounds(cpk, &chand, ply + 1, &mut bpn, &mut bdn, &mut bsh);
+                    }
+                    let mut r = MidSearchResult::new_unknown(bpn, bdn);
                     r.is_first_visit = false;
-                    r.mate_distance = e.len;
-                    r.is_shallow = shallow;
+                    r.mate_distance = e_len;
+                    r.is_shallow = bsh;
                     r
                 }
             } else if let Some(r) = ph_seed {
                 r
             } else {
-                let mut r = MidSearchResult::new_unknown(seed_pn, seed_dn);
+                // V3_XHAND: first-visit seed にも cross-hand bound を適用 (KH MakeFirstVisit
+                // は merge 済 pn/dn で返る)．is_first_visit は維持 (look-ahead 対象のまま)．
+                let (mut bpn, mut bdn, mut bsh) = (seed_pn, seed_dn, false);
+                if self.param_v3_xhand {
+                    let cpk = super::position_key(board);
+                    let chand = board.hand[self.attacker.index()];
+                    self.v3_xh_bounds(cpk, &chand, ply + 1, &mut bpn, &mut bdn, &mut bsh);
+                }
+                let mut r = MidSearchResult::new_unknown(bpn, bdn);
                 r.is_first_visit = true;
+                r.is_shallow = bsh;
                 r
             };
             // KH CheckObviousFinalOrNode 先読み (local_expansion.hpp:206-213)．
@@ -1342,6 +1455,12 @@ impl DfPnSolver {
                 let h = board.hand[self.attacker.index()];
                 self.v3_store_proof(pk, h, len, best16);
             }
+            // V3_XHAND: final 化した hand の stale unknown bound を除去する．
+            if self.param_v3_xhand {
+                let pk = super::position_key(board);
+                let h = board.hand[self.attacker.index()];
+                self.v3_xh_store(pk, h, 0, 0, md_self, true);
+            }
             ret_rep_min = REPETITION_NONE;
         } else if dn == 0 {
             if node_rep_min != REPETITION_NONE && node_rep_min < ply {
@@ -1360,12 +1479,24 @@ impl DfPnSolver {
                     let h = board.hand[self.attacker.index()];
                     self.v3_store_disproof(pk, h);
                 }
+                // V3_XHAND: final 化した hand の stale unknown bound を除去する．
+                if self.param_v3_xhand {
+                    let pk = super::position_key(board);
+                    let h = board.hand[self.attacker.index()];
+                    self.v3_xh_store(pk, h, 0, 0, md_self, true);
+                }
                 ret_rep_min = REPETITION_NONE;
             }
         } else if node_rep_min == REPETITION_NONE || node_rep_min >= ply {
             // 非 taint unknown のみ clean TT へ格納する．
             self.v3_tt
                 .insert(hash, V3Entry { pn: pn as u64, dn: dn as u64, len, best: best16, min_depth: md_self });
+            // V3_XHAND: 非 taint unknown を cross-hand bucket へも upsert (KH UpdateUnknown 相当)．
+            if self.param_v3_xhand {
+                let pk = super::position_key(board);
+                let h = board.hand[self.attacker.index()];
+                self.v3_xh_store(pk, h, pn, dn, md_self, false);
+            }
             ret_rep_min = REPETITION_NONE;
         } else {
             // GHI-tainted unknown (node_rep_min < ply): path 依存推定値は **破棄** する．

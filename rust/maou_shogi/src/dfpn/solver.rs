@@ -528,6 +528,14 @@ pub struct DfPnSolver {
     /// Phase 33k: LE path で cycle-dependent disproof を path_key で RepetitionMemo にキャッシュするか
     /// (KH RepetitionTable; dominance 無しの base でも有効)．clean TT は skip する taint 付き disproof を
     /// path_key で再利用し，再降下の thrash を抑える．
+    /// V3_XHAND (KH ttentry LookUpSuperior/Inferior 移植): 非 taint unknown の
+    /// pn/dn を (pos_key, attacker hand) 別に保存し，child seed 時に
+    /// 「現 hand 優等 → dn=max(dn, entry.dn)」「劣等 → pn=max(pn, entry.pn)」の
+    /// bound 合成を行う (unknown 推定のみ変更 = final 判定に影響せず sound)．
+    /// 値 = (hand, pn, dn, min_depth)．bucket cap は V3_XH_CAP．
+    pub(super) v3_xh: rustc_hash::FxHashMap<u64, Vec<([u8; HAND_KINDS], u32, u32, u16)>>,
+    pub(super) param_v3_xhand: bool,
+    pub(super) v3_xh_hits: u64,
     pub(super) param_v3_rep_cache: bool,
     /// Phase 33c: LE path で KH EliminateDoubleCount (DAG δ 二重計上除去) を有効化するか．
     pub(super) param_v3_dag: bool,
@@ -1137,6 +1145,9 @@ impl DfPnSolver {
             v3_dom_fires: 0,
             v3_rep_inserts: 0,
             v3_rep_hits: 0,
+            v3_xh: rustc_hash::FxHashMap::default(),
+            param_v3_xhand: false,
+            v3_xh_hits: 0,
             param_v3_rep_cache: false,
             param_v3_dag: true,
             v3_dag_resets: 0,
