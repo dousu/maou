@@ -255,11 +255,35 @@ struct PextTable {
     attacks: Vec<Bitboard>,
 }
 
+/// HW pext (BMI2) を `asm!` で直接発行する．
+///
+/// `#[target_feature(enable = "bmi2")]` fn は feature 境界を越えてインライン
+/// 展開されず，全 slider lookup が関数 call になっていた (PMP leaf ~7%)．
+/// `asm!` は target_feature を要求しないため `#[inline(always)]` が効き，
+/// 呼び出し側に展開される．BMI2 非対応 CPU では #UD になるため，必ず
+/// `is_x86_feature_detected!("bmi2")` 確認後のみ呼ぶこと (lookup 内で gate)．
+#[cfg(all(target_arch = "x86_64", not(target_feature = "bmi2")))]
+#[inline(always)]
+fn pext_hw(src: u64, mask: u64) -> u64 {
+    let r: u64;
+    unsafe {
+        std::arch::asm!(
+            "pext {r}, {s}, {m}",
+            r = lateout(reg) r,
+            s = in(reg) src,
+            m = in(reg) mask,
+            options(pure, nomem, nostack),
+        );
+    }
+    r
+}
+
 impl PextTable {
     #[inline(always)]
     fn lookup(&self, sq: Square, occ: Bitboard) -> Bitboard {
         // コンパイル時に bmi2 が無効でも，実行時検出で HW pext へ dispatch する
-        // (検出結果は std_detect が cache するため per-call コストは branch 1 つ)．
+        // (検出結果は std_detect が cache するため per-call コストは予測可能な
+        // branch 1 つ; asm 直接発行なので call 境界もない)．
         // SW fallback は mask bit 数 (≤14) に比例するループで，dfpn 探索の
         // hot path では支配的コストになる (Zen3 実測 leaf 33%)．
         // 注意: Zen1/Zen2 の HW pext はマイクロコードで遅い既知問題があるが，
@@ -267,21 +291,14 @@ impl PextTable {
         #[cfg(all(target_arch = "x86_64", not(target_feature = "bmi2")))]
         {
             if std::arch::is_x86_feature_detected!("bmi2") {
-                return unsafe { self.lookup_bmi2(sq, occ) };
+                let e = unsafe { self.entries.get_unchecked(sq.index()) };
+                let lo_idx = pext_hw(occ.lo, e.mask_lo) as usize;
+                let hi_idx = pext_hw(occ.hi, e.mask_hi) as usize;
+                let idx = lo_idx | (hi_idx << e.lo_popcount);
+                return unsafe { *self.attacks.get_unchecked(e.offset as usize + idx) };
             }
         }
         self.lookup_generic(sq, occ)
-    }
-
-    /// HW pext (BMI2) 直接使用版．`is_x86_feature_detected!("bmi2")` 確認後のみ呼ぶこと．
-    #[cfg(all(target_arch = "x86_64", not(target_feature = "bmi2")))]
-    #[target_feature(enable = "bmi2")]
-    unsafe fn lookup_bmi2(&self, sq: Square, occ: Bitboard) -> Bitboard {
-        let e = unsafe { self.entries.get_unchecked(sq.index()) };
-        let lo_idx = std::arch::x86_64::_pext_u64(occ.lo, e.mask_lo) as usize;
-        let hi_idx = std::arch::x86_64::_pext_u64(occ.hi, e.mask_hi) as usize;
-        let idx = lo_idx | (hi_idx << e.lo_popcount);
-        unsafe { *self.attacks.get_unchecked(e.offset as usize + idx) }
     }
 
     /// コンパイル時 target_feature に従う従来版 (bmi2 有効ビルドでは HW pext に解決)．
