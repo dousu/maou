@@ -355,6 +355,18 @@ pub struct DfPnSolver {
     /// 進んだ best_move (の move16)．
     pub(super) mid_frame_moves: Vec<u16>,
 
+    /// pop 済み `MidLocalExpansion` の再利用 pool (NPS 軸 v2.7.3)．
+    /// 内部 Vec 群 (moves/results/idx/dml/move_evals) の capacity を保持して
+    /// per-expansion の heap alloc (~7 本/構築) を排除する．上限 256 個
+    /// (stack 深さは V3_MAX_PLY=127 で bound されるため十分)．
+    pub(super) mid_expansion_pool: Vec<super::local_expansion::MidLocalExpansion>,
+
+    /// `build_v3_le_expansion` の per-child eval scratch (pool 再利用と対で alloc 排除)．
+    pub(super) v3_evals_buf: Vec<i32>,
+
+    /// `build_v3_le_expansion` の per-child 中合い判定 scratch (V3_CHUAI 用)．
+    pub(super) v3_chuai_buf: Vec<bool>,
+
     /// melodic-cascading-otter (v0.69.0): DAG 検出用 parent_map．
     /// `child_full_hash → parent_full_hash`．mid() で子に再帰する直前に
     /// `or_insert` で挿入 (既存 entry は上書きしない)．find_known_ancestor で
@@ -1110,6 +1122,9 @@ impl DfPnSolver {
             param_use_dag_correction: false,
             mid_expansion_stack: Vec::new(),
             mid_frame_moves: Vec::new(),
+            mid_expansion_pool: Vec::new(),
+            v3_evals_buf: Vec::new(),
+            v3_chuai_buf: Vec::new(),
             parent_map: rustc_hash::FxHashMap::default(),
             max_remaining_map: rustc_hash::FxHashMap::default(),
             param_threshold_epsilon: 2,

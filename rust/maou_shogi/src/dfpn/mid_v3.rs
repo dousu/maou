@@ -889,15 +889,22 @@ impl DfPnSolver {
         // NOTE (Phase 34, 訂正): 上記「残 gap = movegen 順」説は KHTRACE per-expansion 照合で**反証**された．
         // KH 生成順への並べ替え (board-before-drop / piece-type 順) は node を減らさず (68,649〜2.93M)，
         // 真因は探索動力学の breadth (maou unique ~22K vs KH ~2K, reuse 2× vs 9×)．move 順は非レバー．
-        let moves: Vec<Move> = if or_node {
-            self.generate_check_moves_cached(board).into_iter().collect()
+        // NPS 軸 (v2.7.3): expansion を pool から再利用し，moves を直接投入する
+        // (per-expansion の Vec alloc ~7 本を capacity 再利用で排除)．
+        let mut expansion = self
+            .mid_expansion_pool
+            .pop()
+            .unwrap_or_else(MidLocalExpansion::new_empty);
+        expansion.reset_for_fill();
+        if or_node {
+            let av = self.generate_check_moves_cached(board);
+            expansion.moves.extend_from_slice(av.as_slice());
         } else {
-            self.generate_defense_moves_inner(board, false)
-                .into_iter()
-                .collect()
-        };
+            let av = self.generate_defense_moves_inner(board, false);
+            expansion.moves.extend_from_slice(av.as_slice());
+        }
 
-        if moves.is_empty() {
+        if expansion.moves.is_empty() {
             let (p, d, l) = if or_node {
                 (V3_INF_U, 0u32, 0u16)
             } else {
@@ -905,19 +912,21 @@ impl DfPnSolver {
             };
             let md = self.v3_min_depth(hash, ply);
             self.v3_tt.insert(hash, V3Entry { pn: p as u64, dn: d as u64, len: l, best: 0, min_depth: md });
+            self.mid_expansion_pool.push(expansion);
             return Err((p, d, l, REPETITION_NONE));
         }
 
         if or_node {
-            // 王手リストは直上で生成済みの `moves` (同一 cache 由来・同一順) を再利用する
+            // 王手リストは直上で生成済みの `expansion.moves` (同一 cache 由来・同一順) を再利用する
             // (generate_check_moves_cached の値返しは ArrayVec<_, 593> 全コピーで高コスト)．
             let bturn = board.turn;
-            if let Some(mm) = board.mate_move_in_1ply(moves.as_slice(), bturn) {
+            if let Some(mm) = board.mate_move_in_1ply(expansion.moves.as_slice(), bturn) {
                 let md = self.v3_min_depth(hash, ply);
                 self.v3_tt.insert(
                     hash,
                     V3Entry { pn: 0, dn: V3_INF_U as u64, len: 1, best: mm.to_move16(), min_depth: md },
                 );
+                self.mid_expansion_pool.push(expansion);
                 return Err((0, V3_INF_U, 1, REPETITION_NONE));
             }
         }
@@ -932,20 +941,21 @@ impl DfPnSolver {
         // ~10× の unique node を訪問; reuse 2× vs KH 9×)．詳細は worklog 2026-06-03 を参照．
 
         // 子の初期化: seed (unit-2) / clean TT 値 / 千日手．
+        // results / evals / chuai は pool・scratch buffer へ直接 push (alloc 排除)．
         let div = PN_UNIT_SCALE.max(1);
-        let mut initial_results: Vec<MidSearchResult> = Vec::with_capacity(moves.len());
-        let mut evals: Vec<i32> = Vec::with_capacity(moves.len());
         // Phase 33m: KH DelayedMoveList の cross-square「無意味な中合い」検出 (delayed_move_list.hpp:151)．
         // AND ノードで，support 0 (受け方の他駒に守られない) かつ 逆王手でない drop = 後回し対象．
         // 実験 (V3_CHUAI) 時のみ計算 (default は overhead 回避のため skip)．
         let want_chuai = !or_node && env_v3chuai();
         let defender_for_chuai = self.attacker.opponent();
-        let mut chuai: Vec<bool> = Vec::with_capacity(moves.len());
+        self.v3_evals_buf.clear();
+        self.v3_chuai_buf.clear();
         let dump_this = env_v3selx().is_some_and(|t| board.sfen().starts_with(t));
         if dump_this {
             eprintln!("V3SELX node or={} ply={} sfen={}", or_node, ply, board.sfen());
         }
-        for &m in &moves {
+        for mi in 0..expansion.moves.len() {
+            let m = expansion.moves[mi];
             let (sp, sd) = if or_node {
                 super::init_pn_dn_or_kh(board, m, self.attacker)
             } else {
@@ -978,9 +988,10 @@ impl DfPnSolver {
             let ch = board.hash;
             // 逆王手判定: drop 後に攻め方が王手されていれば逆王手 (中合いではなく有効手 → 後回ししない)．
             if chuai_support0 {
-                chuai.push(!board.is_in_check(self.attacker));
+                let v = !board.is_in_check(self.attacker);
+                self.v3_chuai_buf.push(v);
             } else {
-                chuai.push(false);
+                self.v3_chuai_buf.push(false);
             }
             // KH `IsRepetitionOrInferiorAfter` (local_expansion.hpp:160): 子が
             //   (1) path 上の同一局面 (千日手),
@@ -1116,30 +1127,26 @@ impl DfPnSolver {
                     r.is_first_visit as u8, eval, m.is_drop() as u8,
                 );
             }
-            initial_results.push(r);
-            evals.push(eval);
+            expansion.results.push(r);
+            self.v3_evals_buf.push(eval);
         }
 
         // KH coherent (unit-2) 構成で MidLocalExpansion を構築 (DML on)．
         // Phase 33m: cross-square「無意味な中合い」束ね (KH delayed_move_list.hpp:151)．
         // 実測では 29te で効果なし (−0.3%) かつ mate-29→31 退行 — d3-d7 の breadth は
         // AND(中合い) だけでなく OR(王手) でも膨らむため．V3_CHUAI で実験有効化 (default off)．
-        let chuai_opt: Option<&[bool]> = if env_v3chuai() {
-            Some(chuai.as_slice())
-        } else {
-            None
-        };
-        let mut expansion = MidLocalExpansion::new_with_fh_dml_chuai(
-            or_node,
-            moves,
-            initial_results,
-            hash,
-            true,
-            us_is_black,
-            chuai_opt,
-        );
+        {
+            let chuai_opt: Option<&[bool]> = if env_v3chuai() {
+                Some(self.v3_chuai_buf.as_slice())
+            } else {
+                None
+            };
+            // pool 再利用: moves/results は投入済み．残り (dml/idx/sum_mask/スカラ) を
+            // new_with_fh_dml_chuai と同一ロジックで in-place 構築する．
+            expansion.rebuild(or_node, hash, true, us_is_black, chuai_opt);
+        }
         expansion.set_kh_full_comparer(true);
-        expansion.set_move_evals(evals);
+        expansion.set_move_evals_slice(&self.v3_evals_buf);
         expansion.set_threshold_epsilon(1);
         expansion.set_deferred_penalty_denom(8);
         expansion.set_deferred_penalty_floor(true);
@@ -1498,7 +1505,13 @@ impl DfPnSolver {
         // V3_ROOTKEEP: root frame は SearchEntry 相当の IDS loop 全体で持続させる
         // (KH は SearchEntry で Emplace/Pop し iteration 毎には触らない)．
         if !root_keep {
-            self.mid_expansion_stack.pop();
+            if let Some(e) = self.mid_expansion_stack.pop() {
+                // capacity 再利用のため pool へ返却 (上限 256; stack 深さは
+                // V3_MAX_PLY=127 で bound されるため通常超えない)．
+                if self.mid_expansion_pool.len() < 256 {
+                    self.mid_expansion_pool.push(e);
+                }
+            }
             self.mid_frame_moves.pop();
         }
 

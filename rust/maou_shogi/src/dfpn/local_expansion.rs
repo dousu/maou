@@ -247,7 +247,59 @@ impl MidLocalExpansion {
         us_is_black: bool,
         chuai: Option<&[bool]>,
     ) -> Self {
-        let n = moves.len();
+        let mut expansion = Self::new_empty();
+        expansion.moves = moves;
+        expansion.results = initial_results;
+        expansion.rebuild(or_node, position_fh, kh_dml, us_is_black, chuai);
+        expansion
+    }
+
+    /// Pool 再利用用の空 expansion (全 Vec capacity 0)．`reset_for_fill` →
+    /// moves/results 投入 → `rebuild` の順で再構築する．
+    /// (既存の `empty(&self) -> bool` 述語と紛らわしいので `new_` 接頭辞)．
+    pub(super) fn new_empty() -> Self {
+        Self {
+            or_node: false,
+            position_fh: 0,
+            moves: Vec::new(),
+            idx: Vec::new(),
+            excluded_moves: 0,
+            results: Vec::new(),
+            sum_mask: 0,
+            sum_delta_except_best: 0,
+            max_delta_except_best: 0,
+            has_old_child: false,
+            dml_prev: Vec::new(),
+            dml_next: Vec::new(),
+            deferred_penalty_denom: 8,
+            deferred_penalty_floor: false,
+            threshold_epsilon: 1,
+            move_evals: Vec::new(),
+            kh_full_comparer: false,
+            kh_full_and_only: false,
+        }
+    }
+
+    /// Pool 再利用: moves/results を空にする (capacity 維持)．
+    /// 呼び出し側はこの後 moves/results を投入してから `rebuild` を呼ぶ．
+    pub(super) fn reset_for_fill(&mut self) {
+        self.moves.clear();
+        self.results.clear();
+    }
+
+    /// `moves`/`results` 投入済みの self を `new_with_fh_dml_chuai` と**同一ロジック**で
+    /// 再構築する (idx/dml/sum_mask/move_evals/スカラを全て初期化)．
+    /// pool 再利用時も全フィールドがコンストラクタと同値になるよう，前回の
+    /// 設定値 (kh_full_comparer 等) は必ずここでリセットする．
+    pub(super) fn rebuild(
+        &mut self,
+        or_node: bool,
+        position_fh: u64,
+        kh_dml: bool,
+        us_is_black: bool,
+        chuai: Option<&[bool]>,
+    ) {
+        let n = self.moves.len();
 
         // Phase 11 (v0.90.0): DelayedMoveList chain 構築．AND ノードの同 to_sq
         // drops を chain 化．Phase 12 (v0.91.0): prev が **non-final のとき** のみ defer．
@@ -255,68 +307,66 @@ impl MidLocalExpansion {
         // final なら defer しない (= 初期 idx に含める)．これで AND の curr.pn=0 が
         // chain の 1 件目だけで成立する soundness 違反を防ぐ．
         // Phase 26: kh_dml=true で非駒打ち成/不成 deferral を追加 (build_delayed_chain 参照)．
-        let (dml_prev, dml_next) = build_delayed_chain_chuai(&moves, or_node, kh_dml, us_is_black, chuai);
+        build_delayed_chain_chuai_into(
+            &self.moves, or_node, kh_dml, us_is_black, chuai,
+            &mut self.dml_prev, &mut self.dml_next,
+        );
 
-        let mut idx: Vec<u32> = Vec::with_capacity(n);
+        self.idx.clear();
+        self.idx.reserve(n);
         for i in 0..n {
             let mut deferred = false;
-            let mut cur = dml_prev[i];
+            let mut cur = self.dml_prev[i];
             while cur >= 0 {
-                if !initial_results[cur as usize].is_final() {
+                if !self.results[cur as usize].is_final() {
                     deferred = true;
                     break;
                 }
-                cur = dml_prev[cur as usize];
+                cur = self.dml_prev[cur as usize];
             }
             if !deferred {
-                idx.push(i as u32);
+                self.idx.push(i as u32);
             }
         }
         // 初期 sort: KH SearchResultComparer 順 (phi → delta → ...)．
         // 構築時は move_evals 未設定 (全 0) なので tie-break は無効．
         // solver 側が set_move_evals を呼んで実 eval を投入後に再 sort される．
-        idx.sort_by(|&i, &j| {
-            child_ordering(
-                or_node,
-                &initial_results[i as usize], 0,
-                &initial_results[j as usize], 0,
-            )
-        });
+        {
+            let results = &self.results;
+            self.idx.sort_by(|&i, &j| {
+                child_ordering(
+                    or_node,
+                    &results[i as usize], 0,
+                    &results[j as usize], 0,
+                )
+            });
+        }
 
         let mut sum_mask = if n >= 64 { u64::MAX } else { (1u64 << n).wrapping_sub(1) };
         // Phase 22: KH `kForceSumPnDn = kInfinitePnDn / 1024` 相当．
         // child の初期 delta が一定値以上の場合 sum_mask off (max 集約に切替)．
         // KH `local_expansion.hpp:177` を移植．
         const FORCE_MAX_DELTA: u32 = (u32::MAX / 2) / 1024;
-        for (i, r) in initial_results.iter().enumerate().take(64) {
+        for (i, r) in self.results.iter().enumerate().take(64) {
             if r.delta(or_node) >= FORCE_MAX_DELTA {
                 sum_mask &= !(1u64 << i);
             }
         }
-        let has_old_child = initial_results.iter().any(|r| r.is_shallow);
-        let move_evals = vec![0i32; n];
-        let mut expansion = Self {
-            or_node,
-            position_fh,
-            moves,
-            idx,
-            excluded_moves: 0,
-            results: initial_results,
-            sum_mask,
-            sum_delta_except_best: 0,
-            max_delta_except_best: 0,
-            has_old_child,
-            dml_prev,
-            dml_next,
-            deferred_penalty_denom: 8,
-            deferred_penalty_floor: false,
-            threshold_epsilon: 1,
-            move_evals,
-            kh_full_comparer: false,
-            kh_full_and_only: false,
-        };
-        expansion.recalc_delta();
-        expansion
+        self.or_node = or_node;
+        self.position_fh = position_fh;
+        self.excluded_moves = 0;
+        self.sum_mask = sum_mask;
+        self.sum_delta_except_best = 0;
+        self.max_delta_except_best = 0;
+        self.has_old_child = self.results.iter().any(|r| r.is_shallow);
+        self.deferred_penalty_denom = 8;
+        self.deferred_penalty_floor = false;
+        self.threshold_epsilon = 1;
+        self.move_evals.clear();
+        self.move_evals.resize(n, 0i32);
+        self.kh_full_comparer = false;
+        self.kh_full_and_only = false;
+        self.recalc_delta();
     }
 
     /// Phase 23 (G4): KH `MoveBriefEvaluation` の値を設定し idx を再 sort する．
@@ -325,7 +375,20 @@ impl MidLocalExpansion {
     pub(super) fn set_move_evals(&mut self, evals: Vec<i32>) {
         debug_assert_eq!(evals.len(), self.moves.len());
         self.move_evals = evals;
-        // tie-break が変わるため KH comparer で再 sort．
+        self.resort_by_evals();
+    }
+
+    /// `set_move_evals` の slice 版 (pool 再利用用)．`move_evals` の capacity を
+    /// 維持したまま内容を差し替えて再 sort する．挙動は `set_move_evals` と同一．
+    pub(super) fn set_move_evals_slice(&mut self, evals: &[i32]) {
+        debug_assert_eq!(evals.len(), self.moves.len());
+        self.move_evals.clear();
+        self.move_evals.extend_from_slice(evals);
+        self.resort_by_evals();
+    }
+
+    /// move_evals 投入後の idx 再 sort (tie-break が変わるため KH comparer で再 sort)．
+    fn resort_by_evals(&mut self) {
         let or_node = self.or_node;
         let kh_full = self.effective_kh_full();
         let results = &self.results;
@@ -889,14 +952,33 @@ pub(super) fn build_delayed_chain_chuai(
     us_is_black: bool,
     chuai: Option<&[bool]>,
 ) -> (Vec<i32>, Vec<i32>) {
+    let mut prev = Vec::new();
+    let mut next = Vec::new();
+    build_delayed_chain_chuai_into(moves, or_node, kh_dml, us_is_black, chuai, &mut prev, &mut next);
+    (prev, next)
+}
+
+/// `build_delayed_chain_chuai` の in-place 版 (pool 再利用用)．
+/// `prev`/`next` を clear して同一内容を構築する (capacity 維持でアロケーション回避)．
+pub(super) fn build_delayed_chain_chuai_into(
+    moves: &[Move],
+    or_node: bool,
+    kh_dml: bool,
+    us_is_black: bool,
+    chuai: Option<&[bool]>,
+    prev: &mut Vec<i32>,
+    next: &mut Vec<i32>,
+) {
     let n = moves.len();
-    let mut prev = vec![-1i32; n];
-    let mut next = vec![-1i32; n];
+    prev.clear();
+    prev.resize(n, -1i32);
+    next.clear();
+    next.resize(n, -1i32);
 
     if !kh_dml {
         // 旧挙動: AND ノードの同 to_sq drops のみ chain．
         if or_node {
-            return (prev, next);
+            return;
         }
         let mut last_of_to: [u32; 81] = [0; 81];
         for (i, m) in moves.iter().enumerate() {
@@ -916,7 +998,7 @@ pub(super) fn build_delayed_chain_chuai(
             }
             last_of_to[to_idx] = (i + 1) as u32;
         }
-        return (prev, next);
+        return;
     }
 
     // KH parity (Phase 26): delayed_move_list.hpp の double-linked list 構築．
@@ -946,7 +1028,6 @@ pub(super) fn build_delayed_chain_chuai(
             heads.push((m, i));
         }
     }
-    (prev, next)
 }
 
 /// KH `DelayedMoveList::IsDelayable` 移植 (delayed_move_list.hpp:108)．
