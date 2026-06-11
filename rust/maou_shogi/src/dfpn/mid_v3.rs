@@ -175,6 +175,14 @@ impl DfPnSolver {
     /// mid_v3 エントリ: KH SearchEntry 風 root IDS で 29te を解く．
     pub fn solve_via_v3(&mut self, board: &mut Board) -> TsumeResult {
         self.v3_tt.clear();
+        // 大きい budget の solve では TT が数百万 entry まで成長する．段階的 rehash
+        // (全 entry の再配置コピーが累計 ~2× 発生) を避けるため node budget に
+        // 比例した容量を事前確保する (clear は capacity を保持するので 2 回目以降は
+        // no-op)．semantics 非接触 (HashMap の論理内容は不変)．
+        let want_cap = (self.max_nodes / 8).clamp(1 << 12, 1 << 24) as usize;
+        if self.v3_tt.capacity() < want_cap {
+            self.v3_tt.reserve(want_cap - self.v3_tt.len());
+        }
         self.v3_path.clear();
         self.v3_nodes = 0;
         self.attacker = board.turn;
