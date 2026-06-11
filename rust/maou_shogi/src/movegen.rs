@@ -350,30 +350,40 @@ pub(crate) fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
     // 相手(手番交代後の現在手番)の合法手があるかチェック
     // 1手でも見つかれば詰みではない
     let them = board.turn; // 歩を打たれた側
-    let pawn_sq = pawn_drop.to_sq();
-    let pseudo_moves = generate_pseudo_legal_moves(board);
-
-    // 歩打ち王手 (玉に隣接) の逃れは「玉移動」か「王手歩の捕獲」のみ (合駒不可)．
-    // 判定集合は従来どおり全疑似合法手だが，逃れになり得る手を先に試すことで
-    // 大半のケース (打ち歩詰めでない) を 1〜数回の do/undo で確定させる．
-    // 結果 (has_legal) は走査順に依存しないため従来と同一．
-    let likely_evasion = |m: &Move| {
-        m.to_sq() == pawn_sq
-            || (!m.is_drop() && m.moving_piece_type_raw() == PieceType::King as u8)
-    };
-
     let mut has_legal = false;
-    'pass: for likely_pass in [true, false] {
-        for &m in &pseudo_moves {
-            if likely_evasion(&m) != likely_pass {
-                continue;
-            }
+
+    // 玉移動を先に試す: 大半の打ち歩は玉移動で逃れるため，疑似合法手の全列挙
+    // (Vec 確保 + 全駒走査) を省ける．Move 構築 (`Move::new_move(from, to, false,
+    // captured_raw, King)`) と判定述語 (do/undo + is_in_check) は
+    // `generate_pseudo_legal_moves` 経由と完全同一なので結果 (has_legal) は従来と同値．
+    if let Some(king_sq) = board.king_square(them) {
+        let own_occ = board.occupied[them.index()];
+        let all_occ = board.all_occupied();
+        let targets = attack::piece_attacks(them, PieceType::King, king_sq, all_occ) & !own_occ;
+        for to in targets {
+            let captured_raw = board.squares[to.index()].0;
+            let m = Move::new_move(king_sq, to, false, captured_raw, PieceType::King as u8);
             let cap2 = board.do_move(m);
             let evades_check = !board.is_in_check(them);
             board.undo_move(m, cap2);
             if evades_check {
                 has_legal = true;
-                break 'pass;
+                break;
+            }
+        }
+    }
+
+    // 玉移動で逃れられないときのみ全疑似合法手を走査 (従来経路; 玉移動の再試行は
+    // 冗長だが結果不変)．
+    if !has_legal {
+        let pseudo_moves = generate_pseudo_legal_moves(board);
+        for m in pseudo_moves {
+            let cap2 = board.do_move(m);
+            let evades_check = !board.is_in_check(them);
+            board.undo_move(m, cap2);
+            if evades_check {
+                has_legal = true;
+                break;
             }
         }
     }
