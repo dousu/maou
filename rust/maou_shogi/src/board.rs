@@ -716,10 +716,22 @@ impl Board {
             }
         }
 
+        // === ピンの再計算 (移動後配置) ===
+        // 呼び出し元から渡される `pinned` は移動**前**の盤面で計算されている．
+        // 王手駒自身が pinner だった場合 (例: 1e の龍が 1f の金を file 1 に pin して
+        // いた状態から 1e2f と王手)，移動後は pin が解除され金は横移動で王手駒を
+        // 取り返せる．移動前 pin を使うとこの防御を見落とし**偽 1 手詰**になる
+        // (39te 偽証明 @17.9M nodes の真因, 2026-06-11)．移動後の攻め方 slider
+        // 配置 (from 除去・to 追加, 成り考慮) で pin を再計算する．
+        let pinned_after = self.compute_pinned_after_bb(
+            defender, king_sq, occ_after, def_occ_after, from_opt, to_sq, checker_pt,
+        );
+        let _ = pinned; // 移動前 pin は本判定では使用しない
+
         // === 2. 王手駒の捕獲チェック(玉以外) ===
         // ピンされていない守備駒で王手駒を取れるか
         if self.can_capture_checker_bb(
-            to_sq, king_sq, defender, occ_after, def_occ, def_idx, pinned,
+            to_sq, king_sq, defender, occ_after, def_occ, def_idx, &pinned_after,
         ) {
             return Some(false);
         }
@@ -730,7 +742,7 @@ impl Board {
             if between.is_not_empty()
                 && self.can_interpose_bb(
                     &between, king_sq, defender, occ_after, def_occ,
-                    def_idx, att_idx, pinned, from_opt,
+                    def_idx, att_idx, &pinned_after, from_opt,
                 )
             {
                 return Some(false);
@@ -738,6 +750,79 @@ impl Board {
         }
 
         Some(true) // 詰み!
+    }
+
+    /// 王手候補手を適用した**後**の配置における守備側の pin を計算する．
+    ///
+    /// `compute_pinned` の移動後版: 攻め方 slider 集合を from 除去・to 追加
+    /// (成りで駒種が変わる場合は移動後の駒種 `checker_pt` で判定) に調整し，
+    /// `occ_after` / `def_occ_after` でスキャンする．`is_checkmate_after_bb` の
+    /// 捕獲・合い駒判定はこちらを使う (移動前 pin は pinner 自身が動くケースで偽 pin になる)．
+    #[allow(clippy::too_many_arguments)]
+    fn compute_pinned_after_bb(
+        &self,
+        defender: Color,
+        king_sq: Square,
+        occ_after: Bitboard,
+        def_occ_after: Bitboard,
+        from_opt: Option<Square>,
+        to_sq: Square,
+        checker_pt: PieceType,
+    ) -> Bitboard {
+        let attacker = defender.opponent();
+        let ai = attacker.index();
+        let from_mask = from_opt
+            .map(Bitboard::from_square)
+            .unwrap_or(Bitboard::EMPTY);
+        let to_bb = Bitboard::from_square(to_sq);
+        let mut pinned = Bitboard::EMPTY;
+
+        // 飛・龍によるピン(縦横)
+        let mut rook_like = (self.piece_bb[ai][PieceType::Rook as usize]
+            | self.piece_bb[ai][PieceType::Dragon as usize])
+            & !from_mask;
+        if matches!(checker_pt, PieceType::Rook | PieceType::Dragon) {
+            rook_like |= to_bb;
+        }
+        let rook_pinners = attack::rook_attacks(king_sq, Bitboard::EMPTY) & rook_like;
+        for pinner_sq in rook_pinners {
+            let blockers = attack::between_bb(king_sq, pinner_sq) & occ_after;
+            if blockers.count() == 1 {
+                pinned |= blockers & def_occ_after;
+            }
+        }
+
+        // 角・馬によるピン(斜め)
+        let mut bishop_like = (self.piece_bb[ai][PieceType::Bishop as usize]
+            | self.piece_bb[ai][PieceType::Horse as usize])
+            & !from_mask;
+        if matches!(checker_pt, PieceType::Bishop | PieceType::Horse) {
+            bishop_like |= to_bb;
+        }
+        let bishop_pinners = attack::bishop_attacks(king_sq, Bitboard::EMPTY) & bishop_like;
+        for pinner_sq in bishop_pinners {
+            let blockers = attack::between_bb(king_sq, pinner_sq) & occ_after;
+            if blockers.count() == 1 {
+                pinned |= blockers & def_occ_after;
+            }
+        }
+
+        // 香によるピン
+        let mut lance_like =
+            self.piece_bb[ai][PieceType::Lance as usize] & !from_mask;
+        if checker_pt == PieceType::Lance {
+            lance_like |= to_bb;
+        }
+        let lance_pinners =
+            attack::lance_attacks(defender, king_sq, Bitboard::EMPTY) & lance_like;
+        for pinner_sq in lance_pinners {
+            let blockers = attack::between_bb(king_sq, pinner_sq) & occ_after;
+            if blockers.count() == 1 {
+                pinned |= blockers & def_occ_after;
+            }
+        }
+
+        pinned
     }
 
     /// 飛び駒かどうか判定する．

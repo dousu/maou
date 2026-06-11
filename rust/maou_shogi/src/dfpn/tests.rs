@@ -818,6 +818,11 @@ use crate::types::PieceType;
             // 3. 開き王手: 飛 8h8i+ は玉(7b)を直接王手しない (開き王手)．受け方は逃れ可．
             ("l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PGPP2P2/K2S5/1r3+p3/LN+b6 w R2GNLPgs5p 9",
              "discovered check (8h8i+)"),
+            // 4. pinner 自身の移動による pin 解除: 移動前は +R(1e) が金(1f) を file 1 に
+            //    縦ピンしているが，王手 1e2f で pinner が動くと金は unpin され 1f2f (横) で
+            //    王手駒を取り返せる．移動前 pin の流用は偽 1 手詰 (39te 偽証明 @17.9M の真因)．
+            ("4+N4/9/6pS1/9/8+R/6+B1g/1R2S3k/3p3N1/9 b NPb3g2sn4l15p 17",
+             "pin released by moving pinner (1e2f)"),
         ];
         for (sfen, label) in cases {
             let mut b = Board::new();
@@ -941,7 +946,11 @@ use crate::types::PieceType;
     #[test]
     #[ignore]
     fn test_mid_v3_39te_measure() {
-        let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+        // V3_SFEN で任意局面に差し替え可能 (偽証明調査等の計測用)．
+        let sfen_env = std::env::var("V3_SFEN").ok();
+        let sfen: &str = sfen_env
+            .as_deref()
+            .unwrap_or("9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1");
         let mut b = Board::new();
         b.set_sfen(sfen).unwrap();
         // 計測専用: budget/timeout を env で上書き可能に (lever 比較用)．

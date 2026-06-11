@@ -57,6 +57,21 @@ diag_env_flag!(env_khsel, "KHSEL");
 diag_env_flag!(env_v3trace, "V3TRACE");
 diag_env_flag!(env_v3rootkeep, "V3_ROOTKEEP");
 diag_env_flag!(env_v3rooti, "V3ROOTI");
+diag_env_flag!(env_v3vfydbg, "V3_VFY_DBG");
+diag_env_flag!(env_v3dmlguard, "V3_DML_GUARD");
+
+/// V3_VFY_DBG: STRICT VERIFY (verify_v3_proof) の None 経路を理由つきで dump する
+/// (偽証明調査用; 先頭 30 件 cap)．
+fn vfy_dbg(board: &Board, reason: &str) {
+    if !env_v3vfydbg() {
+        return;
+    }
+    static CNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let c = CNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if c <= 30 {
+        eprintln!("VFYDBG {} {} sfen={}", c, reason, board.sfen());
+    }
+}
 
 /// kPnDnUnit 相当．
 pub(super) const V3_U: u64 = 2;
@@ -521,6 +536,7 @@ impl DfPnSolver {
         *budget -= 1;
         let h = board.hash;
         if path.contains(&h) {
+            vfy_dbg(board, "path 上の千日手");
             return None; // 千日手 = 受け方脱出 = 不詰
         }
         if let Some(&r) = memo.get(&h) {
@@ -540,10 +556,20 @@ impl DfPnSolver {
                             path.pop();
                             r.map(|d| d + 1)
                         }
-                        None => None,
+                        None => {
+                            vfy_dbg(board, "OR best が合法手に無い");
+                            None
+                        }
                     }
                 }
-                _ => None,
+                e => {
+                    if e.is_none() {
+                        vfy_dbg(board, "OR TT miss");
+                    } else {
+                        vfy_dbg(board, "OR entry が pn!=0 or best=0");
+                    }
+                    None
+                }
             }
         } else {
             // 受け方: 探索と同じ move set (futile 合駒 filter 込み) で全手を列挙し，
@@ -556,6 +582,7 @@ impl DfPnSolver {
                 if board.is_in_check(board.turn()) {
                     Some(0)
                 } else {
+                    vfy_dbg(board, "AND 手なし非王手 (stalemate)");
                     None
                 }
             } else {
@@ -570,6 +597,16 @@ impl DfPnSolver {
                         Some(d) => maxd = maxd.max(d + 1),
                         None => {
                             ok = false;
+                            // 親 AND と失敗防御手の文脈 dump (偽証明調査)．
+                            if env_v3vfydbg() {
+                                let pe = self.v3_tt.get(&h);
+                                eprintln!(
+                                    "VFYDBG-PARENT AND defense={} 未検証 entry={:?} sfen={}",
+                                    m.to_usi(),
+                                    pe.map(|e| (e.pn, e.dn, e.len, e.best, e.min_depth)),
+                                    board.sfen()
+                                );
+                            }
                             break;
                         }
                     }
@@ -1429,6 +1466,28 @@ impl DfPnSolver {
             .map(|r| r.repetition_start)
             .min()
             .unwrap_or(REPETITION_NONE);
+
+        // V3_DML_GUARD: AND 勝ち (pn=0) 確定時，全 DML chain member が activate 済み
+        // (idx が全 moves を覆う) かを検査する．未 activate の deferred 防御が残ったまま
+        // AND が proven になると，その防御は探索されず偽証明になる (Phase 11 の DML 不全の
+        // cross-square 版疑い; 39te STRICT None 調査用)．
+        if pn == 0 && !or_node && env_v3dmlguard() {
+            let exp = &self.mid_expansion_stack[stack_idx];
+            if exp.idx.len() < exp.moves.len() {
+                static CNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+                let c = CNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if c <= 30 {
+                    eprintln!(
+                        "DMLGUARD {} AND-win with deferred: idx={} moves={} ply={} sfen={}",
+                        c,
+                        exp.idx.len(),
+                        exp.moves.len(),
+                        ply,
+                        board.sfen()
+                    );
+                }
+            }
+        }
 
         // KH ExpansionStack: frame を pop (push と対称)．
         // V3_ROOTKEEP: root frame は SearchEntry 相当の IDS loop 全体で持続させる
