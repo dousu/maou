@@ -497,6 +497,22 @@ impl CheckCache {
         }
     }
 
+    /// キャッシュ内の王手リストをコピーせず slice で借用する (zero-copy 経路)．
+    ///
+    /// 返り値の slice は次の `insert` まで有効．呼び出し側は借用中に本 cache へ
+    /// 再挿入しうる処理 (`generate_check_moves_cached` 等) を呼ばないこと．
+    #[inline(always)]
+    pub(super) fn get_slice(&self, hash: u64) -> Option<&[Move]> {
+        let table = unsafe { &*self.table.get() };
+        let idx = (hash as usize) & (CHECK_CACHE_SIZE - 1);
+        let entry = &table[idx];
+        if entry.hash == hash {
+            Some(entry.moves.as_slice())
+        } else {
+            None
+        }
+    }
+
     /// 王手リストをキャッシュに格納する．
     #[inline(always)]
     pub(super) fn insert(&self, hash: u64, moves: &ArrayVec<Move, MAX_MOVES>) {

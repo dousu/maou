@@ -308,10 +308,10 @@ impl DfPnSolver {
         }
 
         // OR ノード 1 手詰判定 (KH CheckObviousFinalOrNode 相当)．absolute．
+        // 王手リストは直上で生成済みの `moves` (同一 cache 由来・同一順) を再利用する．
         if or_node {
-            let checks_av = self.generate_check_moves_cached(board);
             let bturn = board.turn;
-            if let Some(mm) = board.mate_move_in_1ply(checks_av.as_slice(), bturn) {
+            if let Some(mm) = board.mate_move_in_1ply(moves.as_slice(), bturn) {
                 self.v3_tt.insert(hash, V3Entry { pn: 0, dn: V3_INF, len: 1, best: mm.to_move16(), min_depth: 0 });
                 return (0, V3_INF, 1, u32::MAX);
             }
@@ -909,9 +909,10 @@ impl DfPnSolver {
         }
 
         if or_node {
-            let checks_av = self.generate_check_moves_cached(board);
+            // 王手リストは直上で生成済みの `moves` (同一 cache 由来・同一順) を再利用する
+            // (generate_check_moves_cached の値返しは ArrayVec<_, 593> 全コピーで高コスト)．
             let bturn = board.turn;
-            if let Some(mm) = board.mate_move_in_1ply(checks_av.as_slice(), bturn) {
+            if let Some(mm) = board.mate_move_in_1ply(moves.as_slice(), bturn) {
                 let md = self.v3_min_depth(hash, ply);
                 self.v3_tt.insert(
                     hash,
@@ -1084,10 +1085,11 @@ impl DfPnSolver {
             // KH はこれで「詰む応手」を展開せず除外し，「逃れる応手」を即 disproof する．maou は
             // 従来 seed (2,2) のまま展開して再導出していた (AND node の pn 集約も過大 → breadth)．
             if !or_node && r.is_first_visit && self.param_v3_lookahead {
-                let cks = self.generate_check_moves_cached(board);
                 let cmd = self.v3_min_depth(ch, ply + 1);
-                let bturn = board.turn;
-                if let Some(mm) = board.mate_move_in_1ply(cks.as_slice(), bturn) {
+                // zero-copy 経路 (cache hit 時の ArrayVec 全コピーを回避)．
+                // 生成内容・順序は generate_check_moves_cached と同一．
+                let (mm_opt, has_checks) = self.mate1ply_with_cached_checks(board);
+                if let Some(mm) = mm_opt {
                     // 子 OR node が 1 手詰 → この応手は proven (mate-1)．absolute なので TT へ格納
                     // (KH `query.SetResult` 相当; 格納しないと PV/伝播が不整合 → false mate)．
                     self.v3_tt.insert(
@@ -1096,7 +1098,7 @@ impl DfPnSolver {
                     );
                     r = MidSearchResult::new_win(1);
                     r.is_first_visit = false;
-                } else if cks.is_empty() && env_v3obvd() {
+                } else if !has_checks && env_v3obvd() {
                     // 攻め方に王手手段なし → 詰み不可能 → この応手は逃れ (disproven, absolute)．
                     self.v3_tt.insert(
                         ch,

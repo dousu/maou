@@ -2215,6 +2215,31 @@ impl DfPnSolver {
         moves
     }
 
+    /// per-child 1 手詰 lookahead 専用の zero-copy 経路．
+    ///
+    /// `generate_check_moves_cached` は cache hit でも ArrayVec<_, 593> の値返し
+    /// (全コピー × 2) になるため，hit 時は cache 内 slice を直接
+    /// `mate_move_in_1ply` へ渡す．生成内容・順序は従来と同一 (semantics 不変)．
+    /// 返り値: (1 手詰の手, 王手手段の有無)．
+    pub(super) fn mate1ply_with_cached_checks(
+        &self,
+        board: &mut Board,
+    ) -> (Option<Move>, bool) {
+        let hash = board.hash;
+        let turn = board.turn;
+        if let Some(cached) = self.check_cache.get_slice(hash) {
+            // mate_move_in_1ply は board のみ触る (check_cache へ再挿入しない) ため
+            // 借用中の slice は有効なまま．
+            return (board.mate_move_in_1ply(cached, turn), !cached.is_empty());
+        }
+        let moves = self.generate_check_moves(board);
+        self.check_cache.insert(hash, &moves);
+        (
+            board.mate_move_in_1ply(moves.as_slice(), turn),
+            !moves.is_empty(),
+        )
+    }
+
 }
 
 
