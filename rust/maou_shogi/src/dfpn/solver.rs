@@ -1140,7 +1140,9 @@ impl DfPnSolver {
             v3_nodes: 0,
             param_v3_local_exp: true,
             param_v3_lookahead: true,
-            v3_rep_memo: super::repetition_memo::RepetitionMemo::new(1 << 16),
+            // 1<<22 (64MB)．generation GC が occupancy ~30% を保つ (KH parity)．
+            // 旧 1<<16 は深い探索で飽和し contains/insert が全周走査になっていた．
+            v3_rep_memo: super::repetition_memo::RepetitionMemo::new(1 << 22),
             param_v3_dominance: true,
             v3_dom_fires: 0,
             v3_rep_inserts: 0,
