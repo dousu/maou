@@ -59,6 +59,7 @@ diag_env_flag!(env_v3rootkeep, "V3_ROOTKEEP");
 diag_env_flag!(env_v3rooti, "V3ROOTI");
 diag_env_flag!(env_v3vfydbg, "V3_VFY_DBG");
 diag_env_flag!(env_v3dmlguard, "V3_DML_GUARD");
+diag_env_flag!(env_v3ply, "V3_PLY");
 
 /// V3_VFY_DBG: STRICT VERIFY (verify_v3_proof) の None 経路を理由つきで dump する
 /// (偽証明調査用; 先頭 30 件 cap)．
@@ -739,7 +740,7 @@ impl DfPnSolver {
                 self.param_v3_dag, self.param_v3_proof_hand, self.param_v3_dominance,
                 self.v3_dag_resets, self.v3_ph_hits, self.v3_dom_fires, self.v3_rep_hits, self.v3_nodes);
         }
-        if std::env::var("V3_PLY").is_ok() {
+        if env_v3ply() {
             let (mut tt, mut tu) = (0u64, 0u64);
             for d in 1..40 {
                 if self.v3_ply_total[d] > 0 {
@@ -1224,7 +1225,9 @@ impl DfPnSolver {
 
         let hash = board.hash;
         // Phase 33g: per-ply total/unique 訪問計測 (KHPLY trace 比較用)．
-        {
+        // V3_PLY gate 必須: 常時 ON だと毎ノード巨大 FxHashSet insert になり
+        // 表成長とともに NPS を支配する (tests.rs の per-ply summary も本 gate に依存)．
+        if env_v3ply() {
             let p = (ply as usize).min(63);
             self.v3_ply_total[p] += 1;
             if self.v3_ply_seen.insert((ply, hash)) {
