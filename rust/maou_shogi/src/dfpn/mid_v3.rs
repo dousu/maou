@@ -897,8 +897,8 @@ impl DfPnSolver {
             .unwrap_or_else(MidLocalExpansion::new_empty);
         expansion.reset_for_fill();
         if or_node {
-            let av = self.generate_check_moves_cached(board);
-            expansion.moves.extend_from_slice(av.as_slice());
+            // zero-copy: cache hit 時は ArrayVec 値返しを介さず直接 extend (v2.8.1)
+            self.check_moves_into(board, &mut expansion.moves);
         } else {
             let av = self.generate_defense_moves_inner(board, false);
             expansion.moves.extend_from_slice(av.as_slice());

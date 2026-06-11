@@ -2230,6 +2230,22 @@ impl DfPnSolver {
         moves
     }
 
+    /// 王手リストを `out` へ直接追記する zero-copy 経路 (v2.8.1)．
+    ///
+    /// `generate_check_moves_cached` の ArrayVec<_, 593> 値返し (2.4KB 級
+    /// stack copy) を避け，cache hit 時は cache 内 slice から，miss 時は
+    /// 生成結果から直接 extend する．生成内容・順序は従来と同一．
+    pub(super) fn check_moves_into(&self, board: &mut Board, out: &mut Vec<Move>) {
+        let hash = board.hash;
+        if let Some(cached) = self.check_cache.get_slice(hash) {
+            out.extend_from_slice(cached);
+            return;
+        }
+        let moves = self.generate_check_moves(board);
+        self.check_cache.insert(hash, &moves);
+        out.extend_from_slice(moves.as_slice());
+    }
+
     /// per-child 1 手詰 lookahead 専用の zero-copy 経路．
     ///
     /// `generate_check_moves_cached` は cache hit でも ArrayVec<_, 593> の値返し
