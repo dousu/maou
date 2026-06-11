@@ -112,9 +112,19 @@ impl DfPnSolver {
         // 単一の王手駒
         let checker_sq = checkers.lsb().unwrap();
 
+        // 受け方の pin (合法性判定用)．単一王手の回避手 (捕獲 to=checker / 合駒
+        // to∈between) は王手自体を必ず解消するので，違法になり得るのは from 退去の
+        // 開き王手 = 「from が pin されていて to が pin ray 外」の場合だけ．
+        // per-move の do/undo + is_in_check (is_evasion_legal) と完全同値:
+        //  - pin ray は king-from を通る唯一の直線で，第二 pinner は幾何的に存在しない
+        //    (同一線上の 2 つ目の slider は blocker 2 枚で pinner にならない)．
+        //  - 王手駒が pin ray 上にある場合は blocker 2 枚 (from + 王手駒) で from は
+        //    pin されない (王手駒も between & all_occ の blocker に数えられる)．
+        let pinned = board.compute_pinned(defender, king_sq);
+
         // --- 2. 王手駒の捕獲(玉以外の駒で) ---
         self.generate_capture_checker(
-            board, &mut moves, checker_sq, king_sq, defender, all_occ, our_occ,
+            board, &mut moves, checker_sq, king_sq, defender, all_occ, our_occ, pinned,
         );
         if early_exit && !moves.is_empty() {
             return moves;
@@ -132,7 +142,8 @@ impl DfPnSolver {
                 self.chain_bb_cache = chain;
                 // 間のマスへの合い駒
                 self.generate_interpositions(
-                    board, &mut moves, &between, &futile, &chain, king_sq, defender, all_occ, our_occ,
+                    board, &mut moves, &between, &futile, &chain, king_sq, defender, all_occ,
+                    our_occ, pinned,
                 );
             }
         }
@@ -141,6 +152,7 @@ impl DfPnSolver {
     }
 
     /// 王手駒を玉以外の駒で捕獲する手を生成する．
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn generate_capture_checker(
         &self,
         board: &mut Board,
@@ -150,6 +162,7 @@ impl DfPnSolver {
         defender: Color,
         all_occ: Bitboard,
         _our_occ: Bitboard,
+        pinned: Bitboard,
     ) {
         // 逆引き利き計算: checker_sq を攻撃できる自駒のビットボードを直接求める．
         // is_attacked_by と同じ逆射パターンで，全自駒イテレーション(~16駒)を
@@ -199,6 +212,13 @@ impl DfPnSolver {
 
         while can_capture.is_not_empty() {
             let from = can_capture.pop_lsb();
+            // 捕獲は王手を必ず解消するので，合法性は pin 述語だけで決まる
+            // (is_evasion_legal の do/undo + is_in_check と同値; 呼び出し元コメント参照)．
+            if pinned.contains(from)
+                && !attack::line_through(king_sq, from).contains(checker_sq)
+            {
+                continue;
+            }
             let piece = board.squares[from.index()];
             let pt = piece.piece_type().unwrap();
             let in_promo_zone =
@@ -206,20 +226,14 @@ impl DfPnSolver {
 
             if pt.can_promote() && in_promo_zone {
                 let m = Move::new_move(from, checker_sq, true, captured_raw, pt as u8);
-                if self.is_evasion_legal(board, m, defender) {
-                    push_move(moves, m);
-                }
+                push_move(moves, m);
                 if !movegen::must_promote(defender, pt, checker_sq) {
                     let m = Move::new_move(from, checker_sq, false, captured_raw, pt as u8);
-                    if self.is_evasion_legal(board, m, defender) {
-                        push_move(moves, m);
-                    }
+                    push_move(moves, m);
                 }
             } else if !movegen::must_promote(defender, pt, checker_sq) {
                 let m = Move::new_move(from, checker_sq, false, captured_raw, pt as u8);
-                if self.is_evasion_legal(board, m, defender) {
-                    push_move(moves, m);
-                }
+                push_move(moves, m);
             }
         }
     }
@@ -394,6 +408,7 @@ impl DfPnSolver {
     ///
     /// 中合いで打った駒はチェッカーに取られるため，攻め方に渡す駒が弱いほど
     /// 守備側に有利(包含関係)．各カテゴリ内では最弱の駒が代表となる．
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn generate_interpositions(
         &self,
         board: &mut Board,
@@ -405,6 +420,7 @@ impl DfPnSolver {
         defender: Color,
         all_occ: Bitboard,
         _our_occ: Bitboard,
+        pinned: Bitboard,
     ) {
         let king_step = attack::step_attacks(
             defender.opponent(),
@@ -451,6 +467,14 @@ impl DfPnSolver {
 
             while can_interpose.is_not_empty() {
                 let from = can_interpose.pop_lsb();
+                // 合駒 (to∈between) は王手を必ず遮断するので，合法性は pin 述語だけで
+                // 決まる (is_evasion_legal の do/undo + is_in_check と同値;
+                // generate_defense_moves_inner のコメント参照)．
+                if pinned.contains(from)
+                    && !attack::line_through(king_sq, from).contains(to)
+                {
+                    continue;
+                }
                 let piece = board.squares[from.index()];
                 let pt = piece.piece_type().unwrap();
 
@@ -476,20 +500,14 @@ impl DfPnSolver {
 
                 if pt.can_promote() && in_promo_zone {
                     let m = Move::new_move(from, to, true, captured_raw, pt as u8);
-                    if self.is_evasion_legal(board, m, defender) {
-                        push_move(moves, m);
-                    }
+                    push_move(moves, m);
                     if !movegen::must_promote(defender, pt, to) {
                         let m = Move::new_move(from, to, false, captured_raw, pt as u8);
-                        if self.is_evasion_legal(board, m, defender) {
-                            push_move(moves, m);
-                        }
+                        push_move(moves, m);
                     }
                 } else if !movegen::must_promote(defender, pt, to) {
                     let m = Move::new_move(from, to, false, captured_raw, pt as u8);
-                    if self.is_evasion_legal(board, m, defender) {
-                        push_move(moves, m);
-                    }
+                    push_move(moves, m);
                 }
             }
 
@@ -661,15 +679,6 @@ impl DfPnSolver {
                 push_move(moves, m);
             }
         }
-    }
-
-    /// 回避手の合法性チェック(ピンの確認)．
-    #[inline]
-    pub(super) fn is_evasion_legal(&self, board: &mut Board, m: Move, defender: Color) -> bool {
-        let captured = board.do_move(m);
-        let in_check = board.is_in_check(defender);
-        board.undo_move(m, captured);
-        !in_check
     }
 
     /// 飛び駒で王手している駒のマスを返す(単一の場合のみ)．
