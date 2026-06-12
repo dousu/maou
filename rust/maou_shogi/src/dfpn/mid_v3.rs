@@ -61,6 +61,33 @@ diag_env_flag!(env_v3vfydbg, "V3_VFY_DBG");
 diag_env_flag!(env_v3dmlguard, "V3_DML_GUARD");
 diag_env_flag!(env_v3ply, "V3_PLY");
 
+// --- parity compound 実験 knobs (2026-06-12; default = 現行値で挙動不変) ---
+// builds 3.73× の真因 (stale-sum と eps/denom/floor の共適応) を格子で再調整するための
+// env override．default 経路は gate (29te 18,539 / full 14,478,765) を維持する．
+/// V3_EPS=<n>: threshold_epsilon (default 1)．
+fn env_v3eps() -> u32 {
+    static C: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *C.get_or_init(|| {
+        std::env::var("V3_EPS").ok().and_then(|s| s.parse().ok()).unwrap_or(1)
+    })
+}
+/// V3_DENOM=<n>: deferred_penalty_denom (default 8)．
+fn env_v3denom() -> u32 {
+    static C: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *C.get_or_init(|| {
+        std::env::var("V3_DENOM").ok().and_then(|s| s.parse().ok()).unwrap_or(8)
+    })
+}
+/// V3_FLOOR=0/1: deferred_penalty_floor (default 1=true)．
+fn env_v3floor() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| {
+        std::env::var("V3_FLOOR").map(|s| s != "0").unwrap_or(true)
+    })
+}
+// V3_RECALC=1: resort_by_evals 後に recalc_delta (KH RecalcDelta 一致; default off)．
+diag_env_flag!(env_v3recalc, "V3_RECALC");
+
 /// V3_VFY_DBG: STRICT VERIFY (verify_v3_proof) の None 経路を理由つきで dump する
 /// (偽証明調査用; 先頭 30 件 cap)．
 fn vfy_dbg(board: &Board, reason: &str) {
@@ -1200,10 +1227,11 @@ impl DfPnSolver {
             expansion.rebuild(or_node, hash, true, us_is_black, chuai_opt);
         }
         expansion.set_kh_full_comparer(true);
+        expansion.set_recalc_on_resort(env_v3recalc());
         expansion.set_move_evals_slice(&self.v3_evals_buf);
-        expansion.set_threshold_epsilon(1);
-        expansion.set_deferred_penalty_denom(8);
-        expansion.set_deferred_penalty_floor(true);
+        expansion.set_threshold_epsilon(env_v3eps());
+        expansion.set_deferred_penalty_denom(env_v3denom());
+        expansion.set_deferred_penalty_floor(env_v3floor());
         // KH IsSumDeltaNode: OR の near-duplicate (香成/不成等) を max 集約へ．
         if or_node {
             let force_max: Vec<u32> = expansion

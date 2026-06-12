@@ -174,6 +174,8 @@ pub(super) struct MidLocalExpansion {
     deferred_penalty_denom: u32,
     /// Phase 22: deferred penalty に `.max(1)` floor を適用 (KH=true)．
     deferred_penalty_floor: bool,
+    /// parity compound 実験 (V3_RECALC): eval 再 sort 後に recalc_delta を行うか．
+    recalc_on_resort: bool,
     /// Phase 22: 1+ε 閾値 epsilon (KH デフォルト 1; maou 試験 PN_UNIT=16)．
     threshold_epsilon: u32,
     /// Phase 23 (G4): KH `MoveBriefEvaluation` 相当の move score．
@@ -273,6 +275,7 @@ impl MidLocalExpansion {
             dml_next: Vec::new(),
             deferred_penalty_denom: 8,
             deferred_penalty_floor: false,
+            recalc_on_resort: false,
             threshold_epsilon: 1,
             move_evals: Vec::new(),
             kh_full_comparer: false,
@@ -361,6 +364,7 @@ impl MidLocalExpansion {
         self.has_old_child = self.results.iter().any(|r| r.is_shallow);
         self.deferred_penalty_denom = 8;
         self.deferred_penalty_floor = false;
+        self.recalc_on_resort = false;
         self.threshold_epsilon = 1;
         self.move_evals.clear();
         self.move_evals.resize(n, 0i32);
@@ -403,14 +407,14 @@ impl MidLocalExpansion {
                 )
             });
         }
-        // NOTE (2026-06-12 parity hunt, 不採用): KH は最終 sort 後に RecalcDelta する
-        // (local_expansion.hpp:220-221) が，ここで recalc_delta() を呼んで KH に合わせると
-        // **29te 18,539→26,260 (+42%) / 39te 14.48M→18.69M (+29%) に退行**する (STRICT は
-        // Some(55) で健全)．eval 再 sort で front が変わった場合 sum/max_delta_except_best は
-        // front の delta 差分だけ stale になる (例: AND 集計 12→10 の過小評価) が，この
-        // under-aggregation は「loop を長く回し re-entry を減らす」方向に働き，maou の他機構と
-        // 共適応して net 有利．KH 完全一致は parity hunt の lever でないと実測確定 (Phase 20 の
-        // TCA formula と同型の compound 退行)．
+        // NOTE (2026-06-12 parity hunt): KH は最終 sort 後に RecalcDelta する
+        // (local_expansion.hpp:220-221) が，単発で recalc_delta() を KH に合わせると
+        // **29te +42% / 39te +29% に退行**する (STRICT 健全)．stale sum の under-aggregation
+        // は「loop を長く回し re-entry を減らす」方向に共適応して net 有利のため．
+        // V3_RECALC=1 (compound 格子実験用 env) のときのみ KH 一致の recalc を行う．
+        if self.recalc_on_resort {
+            self.recalc_delta();
+        }
     }
 
     /// Phase 21: deferred penalty 除数を設定 (0 = 無効)．
@@ -427,6 +431,12 @@ impl MidLocalExpansion {
     /// Phase 22: deferred penalty floor (`.max(1)`) を設定．
     pub(super) fn set_deferred_penalty_floor(&mut self, floor: bool) {
         self.deferred_penalty_floor = floor;
+    }
+
+    /// parity compound 実験 (V3_RECALC): eval 再 sort 後に recalc_delta を行うか
+    /// (KH RecalcDelta 一致)．default false (off; v2.8.7 NOTE の単発退行を参照)．
+    pub(super) fn set_recalc_on_resort(&mut self, on: bool) {
+        self.recalc_on_resort = on;
     }
 
     /// Phase 30: KH 完全 comparer (δ値 + amount tie-break) を有効化する．
