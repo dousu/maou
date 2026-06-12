@@ -91,8 +91,10 @@ const V3_U_U32: u32 = V3_U as u32;
 /// mid_v3 の exact-match TT エントリ．
 #[derive(Clone, Copy, Default)]
 pub(super) struct V3Entry {
-    pub pn: u64,
-    pub dn: u64,
+    /// pn (u32 圧縮; `u32::MAX` = INF marker = `V3_INF_U`)．legacy u64 値は
+    /// `new64`/`pn_u64` で相互変換する．entry 24B→16B (-33%, TT footprint 対策)．
+    pub pn: u32,
+    pub dn: u32,
     /// proven 時の詰み手数 (mate distance)．
     pub len: u16,
     /// best child の move16．
@@ -103,19 +105,31 @@ pub(super) struct V3Entry {
 }
 
 impl V3Entry {
+    /// u64 値 (legacy V3_INF 含む) からの構築．`>= V3_INF_U` は INF marker に飽和する
+    /// (LE path の u32 値は `V3_INF_U == u32::MAX` なのでそのまま通る)．
+    #[inline]
+    fn new64(pn: u64, dn: u64, len: u16, best: u16, min_depth: u16) -> Self {
+        Self {
+            pn: pn.min(V3_INF_U as u64) as u32,
+            dn: dn.min(V3_INF_U as u64) as u32,
+            len,
+            best,
+            min_depth,
+        }
+    }
+    /// legacy (u64) 読み出し: INF marker を V3_INF へ戻す．
+    #[inline]
+    fn pn_u64(&self) -> u64 {
+        if self.pn >= V3_INF_U { V3_INF } else { self.pn as u64 }
+    }
+    /// legacy (u64) 読み出し: INF marker を V3_INF へ戻す．
+    #[inline]
+    fn dn_u64(&self) -> u64 {
+        if self.dn >= V3_INF_U { V3_INF } else { self.dn as u64 }
+    }
     #[inline]
     fn is_final(&self) -> bool {
         self.pn == 0 || self.dn == 0
-    }
-    /// or_node から見た phi (= 進めたい側の数値)．OR は pn, AND は dn．
-    #[inline]
-    fn phi(&self, or_node: bool) -> u64 {
-        if or_node { self.pn } else { self.dn }
-    }
-    /// or_node から見た delta (= 相手側の数値)．OR は dn, AND は pn．
-    #[inline]
-    fn delta(&self, or_node: bool) -> u64 {
-        if or_node { self.dn } else { self.pn }
     }
 }
 
@@ -288,7 +302,7 @@ impl DfPnSolver {
         // TT: final 済なら即返す (格納されているのは absolute なものだけ → rep_min=MAX)．
         if let Some(e) = self.v3_tt.get(&hash) {
             if e.is_final() {
-                return (e.pn, e.dn, e.len, u32::MAX);
+                return (e.pn_u64(), e.dn_u64(), e.len, u32::MAX);
             }
         }
 
@@ -311,7 +325,7 @@ impl DfPnSolver {
             } else {
                 (0u64, V3_INF, 0u16)
             };
-            self.v3_tt.insert(hash, V3Entry { pn: r.0, dn: r.1, len: r.2, best: 0, min_depth: 0 });
+            self.v3_tt.insert(hash, V3Entry::new64(r.0, r.1, r.2, 0, 0));
             return (r.0, r.1, r.2, u32::MAX);
         }
 
@@ -320,7 +334,7 @@ impl DfPnSolver {
         if or_node {
             let bturn = board.turn;
             if let Some(mm) = board.mate_move_in_1ply(moves.as_slice(), bturn) {
-                self.v3_tt.insert(hash, V3Entry { pn: 0, dn: V3_INF, len: 1, best: mm.to_move16(), min_depth: 0 });
+                self.v3_tt.insert(hash, V3Entry::new64(0, V3_INF, 1, mm.to_move16(), 0));
                 return (0, V3_INF, 1, u32::MAX);
             }
         }
@@ -355,7 +369,7 @@ impl DfPnSolver {
                     // 子が千日手 → 不詰扱い (dn=0)．参照祖先 ply を rep_min に．
                     (V3_INF, 0u64, 0u16, false, true, anc_ply)
                 } else if let Some(e) = self.v3_tt.get(&ch) {
-                    (e.pn, e.dn, e.len, false, e.is_final(), u32::MAX)
+                    (e.pn_u64(), e.dn_u64(), e.len, false, e.is_final(), u32::MAX)
                 } else {
                     (seed_pn, seed_dn, 0u16, true, false, u32::MAX)
                 };
@@ -487,7 +501,7 @@ impl DfPnSolver {
         if node_rep_min == u32::MAX || node_rep_min >= ply {
             self.v3_tt.insert(
                 hash,
-                V3Entry { pn: cur_pn2, dn: cur_dn2, len, best: best_move16, min_depth: 0 },
+                V3Entry::new64(cur_pn2, cur_dn2, len, best_move16, 0),
             );
         }
         (cur_pn2, cur_dn2, len, node_rep_min)
@@ -919,7 +933,7 @@ impl DfPnSolver {
                 (0u32, V3_INF_U, 0u16)
             };
             let md = self.v3_min_depth(hash, ply);
-            self.v3_tt.insert(hash, V3Entry { pn: p as u64, dn: d as u64, len: l, best: 0, min_depth: md });
+            self.v3_tt.insert(hash, V3Entry::new64(p as u64, d as u64, l, 0, md));
             self.mid_expansion_pool.push(expansion);
             return Err((p, d, l, REPETITION_NONE));
         }
@@ -932,7 +946,7 @@ impl DfPnSolver {
                 let md = self.v3_min_depth(hash, ply);
                 self.v3_tt.insert(
                     hash,
-                    V3Entry { pn: 0, dn: V3_INF_U as u64, len: 1, best: mm.to_move16(), min_depth: md },
+                    V3Entry::new64(0, V3_INF_U as u64, 1, mm.to_move16(), md),
                 );
                 self.mid_expansion_pool.push(expansion);
                 return Err((0, V3_INF_U, 1, REPETITION_NONE));
@@ -1146,7 +1160,7 @@ impl DfPnSolver {
                     // (KH `query.SetResult` 相当; 格納しないと PV/伝播が不整合 → false mate)．
                     self.v3_tt.insert(
                         ch,
-                        V3Entry { pn: 0, dn: V3_INF_U as u64, len: 1, best: mm.to_move16(), min_depth: cmd },
+                        V3Entry::new64(0, V3_INF_U as u64, 1, mm.to_move16(), cmd),
                     );
                     r = MidSearchResult::new_win(1);
                     r.is_first_visit = false;
@@ -1154,7 +1168,7 @@ impl DfPnSolver {
                     // 攻め方に王手手段なし → 詰み不可能 → この応手は逃れ (disproven, absolute)．
                     self.v3_tt.insert(
                         ch,
-                        V3Entry { pn: V3_INF_U as u64, dn: 0, len: 0, best: 0, min_depth: cmd },
+                        V3Entry::new64(V3_INF_U as u64, 0, 0, 0, cmd),
                     );
                     r = MidSearchResult::new_lose(0);
                     r.is_first_visit = false;
@@ -1330,13 +1344,13 @@ impl DfPnSolver {
                 self.v3_ph_hits += 1;
                 // PV 抽出用に exact key へも書き戻す．
                 let md = self.v3_min_depth(hash, ply);
-                self.v3_tt.insert(hash, V3Entry { pn: 0, dn: V3_INF_U as u64, len, best, min_depth: md });
+                self.v3_tt.insert(hash, V3Entry::new64(0, V3_INF_U as u64, len, best, md));
                 return (0, V3_INF_U, len, REPETITION_NONE);
             }
             if self.v3_disproof_lookup(pk, &att_hand) {
                 self.v3_ph_hits += 1;
                 let md = self.v3_min_depth(hash, ply);
-                self.v3_tt.insert(hash, V3Entry { pn: V3_INF_U as u64, dn: 0, len: 0, best: 0, min_depth: md });
+                self.v3_tt.insert(hash, V3Entry::new64(V3_INF_U as u64, 0, 0, 0, md));
                 return (V3_INF_U, 0, 0, REPETITION_NONE);
             }
         }
@@ -1588,7 +1602,7 @@ impl DfPnSolver {
         let ret_rep_min;
         if pn == 0 {
             self.v3_tt
-                .insert(hash, V3Entry { pn: pn as u64, dn: dn as u64, len, best: best16, min_depth: md_self });
+                .insert(hash, V3Entry::new64(pn as u64, dn as u64, len, best16, md_self));
             // Phase 33d: absolute proof を hand-aware store にも記録 (actual hand; Stage 1)．
             if self.param_v3_proof_hand {
                 let pk = super::position_key(board);
@@ -1612,7 +1626,7 @@ impl DfPnSolver {
                 ret_rep_min = node_rep_min;
             } else {
                 self.v3_tt
-                    .insert(hash, V3Entry { pn: pn as u64, dn: dn as u64, len, best: best16, min_depth: md_self });
+                    .insert(hash, V3Entry::new64(pn as u64, dn as u64, len, best16, md_self));
                 // Phase 33d: absolute disproof を hand-aware store にも記録．
                 if self.param_v3_proof_hand {
                     let pk = super::position_key(board);
@@ -1630,7 +1644,7 @@ impl DfPnSolver {
         } else if node_rep_min == REPETITION_NONE || node_rep_min >= ply {
             // 非 taint unknown のみ clean TT へ格納する．
             self.v3_tt
-                .insert(hash, V3Entry { pn: pn as u64, dn: dn as u64, len, best: best16, min_depth: md_self });
+                .insert(hash, V3Entry::new64(pn as u64, dn as u64, len, best16, md_self));
             // V3_XHAND: 非 taint unknown を cross-hand bucket へも upsert (KH UpdateUnknown 相当)．
             if self.param_v3_xhand {
                 let pk = super::position_key(board);
@@ -1788,11 +1802,11 @@ impl DfPnSolver {
 /// LE path: clean TT (u64) → u32 (INF clamp)．
 #[inline]
 fn tt_pn_u32(e: &V3Entry) -> u32 {
-    e.pn.min(V3_INF_U as u64) as u32
+    e.pn
 }
 #[inline]
 fn tt_dn_u32(e: &V3Entry) -> u32 {
-    e.dn.min(V3_INF_U as u64) as u32
+    e.dn
 }
 
 /// LE path: 子 recursion の戻り (pn, dn, len, rep) を `MidSearchResult` へ変換．
