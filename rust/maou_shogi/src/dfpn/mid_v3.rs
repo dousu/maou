@@ -91,6 +91,10 @@ diag_env_flag!(env_v3recalc, "V3_RECALC");
 diag_env_flag!(env_v3laseed, "V3_LA_SEED");
 // V3_PROBE_NOSTORE=1: 降下ゼロの probe visit では unknown を TT/xh に格納しない (default off)．
 diag_env_flag!(env_v3probenostore, "V3_PROBE_NOSTORE");
+// V3_PROBE=1: KH probe shape — first-visit 子を親ループ内で build し，built aggregate が
+// 予算超過なら再帰せず値だけ親へ返す (KH Emplace+skip の完全形: TT store も entry
+// 簿記も無し)．超過しない場合は frame を捨てて従来の再帰へ (Stage 0 では二重 build 許容)．
+diag_env_flag!(env_v3probe, "V3_PROBE");
 
 /// V3_VFY_DBG: STRICT VERIFY (verify_v3_proof) の None 経路を理由つきで dump する
 /// (偽証明調査用; 先頭 30 件 cap)．
@@ -1501,6 +1505,35 @@ impl DfPnSolver {
                 }
                 if initial.is_final() || initial.pn >= cthpn || initial.dn >= cthdn {
                     initial
+                } else if env_v3probe() {
+                    // V3_PROBE (KH probe shape, plan steady-burning-lantern Stage 0):
+                    // 子 expansion を親ループ内で build し built aggregate で skip 判定．
+                    // KH SearchImplForRoot/SearchImpl の is_first_search 経路と同形:
+                    // 超過なら SearchImpl 非到達 = TT store/path 簿記/ノード計数なし．
+                    let ch_hash = board.hash;
+                    match self.build_v3_le_expansion(board, ply + 1, !or_node, ch_hash, child_pk)
+                    {
+                        Err((p, d, l, rp)) => mk_result_u32(p, d, l, rp),
+                        Ok(cidx) => {
+                            let built = self.mid_expansion_stack[cidx].current_result();
+                            // frame を pool へ返却 (probe は使い捨て; Stage 1 で再利用化予定)
+                            if let Some(e) = self.mid_expansion_stack.pop() {
+                                if self.mid_expansion_pool.len() < 256 {
+                                    self.mid_expansion_pool.push(e);
+                                }
+                            }
+                            self.mid_frame_moves.pop();
+                            debug_assert_eq!(self.mid_expansion_stack.len(), cidx);
+                            if built.pn >= cthpn || built.dn >= cthdn || built.is_final() {
+                                built
+                            } else {
+                                let (cp, cd, cl, cr) = self.search_v3_le(
+                                    board, cthpn, cthdn, ply + 1, child_pk, inc_flag,
+                                );
+                                mk_result_u32(cp, cd, cl, cr)
+                            }
+                        }
+                    }
                 } else {
                     let (cp, cd, cl, cr) = self.search_v3_le(board, cthpn, cthdn, ply + 1, child_pk, inc_flag);
                     mk_result_u32(cp, cd, cl, cr)
