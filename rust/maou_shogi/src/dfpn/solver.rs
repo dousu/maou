@@ -539,6 +539,10 @@ pub struct DfPnSolver {
     pub(super) v3_rep_hits: u64,
     /// V3_PROBE: 親ループ内 build-probe の回数 (KHEMP builds 突合用; 深掘り化した分は含まず)．
     pub(super) v3_probes: u64,
+    /// V3_MASKKEEP (plan H3'②): node hash → 永続 sum_mask．EliminateDoubleCount 等で
+    /// default (all-ones) から変化した mask を frame exit で記録し，rebuild 時に復元する
+    /// (KH は TT UnknownData::sum_mask で同等を実現 = FrontSumMask 継承)．
+    pub(super) v3_dag_masks: rustc_hash::FxHashMap<u64, u64>,
     /// Phase 33k: LE path で cycle-dependent disproof を path_key で RepetitionMemo にキャッシュするか
     /// (KH RepetitionTable; dominance 無しの base でも有効)．clean TT は skip する taint 付き disproof を
     /// path_key で再利用し，再降下の thrash を抑える．
@@ -1165,6 +1169,7 @@ impl DfPnSolver {
             v3_rep_inserts: 0,
             v3_rep_hits: 0,
             v3_probes: 0,
+            v3_dag_masks: rustc_hash::FxHashMap::default(),
             v3_xh: rustc_hash::FxHashMap::default(),
             param_v3_xhand: false,
             v3_xh_hits: 0,

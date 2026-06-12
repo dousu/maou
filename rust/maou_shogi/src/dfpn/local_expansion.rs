@@ -439,6 +439,21 @@ impl MidLocalExpansion {
         self.recalc_on_resort = on;
     }
 
+    /// V3_MASKKEEP (plan H3'②): 現在の sum_mask (永続化用)．
+    pub(super) fn sum_mask_raw(&self) -> u64 {
+        self.sum_mask
+    }
+
+    /// V3_MASKKEEP: 永続 sum_mask を復元し集計を再計算する (rebuild 直後に呼ぶ)．
+    /// mask は moves 数の範囲へ切り詰める (KH BitSet64 と同じ非有効 bit は無害)．
+    pub(super) fn apply_persisted_sum_mask(&mut self, mask: u64) {
+        let n = self.moves.len();
+        let full = if n >= 64 { u64::MAX } else { (1u64 << n).wrapping_sub(1) };
+        // rebuild の force-max (delta 過大) で落ちた bit は維持しつつ，永続 reset を AND で合成
+        self.sum_mask &= mask & full | !full;
+        self.recalc_delta();
+    }
+
     /// Phase 30: KH 完全 comparer (δ値 + amount tie-break) を有効化する．
     /// `set_move_evals` の **前** に呼ぶこと (re-sort がこの flag を参照するため)．
     pub(super) fn set_kh_full_comparer(&mut self, on: bool) {

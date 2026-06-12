@@ -91,6 +91,8 @@ diag_env_flag!(env_v3recalc, "V3_RECALC");
 diag_env_flag!(env_v3laseed, "V3_LA_SEED");
 // V3_PROBE_NOSTORE=1: 降下ゼロの probe visit では unknown を TT/xh に格納しない (default off)．
 diag_env_flag!(env_v3probenostore, "V3_PROBE_NOSTORE");
+// V3_MASKKEEP=1: sum_mask を node 単位で永続化し rebuild 時に復元 (KH FrontSumMask 継承相当)．
+diag_env_flag!(env_v3maskkeep, "V3_MASKKEEP");
 // V3_PROBE=1: KH probe shape — first-visit 子を親ループ内で build し，built aggregate が
 // 予算超過なら再帰せず値だけ親へ返す (KH Emplace+skip の完全形: TT store も entry
 // 簿記も無し)．超過しない場合は frame を捨てて従来の再帰へ (Stage 0 では二重 build 許容)．
@@ -235,6 +237,7 @@ impl DfPnSolver {
         self.v3_path.clear();
         self.v3_nodes = 0;
         self.v3_probes = 0;
+        self.v3_dag_masks.clear();
         self.attacker = board.turn;
         self.start_time = std::time::Instant::now();
         self.timed_out = false;
@@ -1264,6 +1267,13 @@ impl DfPnSolver {
                 expansion.apply_force_max(&force_max);
             }
         }
+        // V3_MASKKEEP (plan H3'②): 永続 sum_mask を復元 (KH は TT UnknownData::sum_mask
+        // を FrontSumMask として子 Emplace に渡す = DoubleCount 補正が再入をまたいで持続)．
+        if env_v3maskkeep() {
+            if let Some(&m) = self.v3_dag_masks.get(&hash) {
+                expansion.apply_persisted_sum_mask(m);
+            }
+        }
         // TCA trigger (Phase 33h): KH `min_depth` 流に，浅い transposition (is_shallow) を持つ child が
         // あるときのみ has_old_child=true (= MidLocalExpansion::new の is_shallow 集約をそのまま使う)．
         // 従来の「任意の再訪」基準 (recompute_has_old_child_any_revisit) は TCA を過剰発火させ
@@ -1692,6 +1702,18 @@ impl DfPnSolver {
         // (KH は SearchEntry で Emplace/Pop し iteration 毎には触らない)．
         if !root_keep {
             if let Some(e) = self.mid_expansion_stack.pop() {
+                // V3_MASKKEEP: default (all-ones) から変化した sum_mask を永続化 (変化が
+                // 消えたら除去)．KH の TT UnknownData::sum_mask 書き戻しに相当．
+                if env_v3maskkeep() {
+                    let nm = e.moves.len();
+                    let full = if nm >= 64 { u64::MAX } else { (1u64 << nm).wrapping_sub(1) };
+                    let cur = e.sum_mask_raw() & full;
+                    if cur != full {
+                        self.v3_dag_masks.insert(hash, cur);
+                    } else {
+                        self.v3_dag_masks.remove(&hash);
+                    }
+                }
                 // capacity 再利用のため pool へ返却 (上限 256; stack 深さは
                 // V3_MAX_PLY=127 で bound されるため通常超えない)．
                 if self.mid_expansion_pool.len() < 256 {
