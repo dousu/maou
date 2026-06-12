@@ -89,6 +89,8 @@ fn env_v3floor() -> bool {
 diag_env_flag!(env_v3recalc, "V3_RECALC");
 // V3_LA_SEED=1: lookahead 証明を親の初期集計に反映しない (TT 格納のみ; default off)．
 diag_env_flag!(env_v3laseed, "V3_LA_SEED");
+// V3_PROBE_NOSTORE=1: 降下ゼロの probe visit では unknown を TT/xh に格納しない (default off)．
+diag_env_flag!(env_v3probenostore, "V3_PROBE_NOSTORE");
 
 /// V3_VFY_DBG: STRICT VERIFY (verify_v3_proof) の None 経路を理由つきで dump する
 /// (偽証明調査用; 先頭 30 件 cap)．
@@ -1447,6 +1449,8 @@ impl DfPnSolver {
         // OR proven 時の best 手 + 詰み手数 (KH multi_pv=1 の immediate proof break 用)．
         let mut proof_best_move: u16 = 0;
         let mut proof_md: u16 = 0;
+        // V3_PROBE_NOSTORE 実験用: この visit が子へ 1 度でも降りたか (probe = 降下ゼロ)．
+        let mut descended = false;
 
         while curr.pn < cur_thpn && curr.dn < cur_thdn {
             if self.v3_nodes >= self.max_nodes || self.timed_out {
@@ -1455,6 +1459,7 @@ impl DfPnSolver {
             if self.mid_expansion_stack[stack_idx].empty() {
                 break;
             }
+            descended = true;
             let best_mv = self.mid_expansion_stack[stack_idx].best_move();
             let is_first = self.mid_expansion_stack[stack_idx].front_is_first_visit();
             let (cthpn, cthdn) =
@@ -1680,14 +1685,19 @@ impl DfPnSolver {
                 ret_rep_min = REPETITION_NONE;
             }
         } else if node_rep_min == REPETITION_NONE || node_rep_min >= ply {
-            // 非 taint unknown のみ clean TT へ格納する．
-            self.v3_tt
-                .insert(hash, V3Entry::new64(pn as u64, dn as u64, len, best16, md_self));
-            // V3_XHAND: 非 taint unknown を cross-hand bucket へも upsert (KH UpdateUnknown 相当)．
-            if self.param_v3_xhand {
-                let pk = super::position_key(board);
-                let h = board.hand[self.attacker.index()];
-                self.v3_xh_store(pk, h, pn, dn, md_self, false);
+            // V3_PROBE_NOSTORE 実験: 降下ゼロの probe visit (built aggregate を返すだけ)
+            // では unknown を TT/xh に格納しない (KH の Emplace+skip 経路は SetResult を
+            // 呼ばないことの再現)．default は従来通り格納．
+            if !(env_v3probenostore() && !descended) {
+                // 非 taint unknown のみ clean TT へ格納する．
+                self.v3_tt
+                    .insert(hash, V3Entry::new64(pn as u64, dn as u64, len, best16, md_self));
+                // V3_XHAND: 非 taint unknown を cross-hand bucket へも upsert (KH UpdateUnknown 相当)．
+                if self.param_v3_xhand {
+                    let pk = super::position_key(board);
+                    let h = board.hand[self.attacker.index()];
+                    self.v3_xh_store(pk, h, pn, dn, md_self, false);
+                }
             }
             ret_rep_min = REPETITION_NONE;
         } else {
