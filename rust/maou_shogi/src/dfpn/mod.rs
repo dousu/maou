@@ -449,6 +449,11 @@ fn position_key(board: &Board) -> u64 {
 const CHECK_CACHE_SIZE: usize = 8192;
 
 /// 1エントリあたりのキャッシュ容量(典型的な王手数は 3-15)．
+///
+/// NOTE (2026-06-12, 拡大は非レバー×3): entries 2^18×cap32 = 107.5s /
+/// entries 8192×cap96 = 112.2s / entries 2^17×cap96 = 109.3s — いずれも
+/// ノイズ帯 (103-112s) 内で gain なし (gates は全構成で完全一致)．gen_checks
+/// ~20% は hit 率でなく memory-stall 律速の再生成コストが本体．
 const CHECK_CACHE_CAPACITY: usize = 32;
 
 /// 王手生成キャッシュの1エントリ．
