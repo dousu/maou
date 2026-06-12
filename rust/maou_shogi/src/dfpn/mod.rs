@@ -442,6 +442,10 @@ fn position_key(board: &Board) -> u64 {
 // --- 王手生成キャッシュ (E2 最適化) ---
 
 /// 王手生成キャッシュのサイズ(2^13 = 8192 エントリ，direct-mapped)．
+///
+/// NOTE (2026-06-12, 拡大は非レバー): 2^18 (36MB) へ拡大しても 39te full solve は
+/// 107.5s で不変 (gen_checks 20% は hit 率でなく，CHECK_CACHE_CAPACITY=32 を超える
+/// 王手数の重い局面が cache 対象外なこと + memory-bound 下で memcpy ≈ 再生成のため)．
 const CHECK_CACHE_SIZE: usize = 8192;
 
 /// 1エントリあたりのキャッシュ容量(典型的な王手数は 3-15)．
