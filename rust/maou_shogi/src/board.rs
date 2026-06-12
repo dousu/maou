@@ -1383,6 +1383,102 @@ impl Board {
         piece
     }
 
+    /// `do_move(m)` 後の zobrist hash を盤面を変異させずに計算する．
+    ///
+    /// `do_move`/`put_piece`/`remove_piece` が適用する XOR 列と完全同一の
+    /// 演算を行うため，結果は `do_move(m)` 直後の `self.hash` と bit 一致する．
+    /// dfpn の子局面 TT lookup 用 (per-child do/undo の排除)．
+    /// `m` は本局面の合法 (疑似合法) 手であること．
+    #[inline]
+    pub fn hash_after(&self, m: Move) -> u64 {
+        let mut h = self.hash;
+        let ti = self.turn.index();
+        if m.is_drop() {
+            let pt = m.drop_piece_type().unwrap();
+            let to = m.to_sq();
+            let hi = pt.hand_index().unwrap();
+            let cnt = self.hand[ti][hi] as usize;
+            debug_assert!(cnt > 0);
+            h ^= ZOBRIST.hand_hash(self.turn, hi, cnt);
+            if cnt > 1 {
+                h ^= ZOBRIST.hand_hash(self.turn, hi, cnt - 1);
+            }
+            h ^= ZOBRIST.board_hash_raw(ti, pt as usize, to);
+        } else {
+            let from = m.from_sq();
+            let to = m.to_sq();
+            let moving = self.squares[from.index()];
+            debug_assert!(!moving.is_empty());
+            // Safety: moving が空でないことは debug_assert で検証済み
+            let pt_raw = unsafe { moving.piece_type_raw_unchecked() };
+            h ^= ZOBRIST.board_hash_raw(ti, pt_raw as usize, from);
+            let cap = self.squares[to.index()];
+            if !cap.is_empty() {
+                // Safety: cap が空でないことは検証済み
+                let cap_ci = unsafe { cap.color_index_unchecked() };
+                let cap_raw = unsafe { cap.piece_type_raw_unchecked() };
+                h ^= ZOBRIST.board_hash_raw(cap_ci, cap_raw as usize, to);
+                let cap_hand_pt = cap.piece_type().unwrap().captured_to_hand();
+                if let Some(hi) = cap_hand_pt.hand_index() {
+                    let cnt = self.hand[ti][hi] as usize;
+                    if cnt > 0 {
+                        h ^= ZOBRIST.hand_hash(self.turn, hi, cnt);
+                    }
+                    h ^= ZOBRIST.hand_hash(self.turn, hi, cnt + 1);
+                }
+            }
+            let new_pt_raw = if m.is_promotion() {
+                PieceType::from_u8(pt_raw)
+                    .expect("Move contains invalid PieceType")
+                    .promoted()
+                    .expect("cannot promote this piece") as u8
+            } else {
+                pt_raw
+            };
+            h ^= ZOBRIST.board_hash_raw(ti, new_pt_raw as usize, to);
+        }
+        h ^ ZOBRIST.turn_hash()
+    }
+
+    /// `do_move(m)` 後の盤面のみ zobrist hash (`board_hash`) を盤面を変異させずに計算する．
+    ///
+    /// `hash_after` の持ち駒項を除いた版 (結果は `do_move(m)` 直後の
+    /// `self.board_hash` と bit 一致)．dfpn の position_key 用．
+    #[inline]
+    pub fn board_hash_after(&self, m: Move) -> u64 {
+        let mut h = self.board_hash;
+        let ti = self.turn.index();
+        if m.is_drop() {
+            let pt = m.drop_piece_type().unwrap();
+            h ^= ZOBRIST.board_hash_raw(ti, pt as usize, m.to_sq());
+        } else {
+            let from = m.from_sq();
+            let to = m.to_sq();
+            let moving = self.squares[from.index()];
+            debug_assert!(!moving.is_empty());
+            // Safety: moving が空でないことは debug_assert で検証済み
+            let pt_raw = unsafe { moving.piece_type_raw_unchecked() };
+            h ^= ZOBRIST.board_hash_raw(ti, pt_raw as usize, from);
+            let cap = self.squares[to.index()];
+            if !cap.is_empty() {
+                // Safety: cap が空でないことは検証済み
+                let cap_ci = unsafe { cap.color_index_unchecked() };
+                let cap_raw = unsafe { cap.piece_type_raw_unchecked() };
+                h ^= ZOBRIST.board_hash_raw(cap_ci, cap_raw as usize, to);
+            }
+            let new_pt_raw = if m.is_promotion() {
+                PieceType::from_u8(pt_raw)
+                    .expect("Move contains invalid PieceType")
+                    .promoted()
+                    .expect("cannot promote this piece") as u8
+            } else {
+                pt_raw
+            };
+            h ^= ZOBRIST.board_hash_raw(ti, new_pt_raw as usize, to);
+        }
+        h ^ ZOBRIST.turn_hash()
+    }
+
     /// 手を実行する(取った駒を返す)．
     #[inline]
     pub fn do_move(&mut self, m: Move) -> Piece {

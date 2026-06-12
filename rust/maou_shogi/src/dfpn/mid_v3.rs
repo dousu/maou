@@ -992,11 +992,49 @@ impl DfPnSolver {
                 }
                 None => 0,
             };
-            let captured = board.do_move(m);
-            let ch = board.hash;
+            // NPS 軸 (v2.8.8): 子局面の hash/pos_key/持駒は zobrist delta で無変異計算し，
+            // per-child の do_move/undo_move (盤面更新 ×2 + 全 bitboard 簿記) を排除する．
+            // do_move が必要なのは 1 手詰 lookahead (first-visit AND 子のみ) だけ．
+            // hash_after/board_hash_after は do_move の XOR 列と bit 一致 (board.rs 参照)．
+            let ch = board.hash_after(m);
+            let pk_after = board.board_hash_after(m);
+            // 攻め方持駒の after 値: 攻め方が指す場合のみ変化 (drop: -1 / 捕獲: +1)．
+            let att_idx = self.attacker.index();
+            let hand_after_buf: [u8; crate::types::HAND_KINDS];
+            let hand_after: &[u8; crate::types::HAND_KINDS] = if board.turn == self.attacker {
+                let mut hb = board.hand[att_idx];
+                if m.is_drop() {
+                    let hi = m.drop_piece_type().unwrap().hand_index().unwrap();
+                    hb[hi] -= 1;
+                } else {
+                    let cap = board.squares[m.to_sq().index()];
+                    if !cap.is_empty() {
+                        if let Some(hi) =
+                            cap.piece_type().unwrap().captured_to_hand().hand_index()
+                        {
+                            hb[hi] += 1;
+                        }
+                    }
+                }
+                hand_after_buf = hb;
+                &hand_after_buf
+            } else {
+                &board.hand[att_idx]
+            };
             // 逆王手判定: drop 後に攻め方が王手されていれば逆王手 (中合いではなく有効手 → 後回ししない)．
+            // AND ノードの drop は開き王手を生まないため，打った駒が攻め方玉に利くか
+            // だけで is_in_check(attacker) と同値 (着手前に攻め方玉は非王手)．
             if chuai_support0 {
-                let v = !board.is_in_check(self.attacker);
+                let v = match board.king_square(self.attacker) {
+                    Some(ak) => {
+                        let pt = m.drop_piece_type().unwrap();
+                        !crate::attack::piece_attacks(
+                            board.turn, pt, m.to_sq(), board.all_occupied(),
+                        )
+                        .contains(ak)
+                    }
+                    None => true,
+                };
                 self.v3_chuai_buf.push(v);
             } else {
                 self.v3_chuai_buf.push(false);
@@ -1011,10 +1049,7 @@ impl DfPnSolver {
                 if let Some((d, _)) = self.v3_rep_memo.contains(child_path_key, 0) {
                     self.v3_rep_hits += 1;
                     Some(d)
-                } else if let Some(d) = self.is_dominated_in_path(
-                    super::position_key(board),
-                    &board.hand[self.attacker.index()],
-                ) {
+                } else if let Some(d) = self.is_dominated_in_path(pk_after, hand_after) {
                     self.v3_dom_fires += 1;
                     Some(d)
                 } else {
@@ -1029,14 +1064,12 @@ impl DfPnSolver {
             let ph_seed: Option<MidSearchResult> = if self.param_v3_proof_hand
                 && !self.v3_tt.contains_key(&ch)
             {
-                let cpk = super::position_key(board);
-                let chand = board.hand[self.attacker.index()];
-                if let Some((clen, _cbest)) = self.v3_proof_lookup(cpk, &chand) {
+                if let Some((clen, _cbest)) = self.v3_proof_lookup(pk_after, hand_after) {
                     self.v3_ph_hits += 1;
                     let mut r = MidSearchResult::new_win(clen);
                     r.is_first_visit = false;
                     Some(r)
-                } else if self.v3_disproof_lookup(cpk, &chand) {
+                } else if self.v3_disproof_lookup(pk_after, hand_after) {
                     self.v3_ph_hits += 1;
                     let mut r = MidSearchResult::new_lose(0);
                     r.is_first_visit = false;
@@ -1072,9 +1105,7 @@ impl DfPnSolver {
                     let (mut bpn, mut bdn, mut bsh) = (cpn, cdn, shallow);
                     let e_len = e.len;
                     if self.param_v3_xhand {
-                        let cpk = super::position_key(board);
-                        let chand = board.hand[self.attacker.index()];
-                        self.v3_xh_bounds(cpk, &chand, ply + 1, &mut bpn, &mut bdn, &mut bsh);
+                        self.v3_xh_bounds(pk_after, hand_after, ply + 1, &mut bpn, &mut bdn, &mut bsh);
                     }
                     let mut r = MidSearchResult::new_unknown(bpn, bdn);
                     r.is_first_visit = false;
@@ -1089,9 +1120,7 @@ impl DfPnSolver {
                 // は merge 済 pn/dn で返る)．is_first_visit は維持 (look-ahead 対象のまま)．
                 let (mut bpn, mut bdn, mut bsh) = (seed_pn, seed_dn, false);
                 if self.param_v3_xhand {
-                    let cpk = super::position_key(board);
-                    let chand = board.hand[self.attacker.index()];
-                    self.v3_xh_bounds(cpk, &chand, ply + 1, &mut bpn, &mut bdn, &mut bsh);
+                    self.v3_xh_bounds(pk_after, hand_after, ply + 1, &mut bpn, &mut bdn, &mut bsh);
                 }
                 let mut r = MidSearchResult::new_unknown(bpn, bdn);
                 r.is_first_visit = true;
@@ -1105,9 +1134,13 @@ impl DfPnSolver {
             // 従来 seed (2,2) のまま展開して再導出していた (AND node の pn 集約も過大 → breadth)．
             if !or_node && r.is_first_visit && self.param_v3_lookahead {
                 let cmd = self.v3_min_depth(ch, ply + 1);
+                // lookahead は子局面の王手生成が必要な唯一の経路なのでここだけ do_move する
+                // (first-visit AND 子のみ; それ以外の子は zobrist delta で無変異処理)．
+                let captured = board.do_move(m);
                 // zero-copy 経路 (cache hit 時の ArrayVec 全コピーを回避)．
                 // 生成内容・順序は generate_check_moves_cached と同一．
                 let (mm_opt, has_checks) = self.mate1ply_with_cached_checks(board);
+                board.undo_move(m, captured);
                 if let Some(mm) = mm_opt {
                     // 子 OR node が 1 手詰 → この応手は proven (mate-1)．absolute なので TT へ格納
                     // (KH `query.SetResult` 相当; 格納しないと PV/伝播が不整合 → false mate)．
@@ -1127,7 +1160,6 @@ impl DfPnSolver {
                     r.is_first_visit = false;
                 }
             }
-            board.undo_move(m, captured);
             if dump_this {
                 eprintln!(
                     "V3SELX   {:7} sp={} sd={} spn={} sdn={} rpn={} rdn={} fv={} eval={} drop={}",
