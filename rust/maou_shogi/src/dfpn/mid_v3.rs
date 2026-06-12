@@ -87,6 +87,8 @@ fn env_v3floor() -> bool {
 }
 // V3_RECALC=1: resort_by_evals 後に recalc_delta (KH RecalcDelta 一致; default off)．
 diag_env_flag!(env_v3recalc, "V3_RECALC");
+// V3_LA_SEED=1: lookahead 証明を親の初期集計に反映しない (TT 格納のみ; default off)．
+diag_env_flag!(env_v3laseed, "V3_LA_SEED");
 
 /// V3_VFY_DBG: STRICT VERIFY (verify_v3_proof) の None 経路を理由つきで dump する
 /// (偽証明調査用; 先頭 30 件 cap)．
@@ -1189,8 +1191,16 @@ impl DfPnSolver {
                         ch,
                         V3Entry::new64(0, V3_INF_U as u64, 1, mm.to_move16(), cmd),
                     );
-                    r = MidSearchResult::new_win(1);
-                    r.is_first_visit = false;
+                    if env_v3laseed() {
+                        // V3_LA_SEED 実験: 証明は TT に格納しつつ，親の初期集計では seed の
+                        // まま扱う (proven 反映は再訪時の TT hit に遅延)．集計が過大方向に
+                        // ずれるだけなので健全．KH は不完全 mate1ply でこれらを miss して
+                        // おり，maou の正確な lookahead が AND 集計を即座に下げて probe が
+                        // 早期 deep 降下に化ける (builds 3.73× の機構候補) を切り分ける．
+                    } else {
+                        r = MidSearchResult::new_win(1);
+                        r.is_first_visit = false;
+                    }
                 } else if !has_checks && env_v3obvd() {
                     // 攻め方に王手手段なし → 詰み不可能 → この応手は逃れ (disproven, absolute)．
                     self.v3_tt.insert(
