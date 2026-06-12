@@ -403,6 +403,14 @@ impl MidLocalExpansion {
                 )
             });
         }
+        // NOTE (2026-06-12 parity hunt, 不採用): KH は最終 sort 後に RecalcDelta する
+        // (local_expansion.hpp:220-221) が，ここで recalc_delta() を呼んで KH に合わせると
+        // **29te 18,539→26,260 (+42%) / 39te 14.48M→18.69M (+29%) に退行**する (STRICT は
+        // Some(55) で健全)．eval 再 sort で front が変わった場合 sum/max_delta_except_best は
+        // front の delta 差分だけ stale になる (例: AND 集計 12→10 の過小評価) が，この
+        // under-aggregation は「loop を長く回し re-entry を減らす」方向に働き，maou の他機構と
+        // 共適応して net 有利．KH 完全一致は parity hunt の lever でないと実測確定 (Phase 20 の
+        // TCA formula と同型の compound 退行)．
     }
 
     /// Phase 21: deferred penalty 除数を設定 (0 = 無効)．

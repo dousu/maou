@@ -1178,6 +1178,26 @@ impl DfPnSolver {
         // 従来の「任意の再訪」基準 (recompute_has_old_child_any_revisit) は TCA を過剰発火させ
         // threshold を過延長 → per-node over-branching の一因だった (per-ply 比較で判明)．
 
+        // V3SELX (計測専用): rebuild 直後の active set (idx) と集計値を dump
+        // (KH KHTHX の nidx/sumd と build-time aggregate を突合する)．
+        if dump_this {
+            let cr = expansion.current_result();
+            let kids: Vec<String> = expansion
+                .idx
+                .iter()
+                .map(|&ir| {
+                    let r = &expansion.results[ir as usize];
+                    format!("{}:{}/{}", expansion.moves[ir as usize].to_usi(), r.pn, r.dn)
+                })
+                .collect();
+            eprintln!(
+                "V3SELX built curr_pn={} curr_dn={} nidx={} nmoves={} sumd={} maxd={} | idx: {}",
+                cr.pn, cr.dn, expansion.idx.len(), expansion.moves.len(),
+                expansion.dbg_sum_delta_except_best(), expansion.dbg_max_delta_except_best(),
+                kids.join(" ")
+            );
+        }
+
         // 診断: root の children を sorted 順で dump (KH KHROOT と比較)．
         if ply == 0 && std::env::var("KHDUMP").is_ok() {
             for (k, &ir) in expansion.idx.iter().enumerate() {
@@ -1359,10 +1379,13 @@ impl DfPnSolver {
             // double-count 補正用に branch move を記録．
             self.mid_frame_moves[stack_idx] = best_mv.to_move16();
 
+            // V3THX (計測専用): 親 (pre-move) が target prefix に一致する場合も dump 対象
+            // (KH KHTHX の「ノードのループ全 descent」突合用)．
+            let parent_hit = env_v3thx().is_some_and(|t| board.sfen().starts_with(t));
             let captured = board.do_move(best_mv);
-            // V3THX (計測専用): 親が target child へ降りる瞬間の閾値 breakdown を dump．
             // probe_hit = この child が target prefix に一致 (= 戻り値/exit 理由も dump 対象)．
-            let probe_hit = env_v3thx().is_some_and(|t| board.sfen().starts_with(t));
+            let probe_hit = parent_hit
+                || env_v3thx().is_some_and(|t| board.sfen().starts_with(t));
             let probe_inc_before = *inc_flag;
             if probe_hit {
                 let exp = &self.mid_expansion_stack[stack_idx];
