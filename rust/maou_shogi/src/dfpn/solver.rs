@@ -537,6 +537,8 @@ pub struct DfPnSolver {
     pub(super) v3_dom_fires: u64,
     pub(super) v3_rep_inserts: u64,
     pub(super) v3_rep_hits: u64,
+    /// V3_PROBE: 親ループ内 build-probe の回数 (KHEMP builds 突合用; 深掘り化した分は含まず)．
+    pub(super) v3_probes: u64,
     /// Phase 33k: LE path で cycle-dependent disproof を path_key で RepetitionMemo にキャッシュするか
     /// (KH RepetitionTable; dominance 無しの base でも有効)．clean TT は skip する taint 付き disproof を
     /// path_key で再利用し，再降下の thrash を抑える．
@@ -1162,6 +1164,7 @@ impl DfPnSolver {
             v3_dom_fires: 0,
             v3_rep_inserts: 0,
             v3_rep_hits: 0,
+            v3_probes: 0,
             v3_xh: rustc_hash::FxHashMap::default(),
             param_v3_xhand: false,
             v3_xh_hits: 0,

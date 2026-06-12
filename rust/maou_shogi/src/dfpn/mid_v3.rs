@@ -234,6 +234,7 @@ impl DfPnSolver {
         }
         self.v3_path.clear();
         self.v3_nodes = 0;
+        self.v3_probes = 0;
         self.attacker = board.turn;
         self.start_time = std::time::Instant::now();
         self.timed_out = false;
@@ -793,9 +794,9 @@ impl DfPnSolver {
         }
 
         if std::env::var("V3_DIAG").is_ok() {
-            eprintln!("[v3dom] dag={} ph={} dom={} dag_resets={} ph_hits={} dom_fires={} rep_hits={} nodes={}",
+            eprintln!("[v3dom] dag={} ph={} dom={} dag_resets={} ph_hits={} dom_fires={} rep_hits={} nodes={} probes={}",
                 self.param_v3_dag, self.param_v3_proof_hand, self.param_v3_dominance,
-                self.v3_dag_resets, self.v3_ph_hits, self.v3_dom_fires, self.v3_rep_hits, self.v3_nodes);
+                self.v3_dag_resets, self.v3_ph_hits, self.v3_dom_fires, self.v3_rep_hits, self.v3_nodes, self.v3_probes);
         }
         if env_v3ply() {
             let (mut tt, mut tu) = (0u64, 0u64);
@@ -1343,7 +1344,7 @@ impl DfPnSolver {
         path_key: u64,
         inc_flag: &mut u32,
     ) -> (u32, u32, u16, u32) {
-        use super::local_expansion::{MidSearchResult, REPETITION_NONE};
+        use super::local_expansion::REPETITION_NONE;
 
         self.v3_nodes += 1;
         if self.v3_nodes >= self.max_nodes || (self.v3_nodes & 0x3FF == 0 && self.is_timed_out()) {
@@ -1415,6 +1416,31 @@ impl DfPnSolver {
             }
         };
 
+        self.search_v3_le_frame(board, thpn, thdn, ply, path_key, inc_flag, stack_idx, root_keep)
+    }
+
+    /// `search_v3_le` の frame 駆動部 (KH SearchImpl 本体相当)．`stack_idx` の
+    /// **構築済み** expansion frame を受け取り，threshold loop → exit 簿記 (path/
+    /// dominance/TT store) → frame pop (root_keep 時は保持) を行う．
+    /// entry 側 short-circuit (path/rep memo/TT final/ph) は呼び出し元の責務．
+    /// V3_PROBE の frame 再利用 (KH probe shape: 親が build した子 frame を
+    /// そのまま深掘りに渡し二重 build を排除する) からも呼ばれる (plan
+    /// steady-burning-lantern Stage 1)．
+    #[allow(clippy::too_many_arguments)]
+    fn search_v3_le_frame(
+        &mut self,
+        board: &mut Board,
+        thpn: u32,
+        thdn: u32,
+        ply: u32,
+        path_key: u64,
+        inc_flag: &mut u32,
+        stack_idx: usize,
+        root_keep: bool,
+    ) -> (u32, u32, u16, u32) {
+        use super::local_expansion::{MidSearchResult, REPETITION_NONE};
+        let hash = board.hash;
+        let or_node = board.turn == self.attacker;
         let orig_thpn = thpn;
         let orig_thdn = thdn;
         let orig_inc_flag = *inc_flag;
@@ -1506,29 +1532,36 @@ impl DfPnSolver {
                 if initial.is_final() || initial.pn >= cthpn || initial.dn >= cthdn {
                     initial
                 } else if env_v3probe() {
-                    // V3_PROBE (KH probe shape, plan steady-burning-lantern Stage 0):
+                    // V3_PROBE (KH probe shape, plan steady-burning-lantern Stage 1):
                     // 子 expansion を親ループ内で build し built aggregate で skip 判定．
                     // KH SearchImplForRoot/SearchImpl の is_first_search 経路と同形:
                     // 超過なら SearchImpl 非到達 = TT store/path 簿記/ノード計数なし．
+                    // 超過しなければ **同じ frame を search_v3_le_frame へ渡して**深掘り
+                    // (KH の Emplace→SearchImpl 再利用と同形; Stage 0 の二重 build を排除)．
                     let ch_hash = board.hash;
                     match self.build_v3_le_expansion(board, ply + 1, !or_node, ch_hash, child_pk)
                     {
                         Err((p, d, l, rp)) => mk_result_u32(p, d, l, rp),
                         Ok(cidx) => {
                             let built = self.mid_expansion_stack[cidx].current_result();
-                            // frame を pool へ返却 (probe は使い捨て; Stage 1 で再利用化予定)
-                            if let Some(e) = self.mid_expansion_stack.pop() {
-                                if self.mid_expansion_pool.len() < 256 {
-                                    self.mid_expansion_pool.push(e);
-                                }
-                            }
-                            self.mid_frame_moves.pop();
-                            debug_assert_eq!(self.mid_expansion_stack.len(), cidx);
                             if built.pn >= cthpn || built.dn >= cthdn || built.is_final() {
+                                // probe hit: frame を pool へ返却し値だけ親へ (no store)
+                                self.v3_probes += 1;
+                                if let Some(e) = self.mid_expansion_stack.pop() {
+                                    if self.mid_expansion_pool.len() < 256 {
+                                        self.mid_expansion_pool.push(e);
+                                    }
+                                }
+                                self.mid_frame_moves.pop();
+                                debug_assert_eq!(self.mid_expansion_stack.len(), cidx);
                                 built
                             } else {
-                                let (cp, cd, cl, cr) = self.search_v3_le(
-                                    board, cthpn, cthdn, ply + 1, child_pk, inc_flag,
+                                // 深掘り: 構築済み frame で本体を駆動 (entry short-circuit は
+                                // 親 build 時の子 seeding が担保済み)．ノード計数は深掘りのみ．
+                                self.v3_nodes += 1;
+                                let (cp, cd, cl, cr) = self.search_v3_le_frame(
+                                    board, cthpn, cthdn, ply + 1, child_pk, inc_flag, cidx,
+                                    false,
                                 );
                                 mk_result_u32(cp, cd, cl, cr)
                             }
