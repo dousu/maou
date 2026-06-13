@@ -60,7 +60,8 @@ const MAX_MOVES: usize = 593;
 /// process 内で 1 回だけ読む (hot path の env::var 回避)．
 pub(super) fn kh_parity_order() -> bool {
     static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("V3_KHPAR").is_ok())
+    // V3_V4 (mid_v4 coherent mode) でも有効化する (coherent bundle の一部)．
+    *C.get_or_init(|| std::env::var("V3_KHPAR").is_ok() || std::env::var("V3_V4").is_ok())
 }
 
 /// `ArrayVec::try_push` のラッパー．
@@ -537,4 +538,3 @@ impl CheckCache {
         }
     }
 }
-

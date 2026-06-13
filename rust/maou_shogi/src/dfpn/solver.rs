@@ -554,6 +554,10 @@ pub struct DfPnSolver {
     pub(super) v3_xh: rustc_hash::FxHashMap<u64, Vec<([u8; HAND_KINDS], u32, u32, u16)>>,
     pub(super) param_v3_xhand: bool,
     pub(super) v3_xh_hits: u64,
+    /// mid_v4 mode (V3_V4)．KH coherent dynamics bundle を programmatic に有効化する hook．
+    /// 将来の node-by-node KH divergence (search_v4 本体) はこの flag で gate する．
+    /// default false = canonical (mid_v3) を保護．
+    pub(super) param_v3_v4: bool,
     pub(super) param_v3_rep_cache: bool,
     /// Phase 33c: LE path で KH EliminateDoubleCount (DAG δ 二重計上除去) を有効化するか．
     pub(super) param_v3_dag: bool,
@@ -1173,6 +1177,7 @@ impl DfPnSolver {
             v3_xh: rustc_hash::FxHashMap::default(),
             param_v3_xhand: false,
             v3_xh_hits: 0,
+            param_v3_v4: false,
             param_v3_rep_cache: false,
             param_v3_dag: true,
             v3_dag_resets: 0,
@@ -1683,6 +1688,13 @@ impl DfPnSolver {
     /// 詳細: [`DfPnSolver::param_v3_local_exp`]．
     pub fn set_v3_local_exp(&mut self, on: bool) -> &mut Self {
         self.param_v3_local_exp = on;
+        self
+    }
+
+    /// mid_v4 mode (KH coherent dynamics bundle) を有効化するか．
+    /// 詳細: [`DfPnSolver::param_v3_v4`]．env `V3_V4=1` と等価 (programmatic 版)．
+    pub fn set_v3_v4(&mut self, on: bool) -> &mut Self {
+        self.param_v3_v4 = on;
         self
     }
 
@@ -2280,5 +2292,3 @@ impl DfPnSolver {
     }
 
 }
-
-

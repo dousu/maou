@@ -39,6 +39,21 @@ macro_rules! diag_env_flag {
         }
     };
 }
+// V3_V4: mid_v4 mode (KH coherent dynamics bundle)．単一 flag で coherent gate
+// (recalc/maskkeep/chuai/rootkeep/khpar/xhand) を一括有効化する．`search_v4` の
+// node-by-node KH divergence 作業はこの mode 上 (param_v3_v4) で行う．既存の検証済み
+// LE path を再利用するため sound (canonical default = V3_V4 無し = 18,539 を保護)．
+diag_env_flag!(env_v3v4, "V3_V4");
+/// coherent gate: 自身の var **または** V3_V4 で有効になる flag．mid_v4 bundle 用．
+macro_rules! coherent_env_flag {
+    ($fn_name:ident, $env:literal) => {
+        #[inline]
+        fn $fn_name() -> bool {
+            static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            *C.get_or_init(|| std::env::var($env).is_ok() || std::env::var("V3_V4").is_ok())
+        }
+    };
+}
 diag_env_str!(env_v3selx, "V3SELX");
 diag_env_str!(env_v3th, "V3TH");
 diag_env_str!(env_v3thx, "V3THX");
@@ -50,12 +65,12 @@ fn env_v3ret() -> Option<u32> {
 }
 /// V3RET の出力行数 cap (KHRET と同じ 100K)．
 static V3RET_CNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-diag_env_flag!(env_v3chuai, "V3_CHUAI");
+coherent_env_flag!(env_v3chuai, "V3_CHUAI");
 diag_env_flag!(env_v3droplast, "V3_DROPLAST");
 diag_env_flag!(env_v3obvd, "V3_OBV_D");
 diag_env_flag!(env_khsel, "KHSEL");
 diag_env_flag!(env_v3trace, "V3TRACE");
-diag_env_flag!(env_v3rootkeep, "V3_ROOTKEEP");
+coherent_env_flag!(env_v3rootkeep, "V3_ROOTKEEP");
 diag_env_flag!(env_v3rooti, "V3ROOTI");
 diag_env_flag!(env_v3vfydbg, "V3_VFY_DBG");
 diag_env_flag!(env_v3dmlguard, "V3_DML_GUARD");
@@ -86,13 +101,27 @@ fn env_v3floor() -> bool {
     })
 }
 // V3_RECALC=1: resort_by_evals 後に recalc_delta (KH RecalcDelta 一致; default off)．
-diag_env_flag!(env_v3recalc, "V3_RECALC");
+coherent_env_flag!(env_v3recalc, "V3_RECALC");
 // V3_LA_SEED=1: lookahead 証明を親の初期集計に反映しない (TT 格納のみ; default off)．
 diag_env_flag!(env_v3laseed, "V3_LA_SEED");
 // V3_PROBE_NOSTORE=1: 降下ゼロの probe visit では unknown を TT/xh に格納しない (default off)．
 diag_env_flag!(env_v3probenostore, "V3_PROBE_NOSTORE");
 // V3_MASKKEEP=1: sum_mask を node 単位で永続化し rebuild 時に復元 (KH FrontSumMask 継承相当)．
-diag_env_flag!(env_v3maskkeep, "V3_MASKKEEP");
+coherent_env_flag!(env_v3maskkeep, "V3_MASKKEEP");
+// V3_YOORDER=1: child comparer の eval 完全 tie を YaneuraOu (KH) movegen 順 (= to_sq の
+// YaneuraOu 番号 (file-1)*9+(rank-1) 昇順) で破る (default off)．maou native movegen は
+// file 降順 (col=9-file 昇順) で iterate するため KH と to_sq 順が逆になり，eval 同点の
+// 子 (例: 39te root の N*4d/N*6d, 両者 pn=27 dn=9) で KH と選択順が乖離する．これは
+// Phase 34 の「生成順 global 変更」(退行) と異なり comparer tie-break のみ (eval が同点の
+// 時だけ作用)．eval は ordering 専用で pn/dn には不使用のため sound．
+diag_env_flag!(env_v3yoorder, "V3_YOORDER");
+/// V3_XHCAP=<n>: cross-hand bucket cap (default 8)．KH unbounded 合成への近似度を測る．
+fn env_v3xhcap() -> usize {
+    static C: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *C.get_or_init(|| {
+        std::env::var("V3_XHCAP").ok().and_then(|s| s.parse().ok()).filter(|&n| n > 0).unwrap_or(8)
+    })
+}
 // V3_PROBE=1: KH probe shape — first-visit 子を親ループ内で build し，built aggregate が
 // 予算超過なら再帰せず値だけ親へ返す (KH Emplace+skip の完全形: TT store も entry
 // 簿記も無し)．超過しない場合は frame を捨てて従来の再帰へ (Stage 0 では二重 build 許容)．
@@ -687,6 +716,12 @@ impl DfPnSolver {
 
     /// Phase 33 (案②): LE path の root IDS．u32 unit-2 で `search_v3_le` を駆動する．
     fn solve_via_v3_le(&mut self, board: &mut Board) -> TsumeResult {
+        // mid_v4 mode (V3_V4): coherent dynamics bundle を有効化 (recalc/maskkeep/chuai/
+        // rootkeep/khpar は coherent_env_flag が env で，xhand は下記で活性化)．param_v3_v4
+        // field を立て，将来の search_v4 node-by-node divergence の gate に使う．
+        if env_v3v4() {
+            self.param_v3_v4 = true;
+        }
         // Phase 36: dominance + look-ahead は default ON．A/B デバッグ用に env で個別 OFF 可能．
         if std::env::var("V3_NO_DOM").is_ok() {
             self.param_v3_dominance = false;
@@ -698,7 +733,8 @@ impl DfPnSolver {
             self.param_v3_proof_hand = true;
         }
         // V3_XHAND: KH cross-hand unknown bound 合成 (ttentry LookUpSuperior/Inferior)．
-        if std::env::var("V3_XHAND").is_ok() {
+        // V3_V4 (mid_v4 coherent mode) でも有効化する (coherent bundle の一部)．
+        if std::env::var("V3_XHAND").is_ok() || env_v3v4() || self.param_v3_v4 {
             self.param_v3_xhand = true;
         }
         if self.param_v3_xhand {
@@ -905,7 +941,10 @@ impl DfPnSolver {
         min_depth: u16,
         final_result: bool,
     ) {
-        const V3_XH_CAP: usize = 8;
+        // V3_XHCAP=<n>: cross-hand bucket cap (default 8)．KH の cross-hand bound 合成は
+        // **unbounded** (主 TT cluster 同居)．maou は cap-8 で lossy 近似．大 cap で KH の
+        // unbounded 合成に近づけ 39te node が KH 方向 (減) か否かを測る (mid_v4 lever 検証)．
+        let v3_xh_cap: usize = env_v3xhcap();
         let bucket = self.v3_xh.entry(pos_key).or_default();
         if let Some(slot) = bucket.iter_mut().find(|(h, ..)| *h == hand) {
             if final_result {
@@ -919,7 +958,7 @@ impl DfPnSolver {
         if final_result {
             return;
         }
-        if bucket.len() < V3_XH_CAP {
+        if bucket.len() < v3_xh_cap {
             bucket.push((hand, pn, dn, min_depth));
         } else {
             // cap 超過: 最も情報量の小さい (pn+dn 最小) entry を置換する．
@@ -1044,6 +1083,16 @@ impl DfPnSolver {
                     e
                 }
                 None => 0,
+            };
+            // V3_YOORDER: eval 完全同点を YaneuraOu (KH) movegen to_sq 順で破る．
+            // yo_sq = (file-1)*9+(rank-1) 昇順 = maou col 降順．eval*128+yo_sq で
+            // base eval の順序は保ちつつ (yo_sq∈[0,80] < 128) 同点のみ yo 順に並べ替える．
+            let eval = if env_v3yoorder() {
+                let to = m.to_sq();
+                let yo_sq = (8 - to.col() as i32) * 9 + to.row() as i32;
+                eval.saturating_mul(128).saturating_add(yo_sq)
+            } else {
+                eval
             };
             // NPS 軸 (v2.8.8): 子局面の hash/pos_key/持駒は zobrist delta で無変異計算し，
             // per-child の do_move/undo_move (盤面更新 ×2 + 全 bitboard 簿記) を排除する．
