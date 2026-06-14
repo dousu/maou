@@ -29,11 +29,13 @@
 //! - STRICT PV replay の v4 版 / 無意味中合いの cross-square DML．
 
 use super::delayed_move_list::DelayedMoveList;
-use super::kh_local_expansion::LocalExpansion;
+use super::kh_local_expansion::{
+    BranchRootEdge, LocalExpansion, K_ANCESTOR_SEARCH_THRESHOLD,
+};
 use super::mate_len::{MateLen, DEPTH_MAX_MATE_LEN, ZERO_MATE_LEN};
 use super::path_key::path_key_after;
 use super::search_result::{
-    extend_search_threshold, BitSet64, PnDn, SearchResult, K_INFINITE_PN_DN,
+    extend_search_threshold, BitSet64, Hand, PnDn, SearchResult, K_INFINITE_PN_DN,
 };
 use super::solver::{DfPnSolver, TsumeResult};
 use super::tt_v4::TranspositionTable;
@@ -48,6 +50,8 @@ impl DfPnSolver {
         self.attacker = board.turn;
         self.v3_nodes = 0;
         self.v3_path.clear();
+        self.v4_stack.clear();
+        self.v4_dag_fires = 0;
         self.timed_out = false;
         self.start_time = std::time::Instant::now();
 
@@ -103,13 +107,14 @@ impl DfPnSolver {
         }
 
         eprintln!(
-            "[v4] root pn={} dn={} mate_len={} nodes={} tt_cap={} gc={}",
+            "[v4] root pn={} dn={} mate_len={} nodes={} tt_cap={} gc={} dag={}",
             last.pn(),
             last.dn(),
             last.len().len(),
             self.v3_nodes,
             tt.capacity(),
-            tt.gc_count()
+            tt.gc_count(),
+            self.v4_dag_fires
         );
 
         if last.pn() == 0 {
@@ -183,20 +188,29 @@ impl DfPnSolver {
         }
 
         let attacker_hand = board.hand[self.attacker.index()];
-        let mut exp = match self.build_v4_expansion(tt, board, len, depth, path_key, first_search) {
+        let exp = match self.build_v4_expansion(tt, board, len, depth, path_key, first_search) {
             Ok(e) => e,
             Err(terminal) => return terminal,
         };
+        // KH `expansion_list_.Emplace`: 自 LocalExpansion を明示 stack へ積む (祖先から辿れるように)．
+        // 以降 `self.v4_stack[my]` 経由で操作する (EliminateDoubleCount が祖先 frame を変更するため)．
+        self.v4_stack.push(exp);
+        let my = self.v4_stack.len() - 1;
+        self.v4_stack[my].set_key_hand_pair((super::position_key(board), attacker_hand));
+        // KH `EliminateDoubleCount` (komoring_heights.cpp:432): best_move が TT 親鎖で祖先へ合流する
+        // (DAG) なら，その分岐元の合流子を sum→max 集約へ落とし pn/dn 二重カウントを抑止する．
+        self.eliminate_double_count_v4(tt, board, my, depth);
 
         let orig_thpn = thpn;
         let orig_thdn = thdn;
         let orig_inc = *inc_flag;
 
-        let mut curr = exp.current_result(board, depth as i32);
+        let mut curr = self.v4_stack[my].current_result(board, depth as i32);
         if curr.is_final() {
+            self.v4_stack.truncate(my); // KH `expansion_list_.Pop()`
             return curr;
         }
-        if exp.does_have_old_child() {
+        if self.v4_stack[my].does_have_old_child() {
             *inc_flag += 1;
         }
         if *inc_flag > 0 {
@@ -209,17 +223,17 @@ impl DfPnSolver {
             if self.v3_nodes >= self.max_nodes || self.timed_out {
                 break;
             }
-            let best_move = exp.best_move();
-            let is_first = exp.front_is_first_visit();
-            let (cthpn, cthdn) = exp.front_pn_dn_thresholds(thpn, thdn);
-            let best_raw = exp.front_raw();
-            let child_query = exp.query_at(best_raw);
+            let best_move = self.v4_stack[my].best_move();
+            let is_first = self.v4_stack[my].front_is_first_visit();
+            let (cthpn, cthdn) = self.v4_stack[my].front_pn_dn_thresholds(thpn, thdn);
+            let best_raw = self.v4_stack[my].front_raw();
+            let child_query = self.v4_stack[my].query_at(best_raw);
 
             let captured = board.do_move(best_move);
             let child_pk = path_key_after(path_key, best_move, depth as usize);
 
             let child_result = if is_first {
-                let initial = exp.front_result();
+                let initial = self.v4_stack[my].front_result();
                 if *inc_flag > 0 {
                     *inc_flag -= 1;
                 }
@@ -238,7 +252,7 @@ impl DfPnSolver {
 
             board.undo_move(best_move, captured);
 
-            exp.update_best_child(child_result);
+            self.v4_stack[my].update_best_child(child_result);
             // KH UpdateBestChild 内 query.SetResult: 子結果を子 query で TT へ (親 = 本ノード)．
             // 親 board_key は **position-only** (KH BoardKeyHandPair; cross-hand のため hand は別管理)．
             tt.set_result(
@@ -247,7 +261,7 @@ impl DfPnSolver {
                 (super::position_key(board), attacker_hand),
             );
 
-            curr = exp.current_result(board, depth as i32);
+            curr = self.v4_stack[my].current_result(board, depth as i32);
 
             thpn = orig_thpn;
             thdn = orig_thdn;
@@ -259,6 +273,7 @@ impl DfPnSolver {
         }
 
         self.v3_path.remove(&board.hash);
+        self.v4_stack.truncate(my); // KH `expansion_list_.Pop()`
         *inc_flag = (*inc_flag).min(orig_inc);
         curr
     }
@@ -411,6 +426,104 @@ impl DfPnSolver {
         } else {
             None
         }
+    }
+
+    /// KH `EliminateDoubleCount` (komoring_heights.cpp:432 + expansion_stack.hpp:70)．
+    /// 本ノード `my` の best_move が TT 親鎖を遡って祖先へ合流する (DAG) なら，その分岐元の
+    /// 合流子を sum→max 集約へ落とし pn/dn の二重カウントを抑止する．
+    fn eliminate_double_count_v4(
+        &mut self,
+        tt: &TranspositionTable,
+        board: &mut Board,
+        my: usize,
+        depth: u32,
+    ) {
+        if self.v4_stack[my].empty() {
+            return;
+        }
+        let best_move = self.v4_stack[my].best_move();
+        let current_kh = self.v4_stack[my].key_hand_pair();
+        let or_node = self.v4_stack[my].is_or_node();
+        // best_move 後の子 (board_key, attacker_hand) を取得 (KH `BoardKeyHandPairAfter`)．
+        let captured = board.do_move(best_move);
+        let child_kh = (super::position_key(board), board.hand[self.attacker.index()]);
+        board.undo_move(best_move, captured);
+
+        let edge = match self.find_known_ancestor_v4(tt, current_kh, child_kh, or_node, depth, my) {
+            Some(e) => e,
+            None => return,
+        };
+        self.v4_dag_fires += 1;
+        // 分岐元から下流側 (= my-1 .. 0) を辿り resolve する (KH `list_.rbegin()+1 .. rend()`)．
+        let mut i = my;
+        while i > 0 {
+            i -= 1;
+            if self.v4_stack[i].resolve_double_count_if_branch_root(edge) {
+                break;
+            }
+            if self.v4_stack[i].should_stop_ancestor_search(edge.branch_root_is_or_node) {
+                break;
+            }
+        }
+    }
+
+    /// KH `FindKnownAncestor` (double_count_elimination.hpp:102) の exact-hand 簡約版．
+    /// `child_kh` を起点に TT 親鎖を遡り，path 上の祖先へ合流したら分岐元の辺を返す．
+    fn find_known_ancestor_v4(
+        &self,
+        tt: &TranspositionTable,
+        current_kh: (u64, Hand),
+        child_kh: (u64, Hand),
+        or_node_current: bool,
+        depth: u32,
+        my: usize,
+    ) -> Option<BranchRootEdge> {
+        let mut key_hand = child_kh;
+        let mut last_pn = K_INFINITE_PN_DN;
+        let mut last_dn = K_INFINITE_PN_DN;
+        let mut pn_flag = true;
+        let mut dn_flag = true;
+        let mut or_node = or_node_current;
+        let mut i = 0u32;
+        while i < depth && (pn_flag || dn_flag) {
+            let (pbk, ph, pn, dn) = match tt.look_up_parent(key_hand.0, key_hand.1) {
+                Some(v) => v,
+                None => break,
+            };
+            let parent_kh = (pbk, ph);
+            // 初回の親が現局面なら二重カウントの疑い無し (KH :123)．
+            if i == 0 && parent_kh == current_kh {
+                break;
+            }
+            if dn > last_dn.saturating_add(K_ANCESTOR_SEARCH_THRESHOLD) {
+                dn_flag = false;
+            }
+            if pn > last_pn.saturating_add(K_ANCESTOR_SEARCH_THRESHOLD) {
+                pn_flag = false;
+            }
+            if self.contains_in_path_v4(parent_kh, my) {
+                if (or_node && dn_flag) || (!or_node && pn_flag) {
+                    return Some(BranchRootEdge {
+                        branch_root: parent_kh,
+                        child: key_hand,
+                        branch_root_is_or_node: or_node,
+                    });
+                } else {
+                    break;
+                }
+            }
+            key_hand = parent_kh;
+            last_pn = pn;
+            last_dn = dn;
+            or_node = !or_node;
+            i += 1;
+        }
+        None
+    }
+
+    /// (board_key, hand) が現探索 path の祖先 (`v4_stack[0..my]`) に在るか (KH `Node::ContainsInPath`)．
+    fn contains_in_path_v4(&self, kh: (u64, Hand), my: usize) -> bool {
+        self.v4_stack[..my].iter().any(|e| e.key_hand_pair() == kh)
     }
 
     /// STRICT PV replay (mid_v3 `verify_v3_proof` mid_v3.rs:660 の v4 版)．

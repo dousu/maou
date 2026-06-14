@@ -13,7 +13,7 @@
 
 use super::mate_len::MateLen;
 use super::search_result::{BitSet64, Depth, Hand, PnDn, SearchAmount, SearchResult};
-use super::ttentry::Entry;
+use super::ttentry::{Entry, NULL_HAND};
 use rustc_hash::FxHashMap;
 
 /// KH `tt::RegularTable` (regular_table.hpp:133)．循環配列でエントリを管理する通常テーブル．
@@ -249,6 +249,33 @@ impl TranspositionTable {
         } else {
             false
         }
+    }
+
+    /// KH `Query::LookUpParent` (ttquery.hpp:195) の **exact-hand 簡約版**．
+    /// `(board_key, hand)` 完全一致 entry の親 (board_key, hand) と pn/dn を返す．
+    /// KH の cross-hand `ApplyDeltaHand` 親推論は省略 (= 直接 DAG 合流のみ検出; sound だが非極大)．
+    /// 親が未記録 (NULL_HAND) または entry 無しなら `None`．
+    pub(super) fn look_up_parent(&self, board_key: u64, hand: Hand) -> Option<(u64, Hand, PnDn, PnDn)> {
+        let cap = self.regular.entries.len();
+        let mut idx = self.regular.pointer_of(board_key);
+        for _ in 0..cap {
+            let e = &self.regular.entries[idx];
+            if e.is_null() {
+                break;
+            }
+            if e.is_for_hand(board_key, hand) {
+                let ph = e.get_parent_hand();
+                if ph == NULL_HAND {
+                    return None;
+                }
+                return Some((e.parent_board_key(), ph, e.pn(), e.dn()));
+            }
+            idx += 1;
+            if idx == cap {
+                idx = 0;
+            }
+        }
+        None
     }
 
     /// 1 局面の Query 文脈を構築する (KH `BuildQuery`)．

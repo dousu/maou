@@ -120,6 +120,14 @@ impl Entry {
         self.amount
     }
     #[inline]
+    pub(super) fn pn(&self) -> PnDn {
+        self.pn
+    }
+    #[inline]
+    pub(super) fn dn(&self) -> PnDn {
+        self.dn
+    }
+    #[inline]
     pub(super) fn get_hand(&self) -> Hand {
         self.hand
     }

@@ -518,6 +518,11 @@ pub struct DfPnSolver {
     pub(super) v3_path: rustc_hash::FxHashMap<u64, u32>,
     /// mid_v3 探索ノード数 (= search_v3 呼び出し回数)．
     pub(super) v3_nodes: u64,
+    /// mid_v4 EliminateDoubleCount 用の明示的 expansion stack (KH `expansion_list_`)．
+    /// 各 search_impl_v4 frame が自 LocalExpansion を push/truncate し，祖先を辿れるようにする．
+    pub(super) v4_stack: Vec<super::kh_local_expansion::LocalExpansion>,
+    /// mid_v4 EliminateDoubleCount 発火数 (診断用)．
+    pub(super) v4_dag_fires: u64,
     /// Phase 33: mid_v3 で検証済 `MidLocalExpansion` (DML/sum_mask/comparer/deferred) を
     /// per-node に駆動する (案②)．`false` = classic df-pn 集約 (sound 181K baseline)．
     /// `true` = LocalExpansion refinement + clean TT + unit-2 + 非累積 extend + root IDS の合成．
@@ -1163,6 +1168,8 @@ impl DfPnSolver {
             v3_tt: rustc_hash::FxHashMap::default(),
             v3_path: rustc_hash::FxHashMap::default(),
             v3_nodes: 0,
+            v4_stack: Vec::new(),
+            v4_dag_fires: 0,
             param_v3_local_exp: true,
             param_v3_lookahead: true,
             // 1<<22 (64MB)．generation GC が occupancy ~30% を保つ (KH parity)．

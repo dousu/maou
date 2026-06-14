@@ -15,7 +15,7 @@
 
 use super::mate_len::{MateLen, DEPTH_MAX_PLUS1_MATE_LEN, MINUS1_MATE_LEN};
 use super::search_result::{
-    clamp_pn_dn, compare_results, BitSet64, Depth, Ordering3, PnDn, SearchAmount, SearchResult,
+    clamp_pn_dn, compare_results, BitSet64, Depth, Hand, Ordering3, PnDn, SearchAmount, SearchResult,
     K_INFINITE_PN_DN,
 };
 use super::tt_v4::TtContext;
@@ -25,6 +25,21 @@ use std::cmp::Ordering;
 
 /// KH `detail::kForceSumPnDn` (local_expansion.hpp:35)．δ がこの値以上の子は max 集約へ落とす．
 const K_FORCE_SUM_PN_DN: PnDn = K_INFINITE_PN_DN / 1024;
+
+/// KH `kAncestorSearchThreshold` (double_count_elimination.hpp:53) = 3 * kPnDnUnit(=2)．
+/// 親子間 pn/dn 差がこれを超えたら二重カウントでないとみなす (mid_v4 は unit-2 scale)．
+pub(super) const K_ANCESTOR_SEARCH_THRESHOLD: PnDn = 6;
+
+/// KH `BranchRootEdge` (double_count_elimination.hpp:74)．二重カウントの分岐元の辺．
+#[derive(Clone, Copy)]
+pub(super) struct BranchRootEdge {
+    /// 分岐元局面の (board_key, hand)．
+    pub(super) branch_root: (u64, Hand),
+    /// 分岐元の子 (合流路を遡った直前) の (board_key, hand)．
+    pub(super) child: (u64, Hand),
+    /// 分岐元が OR node なら true．
+    pub(super) branch_root_is_or_node: bool,
+}
 
 /// KH `tt::LocalExpansion` の core (local_expansion.hpp:112)．
 pub(super) struct LocalExpansion {
@@ -52,6 +67,9 @@ pub(super) struct LocalExpansion {
     dml_next: Vec<i32>,
     /// MultiPv (KH `multi_pv_`; 1 以上)．
     multi_pv: u32,
+    /// 本ノードの (position_key, attacker_hand) (KH `key_hand_pair_`)．EliminateDoubleCount で
+    /// 分岐元一致判定に使う．`set_key_hand_pair` で構築後に設定する (未設定は (0, 空))．
+    key_hand_pair: (u64, Hand),
 }
 
 impl LocalExpansion {
@@ -86,6 +104,7 @@ impl LocalExpansion {
             does_have_old_child,
             dml_next,
             multi_pv: multi_pv.max(1),
+            key_hand_pair: (0, [0u8; crate::types::HAND_KINDS]),
         };
         // 構築時点で既に φ=0 の手があれば excluded_moves を進める (KH ctor CHILD_LOOP_END)．
         for k in 0..e.idx.len() {
@@ -158,6 +177,64 @@ impl LocalExpansion {
     #[inline]
     pub(super) fn len(&self) -> MateLen {
         self.len
+    }
+    /// 本ノードの (board_key, hand) を設定する (KH ctor `key_hand_pair_`)．build 後に呼ぶ．
+    #[inline]
+    pub(super) fn set_key_hand_pair(&mut self, kh: (u64, Hand)) {
+        self.key_hand_pair = kh;
+    }
+    /// 本ノードの (board_key, hand) (KH `GetBoardKeyHandPair`)．
+    #[inline]
+    pub(super) fn key_hand_pair(&self) -> (u64, Hand) {
+        self.key_hand_pair
+    }
+    /// 現 best の δ (KH `FrontResult().Delta(or_node)`)．EliminateDoubleCount の ancestor 判定用．
+    #[inline]
+    pub(super) fn front_delta(&self) -> PnDn {
+        self.front_result().delta(self.or_node)
+    }
+    /// 本ノードの現 δ (KH `GetDelta`)．EliminateDoubleCount の ShouldStopAncestorSearch 用．
+    #[inline]
+    pub(super) fn delta(&self) -> PnDn {
+        self.get_delta()
+    }
+    #[inline]
+    pub(super) fn is_or_node(&self) -> bool {
+        self.or_node
+    }
+
+    /// KH `ResolveDoubleCountIfBranchRoot` (local_expansion.hpp:478)．本ノードが二重カウントの
+    /// 分岐元 (`edge.branch_root`) なら，合流していた子を sum→max 集約へ落として δ を再計算する．
+    /// 戻り値 = 本ノードが分岐元だったか (= ancestor walk を打ち切るべきか)．
+    pub(super) fn resolve_double_count_if_branch_root(&mut self, edge: BranchRootEdge) -> bool {
+        if edge.branch_root != self.key_hand_pair {
+            return false;
+        }
+        // KH: sum_mask_.Reset(idx_.front())．best の sum bit を落とす (get_delta が live 反映)．
+        if let Some(&front) = self.idx.first() {
+            self.sum_mask.reset(front as usize);
+        }
+        for k in (self.excluded_moves + 1)..self.idx.len() {
+            let i_raw = self.idx[k] as usize;
+            if self.queries[i_raw].board_key_hand() == edge.child {
+                if self.sum_mask.test(i_raw) {
+                    self.sum_mask.reset(i_raw);
+                    self.recalc_delta();
+                }
+                break;
+            }
+        }
+        true
+    }
+
+    /// KH `ShouldStopAncestorSearch` (local_expansion.hpp:502)．分岐元と node 種別が異なれば
+    /// 続行 (false)．同種別で δ が best 子より閾値超に大きければ二重カウントの影響は小さく打ち切る．
+    pub(super) fn should_stop_ancestor_search(&self, branch_root_is_or_node: bool) -> bool {
+        if self.or_node != branch_root_is_or_node {
+            return false;
+        }
+        let delta_diff = self.get_delta().saturating_sub(self.front_delta());
+        delta_diff > K_ANCESTOR_SEARCH_THRESHOLD
     }
 
     // ---- pn/dn (KH GetPn/GetDn/GetPhi/GetDelta) ----
