@@ -16,6 +16,18 @@ use super::search_result::{BitSet64, Depth, Hand, PnDn, SearchAmount, SearchResu
 use super::ttentry::{Entry, NULL_HAND};
 use rustc_hash::FxHashMap;
 
+/// KH `ApplyDeltaHand` (hands.hpp:83)．`target + (diff_dst - diff_src)` を駒種別に
+/// `[0, MAX_HAND_COUNT]` へ clamp する (cross-hand 親持駒の補正)．
+#[inline]
+fn apply_delta_hand(target: Hand, diff_src: Hand, diff_dst: Hand) -> Hand {
+    let mut res = [0u8; crate::types::HAND_KINDS];
+    for i in 0..crate::types::HAND_KINDS {
+        let v = target[i] as i32 + diff_dst[i] as i32 - diff_src[i] as i32;
+        res[i] = v.clamp(0, crate::types::PieceType::MAX_HAND_COUNT[i] as i32) as u8;
+    }
+    res
+}
+
 /// KH `tt::RegularTable` (regular_table.hpp:133)．循環配列でエントリを管理する通常テーブル．
 pub(super) struct RegularTable {
     entries: Vec<Entry>,
@@ -251,11 +263,19 @@ impl TranspositionTable {
         }
     }
 
-    /// KH `Query::LookUpParent` (ttquery.hpp:195) の **exact-hand 簡約版**．
-    /// `(board_key, hand)` 完全一致 entry の親 (board_key, hand) と pn/dn を返す．
-    /// KH の cross-hand `ApplyDeltaHand` 親推論は省略 (= 直接 DAG 合流のみ検出; sound だが非極大)．
-    /// 親が未記録 (NULL_HAND) または entry 無しなら `None`．
+    /// KH `Query::LookUpParent` (ttquery.hpp:195) + `UpdateParentCandidate` (ttentry.hpp:412)．
+    /// cluster の board_key 一致 entry を全走査し，優等/劣等局面から pn/dn 境界を合成する (KH 忠実)．
+    /// 返す**親**は exact-hand entry を優先し，無い場合のみ cross-hand 推論 (`ApplyDeltaHand`) に
+    /// fall back する．**KH は dominant bound の親で常に上書きするが，maou ではそれが false DAG 辺を
+    /// 生み退行する** (29te 11,143→13,092)．exact 優先 + cross-hand fallback が正 (29te 11,286 /
+    /// 39te 14.5M→13.4M / 62s→58s; いずれも STRICT sound)．pn/dn 境界は KH どおり cross-hand 合成のまま．
     pub(super) fn look_up_parent(&self, board_key: u64, hand: Hand) -> Option<(u64, Hand, PnDn, PnDn)> {
+        use super::ttentry::hand_is_equal_or_superior;
+        let mut pn: PnDn = 1;
+        let mut dn: PnDn = 1;
+        let mut exact_parent: Option<(u64, Hand)> = None;
+        let mut cross_bk: u64 = 0;
+        let mut cross_hand: Hand = NULL_HAND;
         let cap = self.regular.entries.len();
         let mut idx = self.regular.pointer_of(board_key);
         for _ in 0..cap {
@@ -263,19 +283,41 @@ impl TranspositionTable {
             if e.is_null() {
                 break;
             }
-            if e.is_for_hand(board_key, hand) {
-                let ph = e.get_parent_hand();
-                if ph == NULL_HAND {
-                    return None;
+            if e.is_for(board_key) {
+                let entry_hand = e.get_hand();
+                let eph = e.get_parent_hand();
+                if entry_hand == hand && eph != NULL_HAND {
+                    exact_parent = Some((e.parent_board_key(), eph));
                 }
-                return Some((e.parent_board_key(), ph, e.pn(), e.dn()));
+                let is_inferior = hand_is_equal_or_superior(entry_hand, hand);
+                let is_superior = hand_is_equal_or_superior(hand, entry_hand);
+                if is_inferior && e.pn() > pn {
+                    pn = e.pn();
+                    if eph != NULL_HAND && (cross_hand == NULL_HAND || pn > dn) {
+                        cross_bk = e.parent_board_key();
+                        cross_hand = apply_delta_hand(eph, entry_hand, hand);
+                    }
+                }
+                if is_superior && e.dn() > dn {
+                    dn = e.dn();
+                    if eph != NULL_HAND && (cross_hand == NULL_HAND || dn > pn) {
+                        cross_bk = e.parent_board_key();
+                        cross_hand = apply_delta_hand(eph, entry_hand, hand);
+                    }
+                }
             }
             idx += 1;
             if idx == cap {
                 idx = 0;
             }
         }
-        None
+        if let Some((pbk, ph)) = exact_parent {
+            Some((pbk, ph, pn, dn))
+        } else if cross_hand == NULL_HAND {
+            None
+        } else {
+            Some((cross_bk, cross_hand, pn, dn))
+        }
     }
 
     /// 1 局面の Query 文脈を構築する (KH `BuildQuery`)．
