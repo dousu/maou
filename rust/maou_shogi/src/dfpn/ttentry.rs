@@ -159,6 +159,24 @@ impl Entry {
         self.repetition_state = RepetitionState::PossibleRepetition;
     }
 
+    /// 空 slot 化 (KH `SetNull`, ttentry.hpp:237)．GC で低 amount entry を間引く際に使う．
+    #[inline]
+    pub(super) fn set_null(&mut self) {
+        self.hand = NULL_HAND;
+    }
+
+    /// amount を半減 (KH `CutAmount`, ttentry.hpp:277)．GC で max_amount が飽和に近いとき全体縮小．
+    #[inline]
+    pub(super) fn cut_amount(&mut self) {
+        self.amount = (self.amount / 2).max(1);
+    }
+
+    /// 盤面キー (GC compaction の再配置 `PointerOf` 用)．
+    #[inline]
+    pub(super) fn board_key(&self) -> u64 {
+        self.board_key
+    }
+
     /// KH `UpdateUnknown` (ttentry.hpp:306)．
     pub(super) fn update_unknown(
         &mut self,

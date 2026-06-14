@@ -45,6 +45,102 @@ impl RegularTable {
         let hash_low = board_key & 0xffff_ffff;
         ((hash_low as u128 * self.entries.len() as u128) >> 32) as usize
     }
+
+    /// KH `CalculateHashRate` (regular_table.hpp:198)．`kHashfullCalcEntries`=10000 個を
+    /// stride 334 でサンプルし使用率を見積もる (全走査を避ける近似)．
+    pub(super) fn calculate_hash_rate(&self) -> f64 {
+        const SAMPLES: usize = 10_000;
+        let n = self.entries.len();
+        if n == 0 {
+            return 1.0;
+        }
+        let samples = SAMPLES.min(n);
+        let mut used = 0usize;
+        let mut idx = 1usize % n;
+        for _ in 0..samples {
+            if !self.entries[idx].is_null() {
+                used += 1;
+            }
+            idx += 334;
+            if idx >= n {
+                idx -= n;
+            }
+        }
+        used as f64 / samples as f64
+    }
+
+    /// KH `CollectGarbage` (regular_table.hpp:226)．`kGcSamplingEntries`=20000 個の amount を
+    /// サンプルし，下位 `ratio` 分位を閾値に，それ以下の amount の entry を null 化して間引く．
+    /// max_amount が飽和に近ければ全 amount を半減 (CutAmount)．最後に compaction で穴を詰める．
+    pub(super) fn collect_garbage(&mut self, ratio: f64) {
+        const SAMPLES: usize = 20_000;
+        let n = self.entries.len();
+        if n == 0 {
+            return;
+        }
+        let mut amounts: Vec<SearchAmount> = Vec::with_capacity(SAMPLES.min(n));
+        let mut idx = 0usize;
+        let mut scanned = 0usize;
+        while amounts.len() < SAMPLES && scanned < n {
+            if !self.entries[idx].is_null() {
+                amounts.push(self.entries[idx].amount());
+            }
+            idx += 334;
+            if idx >= n {
+                idx -= n;
+            }
+            scanned += 1;
+        }
+        if amounts.is_empty() {
+            return;
+        }
+        // 下位 ratio 分位 (KH: nth_element pivot)．
+        let pivot = ((amounts.len() as f64 * ratio) as usize)
+            .max(1)
+            .min(amounts.len() - 1);
+        amounts.sort_unstable();
+        let amount_threshold = amounts[pivot];
+        let max_amount = *amounts.last().unwrap();
+        let should_cut = max_amount > SearchAmount::MAX / 8;
+        for e in &mut self.entries {
+            if e.is_null() {
+                continue;
+            }
+            if e.amount() <= amount_threshold {
+                e.set_null();
+            } else if should_cut {
+                e.cut_amount();
+            }
+        }
+        self.compact_entries();
+    }
+
+    /// KH `CompactEntries` (regular_table.hpp:344)．null 穴を詰めて各 entry を `PointerOf` から
+    /// なるべく手前へ再配置する (open addressing の probe chain 整合; 先頭周辺は wrap で目を瞑る)．
+    fn compact_entries(&mut self) {
+        let n = self.entries.len();
+        if n == 0 {
+            return;
+        }
+        for i in 0..n {
+            if self.entries[i].is_null() {
+                continue;
+            }
+            let start = self.pointer_of(self.entries[i].board_key());
+            let mut j = start;
+            while j != i {
+                if self.entries[j].is_null() {
+                    self.entries[j] = self.entries[i];
+                    self.entries[i].set_null();
+                    break;
+                }
+                j += 1;
+                if j == n {
+                    j = 0;
+                }
+            }
+        }
+    }
 }
 
 /// KH `tt::RepetitionTable` (repetition_table.hpp)．経路 (path_key) 依存の千日手結果を記録する．
@@ -113,6 +209,7 @@ impl TtContext {
 pub(super) struct TranspositionTable {
     regular: RegularTable,
     rep: RepetitionTable,
+    gc_count: u64,
 }
 
 impl TranspositionTable {
@@ -120,6 +217,7 @@ impl TranspositionTable {
         TranspositionTable {
             regular: RegularTable::new(num_entries),
             rep: RepetitionTable::new(),
+            gc_count: 0,
         }
     }
     /// 新規探索 (KH `NewSearch`): repetition table のみ消去 (通常表は GC に任せるが本移植では明示)．
@@ -133,6 +231,24 @@ impl TranspositionTable {
     }
     pub(super) fn capacity(&self) -> usize {
         self.regular.capacity()
+    }
+
+    /// これまでに実行した GC 回数 (診断用)．
+    pub(super) fn gc_count(&self) -> u64 {
+        self.gc_count
+    }
+
+    /// hashfull が `kExecuteGcHashRate`(=0.5) 以上なら GC を実行する (KH komoring_heights.cpp:157)．
+    /// 通常テーブルのみで判断する (千日手テーブルは mid_v4 では無制限 `FxHashMap`)．
+    /// テーブル満杯による `look_up` の O(cap) probe 退化を防ぐ．戻り値 = GC を実行したか．
+    pub(super) fn maybe_collect_garbage(&mut self) -> bool {
+        if self.regular.calculate_hash_rate() >= 0.5 {
+            self.regular.collect_garbage(0.5);
+            self.gc_count += 1;
+            true
+        } else {
+            false
+        }
     }
 
     /// 1 局面の Query 文脈を構築する (KH `BuildQuery`)．
