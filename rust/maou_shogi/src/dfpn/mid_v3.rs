@@ -108,6 +108,44 @@ diag_env_flag!(env_v3laseed, "V3_LA_SEED");
 diag_env_flag!(env_v3probenostore, "V3_PROBE_NOSTORE");
 // V3_MASKKEEP=1: sum_mask を node 単位で永続化し rebuild 時に復元 (KH FrontSumMask 継承相当)．
 coherent_env_flag!(env_v3maskkeep, "V3_MASKKEEP");
+// --- mid_v4 (param_v3_v4) 深さ gate レバー (2026-06-14, Step 6.2/6.3) ---
+// Step 6.2 確定: 39te gap=深部 (d≥13, peak 23-27=AND 節) の breadth (unique 局面)．
+// global RECALC/MASKKEEP は浅部 (KH 一致済) を乱して +29%/+10% 退行する (§4)．
+// §6.3 は ply<K (浅 gate) しか試していない．breadth-is-deep に従い ply>=K (深 gate) を試した．
+//
+// 🔴 **全て反証済 (2026-06-14, 39te full solve, prod base=14,478,765)**:
+//   V3_DEEPRECALC=11 → 18,705,827 (+29%)  ＝ accurate sum_delta は再選択を増やし breadth 拡大．
+//   V3_DEEPMASK=11   → 14,478,765 (no-op) ＝ v3_dag_masks 未populate (DAG off) で発火せず．
+//   V3_DEEPEPS=11:2  → 19,897,874 (+37%) / =11:3 → 22,029,920 (+52%) ＝ AND-commit (dn 予算↑) も拡大．
+// = maou native の threshold 配分は pn 軸 (sum_delta) ・dn 軸 (ε) 双方で深部 **局所最適**．
+//   深部 breadth は tunable param でなく co-adapted equilibrium．残る lever は
+//   proof-width (defender movegen/pruning) か mate-length (maou 55 vs KH 33) で，threshold 系でない．
+//   反証済 knob は repo 慣習に従い comment 付きで残置 (再実行禁止)．
+/// V3_DEEPRECALC=<K>: ply>=K で recalc_on_resort を有効化 (深さ gate RECALC)．未設定なら従来 (env_v3recalc)．
+fn env_v3deeprecalc() -> Option<u32> {
+    static C: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V3_DEEPRECALC").ok().and_then(|s| s.parse().ok()))
+}
+/// V3_DEEPMASK=<K>: ply>=K で sum_mask 永続化 (深さ gate MASKKEEP)．未設定なら従来 (env_v3maskkeep)．
+fn env_v3deepmask() -> Option<u32> {
+    static C: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V3_DEEPMASK").ok().and_then(|s| s.parse().ok()))
+}
+/// V3_DEEPEPS="K:E": **AND 節のみ** ply>=K で threshold_epsilon=E に上げる (深さ gate AND-commit)．
+/// 根拠 (Step 6.3): DEEPRECALC=11 が +29% ＝ accurate sum_delta は re-selection を増やし breadth 拡大，
+/// 逆に commitment (best child へ予算集中) が breadth を抑える．ε は child_thphi=min(thphi,2ndphi+ε) を
+/// 上げ commitment を強める．global ε=3 は 39te 破滅 (OR 節で長手 check 線を深掘り) だが，**AND 節限定**
+/// なら OR の害を避け defender 再選択削減 (=deep breadth) のみ得る仮説．未設定なら従来 (env_v3eps)．
+fn env_v3deepeps() -> Option<(u32, u32)> {
+    static C: std::sync::OnceLock<Option<(u32, u32)>> = std::sync::OnceLock::new();
+    *C.get_or_init(|| {
+        let s = std::env::var("V3_DEEPEPS").ok()?;
+        let (k, e) = s.split_once(':')?;
+        Some((k.parse().ok()?, e.parse().ok()?))
+    })
+}
+// V3_NODAG=1: EliminateDoubleCount (DAG δ 補正) を無効化する gamble 診断 flag (default off)．
+diag_env_flag!(env_v3nodag, "V3_NODAG");
 // V3_YOORDER=1: child comparer の eval 完全 tie を YaneuraOu (KH) movegen 順 (= to_sq の
 // YaneuraOu 番号 (file-1)*9+(rank-1) 昇順) で破る (default off)．maou native movegen は
 // file 降順 (col=9-file 昇順) で iterate するため KH と to_sq 順が逆になり，eval 同点の
@@ -254,6 +292,11 @@ fn v3_extend(pn: u64, dn: u64, thpn: &mut u64, thdn: &mut u64) {
 impl DfPnSolver {
     /// mid_v3 エントリ: KH SearchEntry 風 root IDS で 29te を解く．
     pub fn solve_via_v3(&mut self, board: &mut Board) -> TsumeResult {
+        // V3_V4ENG: mid_v4 (KH verbatim 忠実移植) エンジンへ分岐する (検証用 gate)．
+        // default / V3_V4(bundle) とは別経路で，29te=18,539 canonical を侵さない．
+        if std::env::var("V3_V4ENG").is_ok() {
+            return self.solve_via_v4(board);
+        }
         self.v3_tt.clear();
         // 大きい budget の solve では TT が数百万 entry まで成長する．段階的 rehash
         // (全 entry の再配置コピーが累計 ~2× 発生) を避けるため node budget に
@@ -1296,9 +1339,19 @@ impl DfPnSolver {
             expansion.rebuild(or_node, hash, true, us_is_black, chuai_opt);
         }
         expansion.set_kh_full_comparer(true);
-        expansion.set_recalc_on_resort(env_v3recalc());
+        // mid_v4 深さ gate (Step 6.3): V3_DEEPRECALC=K なら ply>=K でのみ recalc，それ以外は従来挙動．
+        let recalc = match env_v3deeprecalc() {
+            Some(k) => ply >= k,
+            None => env_v3recalc(),
+        };
+        expansion.set_recalc_on_resort(recalc);
         expansion.set_move_evals_slice(&self.v3_evals_buf);
-        expansion.set_threshold_epsilon(env_v3eps());
+        // mid_v4 深さ gate (Step 6.3): V3_DEEPEPS="K:E" なら AND 節 (!or_node) かつ ply>=K で ε=E．
+        let eps = match env_v3deepeps() {
+            Some((k, e)) if !or_node && ply >= k => e,
+            _ => env_v3eps(),
+        };
+        expansion.set_threshold_epsilon(eps);
         expansion.set_deferred_penalty_denom(env_v3denom());
         expansion.set_deferred_penalty_floor(env_v3floor());
         // KH IsSumDeltaNode: OR の near-duplicate (香成/不成等) を max 集約へ．
@@ -1318,7 +1371,9 @@ impl DfPnSolver {
         }
         // V3_MASKKEEP (plan H3'②): 永続 sum_mask を復元 (KH は TT UnknownData::sum_mask
         // を FrontSumMask として子 Emplace に渡す = DoubleCount 補正が再入をまたいで持続)．
-        if env_v3maskkeep() {
+        // mid_v4 深さ gate (Step 6.3): V3_DEEPMASK=K なら ply>=K でのみ sum_mask 永続化．
+        let maskkeep = env_v3maskkeep() || env_v3deepmask().is_some_and(|k| ply >= k);
+        if maskkeep {
             if let Some(&m) = self.v3_dag_masks.get(&hash) {
                 expansion.apply_persisted_sum_mask(m);
             }
@@ -1579,7 +1634,9 @@ impl DfPnSolver {
             }
             // KH EliminateDoubleCount: child が祖先 frame から到達可能 (DAG) なら，その祖先の
             // branch sum_mask を max へ reset し δ 二重計上を防ぐ．
-            if self.param_v3_dag {
+            // V3_NODAG=1: gamble 診断 — DAG 補正を切り効果を測る (off≈on なら parent_map 版は
+            // 無効で KH FindKnownAncestor 移植が deep lever, off>>on なら DAG は既に効いている)．
+            if self.param_v3_dag && !env_v3nodag() {
                 let child_fh = board.hash;
                 self.eliminate_double_count_v3(stack_idx, child_fh, hash);
             }

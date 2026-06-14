@@ -1,0 +1,420 @@
+//! KH `tt::RegularTable` + `tt::Query` + `tt::RepetitionTable` の忠実移植
+//! (`regular_table.hpp` / `ttquery.hpp` / `repetition_table.hpp`)．
+//!
+//! mid_v4 (KH verbatim 再現) の置換表本体．[`super::ttentry::Entry`] (len-aware/cross-hand) を
+//! 循環配列で管理し，cluster を走査して複数 entry 横断で pn/dn を合成する (KH `Query::LookUp`)．
+//!
+//! ## single-thread 適応 (並列化は対象外)
+//! - KH `Query` は entry への生ポインタ (`initial_entry_pointer_`, `cached_entry_`) を保持するが，
+//!   Rust borrow checker と相性が悪いため **cluster 先頭 index を保持し table 参照を都度渡す**形に
+//!   変える (意味論は同一)．
+//! - thread ノイズ (`tt_noise`) は **main thread (=single-thread) では載らない** (ttquery.hpp:42
+//!   「main thread にはノイズを載せない」) ため除外する．atomic/lock も plain 化．
+
+use super::mate_len::MateLen;
+use super::search_result::{BitSet64, Depth, Hand, PnDn, SearchAmount, SearchResult};
+use super::ttentry::Entry;
+use rustc_hash::FxHashMap;
+
+/// KH `tt::RegularTable` (regular_table.hpp:133)．循環配列でエントリを管理する通常テーブル．
+pub(super) struct RegularTable {
+    entries: Vec<Entry>,
+}
+
+impl RegularTable {
+    /// 要素数 `num_entries` (最低 1) でテーブルを確保し全 null 初期化する (KH `Resize`)．
+    pub(super) fn new(num_entries: usize) -> Self {
+        let n = num_entries.max(1);
+        RegularTable {
+            entries: vec![Entry::null(); n],
+        }
+    }
+    /// 全エントリを null 化する (KH `Clear`)．
+    pub(super) fn clear(&mut self) {
+        for e in &mut self.entries {
+            *e = Entry::null();
+        }
+    }
+    /// 保存可能要素数 (KH `Capacity`)．
+    pub(super) fn capacity(&self) -> usize {
+        self.entries.len()
+    }
+    /// `board_key` の cluster 先頭 index (KH `PointerOf`; Stockfish 方式で mod を回避)．
+    #[inline]
+    pub(super) fn pointer_of(&self, board_key: u64) -> usize {
+        let hash_low = board_key & 0xffff_ffff;
+        ((hash_low as u128 * self.entries.len() as u128) >> 32) as usize
+    }
+}
+
+/// KH `tt::RepetitionTable` (repetition_table.hpp)．経路 (path_key) 依存の千日手結果を記録する．
+/// 開アドレス法 + 世代 GC を持つ KH に対し，意味論を保った `FxHashMap` で移植する
+/// (path_key ごとに 1 つの (depth, len)．Insert の更新規則は KH:100-130 と同一)．
+pub(super) struct RepetitionTable {
+    map: FxHashMap<u64, (Depth, MateLen)>,
+}
+
+impl RepetitionTable {
+    pub(super) fn new() -> Self {
+        RepetitionTable {
+            map: FxHashMap::default(),
+        }
+    }
+    /// 前回探索結果を消す (KH `NewSearch`/`Clear`)．
+    pub(super) fn clear(&mut self) {
+        self.map.clear();
+    }
+    /// KH `Insert` (repetition_table.hpp:100)．
+    pub(super) fn insert(&mut self, path_key: u64, depth: Depth, len: MateLen) {
+        match self.map.get_mut(&path_key) {
+            None => {
+                self.map.insert(path_key, (depth, len));
+            }
+            Some(slot) => {
+                if slot.1 != len {
+                    // len が変われば上書き
+                    *slot = (depth, len);
+                } else if slot.0 <= depth {
+                    // 同 len なら深い (= 千日手が浅くまで及ばない) 方を採る
+                    slot.0 = depth;
+                }
+            }
+        }
+    }
+    /// KH `Contains` (repetition_table.hpp:138)．
+    /// 記録された table_len が探索 len 以上なら，その千日手はこの探索にも適用される．
+    pub(super) fn contains(&self, path_key: u64, len: MateLen) -> Option<(Depth, MateLen)> {
+        match self.map.get(&path_key) {
+            Some(&(depth, table_len)) if table_len >= len => Some((depth, table_len)),
+            _ => None,
+        }
+    }
+}
+
+/// LookUp/SetResult の文脈 (KH `Query` のメンバから生ポインタを除いたもの)．
+/// 1 局面 (board_key, hand, depth, path_key) に対応し，cluster 先頭 index を cache する．
+#[derive(Clone, Copy)]
+pub(super) struct TtContext {
+    start_idx: usize,
+    path_key: u64,
+    board_key: u64,
+    hand: Hand,
+    depth: Depth,
+}
+
+impl TtContext {
+    #[inline]
+    pub(super) fn board_key_hand(&self) -> (u64, Hand) {
+        (self.board_key, self.hand)
+    }
+}
+
+/// KH `tt::TranspositionTable` (regular + repetition を束ねる)．
+pub(super) struct TranspositionTable {
+    regular: RegularTable,
+    rep: RepetitionTable,
+}
+
+impl TranspositionTable {
+    pub(super) fn new(num_entries: usize) -> Self {
+        TranspositionTable {
+            regular: RegularTable::new(num_entries),
+            rep: RepetitionTable::new(),
+        }
+    }
+    /// 新規探索 (KH `NewSearch`): repetition table のみ消去 (通常表は GC に任せるが本移植では明示)．
+    pub(super) fn new_search(&mut self) {
+        self.rep.clear();
+    }
+    /// 通常表を全消去 (KH `Clear`)．
+    pub(super) fn clear(&mut self) {
+        self.regular.clear();
+        self.rep.clear();
+    }
+    pub(super) fn capacity(&self) -> usize {
+        self.regular.capacity()
+    }
+
+    /// 1 局面の Query 文脈を構築する (KH `BuildQuery`)．
+    pub(super) fn build_query(
+        &self,
+        path_key: u64,
+        board_key: u64,
+        hand: Hand,
+        depth: Depth,
+    ) -> TtContext {
+        TtContext {
+            start_idx: self.regular.pointer_of(board_key),
+            path_key,
+            board_key,
+            hand,
+            depth,
+        }
+    }
+
+    /// **置換表の読み出し** (KH `Query::LookUp`, ttquery.hpp:117)．
+    /// cluster を走査し，一致/優等/劣等局面から pn/dn を合成して `SearchResult` を返す．
+    /// エントリが無ければ `eval`(InitialPnDn) を seed として MakeFirstVisit する (遅延評価)．
+    pub(super) fn look_up<F: FnOnce() -> (PnDn, PnDn)>(
+        &mut self,
+        ctx: &TtContext,
+        len: MateLen,
+        does_have_old_child: &mut bool,
+        eval: F,
+    ) -> SearchResult {
+        let mut pn: PnDn = 1;
+        let mut dn: PnDn = 1;
+        let mut amount: SearchAmount = 1;
+        let mut found_exact = false;
+        let mut sum_mask = BitSet64::full();
+
+        let cap = self.regular.entries.len();
+        let mut idx = ctx.start_idx;
+        for _ in 0..cap {
+            if self.regular.entries[idx].is_null() {
+                break; // cluster 終端 (KH `!itr->IsNull()`)
+            }
+            if self.regular.entries[idx].is_for(ctx.board_key) {
+                let matched = self.regular.entries[idx].look_up(
+                    ctx.hand,
+                    ctx.depth,
+                    len,
+                    &mut pn,
+                    &mut dn,
+                    does_have_old_child,
+                );
+                if matched {
+                    let e = &self.regular.entries[idx];
+                    amount = amount.max(e.amount());
+                    if pn == 0 {
+                        return SearchResult::make_final(true, e.get_hand(), e.proven_len(), amount);
+                    } else if dn == 0 {
+                        return SearchResult::make_final(
+                            false,
+                            e.get_hand(),
+                            e.disproven_len(),
+                            amount,
+                        );
+                    } else if e.get_hand() == ctx.hand {
+                        // 一致局面 (exact)
+                        if e.is_possible_repetition() {
+                            if let Some((depth, table_len)) = self.rep.contains(ctx.path_key, len) {
+                                return SearchResult::make_repetition(
+                                    ctx.hand, table_len, amount, depth,
+                                );
+                            }
+                        }
+                        found_exact = true;
+                        sum_mask = e.sum_mask();
+                    }
+                }
+            }
+            idx += 1;
+            if idx == cap {
+                idx = 0;
+            }
+        }
+
+        // single-thread: ノイズなし (KH main thread)．
+        if found_exact {
+            return SearchResult::make_unknown(pn, dn, len, amount, sum_mask);
+        }
+        let (init_pn, init_dn) = eval();
+        pn = pn.max(init_pn);
+        dn = dn.max(init_dn);
+        SearchResult::make_first_visit(pn, dn, len, amount)
+    }
+
+    /// **置換表の書き込み** (KH `Query::SetResult`, ttquery.hpp:248)．
+    pub(super) fn set_result(&mut self, ctx: &TtContext, result: SearchResult, parent: (u64, Hand)) {
+        if result.pn() == 0 {
+            self.set_final(ctx, true, result);
+        } else if result.dn() == 0 {
+            if result.is_repetition() {
+                self.set_repetition(ctx, result);
+            } else {
+                self.set_final(ctx, false, result);
+            }
+        } else {
+            self.set_unknown(ctx, result, parent);
+        }
+    }
+
+    /// `board_key`+`hand` のエントリを探し，無ければ null slot を Init して返す (KH `FindOrCreate`)．
+    fn find_or_create(&mut self, board_key: u64, hand: Hand) -> usize {
+        let start = self.regular.pointer_of(board_key);
+        let cap = self.regular.entries.len();
+        let mut idx = start;
+        for _ in 0..cap {
+            if self.regular.entries[idx].is_null() {
+                self.regular.entries[idx].init(board_key, hand);
+                return idx;
+            }
+            if self.regular.entries[idx].is_for_hand(board_key, hand) {
+                return idx;
+            }
+            idx += 1;
+            if idx == cap {
+                idx = 0;
+            }
+        }
+        // テーブル満杯 (GC 未移植時の fallback; KH は GC で回避)．先頭を上書き．
+        self.regular.entries[start].init(board_key, hand);
+        start
+    }
+
+    /// 詰み/不詰の書き込み (KH `SetFinal<kIsProven>`)．**proof/disproof hand 下に格納** (cross-hand)．
+    fn set_final(&mut self, ctx: &TtContext, proven: bool, result: SearchResult) {
+        let hand = result.hand();
+        let idx = self.find_or_create(ctx.board_key, hand);
+        let len = result.len();
+        let amount = result.amount();
+        if proven {
+            self.regular.entries[idx].update_proven(len, amount);
+        } else {
+            self.regular.entries[idx].update_disproven(len, amount);
+        }
+    }
+
+    /// 千日手の書き込み (KH `SetRepetition`)．rep flag を立て path_key を rep table へ記録．
+    fn set_repetition(&mut self, ctx: &TtContext, result: SearchResult) {
+        let idx = self.find_or_create(ctx.board_key, ctx.hand);
+        self.regular.entries[idx].set_possible_repetition();
+        self.rep
+            .insert(ctx.path_key, result.repetition_start(), result.len());
+    }
+
+    /// 探索中 (unknown) の書き込み (KH `SetUnknown`)．現局面 hand 下に格納．
+    fn set_unknown(&mut self, ctx: &TtContext, result: SearchResult, parent: (u64, Hand)) {
+        let idx = self.find_or_create(ctx.board_key, ctx.hand);
+        self.regular.entries[idx].update_unknown(
+            ctx.depth,
+            result.pn(),
+            result.dn(),
+            result.amount(),
+            result.sum_mask(),
+            parent.0,
+            parent.1,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::ttentry::NULL_HAND;
+    use super::*;
+    use crate::types::HAND_KINDS;
+
+    fn hand(pawns: u8) -> Hand {
+        let mut h = [0u8; HAND_KINDS];
+        h[0] = pawns;
+        h
+    }
+    fn null_parent() -> (u64, Hand) {
+        (0, NULL_HAND)
+    }
+    const BK: u64 = 0xABCD_1234_5678_9ABC;
+
+    #[test]
+    fn unknown_roundtrip() {
+        let mut tt = TranspositionTable::new(1024);
+        let q = tt.build_query(0x11, BK, hand(2), 5);
+        // 初回 LookUp: エントリ無し => eval seed．
+        let mut old = false;
+        let r0 = tt.look_up(&q, MateLen::from_len(10), &mut old, || (4, 6));
+        assert_eq!((r0.pn(), r0.dn()), (4, 6));
+        assert!(r0.is_first_visit());
+
+        // 書き込み後の LookUp で pn/dn/sum_mask を復元．
+        let mut sm = BitSet64::full();
+        sm.reset(2);
+        let stored = SearchResult::make_unknown(7, 9, MateLen::from_len(10), 3, sm);
+        tt.set_result(&q, stored, null_parent());
+
+        let mut old2 = false;
+        let r1 = tt.look_up(&q, MateLen::from_len(10), &mut old2, || (1, 1));
+        assert_eq!((r1.pn(), r1.dn()), (7, 9));
+        assert!(!r1.is_first_visit());
+        assert!(!r1.sum_mask().test(2));
+    }
+
+    #[test]
+    fn proven_len_aware_roundtrip() {
+        let mut tt = TranspositionTable::new(1024);
+        let q = tt.build_query(0x22, BK, hand(1), 3);
+        // まず探索中 (unknown pn=3,dn=5) を格納し，その後 len=8 で詰みを格納する (実探索の順序)．
+        tt.set_result(
+            &q,
+            SearchResult::make_unknown(3, 5, MateLen::from_len(8), 1, BitSet64::full()),
+            null_parent(),
+        );
+        tt.set_result(
+            &q,
+            SearchResult::make_final(true, hand(1), MateLen::from_len(8), 2),
+            null_parent(),
+        );
+
+        // len>=8 で LookUp => proven (len-aware: 探索 len が proven_len 以上)．
+        let mut old = false;
+        let r = tt.look_up(&q, MateLen::from_len(9), &mut old, || (1, 1));
+        assert!(r.is_final());
+        assert_eq!(r.pn(), 0);
+
+        // len<8 では proven にならず，格納済 unknown pn/dn (3,5) を返す (eval seed は呼ばれない)．
+        let mut old2 = false;
+        let r2 = tt.look_up(&q, MateLen::from_len(5), &mut old2, || (99, 99));
+        assert!(!r2.is_final());
+        assert_eq!((r2.pn(), r2.dn()), (3, 5));
+    }
+
+    #[test]
+    fn cross_hand_superior_lookup() {
+        let mut tt = TranspositionTable::new(1024);
+        // hand=1 で len=8 詰みを格納．
+        let q1 = tt.build_query(0x33, BK, hand(1), 3);
+        tt.set_result(
+            &q1,
+            SearchResult::make_final(true, hand(1), MateLen::from_len(8), 1),
+            null_parent(),
+        );
+        // 同 board・hand=3 (優等) で LookUp => 優等局面として詰み．
+        let q3 = tt.build_query(0x33, BK, hand(3), 3);
+        let mut old = false;
+        let r = tt.look_up(&q3, MateLen::from_len(10), &mut old, || (1, 1));
+        assert!(r.is_final());
+        assert_eq!(r.pn(), 0); // cross-hand proven
+    }
+
+    #[test]
+    fn repetition_roundtrip() {
+        let mut tt = TranspositionTable::new(1024);
+        let q = tt.build_query(0x44, BK, hand(2), 7);
+        // 千日手結果 (dn=0, rep_start=2) を格納．
+        let rep = SearchResult::make_repetition(hand(2), MateLen::from_len(0), 1, 2);
+        tt.set_result(&q, rep, null_parent());
+        // LookUp は rep flag + rep_table.Contains で千日手を返す (len <= 記録 len)．
+        let mut old = false;
+        let r = tt.look_up(&q, MateLen::from_len(0), &mut old, || (1, 1));
+        assert!(r.is_final());
+        assert_eq!(r.dn(), 0);
+        assert!(r.is_repetition());
+        assert_eq!(r.repetition_start(), 2);
+    }
+
+    #[test]
+    fn distinct_boards_do_not_collide() {
+        let mut tt = TranspositionTable::new(1024);
+        let qa = tt.build_query(0x1, 0xAAAA, hand(1), 1);
+        let qb = tt.build_query(0x2, 0xBBBB, hand(1), 1);
+        tt.set_result(
+            &qa,
+            SearchResult::make_unknown(5, 5, MateLen::from_len(10), 1, BitSet64::full()),
+            null_parent(),
+        );
+        let mut old = false;
+        // 別 board は first visit のまま (eval seed)．
+        let rb = tt.look_up(&qb, MateLen::from_len(10), &mut old, || (2, 3));
+        assert!(rb.is_first_visit());
+        assert_eq!((rb.pn(), rb.dn()), (2, 3));
+    }
+}
