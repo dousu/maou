@@ -10,18 +10,23 @@
 //!   `&mut self` (movegen) と `&mut tt` を disjoint に保つ)．
 //! - 並列化なし (KH single-thread)．
 //!
-//! ## 移植済 (v2.11.0)
-//! - **1 手詰先読み (CheckObviousFinalOrNode)**: AND first-visit child を do_move し OR 子の
-//!   1 手詰/詰み無を先読みし proven/disproven seed (29te 81,496→48,662, -40%; [`check_obvious_final_or_node_v4`])．
-//! - **proof hand 極小化 (KH HandSet)**: OR proof は `before_hand`，AND proof は `ProofHandSet` max 集約，
+//! ## 移植済
+//! - **1 手詰先読み (CheckObviousFinalOrNode, v2.11.0)**: AND first-visit child を do_move し OR 子の
+//!   1 手詰/詰み無を先読みし proven/disproven seed (81,496→48,662, -40%; [`check_obvious_final_or_node_v4`])．
+//! - **proof hand 極小化 (KH HandSet, v2.11.0)**: OR proof は `before_hand`，AND proof は `ProofHandSet` max 集約，
 //!   look-ahead/terminal も極小化 ([`super::proof_hand`])．**29te node には非効果** (= breadth/selectivity が
 //!   真因; hand 値でないことを mid_v4 で実測確認．Phase 28 と整合) だが KH 忠実かつ sound なので維持．
+//! - **DML deferral (v2.12.0)**: `DelayedMoveList` を build_v4_expansion に配線．同マス合駒/成不成ペアの
+//!   prev chain が未 final の手を idx から除外 (後回し) し，final 化で `update_best_child` が revival
+//!   (48,662→36,768, -24%)．KH ctor の `i_is_skipped` を忠実再現．
 //!
 //! ## 本版で未移植 (sound だが効率劣; TODO)
-//! - DML deferral (全手 active = breadth 増)．LocalExpansion は revival 経路を持つが構築側 (DelayedMoveList) 未移植．
-//! - disproof hand 集約の極小化 (OR-disproof / AND-disproof; mate 木で発火頻度低のため attacker_hand 代用)．
-//! - STRICT PV replay の v4 版 (現状は root pn/dn/len/nodes の診断出力で検証)．
+//! - **EliminateDoubleCount (DAG double-count 抑止)**: KH は SearchImpl 毎に ancestor 展開 stack を walk するが
+//!   mid_v4 は再帰 stack で明示 list を持たない (要構造変更)．残 gap (KH 3.95×) の主候補．
+//! - 無意味中合いの cross-square DML (support 0 + no-check; mid_v3 では mate-len 退行のため要注意)．
+//! - disproof hand 集約の極小化 / STRICT PV replay の v4 版．
 
+use super::delayed_move_list::DelayedMoveList;
 use super::kh_local_expansion::LocalExpansion;
 use super::mate_len::{MateLen, DEPTH_MAX_MATE_LEN, ZERO_MATE_LEN};
 use super::path_key::path_key_after;
@@ -252,6 +257,10 @@ impl DfPnSolver {
             return Err(r);
         }
 
+        // KH `delayed_move_list_{n, mp_}` (local_expansion.hpp:155)．同マス合駒/成不成ペアを
+        // 双方向 chain 化し，prev が未 final の手は idx から除外 (= 後回し) する．
+        let dml = DelayedMoveList::build(&moves, or_node);
+
         let defender_king = board.king_square(attacker.opponent());
         let n = moves.len();
         let mut evals: Vec<i32> = Vec::with_capacity(n);
@@ -288,12 +297,17 @@ impl DfPnSolver {
                 does_have_old = does_have_old || dhoc;
                 res
             };
-            // KH `CheckObviousFinalOrNode` 先読み (local_expansion.hpp:217-221)．
+            // KH DML skip 判定 (local_expansion.hpp:194-203): 非 final かつ prev chain に未 final の
+            // 先行手があれば後回し (idx に積まない)．prev は i より前に処理済なので results が揃っている．
+            let is_skipped =
+                !r.is_final() && dml.has_unresolved_prev(i, |j| results[j].is_final());
+
+            // KH `CheckObviousFinalOrNode` 先読み (local_expansion.hpp:217-221)．non-skipped のみ．
             // AND node の first-visit child は子が OR node (攻め方手番)．board は do_move 済 (= 子局面)
             // なので攻め方の 1 手詰／詰み無を先読みし，proven/disproven を seed する．これにより
             // 「詰む応手」を展開せず除外，「逃れる応手」を即 disproof し breadth を抑える．
             // 子結果が final になったら KH `query.SetResult` 相当で TT へ格納する (PV/伝播の整合)．
-            if !or_node && first_search && r.is_first_visit() {
+            if !is_skipped && !or_node && first_search && r.is_first_visit() {
                 if let Some(res) = self.check_obvious_final_or_node_v4(board) {
                     tt.set_result(&q, res, (ch, child_hand));
                     r = res;
@@ -304,7 +318,18 @@ impl DfPnSolver {
             evals.push(eval);
             results.push(r);
             queries.push(q);
-            idx.push(i as u32);
+            if !is_skipped {
+                idx.push(i as u32);
+            }
+        }
+
+        // KH revival 用 next chain (delayed_move_list_.Next)．後回し手が final 化したら
+        // update_best_child が dml_next を辿って idx へ復活させる．
+        let mut dml_next = vec![-1i32; n];
+        for (i, slot) in dml_next.iter_mut().enumerate() {
+            if let Some(nx) = dml.next(i) {
+                *slot = nx as i32;
+            }
         }
 
         Ok(LocalExpansion::from_parts(
@@ -317,7 +342,7 @@ impl DfPnSolver {
             idx,
             BitSet64::full(),
             does_have_old,
-            vec![-1; n],
+            dml_next,
             1,
         ))
     }
