@@ -27,37 +27,7 @@
 use crate::attack;
 use crate::bitboard::Bitboard;
 use crate::board::Board;
-use crate::moves::Move;
-use crate::types::{Color, Piece, PieceType, Square, HAND_KINDS};
-
-/// KH `BeforeHand` (hands.hpp:57)．`move` 適用**前**の攻め方持駒を，適用**後**の hand
-/// (`after`) から逆算する．子局面の証明駒/反証駒は move 適用後の hand なので，親 (現局面)
-/// の hand へ変換する際に使う．
-///
-/// - 駒打ち: 打った駒種を 1 枚戻す (max で飽和; KH の `HAND_BORROW_MASK` 復元と同義)．
-/// - 駒取り: 取った駒種 (成駒は持駒換算) が `after` に含まれていれば 1 枚減らす (KH
-///   `hand_exists` ガード; 含まれなければ据置 = その駒は証明に不要)．
-/// - 非打・非取: 変化なし．
-#[inline]
-pub(super) fn before_hand(board: &Board, m: Move, mut after: [u8; HAND_KINDS]) -> [u8; HAND_KINDS] {
-    if let Some(pt) = m.drop_piece_type() {
-        if let Some(hi) = pt.hand_index() {
-            if after[hi] < PieceType::MAX_HAND_COUNT[hi] {
-                after[hi] += 1;
-            }
-        }
-    } else {
-        let cap = Piece(board.piece_at(m.to_sq()));
-        if let Some(cap_pt) = cap.piece_type() {
-            if let Some(hi) = cap_pt.captured_to_hand().hand_index() {
-                if after[hi] > 0 {
-                    after[hi] -= 1;
-                }
-            }
-        }
-    }
-    after
-}
+use crate::types::{Color, PieceType, Square, HAND_KINDS};
 
 /// 要素ごとの max (KH `HandSet::Update`, ProofHand 用)．
 #[inline]

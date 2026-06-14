@@ -18,7 +18,6 @@ use super::search_result::{
     clamp_pn_dn, compare_results, BitSet64, Depth, Ordering3, PnDn, SearchAmount, SearchResult,
     K_INFINITE_PN_DN,
 };
-use super::proof_hand::{before_hand, ProofHandSet};
 use super::tt_v4::TtContext;
 use crate::board::Board;
 use crate::moves::Move;
@@ -237,11 +236,10 @@ impl LocalExpansion {
 
     /// 現局面の探索結果 (KH `CurrentResult`, :332)．win/lose/unknown を判定し hand/len を付ける．
     ///
-    /// **proof hand は KH `HandSet` の極小化を移植**: OR proof は子の証明駒を best_move 手前へ
-    /// 逆算 (`before_hand`)，AND proof は全子の証明駒を要素 max 集約 (`ProofHandSet`)．極小証明駒は
-    /// TT の cross-hand Superior/Inferior 再利用を効かせ breadth を抑える．disproof hand は当面
-    /// 攻め方持駒で代用 (sound; mate 木では発火頻度が低く 29te node に効かないため後回し)．
-    /// `board` は現局面 (do_move していない親局面)．
+    /// proof/disproof hand は **現局面の攻め方持駒** (`attacker_hand`) をそのまま使う．これは KH の
+    /// `HandSet` 極小化を**意図的に省略**している (sound だが非極小)．極小化 (`before_hand`/`ProofHandSet`)
+    /// は cross-hand TT が position-only board_key で有効化された途端 **mate-39 の偽証明**を生む
+    /// (= 移植に bug あり; full hand は sound かつ KH 並ノード)．`board` は現局面 (do_move 前の親局面)．
     pub(super) fn current_result(&self, board: &Board, depth: Depth) -> SearchResult {
         let attacker = if self.or_node {
             board.turn
@@ -257,13 +255,7 @@ impl LocalExpansion {
             let amount = front
                 .amount()
                 .saturating_add(self.moves.len().max(1) as SearchAmount - 1);
-            let hand = if self.or_node {
-                // OR proof: 子の証明駒を best_move 手前へ逆算した極小証明駒 (KH BeforeHand)．
-                before_hand(board, self.moves[self.idx[0] as usize], front.hand())
-            } else {
-                attacker_hand
-            };
-            SearchResult::make_final(self.or_node, hand, mate_len, amount)
+            SearchResult::make_final(self.or_node, attacker_hand, mate_len, amount)
         } else if self.get_delta() == 0 {
             // 手番 lose (KH GetLoseResult): OR=不詰 disproven / AND=詰み proven．
             // 千日手: 先頭子が repetition (rep_start < depth) なら伝播する (GHI soundness)．
@@ -287,8 +279,6 @@ impl LocalExpansion {
                 MINUS1_MATE_LEN
             };
             let mut amount: SearchAmount = 1;
-            // AND proof: 全子の証明駒を要素 max 集約 (KH HandSet{ProofHandTag})．
-            let mut proof_set = ProofHandSet::new();
             for &ir in &self.idx {
                 let r = self.results[ir as usize];
                 amount = amount.max(r.amount());
@@ -296,21 +286,13 @@ impl LocalExpansion {
                     if r.len() < mate_len {
                         mate_len = r.len();
                     }
-                } else {
-                    if r.len() > mate_len {
-                        mate_len = r.len();
-                    }
-                    proof_set.update(&r.hand());
+                } else if r.len() > mate_len {
+                    mate_len = r.len();
                 }
             }
             amount = amount.saturating_add(self.moves.len().max(1) as SearchAmount - 1);
-            // OR lose=disproven(false; 攻め方持駒で代用) / AND lose=proven(true; 極小証明駒)．
-            let hand = if self.or_node {
-                attacker_hand
-            } else {
-                proof_set.get(board)
-            };
-            SearchResult::make_final(!self.or_node, hand, mate_len.add(1), amount)
+            // OR lose=disproven(false) / AND lose=proven(true)．hand は full attacker_hand (上記参照)．
+            SearchResult::make_final(!self.or_node, attacker_hand, mate_len.add(1), amount)
         } else {
             self.current_result_unknown()
         }

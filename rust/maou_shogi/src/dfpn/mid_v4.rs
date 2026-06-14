@@ -10,21 +10,23 @@
 //!   `&mut self` (movegen) と `&mut tt` を disjoint に保つ)．
 //! - 並列化なし (KH single-thread)．
 //!
-//! ## 移植済
+//! ## 移植済 (29te: 81,496 → 18,399, -77%; KH 19,270 並に到達)
 //! - **1 手詰先読み (CheckObviousFinalOrNode, v2.11.0)**: AND first-visit child を do_move し OR 子の
 //!   1 手詰/詰み無を先読みし proven/disproven seed (81,496→48,662, -40%; [`check_obvious_final_or_node_v4`])．
-//! - **proof hand 極小化 (KH HandSet, v2.11.0)**: OR proof は `before_hand`，AND proof は `ProofHandSet` max 集約，
-//!   look-ahead/terminal も極小化 ([`super::proof_hand`])．**29te node には非効果** (= breadth/selectivity が
-//!   真因; hand 値でないことを mid_v4 で実測確認．Phase 28 と整合) だが KH 忠実かつ sound なので維持．
 //! - **DML deferral (v2.12.0)**: `DelayedMoveList` を build_v4_expansion に配線．同マス合駒/成不成ペアの
 //!   prev chain が未 final の手を idx から除外 (後回し) し，final 化で `update_best_child` が revival
 //!   (48,662→36,768, -24%)．KH ctor の `i_is_skipped` を忠実再現．
+//! - **🎯 position-only TT board_key (v2.13.0)**: TT を `position_key` (board_hash, 持駒除外; KH BoardKey)
+//!   で索引し，hand は entry に別管理する．従来は `board.hash` (持駒込) を board_key にしていたため
+//!   cross-hand Superior/Inferior が**全く発火していなかった**．修正で cross-hand 再利用が有効化
+//!   (36,768→18,399, -50%, mate-29 健全)．**これが KH parity 到達の本丸**．
 //!
-//! ## 本版で未移植 (sound だが効率劣; TODO)
-//! - **EliminateDoubleCount (DAG double-count 抑止)**: KH は SearchImpl 毎に ancestor 展開 stack を walk するが
-//!   mid_v4 は再帰 stack で明示 list を持たない (要構造変更)．残 gap (KH 3.95×) の主候補．
-//! - 無意味中合いの cross-square DML (support 0 + no-check; mid_v3 では mate-len 退行のため要注意)．
-//! - disproof hand 集約の極小化 / STRICT PV replay の v4 版．
+//! ## 反証 / 未移植
+//! - ❌ **proof hand 極小化 (KH HandSet) は unsound**: cross-hand 有効化後に minimal proof hand を使うと
+//!   過剰な Superior 再利用で **mate-39 偽証明**を生む (v2.11.0 で実装→v2.13.0 で撤回, full hand は sound)．
+//!   KH では sound なので maou 移植側に bug あり (`before_hand`/`ProofHandSet`/`add_if`)．要 debug (低優先)．
+//! - **EliminateDoubleCount (DAG)**: KH は SearchImpl 毎に ancestor 展開 stack を walk (mid_v4 は再帰 stack)．
+//! - STRICT PV replay の v4 版 / 無意味中合いの cross-square DML．
 
 use super::delayed_move_list::DelayedMoveList;
 use super::kh_local_expansion::LocalExpansion;
@@ -204,7 +206,12 @@ impl DfPnSolver {
 
             exp.update_best_child(child_result);
             // KH UpdateBestChild 内 query.SetResult: 子結果を子 query で TT へ (親 = 本ノード)．
-            tt.set_result(&child_query, child_result, (board.hash, attacker_hand));
+            // 親 board_key は **position-only** (KH BoardKeyHandPair; cross-hand のため hand は別管理)．
+            tt.set_result(
+                &child_query,
+                child_result,
+                (super::position_key(board), attacker_hand),
+            );
 
             curr = exp.current_result(board, depth as i32);
 
@@ -246,13 +253,12 @@ impl DfPnSolver {
 
         if moves.is_empty() {
             // OR (王手なし) = 不詰 disproven / AND (受けなし=詰み) = proven (詰み完了 len 0)．
-            // 終端 hand は KH `HandSet{...}.Get` の極小/極大版を使う (cross-hand 再利用効率)．
+            // hand は full attacker_hand (KH HandSet 極小化は cross-hand 有効時 unsound のため不使用)．
+            let attacker_hand = board.hand[attacker.index()];
             let r = if or_node {
-                let dh = super::proof_hand::disproof_hand_terminal_or(board);
-                SearchResult::make_final(false, dh, DEPTH_MAX_MATE_LEN, 1)
+                SearchResult::make_final(false, attacker_hand, DEPTH_MAX_MATE_LEN, 1)
             } else {
-                let ph = super::proof_hand::proof_hand_terminal_and(board);
-                SearchResult::make_final(true, ph, ZERO_MATE_LEN, 1)
+                SearchResult::make_final(true, attacker_hand, ZERO_MATE_LEN, 1)
             };
             return Err(r);
         }
@@ -283,12 +289,15 @@ impl DfPnSolver {
             let seed = ((sp as u64 / DIV).max(1), (sd as u64 / DIV).max(1));
 
             let captured = board.do_move(m);
-            let ch = board.hash;
+            // **TT board_key は position-only** (`position_key`; KH BoardKey)．hand は entry に別管理し
+            // cross-hand Superior/Inferior を効かせる．千日手判定だけは full hash (持駒込みの同一局面)．
+            let ch_full = board.hash;
+            let ch_pos = super::position_key(board);
             let child_hand = board.hand[attacker.index()];
             let child_pk = path_key_after(path_key, m, depth as usize);
-            let q = tt.build_query(child_pk, ch, child_hand, (depth + 1) as i32);
+            let q = tt.build_query(child_pk, ch_pos, child_hand, (depth + 1) as i32);
 
-            let mut r = if let Some(&anc_ply) = self.v3_path.get(&ch) {
+            let mut r = if let Some(&anc_ply) = self.v3_path.get(&ch_full) {
                 // path 上の同一局面 = 千日手 (KH IsRepetitionAfter)．
                 SearchResult::make_repetition(child_hand, len, 1, anc_ply as i32)
             } else {
@@ -309,7 +318,7 @@ impl DfPnSolver {
             // 子結果が final になったら KH `query.SetResult` 相当で TT へ格納する (PV/伝播の整合)．
             if !is_skipped && !or_node && first_search && r.is_first_visit() {
                 if let Some(res) = self.check_obvious_final_or_node_v4(board) {
-                    tt.set_result(&q, res, (ch, child_hand));
+                    tt.set_result(&q, res, (ch_pos, child_hand));
                     r = res;
                 }
             }
@@ -354,24 +363,17 @@ impl DfPnSolver {
     /// - 王手手段なし (`!DoesHaveMatePossibility`) → disproven (不詰確定)．
     /// - 1 手詰あり (`CheckMate1Ply`) → proven (mate-1)．
     ///
-    /// proof/disproof hand は KH `HandSet{...}.Get` の極小/極大版を使う (cross-hand 再利用効率)．
-    /// この極小化が無いと，look-ahead 葉が full hand を store し，AND 集約 (`ProofHandSet` max) で
-    /// full hand が上方伝播してしまい cross-hand Superior/Inferior が効かない (= breadth)．
+    /// proof/disproof hand は **full attacker_hand** (= 子 OR node の手番側持駒) を使う．KH `HandSet`
+    /// 極小化は cross-hand TT 有効時に偽証明 (mate-39) を生むため不使用 (sound 優先)．
     fn check_obvious_final_or_node_v4(&self, board: &mut Board) -> Option<SearchResult> {
+        let or_hand = board.hand[board.turn.index()];
         let (mm_opt, has_checks) = self.mate1ply_with_cached_checks(board);
         if !has_checks {
             // 攻め方に王手手段なし → 詰み不可能 → 不詰 (KH MakeFinal<false>, kDepthMaxMateLen)．
-            // 反証 hand = KH `HandSet{DisproofHandTag}.Get` の極小化版．
-            let dh = super::proof_hand::disproof_hand_terminal_or(board);
-            Some(SearchResult::make_final(false, dh, DEPTH_MAX_MATE_LEN, 1))
-        } else if let Some(mm) = mm_opt {
-            // 1 手詰 → 詰み proven (mate-1)．極小証明駒 = 詰め上がり局面の終端証明駒
-            // (`proof_hand_terminal_and`) を mate 着手の手前へ `before_hand` で逆算する (KH BeforeHand)．
-            let cap = board.do_move(mm);
-            let term = super::proof_hand::proof_hand_terminal_and(board);
-            board.undo_move(mm, cap);
-            let ph = super::proof_hand::before_hand(board, mm, term);
-            Some(SearchResult::make_final(true, ph, MateLen::from_len(1), 1))
+            Some(SearchResult::make_final(false, or_hand, DEPTH_MAX_MATE_LEN, 1))
+        } else if mm_opt.is_some() {
+            // 1 手詰 → 詰み proven (mate-1)．
+            Some(SearchResult::make_final(true, or_hand, MateLen::from_len(1), 1))
         } else {
             None
         }
