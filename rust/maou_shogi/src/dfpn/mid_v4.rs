@@ -54,6 +54,8 @@ fn v4sel_enabled() -> bool {
 thread_local! {
     /// ply 0-7 の dump 済 bitmask (KH `kh_sel_dumped[16]` 相当; solve 毎に reset)．
     static V4SEL_DUMPED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    /// V4RAW (sort/DML 前の raw movegen 順) の ply 0-7 dump 済 bitmask．
+    static V4RAW_DUMPED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
 impl DfPnSolver {
@@ -67,6 +69,7 @@ impl DfPnSolver {
         self.v4_dom_path.clear();
         self.v4_dom_fires = 0;
         V4SEL_DUMPED.with(|c| c.set(0));
+        V4RAW_DUMPED.with(|c| c.set(0));
         // KH VisitHistory path dominance (IsRepetitionOrInferiorAfter)．`V4_DOM` で opt-in (default OFF)．
         // 単位を揃えた計測で判明: KH (dominance 有) = 9,296 visits に対し，maou+dominance = 16,902
         // (1.82×) と KH から **遠ざかる** (DAG EliminateDoubleCount との二重カウント相互作用; fires
@@ -373,6 +376,21 @@ impl DfPnSolver {
                 SearchResult::make_final(true, attacker_hand, ZERO_MATE_LEN, 1)
             };
             return Err(r);
+        }
+
+        // V4RAW: build 時点の raw movegen 順 (sort/DML 前) を ply 0-7 初出で dump (KH MovePicker 順と突合)．
+        if v4sel_enabled() && depth <= 7 {
+            let bit = 1u8 << depth;
+            let already = V4RAW_DUMPED.with(|c| {
+                let v = c.get();
+                c.set(v | bit);
+                v & bit != 0
+            });
+            if !already {
+                let oc = if or_node { 1 } else { 0 };
+                let raw: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+                eprintln!("V4RAW ply={} or={} raw={}", depth, oc, raw.join(" "));
+            }
         }
 
         // KH `delayed_move_list_{n, mp_}` (local_expansion.hpp:155)．同マス合駒/成不成ペアを
