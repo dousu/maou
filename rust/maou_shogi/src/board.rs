@@ -6,6 +6,25 @@ pub use crate::sfen::SfenError;
 use crate::types::{Color, HAND_KINDS, Piece, PIECE_BB_SIZE, PieceType, Square};
 use crate::zobrist::ZOBRIST;
 
+thread_local! {
+    /// `Board::do_move` の累積呼び出し回数 (KH `Threads.nodes_searched()` = USI `info nodes`
+    /// と同単位)．dfpn ソルバーの忠実度計測用: KH の do_move 数と直接突合する．SearchImpl 訪問数
+    /// (`v3_nodes`) とは別単位なので混同しないこと．single-thread 前提の非 atomic Cell．
+    static DO_MOVE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// `do_move` 累積カウンタを 0 にリセットする．
+#[inline]
+pub fn reset_do_move_count() {
+    DO_MOVE_COUNT.with(|c| c.set(0));
+}
+
+/// `do_move` 累積カウンタの現在値を返す．
+#[inline]
+pub fn do_move_count() -> u64 {
+    DO_MOVE_COUNT.with(|c| c.get())
+}
+
 /// 将棋盤の状態．
 ///
 /// Mailbox (駒配列) + Bitboard のハイブリッド表現．
@@ -1479,9 +1498,38 @@ impl Board {
         h ^ ZOBRIST.turn_hash()
     }
 
+    /// `do_move(m)` 後の `color` 側持ち駒を，盤を変更せず incremental に返す
+    /// (KH `Node::OrHandAfter` 相当)．`do_move` の hand 更新ロジックを忠実に再現する:
+    /// 手番側 (`self.turn`) のみが駒打ちで -1 / 駒取りで +1 し，相手側の持ち駒は不変．
+    /// dfpn の子局面 seeding で per-child `do_move` を回避するための O(1) ヘルパ．
+    #[inline]
+    pub fn hand_after(&self, m: Move, color: Color) -> [u8; HAND_KINDS] {
+        let mut h = self.hand[color.index()];
+        // 相手の手は `color` 側 (= 攻め方) の持ち駒を変えない．
+        if color != self.turn {
+            return h;
+        }
+        if m.is_drop() {
+            // 駒打ち: 打った駒種を 1 つ減らす．
+            let hi = m.drop_piece_type().unwrap().hand_index().unwrap();
+            h[hi] -= 1;
+        } else {
+            // 駒取り: 取った駒の非成り駒種を 1 つ増やす (王は持ち駒にならない)．
+            let cap = self.squares[m.to_sq().index()];
+            if !cap.is_empty() {
+                let cap_hand_pt = cap.piece_type().unwrap().captured_to_hand();
+                if let Some(hi) = cap_hand_pt.hand_index() {
+                    h[hi] += 1;
+                }
+            }
+        }
+        h
+    }
+
     /// 手を実行する(取った駒を返す)．
     #[inline]
     pub fn do_move(&mut self, m: Move) -> Piece {
+        DO_MOVE_COUNT.with(|c| c.set(c.get().wrapping_add(1)));
         let captured;
 
         if m.is_drop() {

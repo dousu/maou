@@ -523,6 +523,16 @@ pub struct DfPnSolver {
     pub(super) v4_stack: Vec<super::kh_local_expansion::LocalExpansion>,
     /// mid_v4 EliminateDoubleCount 発火数 (診断用)．
     pub(super) v4_dag_fires: u64,
+    /// mid_v4 VisitHistory path dominance (KH `IsRepetitionOrInferiorAfter`)．
+    /// position_key → 現探索 path 上の祖先 `(attacker_hand, depth)` のスタック．
+    /// 子局面が同一 board_key かつ攻め方持駒が祖先以下 (= 劣位) なら反復として刈る．
+    /// `board.hash` だけの exact 千日手 (`v3_path`) を持駒 superset 方向へ一般化する．
+    pub(super) v4_dom_path: rustc_hash::FxHashMap<u64, Vec<([u8; HAND_KINDS], u32)>>,
+    /// mid_v4 dominance pruning 発火数 (診断用)．
+    pub(super) v4_dom_fires: u64,
+    /// mid_v4 path dominance を有効化するか (`V4_DOM` env で opt-in; default off)．
+    /// 現状 maou 実装は KH と非忠実 (29te で node 増)．忠実化までは reference から除外する．
+    pub(super) param_v4_path_dominance: bool,
     /// Phase 33: mid_v3 で検証済 `MidLocalExpansion` (DML/sum_mask/comparer/deferred) を
     /// per-node に駆動する (案②)．`false` = classic df-pn 集約 (sound 181K baseline)．
     /// `true` = LocalExpansion refinement + clean TT + unit-2 + 非累積 extend + root IDS の合成．
@@ -1170,6 +1180,9 @@ impl DfPnSolver {
             v3_nodes: 0,
             v4_stack: Vec::new(),
             v4_dag_fires: 0,
+            v4_dom_path: rustc_hash::FxHashMap::default(),
+            v4_dom_fires: 0,
+            param_v4_path_dominance: false,
             param_v3_local_exp: true,
             param_v3_lookahead: true,
             // 1<<22 (64MB)．generation GC が occupancy ~30% を保つ (KH parity)．

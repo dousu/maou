@@ -52,6 +52,14 @@ impl DfPnSolver {
         self.v3_path.clear();
         self.v4_stack.clear();
         self.v4_dag_fires = 0;
+        self.v4_dom_path.clear();
+        self.v4_dom_fires = 0;
+        // KH VisitHistory path dominance (IsRepetitionOrInferiorAfter)．`V4_DOM` で opt-in (default OFF)．
+        // 単位を揃えた計測で判明: KH (dominance 有) = 9,296 visits に対し，maou+dominance = 16,902
+        // (1.82×) と KH から **遠ざかる** (DAG EliminateDoubleCount との二重カウント相互作用; fires
+        // 97→167)．KH の dominance は node を減らすので，maou 実装は未だ非忠実 = reference から除外する．
+        // 39te では node を削る (13.4M→10.88M) ため opt-in で残す．忠実化 (DAG 相互作用の修正) は別課題．
+        self.param_v4_path_dominance = std::env::var("V4_DOM").is_ok();
         self.timed_out = false;
         self.start_time = std::time::Instant::now();
 
@@ -67,6 +75,8 @@ impl DfPnSolver {
         let mut thpn: PnDn = 1;
         let mut thdn: PnDn = 1;
         let mut last = SearchResult::make_unknown(1, 1, DEPTH_MAX_MATE_LEN, 1, BitSet64::full());
+        // do_move 数を計測開始 (KH `info nodes` = do_move と同単位; verify は除外するため探索後に読む)．
+        crate::board::reset_do_move_count();
         loop {
             if self.v3_nodes >= self.max_nodes || self.is_timed_out() {
                 self.timed_out = self.is_timed_out();
@@ -106,15 +116,21 @@ impl DfPnSolver {
             }
         }
 
+        // KH と単位を揃えた 2 指標を併記: nodes = SearchImpl 訪問数 (v3_nodes; KH KHEMP builds と同単位),
+        // do_moves = do_move 数 (KH `info nodes`/`nodes_searched` と同単位)．混同しないこと．
+        let search_do_moves = crate::board::do_move_count();
         eprintln!(
-            "[v4] root pn={} dn={} mate_len={} nodes={} tt_cap={} gc={} dag={}",
+            "[v4] root pn={} dn={} mate_len={} nodes={} do_moves={} dm/node={:.2} tt_cap={} gc={} dag={} dom={}",
             last.pn(),
             last.dn(),
             last.len().len(),
             self.v3_nodes,
+            search_do_moves,
+            search_do_moves as f64 / (self.v3_nodes.max(1)) as f64,
             tt.capacity(),
             tt.gc_count(),
-            self.v4_dag_fires
+            self.v4_dag_fires,
+            self.v4_dom_fires
         );
 
         if last.pn() == 0 {
@@ -218,6 +234,14 @@ impl DfPnSolver {
         }
 
         self.v3_path.insert(board.hash, depth);
+        // KH VisitHistory `Visit`: 本ノードの (board_key, attacker_hand, depth) を path へ積む．
+        // 子展開時に `IsRepetitionOrInferiorAfter` で劣位反復を刈るために参照する．
+        if self.param_v4_path_dominance {
+            self.v4_dom_path
+                .entry(super::position_key(board))
+                .or_default()
+                .push((attacker_hand, depth));
+        }
 
         while curr.pn() < thpn && curr.dn() < thdn {
             if self.v3_nodes >= self.max_nodes || self.timed_out {
@@ -273,6 +297,16 @@ impl DfPnSolver {
         }
 
         self.v3_path.remove(&board.hash);
+        // KH VisitHistory `Leave`: 本ノードの entry を path から外す (stack 規律で末尾を pop)．
+        if self.param_v4_path_dominance {
+            let pk = super::position_key(board);
+            if let Some(v) = self.v4_dom_path.get_mut(&pk) {
+                v.pop();
+                if v.is_empty() {
+                    self.v4_dom_path.remove(&pk);
+                }
+            }
+        }
         self.v4_stack.truncate(my); // KH `expansion_list_.Pop()`
         *inc_flag = (*inc_flag).min(orig_inc);
         curr
@@ -337,16 +371,36 @@ impl DfPnSolver {
             };
             let seed = ((sp as u64 / DIV).max(1), (sd as u64 / DIV).max(1));
 
-            let captured = board.do_move(m);
-            // **TT board_key は position-only** (`position_key`; KH BoardKey)．hand は entry に別管理し
-            // cross-hand Superior/Inferior を効かせる．千日手判定だけは full hash (持駒込みの同一局面)．
-            let ch_full = board.hash;
-            let ch_pos = super::position_key(board);
-            let child_hand = board.hand[attacker.index()];
+            // KH `BoardKeyAfter`/`OrHandAfter` (local_expansion.hpp:192): 子 key/hand を **do_move
+            // せず** incremental に算出する．従来の per-child do_move は 7.5 do_moves/node (KH 2.07)
+            // と乖離し per-node time を浪費していた (= incremental child key の欠落)．do_move は子局面
+            // が必須な look-ahead でのみ行う．**TT board_key は position-only** (`board_hash_after`;
+            // KH BoardKey)．hand は entry に別管理し cross-hand を効かせる．千日手判定だけ full hash．
+            let ch_full = board.hash_after(m);
+            let ch_pos = board.board_hash_after(m);
+            let child_hand = board.hand_after(m, attacker);
             let child_pk = path_key_after(path_key, m, depth as usize);
             let q = tt.build_query(child_pk, ch_pos, child_hand, (depth + 1) as i32);
 
-            let mut r = if let Some(&anc_ply) = self.v3_path.get(&ch_full) {
+            // KH `IsRepetitionOrInferiorAfter` (node.hpp:160 + local_expansion.hpp:178): path 上に
+            // 同一 board_key かつ攻め方持駒が child 以上 (= child が劣位) の祖先があれば反復として刈る．
+            // tsume では (position_key, attacker_hand) が全局面を一意決定するため，これは exact 千日手
+            // (`v3_path`) の持駒 superset 方向への一般化 (exact は hand 等値の特殊ケース)．KH 同様に
+            // **TT LookUp より前に** 刈ることで高コストな劣位部分木の展開を未然に防ぐ (これが node 削減の本体)．
+            let dom_depth = if self.param_v4_path_dominance {
+                self.v4_dom_path.get(&ch_pos).and_then(|anc| {
+                    anc.iter()
+                        .rev()
+                        .find(|(h, _)| super::hand_gte(h, &child_hand))
+                        .map(|&(_, d)| d)
+                })
+            } else {
+                None
+            };
+            let mut r = if let Some(anc_depth) = dom_depth {
+                self.v4_dom_fires += 1;
+                SearchResult::make_repetition(child_hand, len, 1, anc_depth as i32)
+            } else if let Some(&anc_ply) = self.v3_path.get(&ch_full) {
                 // path 上の同一局面 = 千日手 (KH IsRepetitionAfter)．
                 SearchResult::make_repetition(child_hand, len, 1, anc_ply as i32)
             } else {
@@ -366,12 +420,15 @@ impl DfPnSolver {
             // 「詰む応手」を展開せず除外，「逃れる応手」を即 disproof し breadth を抑える．
             // 子結果が final になったら KH `query.SetResult` 相当で TT へ格納する (PV/伝播の整合)．
             if !is_skipped && !or_node && first_search && r.is_first_visit() {
+                // 子局面 (do_move 済) が必要なのはここだけ．KH も CheckObviousFinalOrNode 内で
+                // DoMove/UndoMove する (= この do_move は KH と同単位; seeding 分のみ削減した)．
+                let captured = board.do_move(m);
                 if let Some(res) = self.check_obvious_final_or_node_v4(board) {
                     tt.set_result(&q, res, (ch_pos, child_hand));
                     r = res;
                 }
+                board.undo_move(m, captured);
             }
-            board.undo_move(m, captured);
 
             evals.push(eval);
             results.push(r);
