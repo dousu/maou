@@ -152,6 +152,16 @@ impl LocalExpansion {
     pub(super) fn front_raw(&self) -> usize {
         self.idx[self.excluded_moves] as usize
     }
+    /// sort 済 idx の (move, pn, dn) 列 (KH KHSEL ダンプと突合する divergence-hunting 用)．
+    pub(super) fn trace_children(&self) -> Vec<(Move, PnDn, PnDn)> {
+        self.idx
+            .iter()
+            .map(|&r| {
+                let res = &self.results[r as usize];
+                (self.moves[r as usize], res.pn(), res.dn())
+            })
+            .collect()
+    }
     /// raw index の TT query 文脈 (KH `queries_[i_raw]`)．
     #[inline]
     pub(super) fn query_at(&self, raw: usize) -> TtContext {

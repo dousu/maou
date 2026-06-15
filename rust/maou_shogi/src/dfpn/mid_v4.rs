@@ -44,6 +44,18 @@ use crate::board::Board;
 /// init_pn_dn (unit-16) を KH `kPnDnUnit=2` へ縮約する除数 (mid_v3 `PN_UNIT_SCALE` と同値)．
 const DIV: u64 = 8;
 
+/// `V4SEL` env (process 内 1 回読み)．KH `KHSEL` と同形式で ply 0-7 初出ノードの sort 済
+/// 子リスト (move/pn/dn) を sfen 付きで dump し，KH との guidance 乖離を突合する．
+fn v4sel_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4SEL").is_ok())
+}
+
+thread_local! {
+    /// ply 0-7 の dump 済 bitmask (KH `kh_sel_dumped[16]` 相当; solve 毎に reset)．
+    static V4SEL_DUMPED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
 impl DfPnSolver {
     /// mid_v4 探索の root (KH `SearchEntry` 相当の IDS + 診断)．`V3_V4ENG=1` で起動する．
     pub(super) fn solve_via_v4(&mut self, board: &mut Board) -> TsumeResult {
@@ -54,6 +66,7 @@ impl DfPnSolver {
         self.v4_dag_fires = 0;
         self.v4_dom_path.clear();
         self.v4_dom_fires = 0;
+        V4SEL_DUMPED.with(|c| c.set(0));
         // KH VisitHistory path dominance (IsRepetitionOrInferiorAfter)．`V4_DOM` で opt-in (default OFF)．
         // 単位を揃えた計測で判明: KH (dominance 有) = 9,296 visits に対し，maou+dominance = 16,902
         // (1.82×) と KH から **遠ざかる** (DAG EliminateDoubleCount との二重カウント相互作用; fires
@@ -208,6 +221,22 @@ impl DfPnSolver {
             Ok(e) => e,
             Err(terminal) => return terminal,
         };
+        // V4SEL: ply 0-7 の初出ノードで sort 済子リストを dump (KH KHSEL と sfen で突合する)．
+        if v4sel_enabled() && depth <= 7 {
+            let bit = 1u8 << depth;
+            let already = V4SEL_DUMPED.with(|c| {
+                let v = c.get();
+                c.set(v | bit);
+                v & bit != 0
+            });
+            if !already {
+                let oc = if board.turn == self.attacker { 1 } else { 0 };
+                eprintln!("V4SEL ply={} or={} sfen={}", depth, oc, board.sfen());
+                for (k, (m, pn, dn)) in exp.trace_children().iter().enumerate() {
+                    eprintln!("V4SEL   {} {} pn={} dn={}", k, m.to_usi(), pn, dn);
+                }
+            }
+        }
         // KH `expansion_list_.Emplace`: 自 LocalExpansion を明示 stack へ積む (祖先から辿れるように)．
         // 以降 `self.v4_stack[my]` 経由で操作する (EliminateDoubleCount が祖先 frame を変更するため)．
         self.v4_stack.push(exp);
