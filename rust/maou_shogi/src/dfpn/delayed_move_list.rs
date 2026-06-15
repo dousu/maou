@@ -59,6 +59,18 @@ impl DelayedMoveList {
     /// (`IsDelayable` の意味論)．成/不成ペア (同 from, 同 to の駒移動) は
     /// 両ノードで対象とする．
     pub(super) fn build(moves: &[Move], or_node: bool) -> Self {
+        Self::build_with_types(moves, or_node, &[], false)
+    }
+
+    /// `raw_pts[i]` = `moves[i]` の移動元駒種 raw ID (1=歩..14=龍; 駒打ちは 0)．`us_black` は
+    /// 手番側が先手か (enemy_field/香の段判定用)．`raw_pts` が空なら従来の粗い fallback (dummy 歩)．
+    /// KH `IsDelayable` の忠実版 (盤上移動は歩/角/飛, 及び香の敵陣 2/8 段昇り のみ遅延対象)．
+    pub(super) fn build_with_types(
+        moves: &[Move],
+        or_node: bool,
+        raw_pts: &[u8],
+        us_black: bool,
+    ) -> Self {
         let n = moves.len();
         let mut prev = vec![0u32; n];
         let mut next = vec![0u32; n];
@@ -68,7 +80,8 @@ impl DelayedMoveList {
         let mut heads_len = 0usize;
 
         for (i_raw, &m) in moves.iter().enumerate() {
-            if !is_delayable(m, or_node) {
+            let raw_pt = raw_pts.get(i_raw).copied();
+            if !is_delayable_typed(m, or_node, raw_pt, us_black) {
                 continue;
             }
 
@@ -131,6 +144,44 @@ impl DelayedMoveList {
 ///
 /// 成/不成ペアの判定は `is_same` で from/to が同じ非 drop 手を検出することで実現．
 /// `is_delayable` 自身は粗いフィルタとしてこのような手の候補を pre-screen する．
+/// KH `IsDelayable` 忠実版 (移動元駒種 `raw_pt` を使う)．`raw_pt=None`/0 (駒打ち以外で
+/// 不明) のときは従来の粗い fallback (`is_delayable`) に委ねる．
+#[inline]
+fn is_delayable_typed(m: Move, or_node: bool, raw_pt: Option<u8>, us_black: bool) -> bool {
+    if m.is_drop() {
+        // 駒打ち (合駒) は AND ノードでのみ遅延対象．
+        return !or_node;
+    }
+    let pt = match raw_pt {
+        Some(p) if p != 0 => p,
+        // 駒種不明 → 従来の粗い fallback．
+        _ => return is_delayable(m, or_node),
+    };
+    let to = m.to_sq();
+    let from = m.from_sq();
+    // KH: enemy_field(us).test(from) || enemy_field(us).test(to)．
+    let in_enemy = if us_black {
+        from.row() <= 2 || to.row() <= 2
+    } else {
+        from.row() >= 6 || to.row() >= 6
+    };
+    if !in_enemy {
+        return false;
+    }
+    match pt {
+        1 | 5 | 6 => true, // 歩 / 角 / 飛 (不成遅延)
+        2 => {
+            // 香: 敵陣最奥手前 (先手=2段=row1, 後手=8段=row7) への移動のみ遅延．
+            if us_black {
+                to.row() == 1
+            } else {
+                to.row() == 7
+            }
+        }
+        _ => false,
+    }
+}
+
 #[inline]
 fn is_delayable(m: Move, or_node: bool) -> bool {
     if m.is_drop() {

@@ -51,6 +51,96 @@ fn v4sel_enabled() -> bool {
     *C.get_or_init(|| std::env::var("V4SEL").is_ok())
 }
 
+/// `V4_KHORDER` 実験 (process 内 1 回読み)．完全同点手の tie-break を KH `generateMoves` 順にする．
+pub(super) fn khorder_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4_KHORDER").is_ok())
+}
+
+/// KH `generate_checks<CHECKS_ALL>` (movegen.cpp:818-865) の生成順を完全に再現する sort key．
+/// maou の square index は YaneuraOu と同一 ((file-1)*9+(rank-1)) なので raw square で昇順比較できる．
+/// 順序: ① 盤上移動 (from-square 昇順 → to-square 昇順 → 不成→成)，② 駒打ち
+/// (PAWN,LANCE,KNIGHT,SILVER,GOLD,BISHOP,ROOK 順 → to-square 昇順)．
+/// 注: 開き王手/直接王手の細分順は未反映 (直接王手のみの局面では from-square 順で一致)．
+fn drop_piece_order(pt: crate::types::PieceType) -> u64 {
+    use crate::types::PieceType;
+    // 駒打ち順 (GenerateCheckDropMoves / GenerateDropMoves): PAWN,LANCE,KNIGHT,SILVER,GOLD,BISHOP,ROOK．
+    match pt {
+        PieceType::Pawn => 0,
+        PieceType::Lance => 1,
+        PieceType::Knight => 2,
+        PieceType::Silver => 3,
+        PieceType::Gold => 4,
+        PieceType::Bishop => 5,
+        PieceType::Rook => 6,
+        _ => 7,
+    }
+}
+
+pub(super) fn kh_check_order_key(m: crate::moves::Move) -> u64 {
+    if let Some(pt) = m.drop_piece_type() {
+        // 駒打ちは全盤上移動の後 (bit40 で group 分離)．
+        (1u64 << 40) | (drop_piece_order(pt) << 11) | (m.to_sq().raw_u8() as u64)
+    } else {
+        // 盤上移動: from 昇順 → 成(0)/不成(1) → to 昇順 (KH: 5g6f+ 5g7i+ 5g6f 5g7i)．
+        let from = m.from_sq().raw_u8() as u64;
+        let to = m.to_sq().raw_u8() as u64;
+        let pf = if m.is_promotion() { 0u64 } else { 1u64 };
+        (from << 20) | (pf << 19) | (to << 11)
+    }
+}
+
+/// 盤上移動の駒種を KH `GeneratePieceMoves` の呼出し順へ写像する (Evasion 非玉手の group 番号)．
+/// PAWN→0, LANCE→1, KNIGHT→2, SILVER→3, BISHOP→4, ROOK→5, GOLD/成駒(金移動)→6, HORSE→7, DRAGON→8．
+fn kh_piece_gen_order(raw_pt: u8) -> u64 {
+    match raw_pt {
+        1 => 0,            // Pawn
+        2 => 1,            // Lance
+        3 => 2,            // Knight
+        4 => 3,            // Silver
+        5 => 4,            // Bishop
+        6 => 5,            // Rook
+        7 => 6,            // Gold
+        9 | 10 | 11 | 12 => 6, // と金/成香/成桂/成銀 (金の動き; GPM_GHD)
+        13 => 7,           // Horse
+        14 => 8,           // Dragon
+        _ => 9,
+    }
+}
+
+/// KH `generate_evasions` (movegen.cpp:454) の生成順を再現する key．
+/// ① 玉移動 (to-square 昇順) → ② 非玉の盤上移動 (駒種 group 順 → from-square 昇順 → 不成/成) →
+/// ③ 駒打ち (PAWN..ROOK 順 → to-square 昇順)．`board` は親 (受け方手番) 局面．
+pub(super) fn kh_evasion_order_key(board: &crate::board::Board, m: crate::moves::Move) -> u64 {
+    if let Some(pt) = m.drop_piece_type() {
+        // group 2 (駒打ちは最後)．
+        (2u64 << 40) | (drop_piece_order(pt) << 11) | (m.to_sq().raw_u8() as u64)
+    } else {
+        let from = m.from_sq().raw_u8() as u64;
+        let to = m.to_sq().raw_u8() as u64;
+        let pf = if m.is_promotion() { 0u64 } else { 1u64 };
+        let own_king = board.king_square(board.turn);
+        if own_king == Some(m.from_sq()) {
+            // group 0: 玉移動 (to-square 昇順)．
+            to << 11
+        } else {
+            // group 1: 非玉の盤上移動 (駒種 group → from 昇順 → 成/不成 → to 昇順)．
+            let raw_pt = board.piece_at(m.from_sq()) & 0x0F;
+            let go = kh_piece_gen_order(raw_pt);
+            (1u64 << 40) | (go << 30) | (from << 20) | (pf << 19) | (to << 11)
+        }
+    }
+}
+
+/// OR=王手順 / AND=evasion 順を返す per-move の KH 生成順 key (comparer の最終 tie-break 用)．
+pub(super) fn kh_order_key(board: &crate::board::Board, m: crate::moves::Move, or_node: bool) -> u64 {
+    if or_node {
+        kh_check_order_key(m)
+    } else {
+        kh_evasion_order_key(board, m)
+    }
+}
+
 thread_local! {
     /// ply 0-7 の dump 済 bitmask (KH `kh_sel_dumped[16]` 相当; solve 毎に reset)．
     static V4SEL_DUMPED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
@@ -235,8 +325,8 @@ impl DfPnSolver {
             if !already {
                 let oc = if board.turn == self.attacker { 1 } else { 0 };
                 eprintln!("V4SEL ply={} or={} sfen={}", depth, oc, board.sfen());
-                for (k, (m, pn, dn)) in exp.trace_children().iter().enumerate() {
-                    eprintln!("V4SEL   {} {} pn={} dn={}", k, m.to_usi(), pn, dn);
+                for (k, (m, pn, dn, ev, am)) in exp.trace_children().iter().enumerate() {
+                    eprintln!("V4SEL   {} {} pn={} dn={} ev={} am={}", k, m.to_usi(), pn, dn, ev, am);
                 }
             }
         }
@@ -378,6 +468,12 @@ impl DfPnSolver {
             return Err(r);
         }
 
+        // V4_KHORDER: 生成手を KH `generateMoves` 順へ並べ替える (これが KH のソート入力 = 同じ
+        // スタート地点)．DML/results/idx すべてこの順で構築する．promo は成→不成の順 (KH 一致)．
+        if khorder_enabled() {
+            moves.sort_by_key(|&m| kh_order_key(board, m, or_node));
+        }
+
         // V4RAW: build 時点の raw movegen 順 (sort/DML 前) を ply 0-7 初出で dump (KH MovePicker 順と突合)．
         if v4sel_enabled() && depth <= 7 {
             let bit = 1u8 << depth;
@@ -395,7 +491,24 @@ impl DfPnSolver {
 
         // KH `delayed_move_list_{n, mp_}` (local_expansion.hpp:155)．同マス合駒/成不成ペアを
         // 双方向 chain 化し，prev が未 final の手は idx から除外 (= 後回し) する．
-        let dml = DelayedMoveList::build(&moves, or_node);
+        // is_delayable を KH 忠実化するため移動元駒種 (raw ID) を渡す (駒打ちは 0)．
+        // `V4_KHORDER` 実験時のみ忠実版 (default は co-adapt 済の従来 DML を維持)．
+        let dml = if khorder_enabled() {
+            let raw_pts: Vec<u8> = moves
+                .iter()
+                .map(|&m| {
+                    if m.is_drop() {
+                        0
+                    } else {
+                        board.piece_at(m.from_sq()) & 0x0F
+                    }
+                })
+                .collect();
+            let us_black = board.turn == crate::types::Color::Black;
+            DelayedMoveList::build_with_types(&moves, or_node, &raw_pts, us_black)
+        } else {
+            DelayedMoveList::build(&moves, or_node)
+        };
 
         let defender_king = board.king_square(attacker.opponent());
         let n = moves.len();

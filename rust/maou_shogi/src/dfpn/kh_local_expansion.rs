@@ -133,6 +133,8 @@ impl LocalExpansion {
     /// idx_ 全体を comparer で sort する (KH `std::sort(idx_.begin(), idx_.end(), ...)`)．
     fn sort_idx(&mut self) {
         let mut idx = std::mem::take(&mut self.idx);
+        // stable sort (KH の std::sort は introsort=unstable だが，完全同点手の置換差は
+        // libstdc++ 実装依存の人工物であり再現対象外 = guidance 忠実化の範囲外と結論)．
         idx.sort_by(|&a, &b| self.compare_idx(a, b));
         self.idx = idx;
     }
@@ -152,13 +154,19 @@ impl LocalExpansion {
     pub(super) fn front_raw(&self) -> usize {
         self.idx[self.excluded_moves] as usize
     }
-    /// sort 済 idx の (move, pn, dn) 列 (KH KHSEL ダンプと突合する divergence-hunting 用)．
-    pub(super) fn trace_children(&self) -> Vec<(Move, PnDn, PnDn)> {
+    /// sort 済 idx の (move, pn, dn, eval, amount) 列 (KH KHSEL ダンプと突合する divergence-hunting 用)．
+    pub(super) fn trace_children(&self) -> Vec<(Move, PnDn, PnDn, i32, u32)> {
         self.idx
             .iter()
             .map(|&r| {
                 let res = &self.results[r as usize];
-                (self.moves[r as usize], res.pn(), res.dn())
+                (
+                    self.moves[r as usize],
+                    res.pn(),
+                    res.dn(),
+                    self.move_evals[r as usize],
+                    res.amount(),
+                )
             })
             .collect()
     }
