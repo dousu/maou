@@ -228,7 +228,11 @@ fn encode_board_piece(writer: &mut BitWriter, piece: Piece) -> Result<(), HcpErr
 }
 
 /// 持ち駒をHuffman符号化してビットストリームに書き込む．
-fn encode_hand_piece(writer: &mut BitWriter, hand_type: PieceType, color: Color) -> Result<(), HcpError> {
+fn encode_hand_piece(
+    writer: &mut BitWriter,
+    hand_type: PieceType,
+    color: Color,
+) -> Result<(), HcpError> {
     let color_bit = color as u8;
 
     match hand_type {
@@ -458,7 +462,9 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), HcpEr
             };
             return Ok((PieceType::Pawn, color));
         }
-        return Err(HcpError::InvalidHandPieceCode("prefix 0,1 is not defined".to_string()));
+        return Err(HcpError::InvalidHandPieceCode(
+            "prefix 0,1 is not defined".to_string(),
+        ));
     }
 
     // 1,...
@@ -476,7 +482,9 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), HcpEr
                 };
                 return Ok((PieceType::Lance, color));
             }
-            return Err(HcpError::InvalidHandPieceCode("prefix 1,0,0,1 is not defined".to_string()));
+            return Err(HcpError::InvalidHandPieceCode(
+                "prefix 1,0,0,1 is not defined".to_string(),
+            ));
         }
         // 1,0,1,...
         if reader.read_bit()? == 0 {
@@ -489,7 +497,9 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), HcpEr
             };
             return Ok((PieceType::Silver, color));
         }
-        return Err(HcpError::InvalidHandPieceCode("prefix 1,0,1,1 is not defined".to_string()));
+        return Err(HcpError::InvalidHandPieceCode(
+            "prefix 1,0,1,1 is not defined".to_string(),
+        ));
     }
 
     // 1,1,...
@@ -505,7 +515,9 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), HcpEr
             };
             return Ok((PieceType::Knight, color));
         }
-        return Err(HcpError::InvalidHandPieceCode("prefix 1,1,0,1 is not defined".to_string()));
+        return Err(HcpError::InvalidHandPieceCode(
+            "prefix 1,1,0,1 is not defined".to_string(),
+        ));
     }
 
     // 1,1,1,...
@@ -522,7 +534,9 @@ fn decode_hand_piece(reader: &mut BitReader) -> Result<(PieceType, Color), HcpEr
 
     // 1,1,1,1,...
     if reader.read_bit()? == 0 {
-        return Err(HcpError::InvalidHandPieceCode("prefix 1,1,1,1,0 is not defined".to_string()));
+        return Err(HcpError::InvalidHandPieceCode(
+            "prefix 1,1,1,1,0 is not defined".to_string(),
+        ));
     }
 
     // 1,1,1,1,1,...

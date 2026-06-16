@@ -271,7 +271,8 @@ mod tests {
 
     fn board(sfen: &str) -> Board {
         let mut b = Board::empty();
-        b.set_sfen(sfen).unwrap_or_else(|e| panic!("bad sfen {sfen}: {e:?}"));
+        b.set_sfen(sfen)
+            .unwrap_or_else(|e| panic!("bad sfen {sfen}: {e:?}"));
         b
     }
 

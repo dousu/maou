@@ -30,28 +30,28 @@ macro_rules! verbose_eprintln {
 // Rust のマクロは定義順で解決されるため，profile モジュールを先に宣言する．
 #[macro_use]
 mod profile;
-mod entry;
-mod tt;
-mod solver;
-mod pns;
-mod node_movegen;
 mod delayed_move_list;
-mod local_expansion;
-mod mid_v3;
-mod mate_len;
-mod search_result;
-mod ttentry;
-mod tt_v4;
+mod entry;
 mod kh_local_expansion;
+mod local_expansion;
+mod mate_len;
+mod mid_v3;
 mod mid_v4;
-mod proof_hand;
+mod node_movegen;
 mod path_key;
+mod pns;
+mod proof_hand;
 mod repetition_memo;
+mod search_result;
+mod solver;
 #[cfg(test)]
 mod tests;
+mod tt;
+mod tt_v4;
+mod ttentry;
 
+pub use pns::{solve_tsume, solve_tsume_and_collect_pn_dn_dist, solve_tsume_with_timeout};
 pub use solver::{DfPnSolver, TsumeResult};
-pub use pns::{solve_tsume, solve_tsume_with_timeout, solve_tsume_and_collect_pn_dn_dist};
 
 /// 王手手/応手の最大数．
 /// 将棋の合法手上限は593であり，長手数の詰将棋では
@@ -75,7 +75,10 @@ pub(super) fn kh_parity_order() -> bool {
 #[inline(always)]
 fn push_move<T, const N: usize>(buf: &mut ArrayVec<T, N>, val: T) {
     let result = buf.try_push(val);
-    debug_assert!(result.is_ok(), "move buffer overflow: capacity {N} exceeded");
+    debug_assert!(
+        result.is_ok(),
+        "move buffer overflow: capacity {N} exceeded"
+    );
 }
 
 /// pn/dn の 1 単位を表す定数．
@@ -126,7 +129,6 @@ pub(super) const DISPROOF_THRESHOLD_ADAPTIVE: u16 = u16::MAX;
 /// remaining_flags のビット 0-14 に格納されるため 15 ビットの最大値(0x7FFF)．
 /// 実用上の depth は 31〜127 であり 32767 は十分に大きい．
 const REMAINING_INFINITE: u16 = 0x7FFF;
-
 
 /// DFPN-E (Kishimoto et al., NeurIPS 2019) エッジコスト型ヒューリスティック．
 ///
@@ -291,17 +293,17 @@ pub(super) fn move_brief_eval(m: Move, king_sq: Square, board: &Board) -> i32 {
 
     let after_raw = if m.is_promotion() { raw_pt + 8 } else { raw_pt };
     let pt_value: i32 = match after_raw {
-        1 => 10,                   // Pawn
-        2 => 20,                   // Lance
-        3 => 20,                   // Knight
-        4 => 30,                   // Silver
-        5 => 50,                   // Bishop
-        6 => 50,                   // Rook
-        7 => 50,                   // Gold
-        8 => 80,                   // King (KH tl_pt_values[KING]=80; 欠落で AND 玉捕獲手の tie-break が乖離していた)
-        9 | 10 | 11 | 12 => 50,   // ProPawn..ProSilver
-        13 => 80,                  // Horse
-        14 => 80,                  // Dragon
+        1 => 10,                // Pawn
+        2 => 20,                // Lance
+        3 => 20,                // Knight
+        4 => 30,                // Silver
+        5 => 50,                // Bishop
+        6 => 50,                // Rook
+        7 => 50,                // Gold
+        8 => 80, // King (KH tl_pt_values[KING]=80; 欠落で AND 玉捕獲手の tie-break が乖離していた)
+        9 | 10 | 11 | 12 => 50, // ProPawn..ProSilver
+        13 => 80, // Horse
+        14 => 80, // Dragon
         _ => 0,
     };
     value -= pt_value;
@@ -497,7 +499,9 @@ impl CheckCache {
         for _ in 0..CHECK_CACHE_SIZE {
             table.push(CheckCacheEntry::default());
         }
-        Self { table: std::cell::UnsafeCell::new(table) }
+        Self {
+            table: std::cell::UnsafeCell::new(table),
+        }
     }
 
     /// キャッシュから王手リストを取得し，ヒットした場合はコピーを返す．

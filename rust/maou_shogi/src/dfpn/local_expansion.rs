@@ -37,7 +37,7 @@
 //! Phase 4: tsume_5 / 39te Mate(15) / 29te で検証．既存 mid() の機能
 //!          (DML, HandSet, SNDA, K-M, chain) を順次移植．
 
-#![allow(dead_code)]  // Phase 1: 全 API stub，使用は Phase 3 から
+#![allow(dead_code)] // Phase 1: 全 API stub，使用は Phase 3 から
 
 use crate::moves::Move;
 
@@ -129,11 +129,19 @@ impl MidSearchResult {
 
     /// `or_node = true` で attacker 視点 phi=pn，false で defender 視点 phi=dn．
     pub(super) fn phi(&self, or_node: bool) -> u32 {
-        if or_node { self.pn } else { self.dn }
+        if or_node {
+            self.pn
+        } else {
+            self.dn
+        }
     }
 
     pub(super) fn delta(&self, or_node: bool) -> u32 {
-        if or_node { self.dn } else { self.pn }
+        if or_node {
+            self.dn
+        } else {
+            self.pn
+        }
     }
 }
 
@@ -311,8 +319,13 @@ impl MidLocalExpansion {
         // chain の 1 件目だけで成立する soundness 違反を防ぐ．
         // Phase 26: kh_dml=true で非駒打ち成/不成 deferral を追加 (build_delayed_chain 参照)．
         build_delayed_chain_chuai_into(
-            &self.moves, or_node, kh_dml, us_is_black, chuai,
-            &mut self.dml_prev, &mut self.dml_next,
+            &self.moves,
+            or_node,
+            kh_dml,
+            us_is_black,
+            chuai,
+            &mut self.dml_prev,
+            &mut self.dml_next,
         );
 
         self.idx.clear();
@@ -337,15 +350,15 @@ impl MidLocalExpansion {
         {
             let results = &self.results;
             self.idx.sort_by(|&i, &j| {
-                child_ordering(
-                    or_node,
-                    &results[i as usize], 0,
-                    &results[j as usize], 0,
-                )
+                child_ordering(or_node, &results[i as usize], 0, &results[j as usize], 0)
             });
         }
 
-        let mut sum_mask = if n >= 64 { u64::MAX } else { (1u64 << n).wrapping_sub(1) };
+        let mut sum_mask = if n >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << n).wrapping_sub(1)
+        };
         // Phase 22: KH `kForceSumPnDn = kInfinitePnDn / 1024` 相当．
         // child の初期 delta が一定値以上の場合 sum_mask off (max 集約に切替)．
         // KH `local_expansion.hpp:177` を移植．
@@ -401,8 +414,10 @@ impl MidLocalExpansion {
             self.idx[self.excluded_moves..].sort_by(|&i, &j| {
                 child_ordering_ex(
                     or_node,
-                    &results[i as usize], me_evals[i as usize],
-                    &results[j as usize], me_evals[j as usize],
+                    &results[i as usize],
+                    me_evals[i as usize],
+                    &results[j as usize],
+                    me_evals[j as usize],
                     kh_full,
                 )
             });
@@ -448,7 +463,11 @@ impl MidLocalExpansion {
     /// mask は moves 数の範囲へ切り詰める (KH BitSet64 と同じ非有効 bit は無害)．
     pub(super) fn apply_persisted_sum_mask(&mut self, mask: u64) {
         let n = self.moves.len();
-        let full = if n >= 64 { u64::MAX } else { (1u64 << n).wrapping_sub(1) };
+        let full = if n >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << n).wrapping_sub(1)
+        };
         // rebuild の force-max (delta 過大) で落ちた bit は維持しつつ，永続 reset を AND で合成
         self.sum_mask &= mask & full | !full;
         self.recalc_delta();
@@ -586,7 +605,12 @@ impl MidLocalExpansion {
             .take(k)
             .map(|&i| {
                 let r = i as usize;
-                (self.moves[r], self.results[r].pn, self.results[r].dn, self.move_evals[r])
+                (
+                    self.moves[r],
+                    self.results[r].pn,
+                    self.results[r].dn,
+                    self.move_evals[r],
+                )
             })
             .collect()
     }
@@ -629,7 +653,12 @@ impl MidLocalExpansion {
             .iter()
             .map(|&i| {
                 let r = &self.results[i as usize];
-                (self.moves[i as usize], r.phi(self.or_node), r.delta(self.or_node), r.is_first_visit)
+                (
+                    self.moves[i as usize],
+                    r.phi(self.or_node),
+                    r.delta(self.or_node),
+                    r.is_first_visit,
+                )
             })
             .collect()
     }
@@ -696,7 +725,11 @@ impl MidLocalExpansion {
                 min_md = r.mate_distance;
             }
         }
-        if min_md == u16::MAX { 0 } else { min_md.saturating_add(1) }
+        if min_md == u16::MAX {
+            0
+        } else {
+            min_md.saturating_add(1)
+        }
     }
 
     /// CurrentResult: 現フレームの集約 (pn, dn) を計算し SearchResult として返す．
@@ -708,7 +741,11 @@ impl MidLocalExpansion {
         let phi = self.get_phi();
         let delta = self.get_delta();
         // pn/dn に戻す
-        let (pn, dn) = if self.or_node { (phi, delta) } else { (delta, phi) };
+        let (pn, dn) = if self.or_node {
+            (phi, delta)
+        } else {
+            (delta, phi)
+        };
         if pn == 0 {
             MidSearchResult::new_win(0) // mate_distance は別途計算
         } else if dn == 0 {
@@ -759,8 +796,10 @@ impl MidLocalExpansion {
             self.idx[self.excluded_moves..].sort_by(|&i, &j| {
                 child_ordering_ex(
                     or_node,
-                    &results[i as usize], me_evals[i as usize],
-                    &results[j as usize], me_evals[j as usize],
+                    &results[i as usize],
+                    me_evals[i as usize],
+                    &results[j as usize],
+                    me_evals[j as usize],
                     kh_full,
                 )
             });
@@ -775,7 +814,11 @@ impl MidLocalExpansion {
     /// - child_thphi = min(thphi, second_phi + 1)
     /// - child_thdelta = thdelta - sum_delta_except_best - [if sum_mask[best] max_delta_except_best]
     pub(super) fn front_pn_dn_thresholds(&self, thpn: u32, thdn: u32) -> (u32, u32) {
-        let (thphi, thdelta) = if self.or_node { (thpn, thdn) } else { (thdn, thpn) };
+        let (thphi, thdelta) = if self.or_node {
+            (thpn, thdn)
+        } else {
+            (thdn, thpn)
+        };
         let second_phi = self.get_second_phi();
         let child_thphi = thphi.min(second_phi.saturating_add(self.threshold_epsilon));
         let child_thdelta = self.new_thdelta_for_best_move(thdelta);
@@ -801,7 +844,8 @@ impl MidLocalExpansion {
         let mut delta_except_best = self.sum_delta_except_best;
         // KH local_expansion.hpp:513-514: deferred moves penalty
         if self.deferred_penalty_denom > 0 && self.moves.len() > self.idx.len() {
-            let raw_penalty = (self.moves.len() - self.idx.len()) / self.deferred_penalty_denom as usize;
+            let raw_penalty =
+                (self.moves.len() - self.idx.len()) / self.deferred_penalty_denom as usize;
             let penalty = if self.deferred_penalty_floor {
                 raw_penalty.max(1) as u32
             } else {
@@ -854,7 +898,8 @@ impl MidLocalExpansion {
         }
         // KH local_expansion.hpp:485-488: deferred moves penalty
         if self.deferred_penalty_denom > 0 && self.moves.len() > self.idx.len() {
-            let raw_penalty = (self.moves.len() - self.idx.len()) / self.deferred_penalty_denom as usize;
+            let raw_penalty =
+                (self.moves.len() - self.idx.len()) / self.deferred_penalty_denom as usize;
             let penalty = if self.deferred_penalty_floor {
                 raw_penalty.max(1) as u32
             } else {
@@ -987,7 +1032,15 @@ pub(super) fn build_delayed_chain_chuai(
 ) -> (Vec<i32>, Vec<i32>) {
     let mut prev = Vec::new();
     let mut next = Vec::new();
-    build_delayed_chain_chuai_into(moves, or_node, kh_dml, us_is_black, chuai, &mut prev, &mut next);
+    build_delayed_chain_chuai_into(
+        moves,
+        or_node,
+        kh_dml,
+        us_is_black,
+        chuai,
+        &mut prev,
+        &mut next,
+    );
     (prev, next)
 }
 
@@ -1181,7 +1234,7 @@ mod tests {
         let moves = vec![Move(1), Move(2), Move(3)];
         let results = vec![
             MidSearchResult::new_unknown(100, 50),
-            MidSearchResult::new_unknown(30, 80),  // best for OR (min pn)
+            MidSearchResult::new_unknown(30, 80), // best for OR (min pn)
             MidSearchResult::new_unknown(50, 60),
         ];
         let exp = MidLocalExpansion::new(true, moves.clone(), results);
@@ -1206,5 +1259,4 @@ mod tests {
         // excluded_moves が進み，次の best は元 idx 0 (Move(1))
         assert_eq!(exp.best_move(), Move(1));
     }
-
 }

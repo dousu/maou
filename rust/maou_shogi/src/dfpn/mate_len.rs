@@ -29,7 +29,9 @@ impl MateLen {
     /// `len` 手詰み(不詰)で構築する (KH `MateLenImpl(T len)`, mate_len.hpp:40)．
     #[inline]
     pub(super) const fn from_len(len: u32) -> Self {
-        Self { len_plus_1: len + 1 }
+        Self {
+            len_plus_1: len + 1,
+        }
     }
 
     /// `len_plus_1` から直接構築する (KH `DirectConstructTag` 経路, mate_len.hpp:109)．
@@ -42,7 +44,11 @@ impl MateLen {
     /// `-1` 手 (`len_plus_1 == 0`) は 0 手へ切り上げる．
     #[inline]
     pub(super) const fn len(self) -> u32 {
-        let lp1 = if self.len_plus_1 == 0 { 1 } else { self.len_plus_1 };
+        let lp1 = if self.len_plus_1 == 0 {
+            1
+        } else {
+            self.len_plus_1
+        };
         lp1 - 1
     }
 

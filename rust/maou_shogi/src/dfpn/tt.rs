@@ -12,8 +12,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-
-use crate::types::{HAND_KINDS, PieceType};
+use crate::types::{PieceType, HAND_KINDS};
 
 use super::entry::{DfPnEntry, ProvenEntry};
 use super::{hand_gte_forward_chain, PN_UNIT, REMAINING_INFINITE};
@@ -24,17 +23,17 @@ use super::{hand_gte_forward_chain, PN_UNIT, REMAINING_INFINITE};
 /// [2]: WorkingTT disproof 近傍ヒット
 /// [3]: 近傍走査呼び出し回数
 pub(super) static NEIGHBOR_DIAG: [AtomicU64; 4] = [
-    AtomicU64::new(0), AtomicU64::new(0),
-    AtomicU64::new(0), AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
 ];
 
 /// WorkingTT 中間エントリヒット診断カウンタ (verbose feature)．
 /// [0]: exact_match ヒット回数 (hand 完全一致)
 /// [1]: fc_match ヒット回数 (forward-chain dominance)
 #[cfg(feature = "verbose")]
-pub(super) static WORKING_DIAG: [AtomicU64; 2] = [
-    AtomicU64::new(0), AtomicU64::new(0),
-];
+pub(super) static WORKING_DIAG: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
 
 /// WorkingTT の 1 クラスタあたりのエントリ数．
 ///
@@ -61,7 +60,6 @@ const WORKING_CLUSTER_SIZE: usize = 8;
 /// - ProvenTT:  proven_num_clusters × 8 × 24B = 384 MB @ 2M clusters
 /// - WorkingTT: working_num_clusters × 8 × 32B = 512 MB @ 2M clusters
 const DEFAULT_NUM_CLUSTERS: usize = 1 << 21; // 2M
-
 
 /// LeafDisproofTT のクラスタサイズ (4 エントリ × 16B = 64B / クラスタ = 1 cache line)．
 const LEAF_CLUSTER_SIZE: usize = 4;
@@ -96,7 +94,6 @@ const FRONTIER_NUM_CLUSTERS: usize = DEFAULT_NUM_CLUSTERS;
 /// 初期 amount=FRONTIER_INITIAL_AMOUNT により，amount=0 の remaining>2 エントリより
 /// eviction 耐性が高くなる．
 const FRONTIER_INITIAL_AMOUNT: u8 = 32;
-
 
 /// LeafDisproofTT のコンパクトエントリ (16B)．
 ///
@@ -161,7 +158,6 @@ impl TTFlatEntry {
         self.pos_key == 0
     }
 }
-
 
 /// エントリが ProvenTT に格納されるべきかを判定する．
 ///
@@ -280,7 +276,11 @@ impl ProvenTable {
     /// 既存 `TranspositionTable::safe_key` と同等．
     #[inline(always)]
     fn safe_key(pos_key: u64) -> u64 {
-        if pos_key == 0 { 1 } else { pos_key }
+        if pos_key == 0 {
+            1
+        } else {
+            pos_key
+        }
     }
 
     /// Stockfish 風インデックス計算 (`hash_low * size >> 32`)．
@@ -337,11 +337,7 @@ impl ProvenTable {
     ///
     /// linear probing で次の空 slot (`pos_key == 0`) に到達したら `None`．
     /// 一致しない pos_key および tombstone slot は skip して継続．
-    pub(super) fn lookup(
-        &self,
-        pos_key: u64,
-        hand: &[u8; HAND_KINDS],
-    ) -> Option<&ProvenEntry> {
+    pub(super) fn lookup(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> Option<&ProvenEntry> {
         let pos_key = Self::safe_key(pos_key);
         let mut idx = self.index(pos_key);
         let n = self.entries.len();
@@ -382,10 +378,7 @@ impl ProvenTable {
     ///
     /// `hand_gte_forward_chain` 等で antichain を走査する際に使う．
     /// 空 slot (`pos_key == 0`) に到達した時点で停止．
-    pub(super) fn iter_pos_key<'a>(
-        &'a self,
-        pos_key: u64,
-    ) -> ProvenTableIter<'a> {
+    pub(super) fn iter_pos_key<'a>(&'a self, pos_key: u64) -> ProvenTableIter<'a> {
         let pos_key = Self::safe_key(pos_key);
         ProvenTableIter {
             table: self,
@@ -467,12 +460,7 @@ impl ProvenTable {
                 && slot.entry.hand == *hand
             {
                 let removed = slot.entry;
-                Self::adjust_counters(
-                    &mut self.proofs,
-                    &mut self.confirmed,
-                    &removed,
-                    false,
-                );
+                Self::adjust_counters(&mut self.proofs, &mut self.confirmed, &removed, false);
                 self.total -= 1;
                 slot.pos_key = PROVEN_TABLE_TOMBSTONE_KEY;
                 return true;
@@ -503,12 +491,7 @@ impl ProvenTable {
             }
             if slot.pos_key == pos_key {
                 let entry = slot.entry;
-                Self::adjust_counters(
-                    &mut self.proofs,
-                    &mut self.confirmed,
-                    &entry,
-                    false,
-                );
+                Self::adjust_counters(&mut self.proofs, &mut self.confirmed, &entry, false);
                 self.total -= 1;
                 slot.pos_key = PROVEN_TABLE_TOMBSTONE_KEY;
                 removed += 1;
@@ -556,11 +539,7 @@ impl ProvenTable {
     /// **注意**: Phase 3 (v0.62.0) ではこの API を追加するのみで，caller は
     /// 接続しない (proven_map が primary store のため)．Phase 4 で proven_map
     /// 削除後に caller を接続する．
-    pub(super) fn collect_garbage(
-        &mut self,
-        removal_ratio: f64,
-        only_refutable: bool,
-    ) -> usize {
+    pub(super) fn collect_garbage(&mut self, removal_ratio: f64, only_refutable: bool) -> usize {
         if self.total == 0 {
             return 0;
         }
@@ -608,12 +587,7 @@ impl ProvenTable {
             }
             if slot.entry.amount() <= threshold {
                 let entry = slot.entry;
-                Self::adjust_counters(
-                    &mut self.proofs,
-                    &mut self.confirmed,
-                    &entry,
-                    false,
-                );
+                Self::adjust_counters(&mut self.proofs, &mut self.confirmed, &entry, false);
                 self.total -= 1;
                 slot.pos_key = PROVEN_TABLE_TOMBSTONE_KEY;
                 removed += 1;
@@ -625,16 +599,19 @@ impl ProvenTable {
     /// `proofs` / `confirmed` カウンタを `entry` 種別に応じて増減する．
     /// `add=true` で +1, `add=false` で saturating -1．
     #[inline(always)]
-    fn adjust_counters(
-        proofs: &mut usize,
-        confirmed: &mut usize,
-        entry: &ProvenEntry,
-        add: bool,
-    ) {
+    fn adjust_counters(proofs: &mut usize, confirmed: &mut usize, entry: &ProvenEntry, add: bool) {
         if entry.is_proof() {
-            *proofs = if add { *proofs + 1 } else { proofs.saturating_sub(1) };
+            *proofs = if add {
+                *proofs + 1
+            } else {
+                proofs.saturating_sub(1)
+            };
         } else if !entry.is_refutable_disproof() {
-            *confirmed = if add { *confirmed + 1 } else { confirmed.saturating_sub(1) };
+            *confirmed = if add {
+                *confirmed + 1
+            } else {
+                confirmed.saturating_sub(1)
+            };
         }
     }
 }
@@ -993,7 +970,7 @@ impl TranspositionTable {
 
     // ---- ヘルパー ----
 
-/// `pos_key == 0` をセンチネル(空スロット)と衝突させない変換．
+    /// `pos_key == 0` をセンチネル(空スロット)と衝突させない変換．
     #[inline(always)]
     fn safe_key(pos_key: u64) -> u64 {
         pos_key | 1
@@ -1008,8 +985,8 @@ impl TranspositionTable {
     ///   → 部分集合クラスタの特定が高速
     #[inline(always)]
     fn hand_hash(hand: &[u8; HAND_KINDS]) -> u64 {
-        use crate::zobrist::ZOBRIST;
         use crate::types::Color;
+        use crate::zobrist::ZOBRIST;
         let mut h = 0u64;
         for k in 0..HAND_KINDS {
             h ^= ZOBRIST.hand_hash(Color::Black, k, hand[k] as usize);
@@ -1023,8 +1000,8 @@ impl TranspositionTable {
     /// `new_hash = old_hash ^ hand_hash_diff(k, old_val, new_val)`
     #[inline(always)]
     fn hand_hash_diff(k: usize, old_val: u8, new_val: u8) -> u64 {
-        use crate::zobrist::ZOBRIST;
         use crate::types::Color;
+        use crate::zobrist::ZOBRIST;
         ZOBRIST.hand_hash(Color::Black, k, old_val as usize)
             ^ ZOBRIST.hand_hash(Color::Black, k, new_val as usize)
     }
@@ -1079,8 +1056,8 @@ impl TranspositionTable {
     /// Knight/Silver/Gold/Bishop は代替不可のため個別に hash する．
     #[inline(always)]
     fn fc_hand_hash(hand: &[u8; HAND_KINDS]) -> u64 {
-        use crate::zobrist::ZOBRIST;
         use crate::types::Color;
+        use crate::zobrist::ZOBRIST;
         // Forward-chain components: pawn(0) + lance(1) + rook(6) → 総和を pawn slot で hash
         let fc_total = (hand[0] as usize) + (hand[1] as usize) + (hand[6] as usize);
         // fc_total は最大 18+4+2=24 だが，hand_hash table は MAX_HAND_STATES
@@ -1129,7 +1106,9 @@ impl TranspositionTable {
             // Step 1: WorkingTT で disproof を先に確認 (frontier の stale intermediate より優先)
             let w_start = self.working_cluster_start(pos_key, hand);
             for fe in &self.working[w_start..w_start + WORKING_CLUSTER_SIZE] {
-                if fe.pos_key != pos_key { continue; }
+                if fe.pos_key != pos_key {
+                    continue;
+                }
                 let e = &fe.entry;
                 if e.dn == 0
                     && hand_gte_forward_chain(&e.hand, hand)
@@ -1144,10 +1123,14 @@ impl TranspositionTable {
             let mut f_exact: Option<(u32, u32, u32)> = None;
             let mut f_fc: Option<(u32, u32, u32)> = None;
             for fe in f_cluster {
-                if fe.pos_key != pos_key { continue; }
+                if fe.pos_key != pos_key {
+                    continue;
+                }
                 let e = &fe.entry;
                 if e.pn != 0 && e.dn != 0 {
-                    if e.pn == u32::MAX && e.remaining() < remaining { continue; }
+                    if e.pn == u32::MAX && e.remaining() < remaining {
+                        continue;
+                    }
                     if e.hand == *hand {
                         f_exact = Some((e.pn, e.dn, e.source));
                     } else if f_fc.is_none() && hand_gte_forward_chain(hand, &e.hand) {
@@ -1155,8 +1138,12 @@ impl TranspositionTable {
                     }
                 }
             }
-            if let Some(m) = f_exact { return m; }
-            if let Some(m) = f_fc { return m; }
+            if let Some(m) = f_exact {
+                return m;
+            }
+            if let Some(m) = f_fc {
+                return m;
+            }
             // FrontierTT ミス: disproof は WorkingTT / LeafDisproofTT で継続探索
         }
 
@@ -1169,7 +1156,9 @@ impl TranspositionTable {
         // exact match を優先し，なければ fc-dominated を fallback とする．
         let mut fc_match: Option<(u32, u32, u32)> = None;
         for fe in working {
-            if fe.pos_key != pos_key { continue; }
+            if fe.pos_key != pos_key {
+                continue;
+            }
             let e = &fe.entry;
             if e.dn == 0
                 && hand_gte_forward_chain(&e.hand, hand)
@@ -1181,12 +1170,12 @@ impl TranspositionTable {
                 // pn=INF intermediate は depth-limited 証明不能．
                 // dn=0 disproof と同様に，保存時の remaining が現在の remaining
                 // より浅い場合は無効 — より深い探索で再展開が必要．
-                if e.pn == u32::MAX && e.remaining() < remaining { continue; }
+                if e.pn == u32::MAX && e.remaining() < remaining {
+                    continue;
+                }
                 if e.hand == *hand {
                     exact_match = Some((e.pn, e.dn, e.source));
-                } else if fc_match.is_none()
-                    && hand_gte_forward_chain(hand, &e.hand)
-                {
+                } else if fc_match.is_none() && hand_gte_forward_chain(hand, &e.hand) {
                     fc_match = Some((e.pn, e.dn, e.source));
                 }
             }
@@ -1204,7 +1193,9 @@ impl TranspositionTable {
         {
             let f_start = self.frontier_cluster_start(pos_key, hand);
             for fe in &self.frontier[f_start..f_start + FRONTIER_CLUSTER_SIZE] {
-                if fe.pos_key != pos_key { continue; }
+                if fe.pos_key != pos_key {
+                    continue;
+                }
                 let e = &fe.entry;
                 if e.pn != 0 && e.dn != 0 && e.pn != u32::MAX {
                     if e.hand == *hand {
@@ -1219,16 +1210,24 @@ impl TranspositionTable {
 
         if let Some(m) = exact_match {
             #[cfg(feature = "verbose")]
-            { WORKING_DIAG[0].fetch_add(1, Ordering::Relaxed); }
+            {
+                WORKING_DIAG[0].fetch_add(1, Ordering::Relaxed);
+            }
             #[cfg(feature = "tt_diag")]
-            { self.diag_working_intermediate_hits[0].fetch_add(1, Ordering::Relaxed); }
+            {
+                self.diag_working_intermediate_hits[0].fetch_add(1, Ordering::Relaxed);
+            }
             return m;
         }
         if let Some(m) = fc_match {
             #[cfg(feature = "verbose")]
-            { WORKING_DIAG[1].fetch_add(1, Ordering::Relaxed); }
+            {
+                WORKING_DIAG[1].fetch_add(1, Ordering::Relaxed);
+            }
             #[cfg(feature = "tt_diag")]
-            { self.diag_working_intermediate_hits[1].fetch_add(1, Ordering::Relaxed); }
+            {
+                self.diag_working_intermediate_hits[1].fetch_add(1, Ordering::Relaxed);
+            }
             return m;
         }
 
@@ -1241,7 +1240,9 @@ impl TranspositionTable {
             let start = self.working_cluster_start_from_hash(pos_key, base_hh ^ diff);
             let cluster = &self.working[start..start + WORKING_CLUSTER_SIZE];
             for fe in cluster {
-                if fe.pos_key != pos_key { continue; }
+                if fe.pos_key != pos_key {
+                    continue;
+                }
                 let e = &fe.entry;
                 if e.dn == 0
                     && hand_gte_forward_chain(&e.hand, hand)
@@ -1259,11 +1260,12 @@ impl TranspositionTable {
             let l_start = self.leaf_cluster_start(pos_key, hand);
             let l_cluster = &self.leaf_disproofs[l_start..l_start + LEAF_CLUSTER_SIZE];
             for le in l_cluster {
-                if le.pos_key != pos_key { continue; }
-                if hand_gte_forward_chain(&le.hand, hand)
-                    && (le.remaining as u16) >= remaining
-                {
-                    self.diag_leaf_hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if le.pos_key != pos_key {
+                    continue;
+                }
+                if hand_gte_forward_chain(&le.hand, hand) && (le.remaining as u16) >= remaining {
+                    self.diag_leaf_hits
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     return (PN_UNIT, 0, 0);
                 }
             }
@@ -1299,9 +1301,7 @@ impl TranspositionTable {
         for e in self.iter_proven_entries(pos_key) {
             if e.is_proof() && hand_gte_forward_chain(hand, &e.hand) {
                 let tag = e.proof_tag();
-                if tag != super::entry::PROOF_TAG_ABSOLUTE
-                    && e.tag_depth() < ids_depth
-                {
+                if tag != super::entry::PROOF_TAG_ABSOLUTE && e.tag_depth() < ids_depth {
                     continue; // stale tagged proof: skip
                 }
                 return (0, e.dn(), e.source());
@@ -1311,13 +1311,14 @@ impl TranspositionTable {
         // ProvenTT の confirmed disproof は常に depth 非依存として格納される．
         for e in self.iter_proven_entries(pos_key) {
             if !e.is_proof() && hand_gte_forward_chain(&e.hand, hand) {
-                if skip_refutable && e.is_refutable_disproof() { continue; }
+                if skip_refutable && e.is_refutable_disproof() {
+                    continue;
+                }
                 return (e.pn(), 0, e.source());
             }
         }
         (PN_UNIT, PN_UNIT, 0)
     }
-
 
     /// 統合 look_up: ProvenTT → WorkingTT の順で検索．
     ///
@@ -1357,8 +1358,17 @@ impl TranspositionTable {
         best_move: u16,
         mate_distance: u16,
     ) {
-        self.store_impl(pos_key, hand, pn, dn, remaining, source, false,
-            best_move, mate_distance);
+        self.store_impl(
+            pos_key,
+            hand,
+            pn,
+            dn,
+            remaining,
+            source,
+            false,
+            best_move,
+            mate_distance,
+        );
     }
 
     /// 施策 X (v0.24.53+): tag 付き proof を ProvenTT に格納する．
@@ -1384,7 +1394,11 @@ impl TranspositionTable {
     ) {
         let pos_key = Self::safe_key(pos_key);
         let new_entry = super::entry::ProvenEntry::new_tagged_proof(
-            hand, best_move, mate_distance, tag, tag_depth,
+            hand,
+            best_move,
+            mate_distance,
+            tag,
+            tag_depth,
         );
         let new_priority = new_entry.amount();
         // Phase 4b (v0.63.0): proven_table 単独．同一 hand の既存 proof の amount を比較．
@@ -1440,7 +1454,11 @@ impl TranspositionTable {
     ) {
         let pos_key = Self::safe_key(pos_key);
         #[cfg(feature = "verbose")]
-        let rem_idx = if remaining == REMAINING_INFINITE { 32 } else { (remaining as usize).min(31) };
+        let rem_idx = if remaining == REMAINING_INFINITE {
+            32
+        } else {
+            (remaining as usize).min(31)
+        };
 
         // === 共通: 既存の証明/反証に支配されているなら挿入不要 ===
         // ProvenTT をチェック．Phase 2b (v0.61.0): flag ON 時は proven_table から走査．
@@ -1448,27 +1466,44 @@ impl TranspositionTable {
         // として格納されるため `remaining` との比較は不要．
         for e in self.iter_proven_entries(pos_key) {
             if e.is_proof() && hand_gte_forward_chain(&hand, &e.hand) {
-                #[cfg(feature = "verbose")] { self.diag_dominated_skip += 1; }
+                #[cfg(feature = "verbose")]
+                {
+                    self.diag_dominated_skip += 1;
+                }
                 return;
             }
-            if !e.is_proof()
-                && !path_dependent
-                && hand_gte_forward_chain(&e.hand, &hand)
-            {
-                #[cfg(feature = "verbose")] { self.diag_dominated_skip += 1; }
+            if !e.is_proof() && !path_dependent && hand_gte_forward_chain(&e.hand, &hand) {
+                #[cfg(feature = "verbose")]
+                {
+                    self.diag_dominated_skip += 1;
+                }
                 return;
             }
         }
 
         if is_proven_entry(pn, dn, remaining, path_dependent) {
             // === ProvenTT への挿入 (Plan D: ProvenEntry を直接構築) ===
-            self.store_proven(pos_key, hand, pn == 0, best_move, mate_distance,
-                #[cfg(feature = "verbose")] rem_idx);
+            self.store_proven(
+                pos_key,
+                hand,
+                pn == 0,
+                best_move,
+                mate_distance,
+                #[cfg(feature = "verbose")]
+                rem_idx,
+            );
             return;
         }
 
         let new_entry = DfPnEntry::new(
-            source, pn, dn, hand, remaining, path_dependent, best_move, 0,
+            source,
+            pn,
+            dn,
+            hand,
+            remaining,
+            path_dependent,
+            best_move,
+            0,
         );
 
         if dn == 0 {
@@ -1483,12 +1518,27 @@ impl TranspositionTable {
                 return;
             }
             // === WorkingTT への depth-limited / path-dep disproof 挿入 ===
-            self.store_working_disproof(pos_key, hand, remaining, new_entry,
-                #[cfg(feature = "verbose")] rem_idx);
+            self.store_working_disproof(
+                pos_key,
+                hand,
+                remaining,
+                new_entry,
+                #[cfg(feature = "verbose")]
+                rem_idx,
+            );
         } else {
             // === WorkingTT への intermediate 挿入 ===
-            self.store_working_intermediate(pos_key, hand, pn, dn, remaining, source, best_move,
-                #[cfg(feature = "verbose")] rem_idx);
+            self.store_working_intermediate(
+                pos_key,
+                hand,
+                pn,
+                dn,
+                remaining,
+                source,
+                best_move,
+                #[cfg(feature = "verbose")]
+                rem_idx,
+            );
         }
     }
 
@@ -1522,8 +1572,12 @@ impl TranspositionTable {
                 let w_start = self.working_cluster_start(pos_key, &hand);
                 let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
                 for fe in w_cluster.iter_mut() {
-                    if fe.pos_key != pos_key { continue; }
-                    if fe.entry.dn == 0 { continue; }
+                    if fe.pos_key != pos_key {
+                        continue;
+                    }
+                    if fe.entry.dn == 0 {
+                        continue;
+                    }
                     if hand_gte_forward_chain(&fe.entry.hand, &hand) {
                         fe.pos_key = 0;
                     }
@@ -1532,10 +1586,11 @@ impl TranspositionTable {
 
             // Phase 4b (v0.63.0): proven_table 単独．被支配 proof を収集 → 除去
             let mut dominated = false;
-            let mut to_remove: arrayvec::ArrayVec<[u8; HAND_KINDS], 16> =
-                arrayvec::ArrayVec::new();
+            let mut to_remove: arrayvec::ArrayVec<[u8; HAND_KINDS], 16> = arrayvec::ArrayVec::new();
             for e in self.proven_table.iter_pos_key(pos_key) {
-                if !e.is_proof() { continue; }
+                if !e.is_proof() {
+                    continue;
+                }
                 // 被支配 proof: old_hand ≥ new_hand → 除去対象
                 if hand_gte_forward_chain(&e.hand, &hand) {
                     let _ = to_remove.try_push(e.hand);
@@ -1553,21 +1608,26 @@ impl TranspositionTable {
             for h in &to_remove {
                 self.proven_table.remove(pos_key, h);
             }
-            if dominated { return; }
+            if dominated {
+                return;
+            }
             self.proven_table.insert(pos_key, new_entry);
         } else {
             // WorkingTT の同一 pos_key エントリを積極的に除去(proof 以外)．
             let w_start = self.working_cluster_start(pos_key, &hand);
             let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
             for fe in w_cluster.iter_mut() {
-                if fe.pos_key != pos_key { continue; }
-                if fe.entry.pn == 0 { continue; } // proof は ProvenTT にあるが防衛的に保護
+                if fe.pos_key != pos_key {
+                    continue;
+                }
+                if fe.entry.pn == 0 {
+                    continue;
+                } // proof は ProvenTT にあるが防衛的に保護
                 fe.pos_key = 0;
             }
 
             // Phase 4b (v0.63.0): 同一 hand の既存 disproof (proof でない) を除去
-            let mut to_remove: arrayvec::ArrayVec<[u8; HAND_KINDS], 16> =
-                arrayvec::ArrayVec::new();
+            let mut to_remove: arrayvec::ArrayVec<[u8; HAND_KINDS], 16> = arrayvec::ArrayVec::new();
             for e in self.proven_table.iter_pos_key(pos_key) {
                 if !e.is_proof() && e.hand == hand {
                     let _ = to_remove.try_push(e.hand);
@@ -1580,16 +1640,22 @@ impl TranspositionTable {
             self.proven_table.insert(pos_key, new_entry);
         }
 
-        #[cfg(feature = "verbose")] {
-            if is_proof { self.diag_proof_inserts += 1; }
-            else { self.diag_disproof_inserts += 1; }
+        #[cfg(feature = "verbose")]
+        {
+            if is_proof {
+                self.diag_proof_inserts += 1;
+            } else {
+                self.diag_disproof_inserts += 1;
+            }
             self.diag_remaining_dist[rem_idx] += 1;
         }
         #[cfg(feature = "tt_diag")]
-        if !is_proof { self.diag_disproof_confirmed += 1; }
+        if !is_proof {
+            self.diag_disproof_confirmed += 1;
+        }
     }
 
-/// WorkingTT に depth-limited / path-dep disproof を挿入する．
+    /// WorkingTT に depth-limited / path-dep disproof を挿入する．
     fn store_working_disproof(
         &mut self,
         pos_key: u64,
@@ -1610,7 +1676,9 @@ impl TranspositionTable {
 
         // 同じ pos_key の中間エントリと被支配反証を除去
         for fe in w_cluster.iter_mut() {
-            if fe.pos_key != pos_key { continue; }
+            if fe.pos_key != pos_key {
+                continue;
+            }
             let e = &fe.entry;
             if e.pn != 0 && e.dn != 0 {
                 // 中間エントリ → 除去
@@ -1618,7 +1686,9 @@ impl TranspositionTable {
                 continue;
             }
             if e.dn == 0 {
-                if e.path_dependent() && !path_dependent { continue; }
+                if e.path_dependent() && !path_dependent {
+                    continue;
+                }
                 if !(hand_gte_forward_chain(&hand, &e.hand) && remaining >= e.remaining()) {
                     continue;
                 }
@@ -1629,11 +1699,20 @@ impl TranspositionTable {
         if let Some(slot) = w_cluster.iter_mut().find(|fe| fe.is_empty()) {
             slot.pos_key = pos_key;
             slot.entry = new_entry;
-            #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
-            #[cfg(feature = "tt_diag")] { self.diag_disproof_working += 1; }
+            #[cfg(feature = "verbose")]
+            {
+                self.diag_disproof_inserts += 1;
+                self.diag_remaining_dist[rem_idx] += 1;
+            }
+            #[cfg(feature = "tt_diag")]
+            {
+                self.diag_disproof_working += 1;
+            }
             // ピーク充填数の追跡
-            let fill = self.working[w_start..w_start + WORKING_CLUSTER_SIZE].iter()
-                .filter(|fe| fe.pos_key != 0).count();
+            let fill = self.working[w_start..w_start + WORKING_CLUSTER_SIZE]
+                .iter()
+                .filter(|fe| fe.pos_key != 0)
+                .count();
             if fill > self.working_peak_cluster_fill {
                 self.working_peak_cluster_fill = fill;
             }
@@ -1642,21 +1721,37 @@ impl TranspositionTable {
         // クラスタ飽和 → overflow．サンプリング診断は replace 後に実行 (borrow 回避)．
         self.working_overflow_since_gc += 1;
         if Self::replace_weakest_for_disproof_in(w_cluster, pos_key, new_entry) {
-            #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
-            #[cfg(feature = "tt_diag")] { self.diag_disproof_working += 1; }
+            #[cfg(feature = "verbose")]
+            {
+                self.diag_disproof_inserts += 1;
+                self.diag_remaining_dist[rem_idx] += 1;
+            }
+            #[cfg(feature = "tt_diag")]
+            {
+                self.diag_disproof_working += 1;
+            }
             return;
         }
         // NM 同士の置換
         let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
         for fe in w_cluster.iter_mut() {
-            if fe.pos_key != pos_key { continue; }
+            if fe.pos_key != pos_key {
+                continue;
+            }
             if fe.entry.dn == 0
                 && fe.entry.remaining() != REMAINING_INFINITE
                 && !hand_gte_forward_chain(&fe.entry.hand, &hand)
             {
                 fe.entry = new_entry;
-                #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
-                #[cfg(feature = "tt_diag")] { self.diag_disproof_working += 1; }
+                #[cfg(feature = "verbose")]
+                {
+                    self.diag_disproof_inserts += 1;
+                    self.diag_remaining_dist[rem_idx] += 1;
+                }
+                #[cfg(feature = "tt_diag")]
+                {
+                    self.diag_disproof_working += 1;
+                }
                 return;
             }
         }
@@ -1667,7 +1762,11 @@ impl TranspositionTable {
             let l_start = self.leaf_cluster_start(pos_key, &hand);
             let l_cluster = &mut self.leaf_disproofs[l_start..l_start + LEAF_CLUSTER_SIZE];
             // 既存の同 pos_key 被支配エントリを置換，なければ空きか先頭に格納
-            let leaf_entry = TTLeafEntry { pos_key, hand, remaining: remaining as u8 };
+            let leaf_entry = TTLeafEntry {
+                pos_key,
+                hand,
+                remaining: remaining as u8,
+            };
             let mut stored = false;
             for le in l_cluster.iter_mut() {
                 if le.pos_key == pos_key
@@ -1694,7 +1793,11 @@ impl TranspositionTable {
         // フォールバック
         let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
         if Self::replace_weakest_in(w_cluster, pos_key, new_entry) {
-            #[cfg(feature = "verbose")] { self.diag_disproof_inserts += 1; self.diag_remaining_dist[rem_idx] += 1; }
+            #[cfg(feature = "verbose")]
+            {
+                self.diag_disproof_inserts += 1;
+                self.diag_remaining_dist[rem_idx] += 1;
+            }
         }
     }
 
@@ -1721,7 +1824,9 @@ impl TranspositionTable {
 
         // 同一持ち駒の既存エントリを更新
         for fe in w_cluster.iter_mut() {
-            if fe.pos_key != pos_key { continue; }
+            if fe.pos_key != pos_key {
+                continue;
+            }
             let e = &mut fe.entry;
             if e.hand == hand {
                 if e.dn == 0 {
@@ -1738,7 +1843,11 @@ impl TranspositionTable {
                 if best_move != 0 {
                     e.best_move = best_move;
                 }
-                #[cfg(feature = "verbose")] { self.diag_intermediate_update += 1; self.diag_remaining_dist[rem_idx] += 1; }
+                #[cfg(feature = "verbose")]
+                {
+                    self.diag_intermediate_update += 1;
+                    self.diag_remaining_dist[rem_idx] += 1;
+                }
                 return;
             }
         }
@@ -1748,24 +1857,35 @@ impl TranspositionTable {
         if let Some(slot) = w_cluster.iter_mut().find(|fe| fe.is_empty()) {
             slot.pos_key = pos_key;
             slot.entry = new_entry;
-            #[cfg(feature = "verbose")] { self.diag_intermediate_new += 1; self.diag_remaining_dist[rem_idx] += 1; }
+            #[cfg(feature = "verbose")]
+            {
+                self.diag_intermediate_new += 1;
+                self.diag_remaining_dist[rem_idx] += 1;
+            }
             // ピーク充填数の追跡
-            let fill = self.working[w_start..w_start + WORKING_CLUSTER_SIZE].iter()
-                .filter(|fe| fe.pos_key != 0).count();
+            let fill = self.working[w_start..w_start + WORKING_CLUSTER_SIZE]
+                .iter()
+                .filter(|fe| fe.pos_key != 0)
+                .count();
             if fill > self.working_peak_cluster_fill {
                 self.working_peak_cluster_fill = fill;
             }
             #[cfg(feature = "profile")]
             {
-                let count = self.working[w_start..w_start + WORKING_CLUSTER_SIZE].iter()
-                    .filter(|fe| fe.pos_key == pos_key).count();
+                let count = self.working[w_start..w_start + WORKING_CLUSTER_SIZE]
+                    .iter()
+                    .filter(|fe| fe.pos_key == pos_key)
+                    .count();
                 if count > self.max_entries_per_position {
                     self.max_entries_per_position = count;
                 }
             }
         } else {
             #[cfg(feature = "profile")]
-            { self.overflow_count += 1; self.working_overflow_count += 1; }
+            {
+                self.overflow_count += 1;
+                self.working_overflow_count += 1;
+            }
             self.working_overflow_since_gc += 1;
             // 100回に1回サンプリング
             if self.working_overflow_since_gc % 100 == 1 {
@@ -1775,17 +1895,27 @@ impl TranspositionTable {
                 let mut n_inter = 0u64;
                 let mut n_disp = 0u64;
                 for fe in cluster {
-                    if fe.pos_key == 0 { continue; }
+                    if fe.pos_key == 0 {
+                        continue;
+                    }
                     if !keys[..n_keys].contains(&fe.pos_key) {
-                        if n_keys < WORKING_CLUSTER_SIZE { keys[n_keys] = fe.pos_key; n_keys += 1; }
+                        if n_keys < WORKING_CLUSTER_SIZE {
+                            keys[n_keys] = fe.pos_key;
+                            n_keys += 1;
+                        }
                     }
                     if fe.entry.dn == 0 {
                         n_disp += 1;
                         let rem = fe.entry.remaining();
-                        let bucket = if rem == 0 { 0 }
-                            else if rem <= 4 { 1 }
-                            else if rem < REMAINING_INFINITE { 2 }
-                            else { 3 };
+                        let bucket = if rem == 0 {
+                            0
+                        } else if rem <= 4 {
+                            1
+                        } else if rem < REMAINING_INFINITE {
+                            2
+                        } else {
+                            3
+                        };
                         self.overflow_disproof_remaining[bucket] += 1;
                         if fe.entry.path_dependent() {
                             self.overflow_disproof_path_dep += 1;
@@ -1801,7 +1931,11 @@ impl TranspositionTable {
             }
             let w_cluster = &mut self.working[w_start..w_start + WORKING_CLUSTER_SIZE];
             if Self::replace_weakest_in(w_cluster, pos_key, new_entry) {
-                #[cfg(feature = "verbose")] { self.diag_intermediate_new += 1; self.diag_remaining_dist[rem_idx] += 1; }
+                #[cfg(feature = "verbose")]
+                {
+                    self.diag_intermediate_new += 1;
+                    self.diag_remaining_dist[rem_idx] += 1;
+                }
             }
         }
     }
@@ -1824,7 +1958,9 @@ impl TranspositionTable {
 
         // 同一持ち駒の既存エントリを更新
         for fe in self.frontier[f_start..f_start + FRONTIER_CLUSTER_SIZE].iter_mut() {
-            if fe.pos_key != pos_key { continue; }
+            if fe.pos_key != pos_key {
+                continue;
+            }
             let e = &mut fe.entry;
             if e.hand == hand {
                 if e.dn == 0 && (e.remaining() >= remaining || e.path_dependent()) {
@@ -1845,7 +1981,14 @@ impl TranspositionTable {
 
         // 新規エントリを追加 (初期 amount ブースト付き)
         let new_entry = DfPnEntry::new(
-            source, pn, dn, hand, remaining, false, best_move, FRONTIER_INITIAL_AMOUNT,
+            source,
+            pn,
+            dn,
+            hand,
+            remaining,
+            false,
+            best_move,
+            FRONTIER_INITIAL_AMOUNT,
         );
         if let Some(slot) = self.frontier[f_start..f_start + FRONTIER_CLUSTER_SIZE]
             .iter_mut()
@@ -1867,7 +2010,9 @@ impl TranspositionTable {
         let mut worst_is_foreign = false;
 
         for (i, fe) in cluster.iter().enumerate() {
-            if fe.pos_key == 0 { continue; }
+            if fe.pos_key == 0 {
+                continue;
+            }
             let is_foreign = fe.pos_key != pos_key;
             let score = fe.entry.amount as u32;
 
@@ -1914,7 +2059,9 @@ impl TranspositionTable {
     ) -> bool {
         // 1st pass: foreign depth-limited disproof
         for fe in cluster.iter_mut() {
-            if fe.pos_key == pos_key || fe.pos_key == 0 { continue; }
+            if fe.pos_key == pos_key || fe.pos_key == 0 {
+                continue;
+            }
             if fe.entry.dn == 0 && fe.entry.remaining() != REMAINING_INFINITE {
                 fe.pos_key = pos_key;
                 fe.entry = new_entry;
@@ -1925,7 +2072,9 @@ impl TranspositionTable {
         let mut worst_idx: Option<usize> = None;
         let mut worst_amount: u8 = u8::MAX;
         for (i, fe) in cluster.iter().enumerate() {
-            if fe.pos_key == pos_key || fe.pos_key == 0 { continue; }
+            if fe.pos_key == pos_key || fe.pos_key == 0 {
+                continue;
+            }
             if fe.entry.pn != 0 && fe.entry.dn != 0 && fe.entry.amount < worst_amount {
                 worst_amount = fe.entry.amount;
                 worst_idx = Some(i);
@@ -1942,12 +2091,15 @@ impl TranspositionTable {
     /// WorkingTT の confirmed disproof (dn=0, !path_dep, remaining=INF) の数を返す．
     #[cfg(feature = "tt_diag")]
     pub(super) fn count_working_confirmed_disproofs(&self) -> usize {
-        self.working.iter().filter(|fe| {
-            fe.pos_key != 0
-                && fe.entry.dn == 0
-                && !fe.entry.path_dependent()
-                && fe.entry.remaining() == REMAINING_INFINITE
-        }).count()
+        self.working
+            .iter()
+            .filter(|fe| {
+                fe.pos_key != 0
+                    && fe.entry.dn == 0
+                    && !fe.entry.path_dependent()
+                    && fe.entry.remaining() == REMAINING_INFINITE
+            })
+            .count()
     }
 
     /// ProvenTT の ephemeral エントリ (refutable disproof + non-ABSOLUTE proof)
@@ -1982,8 +2134,7 @@ impl TranspositionTable {
         let mut to_remove: Vec<(u64, [u8; HAND_KINDS])> = Vec::new();
         for (pk, e) in self.proven_table.iter_all() {
             let keep = if e.is_proof() {
-                e.proof_tag() == super::entry::PROOF_TAG_ABSOLUTE
-                    || e.tag_depth() >= min_depth
+                e.proof_tag() == super::entry::PROOF_TAG_ABSOLUTE || e.tag_depth() >= min_depth
             } else {
                 !e.is_refutable_disproof() || e.disproof_depth() >= min_depth
             };
@@ -2052,7 +2203,11 @@ impl TranspositionTable {
     pub(super) fn entries_for_position(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> usize {
         let pos_key = Self::safe_key(pos_key);
         let p = self.proven_map.get(&pos_key).map_or(0, |v| v.len());
-        let w = self.working_cluster(pos_key, hand).iter().filter(|fe| fe.pos_key == pos_key).count();
+        let w = self
+            .working_cluster(pos_key, hand)
+            .iter()
+            .filter(|fe| fe.pos_key == pos_key)
+            .count();
         p + w
     }
 
@@ -2065,7 +2220,12 @@ impl TranspositionTable {
             for (i, e) in vec.iter().enumerate() {
                 verbose_eprintln!(
                     "  [P{}]: pn={} dn={} tag={} tag_depth={} path_dep=false hand={:?}",
-                    i, e.pn(), e.dn(), e.proof_tag(), e.tag_depth(), &e.hand
+                    i,
+                    e.pn(),
+                    e.dn(),
+                    e.proof_tag(),
+                    e.tag_depth(),
+                    &e.hand
                 );
             }
         }
@@ -2075,7 +2235,12 @@ impl TranspositionTable {
                 let e = &fe.entry;
                 verbose_eprintln!(
                     "  [W{}]: pn={} dn={} remaining={} path_dep={} hand={:?}",
-                    i, e.pn, e.dn, e.remaining(), e.path_dependent(), &e.hand
+                    i,
+                    e.pn,
+                    e.dn,
+                    e.remaining(),
+                    e.path_dependent(),
+                    &e.hand
                 );
             }
         }
@@ -2084,21 +2249,35 @@ impl TranspositionTable {
     /// 証明済み(pn=0)のエントリ数を返す．
     #[cfg(feature = "tt_diag")]
     pub(super) fn count_proven(&self) -> usize {
-        self.proven_map.values().flat_map(|v| v.iter()).filter(|e| e.is_proof()).count()
+        self.proven_map
+            .values()
+            .flat_map(|v| v.iter())
+            .filter(|e| e.is_proof())
+            .count()
     }
 
     /// 反証済み(dn=0)のエントリ数を返す(ProvenTT + WorkingTT)．
     #[cfg(feature = "tt_diag")]
     pub(super) fn count_disproven(&self) -> usize {
-        let p = self.proven_map.values().flat_map(|v| v.iter()).filter(|e| !e.is_proof()).count();
-        let w = self.working.iter().filter(|fe| fe.pos_key != 0 && fe.entry.dn == 0).count();
+        let p = self
+            .proven_map
+            .values()
+            .flat_map(|v| v.iter())
+            .filter(|e| !e.is_proof())
+            .count();
+        let w = self
+            .working
+            .iter()
+            .filter(|fe| fe.pos_key != 0 && fe.entry.dn == 0)
+            .count();
         p + w
     }
 
     /// 中間のエントリ数を返す．
     #[cfg(feature = "tt_diag")]
     pub(super) fn count_intermediate(&self) -> usize {
-        self.working.iter()
+        self.working
+            .iter()
             .filter(|fe| fe.pos_key != 0 && fe.entry.pn > 0 && fe.entry.dn > 0)
             .count()
     }
@@ -2127,52 +2306,105 @@ impl TranspositionTable {
         }
         // WorkingTT: intermediate + depth-limited disproof
         for fe in self.working.iter() {
-            if fe.pos_key == 0 { continue; }
+            if fe.pos_key == 0 {
+                continue;
+            }
             let e = &fe.entry;
             if e.pn == 0 {
                 proof_count += 1; // defensive (should not happen in Plan D)
             } else if e.dn == 0 {
                 disproof_count += 1;
-                let ri = if e.remaining() == REMAINING_INFINITE { 32 } else { (e.remaining() as usize).min(31) };
+                let ri = if e.remaining() == REMAINING_INFINITE {
+                    32
+                } else {
+                    (e.remaining() as usize).min(31)
+                };
                 disproof_rem[ri] += 1;
             } else {
                 intermediate_count += 1;
-                let ri = if e.remaining() == REMAINING_INFINITE { 32 } else { (e.remaining() as usize).min(31) };
+                let ri = if e.remaining() == REMAINING_INFINITE {
+                    32
+                } else {
+                    (e.remaining() as usize).min(31)
+                };
                 inter_rem[ri] += 1;
                 // バケット閾値は PN_UNIT=16 スケールに合わせる
                 let pb = match e.pn {
-                    0..=16 => 0, 17..=48 => 1, 49..=128 => 2, 129..=512 => 3,
-                    513..=2048 => 4, 2049..=16384 => 5, 16385..=131072 => 6, _ => 7,
+                    0..=16 => 0,
+                    17..=48 => 1,
+                    49..=128 => 2,
+                    129..=512 => 3,
+                    513..=2048 => 4,
+                    2049..=16384 => 5,
+                    16385..=131072 => 6,
+                    _ => 7,
                 };
                 inter_pn_buckets[pb] += 1;
                 let db = match e.dn {
-                    1 => 0, 2..=5 => 1, 6..=20 => 2, 21..=100 => 3, _ => 4,
+                    1 => 0,
+                    2..=5 => 1,
+                    6..=20 => 2,
+                    21..=100 => 3,
+                    _ => 4,
                 };
                 inter_dn_buckets[db] += 1;
             }
         }
 
         verbose_eprintln!("\n=== TT Content Analysis ===");
-        verbose_eprintln!("entries: proof={} disproof={} intermediate={}",
-            proof_count, disproof_count, intermediate_count);
-        let dr: Vec<String> = disproof_rem.iter().enumerate()
+        verbose_eprintln!(
+            "entries: proof={} disproof={} intermediate={}",
+            proof_count,
+            disproof_count,
+            intermediate_count
+        );
+        let dr: Vec<String> = disproof_rem
+            .iter()
+            .enumerate()
             .filter(|(_, &c)| c > 0)
-            .map(|(r, &c)| if r == 32 { format!("INF:{}", c) } else { format!("{}:{}", r, c) })
+            .map(|(r, &c)| {
+                if r == 32 {
+                    format!("INF:{}", c)
+                } else {
+                    format!("{}:{}", r, c)
+                }
+            })
             .collect();
         verbose_eprintln!("disproof remaining: [{}]", dr.join(", "));
-        let ir: Vec<String> = inter_rem.iter().enumerate()
+        let ir: Vec<String> = inter_rem
+            .iter()
+            .enumerate()
             .filter(|(_, &c)| c > 0)
-            .map(|(r, &c)| if r == 32 { format!("INF:{}", c) } else { format!("{}:{}", r, c) })
+            .map(|(r, &c)| {
+                if r == 32 {
+                    format!("INF:{}", c)
+                } else {
+                    format!("{}:{}", r, c)
+                }
+            })
             .collect();
         verbose_eprintln!("intermediate remaining: [{}]", ir.join(", "));
-        let pn_labels = ["pn≤S", "pn≤3S", "pn≤8S", "pn≤32S", "pn≤128S", "pn≤1KS", "pn≤8KS", "pn>8KS"];
-        let pb: Vec<String> = inter_pn_buckets.iter().enumerate()
+        let pn_labels = [
+            "pn≤S",
+            "pn≤3S",
+            "pn≤8S",
+            "pn≤32S",
+            "pn≤128S",
+            "pn≤1KS",
+            "pn≤8KS",
+            "pn>8KS",
+        ];
+        let pb: Vec<String> = inter_pn_buckets
+            .iter()
+            .enumerate()
             .filter(|(_, &c)| c > 0)
             .map(|(i, &c)| format!("{}:{}", pn_labels[i], c))
             .collect();
         verbose_eprintln!("intermediate pn dist: [{}]", pb.join(", "));
         let dn_labels = ["dn=1", "dn=2-5", "dn=6-20", "dn=21-100", "dn=100+"];
-        let db: Vec<String> = inter_dn_buckets.iter().enumerate()
+        let db: Vec<String> = inter_dn_buckets
+            .iter()
+            .enumerate()
             .filter(|(_, &c)| c > 0)
             .map(|(i, &c)| format!("{}:{}", dn_labels[i], c))
             .collect();
@@ -2191,9 +2423,14 @@ impl TranspositionTable {
     /// 指定 pos_key のエントリイテレータ(verbose 診断用)．
     /// ProvenTT + WorkingTT を chain して返す．
     #[cfg(feature = "verbose")]
-    pub(super) fn entries_iter(&self, pos_key: u64, hand: &[u8; HAND_KINDS]) -> impl Iterator<Item = &DfPnEntry> {
+    pub(super) fn entries_iter(
+        &self,
+        pos_key: u64,
+        hand: &[u8; HAND_KINDS],
+    ) -> impl Iterator<Item = &DfPnEntry> {
         let pos_key = Self::safe_key(pos_key);
-        self.working_cluster(pos_key, hand).iter()
+        self.working_cluster(pos_key, hand)
+            .iter()
             .filter(move |fe| fe.pos_key == pos_key)
             .map(|fe| &fe.entry)
     }
@@ -2302,7 +2539,11 @@ mod proven_table_tests {
         table.insert(0x1, ProvenEntry::new_disproof(hand, 30));
         assert_eq!(table.len(), 1, "total should remain 1 after update");
         assert_eq!(table.proof_len(), 0, "proof counter should decrement");
-        assert_eq!(table.confirmed_len(), 1, "confirmed counter should increment");
+        assert_eq!(
+            table.confirmed_len(),
+            1,
+            "confirmed counter should increment"
+        );
     }
 
     #[test]
@@ -2404,8 +2645,10 @@ mod proven_table_tests {
         assert!(table.remove(0x100, &h1));
 
         // h2 は依然 lookup できなければならない (tombstone を skip して継続)
-        assert!(table.lookup(0x100, &h2).is_some(),
-            "lookup must skip tombstones and reach h2");
+        assert!(
+            table.lookup(0x100, &h2).is_some(),
+            "lookup must skip tombstones and reach h2"
+        );
 
         // iter_pos_key も 1 エントリ (h2) のみ返す
         let count = table.iter_pos_key(0x100).count();

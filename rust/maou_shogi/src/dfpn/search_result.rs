@@ -109,7 +109,14 @@ impl SearchResult {
         } else {
             (K_INFINITE_PN_DN, 0)
         };
-        Self::new_final_inner(pn, dn, len, amount, super::mate_len::KDEPTH_MAX as Depth, hand)
+        Self::new_final_inner(
+            pn,
+            dn,
+            len,
+            amount,
+            super::mate_len::KDEPTH_MAX as Depth,
+            hand,
+        )
     }
     /// 千日手 (KH `MakeRepetition`, :91)．pn=INF, dn=0, rep_start を保持．
     pub(super) fn make_repetition(
@@ -284,9 +291,17 @@ pub(super) fn compare_results(or_node: bool, lhs: SearchResult, rhs: SearchResul
     // 3. proven (pn==0): OR は短い詰み / AND は長い詰みを優先
     if lhs.pn() == 0 {
         if lhs.len() < rhs.len() {
-            return if or_node { Ordering3::Less } else { Ordering3::Greater };
+            return if or_node {
+                Ordering3::Less
+            } else {
+                Ordering3::Greater
+            };
         } else if lhs.len() > rhs.len() {
-            return if or_node { Ordering3::Greater } else { Ordering3::Less };
+            return if or_node {
+                Ordering3::Greater
+            } else {
+                Ordering3::Less
+            };
         }
     }
     // 4. disproven (dn==0): rep_start 順 (OR=小さい順, AND=大きい順)
@@ -368,7 +383,7 @@ mod tests {
         extend_search_threshold(u, &mut thpn, &mut thdn);
         assert_eq!(thpn, 6); // max(1, 5+1)
         assert_eq!(thdn, 8); // max(1, 7+1)
-        // final は更新しない
+                             // final は更新しない
         let f = SearchResult::make_final(true, h0(), MateLen::from_len(5), 1);
         let (mut a, mut b) = (3u64, 3u64);
         extend_search_threshold(f, &mut a, &mut b);
@@ -381,7 +396,7 @@ mod tests {
         let a = SearchResult::make_unknown(2, 9, len, 1, BitSet64::full()); // OR: phi=2
         let b = SearchResult::make_unknown(3, 1, len, 1, BitSet64::full()); // OR: phi=3
         assert_eq!(compare_results(true, a, b), Ordering3::Less); // a better (smaller pn)
-        // 同 phi なら delta (OR=dn) 昇順
+                                                                  // 同 phi なら delta (OR=dn) 昇順
         let c = SearchResult::make_unknown(2, 5, len, 1, BitSet64::full());
         let d = SearchResult::make_unknown(2, 9, len, 1, BitSet64::full());
         assert_eq!(compare_results(true, c, d), Ordering3::Less);

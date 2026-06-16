@@ -1,6 +1,5 @@
 //! プロファイリング用マクロと統計構造体．
 
-
 /// `profile` feature が有効な場合のみ計測し，結果をフィールドに加算する．
 #[cfg(feature = "profile")]
 macro_rules! profile_timed {
@@ -126,8 +125,7 @@ impl std::fmt::Display for ProfileStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // child_init_domove は child_init の入れ子内訳だが，一部の early return
         // 経路で親 child_init カウンタに記録されないため，未計上分を補正する．
-        let child_init_uncaptured = self.child_init_domove_ns
-            .saturating_sub(self.child_init_ns);
+        let child_init_uncaptured = self.child_init_domove_ns.saturating_sub(self.child_init_ns);
         let total_ns = self.position_key_ns
             + self.loop_detect_ns
             + self.tt_lookup_ns
@@ -147,29 +145,68 @@ impl std::fmt::Display for ProfileStats {
         let total_us = total_ns as f64 / 1000.0;
 
         writeln!(f, "=== DFPN Profile Stats ===")?;
-        writeln!(f, "{:<25} {:>12} {:>10} {:>10} {:>6}",
-            "Operation", "Total(µs)", "Count", "Avg(ns)", "%")?;
+        writeln!(
+            f,
+            "{:<25} {:>12} {:>10} {:>10} {:>6}",
+            "Operation", "Total(µs)", "Count", "Avg(ns)", "%"
+        )?;
         writeln!(f, "{}", "-".repeat(65))?;
 
         let items: Vec<(&str, u64, u64)> = vec![
-            ("position_key", self.position_key_ns, self.position_key_count),
+            (
+                "position_key",
+                self.position_key_ns,
+                self.position_key_count,
+            ),
             ("loop_detect", self.loop_detect_ns, self.loop_detect_count),
             ("tt_lookup", self.tt_lookup_ns, self.tt_lookup_count),
             ("tt_store", self.tt_store_ns, self.tt_store_count),
-            ("movegen_check", self.movegen_check_ns, self.movegen_check_count),
-            ("movegen_defense", self.movegen_defense_ns, self.movegen_defense_count),
+            (
+                "movegen_check",
+                self.movegen_check_ns,
+                self.movegen_check_count,
+            ),
+            (
+                "movegen_defense",
+                self.movegen_defense_ns,
+                self.movegen_defense_count,
+            ),
             ("do_move", self.do_move_ns, self.do_move_count),
             ("undo_move", self.undo_move_ns, self.undo_move_count),
             ("child_init", self.child_init_ns, self.child_init_count),
-            ("  ci_do/undo_move", self.child_init_domove_ns, self.child_init_domove_count),
+            (
+                "  ci_do/undo_move",
+                self.child_init_domove_ns,
+                self.child_init_domove_count,
+            ),
             ("  ci_inline", self.ci_inline_ns, self.ci_inline_count),
             ("  ci_resolve", self.ci_resolve_ns, self.ci_resolve_count),
             ("  ci_early_domove", child_init_uncaptured, 0),
-            ("main_loop_collect", self.main_loop_collect_ns, self.main_loop_collect_count),
-            ("depth_limit_terminal", self.depth_limit_terminal_ns, self.depth_limit_terminal_count),
-            ("nm_promotion_refut", self.nm_promotion_refutable_ns, self.nm_promotion_refutable_count),
-            ("capture_tt_lookahead", self.capture_tt_lookahead_ns, self.capture_tt_lookahead_count),
-            ("cross_deduce", self.cross_deduce_ns, self.cross_deduce_count),
+            (
+                "main_loop_collect",
+                self.main_loop_collect_ns,
+                self.main_loop_collect_count,
+            ),
+            (
+                "depth_limit_terminal",
+                self.depth_limit_terminal_ns,
+                self.depth_limit_terminal_count,
+            ),
+            (
+                "nm_promotion_refut",
+                self.nm_promotion_refutable_ns,
+                self.nm_promotion_refutable_count,
+            ),
+            (
+                "capture_tt_lookahead",
+                self.capture_tt_lookahead_ns,
+                self.capture_tt_lookahead_count,
+            ),
+            (
+                "cross_deduce",
+                self.cross_deduce_ns,
+                self.cross_deduce_count,
+            ),
             ("prefilter", self.prefilter_ns, self.prefilter_count),
         ];
 
@@ -181,18 +218,24 @@ impl std::fmt::Display for ProfileStats {
             } else {
                 0.0
             };
-            writeln!(f, "{:<25} {:>12.1} {:>10} {:>10} {:>5.1}%",
-                name, us, count, avg_ns, pct)?;
+            writeln!(
+                f,
+                "{:<25} {:>12.1} {:>10} {:>10} {:>5.1}%",
+                name, us, count, avg_ns, pct
+            )?;
         }
         writeln!(f, "{}", "-".repeat(65))?;
         writeln!(f, "{:<25} {:>12.1}", "Total measured", total_us)?;
         if self.tt_overflow_count > 0 || self.tt_max_entries_per_position > 0 {
-            writeln!(f, "  tt_overflow: {} (proven: {}, working: {}, no_victim: {}), max_entries/pos: {}",
+            writeln!(
+                f,
+                "  tt_overflow: {} (proven: {}, working: {}, no_victim: {}), max_entries/pos: {}",
                 self.tt_overflow_count,
                 self.tt_proven_overflow_count,
                 self.tt_working_overflow_count,
                 self.tt_overflow_no_victim_count,
-                self.tt_max_entries_per_position)?;
+                self.tt_max_entries_per_position
+            )?;
         }
         let solve_wall_ns = self.mid_total_ns + self.pns_total_ns;
         if solve_wall_ns > 0 {
@@ -203,8 +246,11 @@ impl std::fmt::Display for ProfileStats {
             } else {
                 0.0
             };
-            writeln!(f, "  MID wall: {:.1}µs ({} calls), PNS wall: {:.1}µs",
-                mid_us, self.mid_total_count, pns_us)?;
+            writeln!(
+                f,
+                "  MID wall: {:.1}µs ({} calls), PNS wall: {:.1}µs",
+                mid_us, self.mid_total_count, pns_us
+            )?;
             writeln!(f, "  MID profiled coverage: {:.1}%", coverage_pct)?;
         }
         Ok(())

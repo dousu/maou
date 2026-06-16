@@ -15,8 +15,8 @@
 
 use super::mate_len::{MateLen, DEPTH_MAX_PLUS1_MATE_LEN, MINUS1_MATE_LEN};
 use super::search_result::{
-    clamp_pn_dn, compare_results, BitSet64, Depth, Hand, Ordering3, PnDn, SearchAmount, SearchResult,
-    K_INFINITE_PN_DN,
+    clamp_pn_dn, compare_results, BitSet64, Depth, Hand, Ordering3, PnDn, SearchAmount,
+    SearchResult, K_INFINITE_PN_DN,
 };
 use super::tt_v4::TtContext;
 use crate::board::Board;
@@ -124,7 +124,11 @@ impl LocalExpansion {
     // ---- comparer (KH MakeComparer: SearchResultComparer → 同点なら mp_.value) ----
     #[inline]
     fn compare_idx(&self, i: u32, j: u32) -> Ordering {
-        match compare_results(self.or_node, self.results[i as usize], self.results[j as usize]) {
+        match compare_results(
+            self.or_node,
+            self.results[i as usize],
+            self.results[j as usize],
+        ) {
             Ordering3::Less => Ordering::Less,
             Ordering3::Greater => Ordering::Greater,
             Ordering3::Equivalent => self.move_evals[i as usize].cmp(&self.move_evals[j as usize]),
@@ -316,7 +320,13 @@ impl LocalExpansion {
             .front_result()
             .amount()
             .saturating_add(self.moves.len() as SearchAmount - 1);
-        SearchResult::make_unknown(self.get_pn(), self.get_dn(), self.len, amount, self.sum_mask)
+        SearchResult::make_unknown(
+            self.get_pn(),
+            self.get_dn(),
+            self.len,
+            amount,
+            self.sum_mask,
+        )
     }
     /// 現局面が proven か (φ=0)．3b の current_result 分岐用．
     #[inline]
@@ -417,7 +427,11 @@ impl LocalExpansion {
     }
     /// 子に渡す (pn, dn) 閾値 (KH `FrontPnDnThresholds`, :428)．
     pub(super) fn front_pn_dn_thresholds(&self, thpn: PnDn, thdn: PnDn) -> (PnDn, PnDn) {
-        let (thphi, thdelta) = if self.or_node { (thpn, thdn) } else { (thdn, thpn) };
+        let (thphi, thdelta) = if self.or_node {
+            (thpn, thdn)
+        } else {
+            (thdn, thpn)
+        };
         let child_thphi = thphi.min(self.get_second_phi().saturating_add(1));
         let child_thdelta = self.new_thdelta_for_best_move(thdelta);
         if self.or_node {
@@ -448,7 +462,8 @@ impl LocalExpansion {
         if self.idx.len() > self.excluded_moves + 1 {
             let front = self.idx[self.excluded_moves];
             let lo = self.excluded_moves + 1;
-            let rel = self.idx[lo..].partition_point(|&x| self.compare_idx(x, front) == Ordering::Less);
+            let rel =
+                self.idx[lo..].partition_point(|&x| self.compare_idx(x, front) == Ordering::Less);
             let itr = lo + rel;
             self.idx[self.excluded_moves..itr].rotate_left(1);
         }
@@ -459,7 +474,8 @@ impl LocalExpansion {
             let back = self.idx[self.idx.len() - 1];
             let lo = self.excluded_moves;
             let hi = self.idx.len() - 1;
-            let rel = self.idx[lo..hi].partition_point(|&x| self.compare_idx(x, back) == Ordering::Less);
+            let rel =
+                self.idx[lo..hi].partition_point(|&x| self.compare_idx(x, back) == Ordering::Less);
             let itr = lo + rel;
             self.idx[itr..].rotate_right(1);
         }
@@ -468,8 +484,8 @@ impl LocalExpansion {
     fn resort_excluded_back(&mut self) {
         if self.excluded_moves > 0 {
             let val = self.idx[self.excluded_moves];
-            let rel =
-                self.idx[..self.excluded_moves].partition_point(|&x| self.compare_idx(x, val) == Ordering::Less);
+            let rel = self.idx[..self.excluded_moves]
+                .partition_point(|&x| self.compare_idx(x, val) == Ordering::Less);
             self.idx[rel..self.excluded_moves + 1].rotate_right(1);
         }
     }
@@ -517,11 +533,13 @@ impl LocalExpansion {
                 // 旧 best が delta_except_best へ加わるので差分計算
                 let old_is_sum_delta = self.sum_mask.test(old_i_raw);
                 if old_is_sum_delta {
-                    self.sum_delta_except_best =
-                        clamp_pn_dn(self.sum_delta_except_best + self.results[old_i_raw].delta(self.or_node));
+                    self.sum_delta_except_best = clamp_pn_dn(
+                        self.sum_delta_except_best + self.results[old_i_raw].delta(self.or_node),
+                    );
                 } else {
-                    self.max_delta_except_best =
-                        self.max_delta_except_best.max(self.results[old_i_raw].delta(self.or_node));
+                    self.max_delta_except_best = self
+                        .max_delta_except_best
+                        .max(self.results[old_i_raw].delta(self.or_node));
                 }
                 self.resort_front();
             }
@@ -529,8 +547,7 @@ impl LocalExpansion {
             let new_delta = self.results[new_i_raw].delta(self.or_node);
             let new_is_sum_delta = self.sum_mask.test(new_i_raw);
             if new_is_sum_delta {
-                self.sum_delta_except_best =
-                    self.sum_delta_except_best.saturating_sub(new_delta);
+                self.sum_delta_except_best = self.sum_delta_except_best.saturating_sub(new_delta);
             } else if new_delta < self.max_delta_except_best {
                 // new_best を抜いても max_delta_except_best は不変
             } else {
@@ -588,7 +605,7 @@ mod tests {
         let e = or_node(&[(5, 3), (2, 4), (9, 1)]);
         let (cthpn, cthdn) = e.front_pn_dn_thresholds(100, 1000);
         assert_eq!(cthpn, 6); // min(100, second_phi(5)+1)
-        // child_thdelta = thdn - sum_delta_except_best(他子 dn = 3+1=4) = 1000-4 = 996．
+                              // child_thdelta = thdn - sum_delta_except_best(他子 dn = 3+1=4) = 1000-4 = 996．
         assert_eq!(cthdn, 996);
     }
 

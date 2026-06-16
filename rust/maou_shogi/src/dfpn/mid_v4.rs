@@ -29,9 +29,7 @@
 //! - STRICT PV replay の v4 版 / 無意味中合いの cross-square DML．
 
 use super::delayed_move_list::DelayedMoveList;
-use super::kh_local_expansion::{
-    BranchRootEdge, LocalExpansion, K_ANCESTOR_SEARCH_THRESHOLD,
-};
+use super::kh_local_expansion::{BranchRootEdge, LocalExpansion, K_ANCESTOR_SEARCH_THRESHOLD};
 use super::mate_len::{MateLen, DEPTH_MAX_MATE_LEN, ZERO_MATE_LEN};
 use super::path_key::path_key_after;
 use super::search_result::{
@@ -44,6 +42,41 @@ use crate::board::Board;
 /// init_pn_dn (unit-16) を KH `kPnDnUnit=2` へ縮約する除数 (mid_v3 `PN_UNIT_SCALE` と同値)．
 const DIV: u64 = 8;
 
+/// KH `detail::kForceSumPnDn` (local_expansion.hpp:35)．δ がこの値以上の子は build 時に
+/// sum→max 集約へ落とす (kh_local_expansion.rs と同値)．
+const K_FORCE_SUM_PN_DN: PnDn = K_INFINITE_PN_DN / 1024;
+
+/// KH `IsSumDeltaNode` (initial_estimation.hpp:227)．move のδ値を sum で計上すべきか判定する．
+/// 基本は true (sum)．OR node で「2/3 段目 (受け方先) への香の成/不成 (玉が直前にいる)」のみ
+/// false (max) を返す = 似た子局面で過小評価を避ける．`board` は親局面 (この手を指す側の手番)．
+fn is_sum_delta_node(board: &Board, m: crate::moves::Move, or_node: bool) -> bool {
+    use crate::types::{Color, PieceType};
+    if m.is_drop() || !or_node {
+        return true;
+    }
+    let from = m.from_sq();
+    // 移動駒種 (raw piece type の下位 4bit)．香 = Lance のみ判定対象．
+    if (board.piece_at(from) & 0x0F) != PieceType::Lance as u8 {
+        return true;
+    }
+    let to = m.to_sq();
+    let to_raw = to.raw_u8();
+    let rank0 = (to_raw % 9) as i32; // 0-based rank (rank1=0 .. rank9=8)
+    let king = match board.king_square(board.turn.opponent()) {
+        Some(k) => k.raw_u8() as i32,
+        None => return true,
+    };
+    let to_i = to_raw as i32;
+    // KH: 黒番は to が rank2/3 (rank0∈{1,2}) かつ玉が to の 1 つ上 (rank 減 = raw-1)．
+    //     白番は to が rank7/8 (rank0∈{6,7}) かつ玉が to の 1 つ下 (rank 増 = raw+1)．
+    let hit = if board.turn == Color::Black {
+        (rank0 == 1 || rank0 == 2) && king == to_i - 1
+    } else {
+        (rank0 == 6 || rank0 == 7) && king == to_i + 1
+    };
+    !hit
+}
+
 /// `V4SEL` env (process 内 1 回読み)．KH `KHSEL` と同形式で ply 0-7 初出ノードの sort 済
 /// 子リスト (move/pn/dn) を sfen 付きで dump し，KH との guidance 乖離を突合する．
 fn v4sel_enabled() -> bool {
@@ -55,6 +88,44 @@ fn v4sel_enabled() -> bool {
 pub(super) fn khorder_enabled() -> bool {
     static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *C.get_or_init(|| std::env::var("V4_KHORDER").is_ok())
+}
+
+/// `V4TRACE` env (process 内 1 回読み)．KH `KHTRACE` と同形式で各 build の best 子 (idx[0]) の
+/// move/pn/dn を sfen 付き chronological dump し，最初の探索乖離を突合する ([[feedback_kh_divergence_hunting]])．
+fn v4trace_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4TRACE").is_ok())
+}
+
+/// `V4NODE` env: 指定 sfen prefix に一致するノードの sort 済子リストを dump する診断用 (process 内 1 回読み)．
+fn v4node_prefix() -> Option<String> {
+    static C: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    C.get_or_init(|| std::env::var("V4NODE").ok().filter(|s| !s.is_empty()))
+        .clone()
+}
+
+/// `V4_SMPROP` env: KH `FrontSumMask` の cross-expansion propagation を**有効化**する (process 内 1 回読み)．
+/// **default OFF**．理由: propagation 単体は default 探索順 (movegen 順 ≠ KH) では DAG (EliminateDoubleCount)
+/// の効果を打ち消し 11,286→18,470 と退行する (KHTRACE 突合で cnt=24 tie-break 乖離が真因と判明)．
+/// movegen 順を KH に揃える `V4_KHORDER` + `V4_DOM` と**併用**して初めて co-adapt し有益になる
+/// (V4_KHORDER+V4_DOM+V4_SMPROP = 11,544, dominance が -45% に転じ KH と同符号; 単独は退行)．
+/// → 忠実 bundle は opt-in．default v4 (無印) は 11,286 を維持する ([[project_dfpn_incremental_unreachable_v2_9_0]])．
+fn v4_smprop() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4_SMPROP").is_ok())
+}
+
+/// `V4_NOSMRESET` env: build-time sum_mask reset を無効化 (Full のまま from_parts) して
+/// 旧挙動 (update_best_child の reset のみ) と切り分ける診断用 (process 内 1 回読み)．
+fn v4_nosmreset() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4_NOSMRESET").is_ok())
+}
+
+/// `V4_NODAG` env: EliminateDoubleCount (DAG 二重カウント抑止) を無効化する診断用 (process 内 1 回読み)．
+fn v4_nodag() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4_NODAG").is_ok())
 }
 
 /// KH `generate_checks<CHECKS_ALL>` (movegen.cpp:818-865) の生成順を完全に再現する sort key．
@@ -94,16 +165,16 @@ pub(super) fn kh_check_order_key(m: crate::moves::Move) -> u64 {
 /// PAWN→0, LANCE→1, KNIGHT→2, SILVER→3, BISHOP→4, ROOK→5, GOLD/成駒(金移動)→6, HORSE→7, DRAGON→8．
 fn kh_piece_gen_order(raw_pt: u8) -> u64 {
     match raw_pt {
-        1 => 0,            // Pawn
-        2 => 1,            // Lance
-        3 => 2,            // Knight
-        4 => 3,            // Silver
-        5 => 4,            // Bishop
-        6 => 5,            // Rook
-        7 => 6,            // Gold
+        1 => 0,                // Pawn
+        2 => 1,                // Lance
+        3 => 2,                // Knight
+        4 => 3,                // Silver
+        5 => 4,                // Bishop
+        6 => 5,                // Rook
+        7 => 6,                // Gold
         9 | 10 | 11 | 12 => 6, // と金/成香/成桂/成銀 (金の動き; GPM_GHD)
-        13 => 7,           // Horse
-        14 => 8,           // Dragon
+        13 => 7,               // Horse
+        14 => 8,               // Dragon
         _ => 9,
     }
 }
@@ -133,7 +204,11 @@ pub(super) fn kh_evasion_order_key(board: &crate::board::Board, m: crate::moves:
 }
 
 /// OR=王手順 / AND=evasion 順を返す per-move の KH 生成順 key (comparer の最終 tie-break 用)．
-pub(super) fn kh_order_key(board: &crate::board::Board, m: crate::moves::Move, or_node: bool) -> u64 {
+pub(super) fn kh_order_key(
+    board: &crate::board::Board,
+    m: crate::moves::Move,
+    or_node: bool,
+) -> u64 {
     if or_node {
         kh_check_order_key(m)
     } else {
@@ -146,6 +221,8 @@ thread_local! {
     static V4SEL_DUMPED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     /// V4RAW (sort/DML 前の raw movegen 順) の ply 0-7 dump 済 bitmask．
     static V4RAW_DUMPED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    /// V4TRACE の chronological build カウンタ (KH `kh_trace_cnt` 相当; solve 毎に reset)．
+    static V4TRACE_CNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 impl DfPnSolver {
@@ -160,6 +237,7 @@ impl DfPnSolver {
         self.v4_dom_fires = 0;
         V4SEL_DUMPED.with(|c| c.set(0));
         V4RAW_DUMPED.with(|c| c.set(0));
+        V4TRACE_CNT.with(|c| c.set(0));
         // KH VisitHistory path dominance (IsRepetitionOrInferiorAfter)．`V4_DOM` で opt-in (default OFF)．
         // 単位を揃えた計測で判明: KH (dominance 有) = 9,296 visits に対し，maou+dominance = 16,902
         // (1.82×) と KH から **遠ざかる** (DAG EliminateDoubleCount との二重カウント相互作用; fires
@@ -198,6 +276,7 @@ impl DfPnSolver {
                 0,
                 0u64,
                 true,
+                BitSet64::full(),
                 &mut inc_flag,
             );
             if last.pn() == 0 || last.dn() == 0 {
@@ -289,15 +368,20 @@ impl DfPnSolver {
         depth: u32,
         path_key: u64,
         first_search: bool,
+        sum_mask: BitSet64,
         inc_flag: &mut u32,
     ) -> SearchResult {
         self.v3_nodes += 1;
-        if self.v3_nodes >= self.max_nodes
-            || (self.v3_nodes & 0x3FF == 0 && self.is_timed_out())
-        {
+        if self.v3_nodes >= self.max_nodes || (self.v3_nodes & 0x3FF == 0 && self.is_timed_out()) {
             self.timed_out = self.timed_out || self.is_timed_out();
             // budget 切れは非 final unknown で unwind (root の IDS が次で break)．
             return SearchResult::make_first_visit(1, 1, len, 1);
+        }
+        // KH `if (n.GetDepth() >= kDepthMax) return MakeRepetition(...)` (komoring_heights.cpp:428)．
+        // 病的な深さでの無限再帰を千日手扱いで打ち切る (29te/39te では発火しない)．
+        if depth as usize >= super::mate_len::KDEPTH_MAX as usize {
+            let attacker_hand = board.hand[self.attacker.index()];
+            return SearchResult::make_repetition(attacker_hand, len, 1, 0);
         }
 
         // KH 流 GC (komoring_heights.cpp:446): hashfull が 50% を超えたら低 amount entry を
@@ -310,10 +394,61 @@ impl DfPnSolver {
         }
 
         let attacker_hand = board.hand[self.attacker.index()];
-        let exp = match self.build_v4_expansion(tt, board, len, depth, path_key, first_search) {
+        let exp = match self.build_v4_expansion(
+            tt,
+            board,
+            len,
+            depth,
+            path_key,
+            first_search,
+            sum_mask,
+        ) {
             Ok(e) => e,
             Err(terminal) => return terminal,
         };
+        // V4TRACE: 各 build の best 子 (idx[0]) を chronological dump (KH KHTRACE と 1:1 join)．
+        if v4trace_enabled() {
+            let cnt = V4TRACE_CNT.with(|c| {
+                let v = c.get() + 1;
+                c.set(v);
+                v
+            });
+            if cnt <= 20000 {
+                let oc = if board.turn == self.attacker { 1 } else { 0 };
+                let children = exp.trace_children();
+                if let Some((m, pn, dn, _ev, _am)) = children.first() {
+                    eprintln!(
+                        "V4TRACE {} ply={} or={} best={} bpn={} bdn={} sfen={}",
+                        cnt,
+                        depth,
+                        oc,
+                        m.to_usi(),
+                        pn,
+                        dn,
+                        board.sfen()
+                    );
+                }
+            }
+        }
+        // V4NODE: 指定 sfen prefix に一致するノードで sort 済子リストを dump (任意 ply, 全 occurrence)．
+        if let Some(prefix) = v4node_prefix() {
+            let sfen = board.sfen();
+            if sfen.starts_with(prefix.as_str()) {
+                let oc = if board.turn == self.attacker { 1 } else { 0 };
+                eprintln!("V4NODE ply={} or={} sfen={}", depth, oc, sfen);
+                for (k, (m, pn, dn, ev, am)) in exp.trace_children().iter().enumerate() {
+                    eprintln!(
+                        "V4NODE   {} {} pn={} dn={} ev={} am={}",
+                        k,
+                        m.to_usi(),
+                        pn,
+                        dn,
+                        ev,
+                        am
+                    );
+                }
+            }
+        }
         // V4SEL: ply 0-7 の初出ノードで sort 済子リストを dump (KH KHSEL と sfen で突合する)．
         if v4sel_enabled() && depth <= 7 {
             let bit = 1u8 << depth;
@@ -326,7 +461,15 @@ impl DfPnSolver {
                 let oc = if board.turn == self.attacker { 1 } else { 0 };
                 eprintln!("V4SEL ply={} or={} sfen={}", depth, oc, board.sfen());
                 for (k, (m, pn, dn, ev, am)) in exp.trace_children().iter().enumerate() {
-                    eprintln!("V4SEL   {} {} pn={} dn={} ev={} am={}", k, m.to_usi(), pn, dn, ev, am);
+                    eprintln!(
+                        "V4SEL   {} {} pn={} dn={} ev={} am={}",
+                        k,
+                        m.to_usi(),
+                        pn,
+                        dn,
+                        ev,
+                        am
+                    );
                 }
             }
         }
@@ -337,7 +480,9 @@ impl DfPnSolver {
         self.v4_stack[my].set_key_hand_pair((super::position_key(board), attacker_hand));
         // KH `EliminateDoubleCount` (komoring_heights.cpp:432): best_move が TT 親鎖で祖先へ合流する
         // (DAG) なら，その分岐元の合流子を sum→max 集約へ落とし pn/dn 二重カウントを抑止する．
-        self.eliminate_double_count_v4(tt, board, my, depth);
+        if !v4_nodag() {
+            self.eliminate_double_count_v4(tt, board, my, depth);
+        }
 
         let orig_thpn = thpn;
         let orig_thdn = thdn;
@@ -374,6 +519,16 @@ impl DfPnSolver {
             let (cthpn, cthdn) = self.v4_stack[my].front_pn_dn_thresholds(thpn, thdn);
             let best_raw = self.v4_stack[my].front_raw();
             let child_query = self.v4_stack[my].query_at(best_raw);
+            // KH `sum_mask = local_expansion.FrontSumMask()` (komoring_heights.cpp:458): 子展開へ
+            // 渡す sum_mask は best 子の結果が保持する mask．これにより子の sum→max 集約が再展開を
+            // 跨いで保たれる (build 時の `BitSet64::full()` 上書きで失われていた = δ集約の忠実性欠落)．
+            // default OFF (V4_SMPROP opt-in)．単体 propagation は DAG を打ち消し退行するため，
+            // 忠実 bundle (V4_KHORDER+V4_DOM) と併用時のみ有効化する．
+            let child_sum_mask = if v4_smprop() {
+                self.v4_stack[my].front_sum_mask()
+            } else {
+                BitSet64::full()
+            };
 
             let captured = board.do_move(best_move);
             let child_pk = path_key_after(path_key, best_move, depth as usize);
@@ -387,12 +542,30 @@ impl DfPnSolver {
                     initial
                 } else {
                     self.search_impl_v4(
-                        tt, board, cthpn, cthdn, len.sub(1), depth + 1, child_pk, is_first, inc_flag,
+                        tt,
+                        board,
+                        cthpn,
+                        cthdn,
+                        len.sub(1),
+                        depth + 1,
+                        child_pk,
+                        is_first,
+                        child_sum_mask,
+                        inc_flag,
                     )
                 }
             } else {
                 self.search_impl_v4(
-                    tt, board, cthpn, cthdn, len.sub(1), depth + 1, child_pk, is_first, inc_flag,
+                    tt,
+                    board,
+                    cthpn,
+                    cthdn,
+                    len.sub(1),
+                    depth + 1,
+                    child_pk,
+                    is_first,
+                    child_sum_mask,
+                    inc_flag,
                 )
             };
 
@@ -444,6 +617,7 @@ impl DfPnSolver {
         depth: u32,
         path_key: u64,
         first_search: bool,
+        sum_mask: BitSet64,
     ) -> Result<LocalExpansion, SearchResult> {
         let attacker = self.attacker;
         let or_node = board.turn == attacker;
@@ -517,6 +691,9 @@ impl DfPnSolver {
         let mut queries = Vec::with_capacity(n);
         let mut idx: Vec<u32> = Vec::with_capacity(n);
         let mut does_have_old = false;
+        // KH ctor `sum_mask_{sum_mask}` (local_expansion.hpp:159): 親から渡された sum_mask を起点に，
+        // 非 final 子のうち IsSumDeltaNode でない / δ が kForceSumPnDn 以上のものを max 集約へ落とす．
+        let mut cur_sum_mask = sum_mask;
 
         for (i, &m) in moves.iter().enumerate() {
             // eval / seed は親局面で計算 (KH: MoveBriefEvaluation / InitialPnDn(n, move))．
@@ -569,10 +746,18 @@ impl DfPnSolver {
                 does_have_old = does_have_old || dhoc;
                 res
             };
+            // KH ctor (local_expansion.hpp:194-197): 非 final 子の δ 集約方式を決める．似た子局面で
+            // 過小評価を招く手 (`!IsSumDeltaNode`) と既に δ が巨大な子 (`>= kForceSumPnDn`) は max 集約へ
+            // 落とす (sum_mask bit を reset)．look-ahead で final 化する前の seed の δ で判定する．
+            if !v4_nosmreset()
+                && !r.is_final()
+                && (!is_sum_delta_node(board, m, or_node) || r.delta(or_node) >= K_FORCE_SUM_PN_DN)
+            {
+                cur_sum_mask.reset(i);
+            }
             // KH DML skip 判定 (local_expansion.hpp:194-203): 非 final かつ prev chain に未 final の
             // 先行手があれば後回し (idx に積まない)．prev は i より前に処理済なので results が揃っている．
-            let is_skipped =
-                !r.is_final() && dml.has_unresolved_prev(i, |j| results[j].is_final());
+            let is_skipped = !r.is_final() && dml.has_unresolved_prev(i, |j| results[j].is_final());
 
             // KH `CheckObviousFinalOrNode` 先読み (local_expansion.hpp:217-221)．non-skipped のみ．
             // AND node の first-visit child は子が OR node (攻め方手番)．board は do_move 済 (= 子局面)
@@ -615,7 +800,7 @@ impl DfPnSolver {
             queries,
             results,
             idx,
-            BitSet64::full(),
+            cur_sum_mask,
             does_have_old,
             dml_next,
             1,
@@ -636,10 +821,20 @@ impl DfPnSolver {
         let (mm_opt, has_checks) = self.mate1ply_with_cached_checks(board);
         if !has_checks {
             // 攻め方に王手手段なし → 詰み不可能 → 不詰 (KH MakeFinal<false>, kDepthMaxMateLen)．
-            Some(SearchResult::make_final(false, or_hand, DEPTH_MAX_MATE_LEN, 1))
+            Some(SearchResult::make_final(
+                false,
+                or_hand,
+                DEPTH_MAX_MATE_LEN,
+                1,
+            ))
         } else if mm_opt.is_some() {
             // 1 手詰 → 詰み proven (mate-1)．
-            Some(SearchResult::make_final(true, or_hand, MateLen::from_len(1), 1))
+            Some(SearchResult::make_final(
+                true,
+                or_hand,
+                MateLen::from_len(1),
+                1,
+            ))
         } else {
             None
         }
@@ -663,7 +858,10 @@ impl DfPnSolver {
         let or_node = self.v4_stack[my].is_or_node();
         // best_move 後の子 (board_key, attacker_hand) を取得 (KH `BoardKeyHandPairAfter`)．
         let captured = board.do_move(best_move);
-        let child_kh = (super::position_key(board), board.hand[self.attacker.index()]);
+        let child_kh = (
+            super::position_key(board),
+            board.hand[self.attacker.index()],
+        );
         board.undo_move(best_move, captured);
 
         let edge = match self.find_known_ancestor_v4(tt, current_kh, child_kh, or_node, depth, my) {

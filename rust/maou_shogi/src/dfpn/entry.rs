@@ -1,6 +1,5 @@
 //! Df-Pn のデータ構造定義．
 
-
 use crate::types::HAND_KINDS;
 
 /// remaining_flags のビット 15: path_dependent フラグ．
@@ -154,13 +153,21 @@ impl ProvenEntry {
     /// pn synthesized value: proof=0, disproof=INF.
     #[inline(always)]
     pub(super) fn pn(&self) -> u32 {
-        if self.is_proof() { 0 } else { u32::MAX }
+        if self.is_proof() {
+            0
+        } else {
+            u32::MAX
+        }
     }
 
     /// dn synthesized value: proof=INF, disproof=0.
     #[inline(always)]
     pub(super) fn dn(&self) -> u32 {
-        if self.is_proof() { u32::MAX } else { 0 }
+        if self.is_proof() {
+            u32::MAX
+        } else {
+            0
+        }
     }
 
     /// source synthesized value: proven entries don't use SNDA → 0.
@@ -238,11 +245,7 @@ impl ProvenEntry {
     ///
     /// 既存コードはこの経路を使用する．tag=ABSOLUTE, tag_depth=0．
     #[inline(always)]
-    pub(super) fn new_proof(
-        hand: [u8; HAND_KINDS],
-        best_move: u16,
-        mate_distance: u16,
-    ) -> Self {
+    pub(super) fn new_proof(hand: [u8; HAND_KINDS], best_move: u16, mate_distance: u16) -> Self {
         Self::new_tagged_proof(hand, best_move, mate_distance, PROOF_TAG_ABSOLUTE, 0)
     }
 
@@ -262,8 +265,7 @@ impl ProvenEntry {
         tag: u8,
         tag_depth: u32,
     ) -> Self {
-        let meta = (tag as u16 & PROOF_TAG_MASK)
-            | ((tag_depth.min(63) as u16) << TAG_DEPTH_SHIFT);
+        let meta = (tag as u16 & PROOF_TAG_MASK) | ((tag_depth.min(63) as u16) << TAG_DEPTH_SHIFT);
         Self {
             hand,
             flags: Self::encode_proof_flags(mate_distance),
@@ -278,10 +280,7 @@ impl ProvenEntry {
     /// `clear_proven_disproofs_below()` での選択的除去に使用する．
     /// disproof の flags bits 1-6 に 0-63 にクランプして格納する．
     #[inline(always)]
-    pub(super) fn new_disproof(
-        hand: [u8; HAND_KINDS],
-        ids_depth: u32,
-    ) -> Self {
+    pub(super) fn new_disproof(hand: [u8; HAND_KINDS], ids_depth: u32) -> Self {
         Self {
             hand,
             flags: Self::encode_disproof_flags(ids_depth),
@@ -394,7 +393,12 @@ impl DfPnEntry {
             remaining <= REMAINING_MASK,
             "remaining value {remaining} exceeds 15-bit limit"
         );
-        (remaining & REMAINING_MASK) | if path_dependent { PATH_DEPENDENT_BIT } else { 0 }
+        (remaining & REMAINING_MASK)
+            | if path_dependent {
+                PATH_DEPENDENT_BIT
+            } else {
+                0
+            }
     }
 
     /// 新しいエントリを構築する．
@@ -442,4 +446,3 @@ impl DfPnEntry {
 /// v0.25.0 以降は `DfPnSolver::param_pns_arena_max` で実行時に変更可能．
 /// この定数はデフォルト値および初期 `Vec::with_capacity` の上限として使用する．
 pub(super) const PNS_MAX_ARENA_NODES: usize = 5_000_000;
-

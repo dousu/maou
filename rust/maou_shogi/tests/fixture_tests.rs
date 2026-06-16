@@ -9,11 +9,7 @@ use maou_shogi::types::FEATURES_NUM;
 use serde::Deserialize;
 
 fn load_fixture<T: serde::de::DeserializeOwned>(filename: &str) -> T {
-    let path = format!(
-        "{}/tests/fixtures/{}",
-        env!("CARGO_MANIFEST_DIR"),
-        filename
-    );
+    let path = format!("{}/tests/fixtures/{}", env!("CARGO_MANIFEST_DIR"), filename);
     let content = std::fs::read_to_string(&path).expect(&format!("Failed to read: {}", path));
     serde_json::from_str(&content).expect(&format!("Failed to parse: {}", path))
 }
@@ -63,14 +59,19 @@ fn test_sfen_fixtures() {
         );
 
         assert_eq!(
-            board.turn() as u8, fixture.turn,
+            board.turn() as u8,
+            fixture.turn,
             "{}: turn mismatch",
             fixture.name
         );
 
         // SFEN round-trip
         let sfen_out = board.sfen();
-        assert_eq!(sfen_out, fixture.sfen, "{}: SFEN roundtrip failed", fixture.name);
+        assert_eq!(
+            sfen_out, fixture.sfen,
+            "{}: SFEN roundtrip failed",
+            fixture.name
+        );
     }
 }
 
@@ -124,7 +125,12 @@ fn test_move_fixtures() {
         );
 
         // USI round-trip
-        assert_eq!(m.to_usi(), fixture.usi, "USI roundtrip failed: {}", fixture.usi);
+        assert_eq!(
+            m.to_usi(),
+            fixture.usi,
+            "USI roundtrip failed: {}",
+            fixture.usi
+        );
     }
 }
 
@@ -216,10 +222,7 @@ fn test_checkmate_fixtures() {
 
     // 非詰み局面では is_checkmate() が false を返すこと
     let mut pos_hirate = Position::new();
-    assert!(
-        !pos_hirate.is_checkmate(),
-        "hirate should not be checkmate"
-    );
+    assert!(!pos_hirate.is_checkmate(), "hirate should not be checkmate");
 
     // 王手だが逃げられる局面
     let mut pos_check = Position::from_sfen("4k4/9/9/9/9/9/9/4r4/4K4 b - 1").unwrap();
@@ -278,10 +281,8 @@ fn test_special_rule_fixtures() {
         match fixture.name.as_str() {
             "nifu_check" => {
                 // 5筋に歩を打てない
-                let pawn_drops_file5: Vec<&String> = usi_moves
-                    .iter()
-                    .filter(|u| u.starts_with("P*5"))
-                    .collect();
+                let pawn_drops_file5: Vec<&String> =
+                    usi_moves.iter().filter(|u| u.starts_with("P*5")).collect();
                 assert!(
                     pawn_drops_file5.is_empty(),
                     "nifu: should not have pawn drops on file 5, but found: {:?}",

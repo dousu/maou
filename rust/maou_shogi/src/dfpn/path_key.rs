@@ -107,7 +107,11 @@ mod tests {
         let k0 = 0x1234_5678_9ABC_DEF0u64;
         let k1 = path_key_after(k0, m, 3);
         assert_ne!(k1, k0, "a move must change the path key");
-        assert_eq!(path_key_after(k1, m, 3), k0, "XOR diff must be self-inverse");
+        assert_eq!(
+            path_key_after(k1, m, 3),
+            k0,
+            "XOR diff must be self-inverse"
+        );
     }
 
     #[test]

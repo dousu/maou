@@ -13,9 +13,9 @@
 //!
 //! 全経路は `solve_via_v3` でのみ起動し，既存 mid_v2/baseline には一切影響しない (gated)．
 
+use super::solver::{DfPnSolver, TsumeResult};
 use crate::board::Board;
 use crate::moves::Move;
-use super::solver::{DfPnSolver, TsumeResult};
 
 /// 診断 env (sfen prefix gate) を process 内で 1 回だけ読む．
 /// hot path (per-node/per-child) での `std::env::var` は NPS を 1-2 桁落とすため必須．
@@ -83,22 +83,26 @@ diag_env_flag!(env_v3ply, "V3_PLY");
 fn env_v3eps() -> u32 {
     static C: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *C.get_or_init(|| {
-        std::env::var("V3_EPS").ok().and_then(|s| s.parse().ok()).unwrap_or(1)
+        std::env::var("V3_EPS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1)
     })
 }
 /// V3_DENOM=<n>: deferred_penalty_denom (default 8)．
 fn env_v3denom() -> u32 {
     static C: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *C.get_or_init(|| {
-        std::env::var("V3_DENOM").ok().and_then(|s| s.parse().ok()).unwrap_or(8)
+        std::env::var("V3_DENOM")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(8)
     })
 }
 /// V3_FLOOR=0/1: deferred_penalty_floor (default 1=true)．
 fn env_v3floor() -> bool {
     static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| {
-        std::env::var("V3_FLOOR").map(|s| s != "0").unwrap_or(true)
-    })
+    *C.get_or_init(|| std::env::var("V3_FLOOR").map(|s| s != "0").unwrap_or(true))
 }
 // V3_RECALC=1: resort_by_evals 後に recalc_delta (KH RecalcDelta 一致; default off)．
 coherent_env_flag!(env_v3recalc, "V3_RECALC");
@@ -124,12 +128,20 @@ coherent_env_flag!(env_v3maskkeep, "V3_MASKKEEP");
 /// V3_DEEPRECALC=<K>: ply>=K で recalc_on_resort を有効化 (深さ gate RECALC)．未設定なら従来 (env_v3recalc)．
 fn env_v3deeprecalc() -> Option<u32> {
     static C: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("V3_DEEPRECALC").ok().and_then(|s| s.parse().ok()))
+    *C.get_or_init(|| {
+        std::env::var("V3_DEEPRECALC")
+            .ok()
+            .and_then(|s| s.parse().ok())
+    })
 }
 /// V3_DEEPMASK=<K>: ply>=K で sum_mask 永続化 (深さ gate MASKKEEP)．未設定なら従来 (env_v3maskkeep)．
 fn env_v3deepmask() -> Option<u32> {
     static C: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("V3_DEEPMASK").ok().and_then(|s| s.parse().ok()))
+    *C.get_or_init(|| {
+        std::env::var("V3_DEEPMASK")
+            .ok()
+            .and_then(|s| s.parse().ok())
+    })
 }
 /// V3_DEEPEPS="K:E": **AND 節のみ** ply>=K で threshold_epsilon=E に上げる (深さ gate AND-commit)．
 /// 根拠 (Step 6.3): DEEPRECALC=11 が +29% ＝ accurate sum_delta は re-selection を増やし breadth 拡大，
@@ -157,7 +169,11 @@ diag_env_flag!(env_v3yoorder, "V3_YOORDER");
 fn env_v3xhcap() -> usize {
     static C: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *C.get_or_init(|| {
-        std::env::var("V3_XHCAP").ok().and_then(|s| s.parse().ok()).filter(|&n| n > 0).unwrap_or(8)
+        std::env::var("V3_XHCAP")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(8)
     })
 }
 // V3_PROBE=1: KH probe shape — first-visit 子を親ループ内で build し，built aggregate が
@@ -224,12 +240,20 @@ impl V3Entry {
     /// legacy (u64) 読み出し: INF marker を V3_INF へ戻す．
     #[inline]
     fn pn_u64(&self) -> u64 {
-        if self.pn >= V3_INF_U { V3_INF } else { self.pn as u64 }
+        if self.pn >= V3_INF_U {
+            V3_INF
+        } else {
+            self.pn as u64
+        }
     }
     /// legacy (u64) 読み出し: INF marker を V3_INF へ戻す．
     #[inline]
     fn dn_u64(&self) -> u64 {
-        if self.dn >= V3_INF_U { V3_INF } else { self.dn as u64 }
+        if self.dn >= V3_INF_U {
+            V3_INF
+        } else {
+            self.dn as u64
+        }
     }
     #[inline]
     fn is_final(&self) -> bool {
@@ -262,17 +286,29 @@ struct V3Child {
 impl V3Child {
     #[inline]
     fn phi(&self, or_node: bool) -> u64 {
-        if or_node { self.pn } else { self.dn }
+        if or_node {
+            self.pn
+        } else {
+            self.dn
+        }
     }
     #[inline]
     fn delta(&self, or_node: bool) -> u64 {
-        if or_node { self.dn } else { self.pn }
+        if or_node {
+            self.dn
+        } else {
+            self.pn
+        }
     }
 }
 
 #[inline]
 fn clamp_inf(v: u64) -> u64 {
-    if v > V3_INF { V3_INF } else { v }
+    if v > V3_INF {
+        V3_INF
+    } else {
+        v
+    }
 }
 
 /// KH `ExtendSearchThreshold`: 非累積 extend．thpn = max(thpn, pn+1)．
@@ -421,7 +457,9 @@ impl DfPnSolver {
 
         // 子の生成: OR=王手, AND=受け (無駄合い filter 付き)．
         let moves: Vec<Move> = if or_node {
-            self.generate_check_moves_cached(board).into_iter().collect()
+            self.generate_check_moves_cached(board)
+                .into_iter()
+                .collect()
         } else {
             self.generate_defense_moves_inner(board, false)
                 .into_iter()
@@ -445,7 +483,8 @@ impl DfPnSolver {
         if or_node {
             let bturn = board.turn;
             if let Some(mm) = board.mate_move_in_1ply(moves.as_slice(), bturn) {
-                self.v3_tt.insert(hash, V3Entry::new64(0, V3_INF, 1, mm.to_move16(), 0));
+                self.v3_tt
+                    .insert(hash, V3Entry::new64(0, V3_INF, 1, mm.to_move16(), 0));
                 return (0, V3_INF, 1, u32::MAX);
             }
         }
@@ -454,7 +493,8 @@ impl DfPnSolver {
         let us_is_black = board.turn == crate::types::Color::Black;
         let defender_king = board.king_square(self.attacker.opponent());
         // KH DML: 同一マス合駒 / 成不成ペアの chain を構築．head のみ active で開始．
-        let (dml_prev, dml_next) = super::local_expansion::build_delayed_chain(&moves, or_node, true, us_is_black);
+        let (dml_prev, dml_next) =
+            super::local_expansion::build_delayed_chain(&moves, or_node, true, us_is_black);
 
         // 子の初期化: seed (unit-2) または TT 値．
         let mut children: Vec<V3Child> = Vec::with_capacity(moves.len());
@@ -491,7 +531,14 @@ impl DfPnSolver {
             // chain (dml_prev/next) / is_sum_delta_node は将来の careful port 用に計算だけ残す．
             let _ = (dml_prev[mi], dml_next[mi], defender_king, us_is_black);
             children.push(V3Child {
-                mv: m, pn: cpn, dn: cdn, len: clen, is_first, is_final, rep_min, eval,
+                mv: m,
+                pn: cpn,
+                dn: cdn,
+                len: clen,
+                is_first,
+                is_final,
+                rep_min,
+                eval,
                 active: true,
                 next_in_chain: dml_next[mi],
                 sum_delta: true,
@@ -506,7 +553,10 @@ impl DfPnSolver {
         if let Some(th_t) = env_v3th() {
             let th_s = board.sfen();
             if th_s.starts_with(th_t) {
-                eprintln!("V3TH depth={} thpn={} thdn={} sfen={}", ply, thpn, thdn, th_s);
+                eprintln!(
+                    "V3TH depth={} thpn={} thdn={} sfen={}",
+                    ply, thpn, thdn, th_s
+                );
             }
         }
 
@@ -535,7 +585,11 @@ impl DfPnSolver {
             let (thphi, thdelta) = if or_node { (thpn, thdn) } else { (thdn, thpn) };
             let child_thphi = thphi.min(clamp_inf(second_phi.saturating_add(1)));
             let sum_delta = v3_sum_delta_except_best(&children, or_node, best_idx);
-            let child_thdelta = if thdelta > sum_delta { thdelta - sum_delta } else { 0 };
+            let child_thdelta = if thdelta > sum_delta {
+                thdelta - sum_delta
+            } else {
+                0
+            };
             let (child_thpn, child_thdn) = if or_node {
                 (child_thphi, child_thdelta)
             } else {
@@ -610,10 +664,8 @@ impl DfPnSolver {
         // path 上流に依存する結果 (node_rep_min < ply) は path-dependent なので格納しない
         // (= KH RepetitionTable: 千日手依存の結果は absolute にキャッシュしない)．
         if node_rep_min == u32::MAX || node_rep_min >= ply {
-            self.v3_tt.insert(
-                hash,
-                V3Entry::new64(cur_pn2, cur_dn2, len, best_move16, 0),
-            );
+            self.v3_tt
+                .insert(hash, V3Entry::new64(cur_pn2, cur_dn2, len, best_move16, 0));
         }
         (cur_pn2, cur_dn2, len, node_rep_min)
     }
@@ -632,7 +684,10 @@ impl DfPnSolver {
                 }
             };
             if e.pn != 0 {
-                eprintln!("[v3pv] step {step}: entry pn={} (not proven) len={} — break", e.pn, e.len);
+                eprintln!(
+                    "[v3pv] step {step}: entry pn={} (not proven) len={} — break",
+                    e.pn, e.len
+                );
                 break;
             }
             if e.best == 0 {
@@ -643,7 +698,11 @@ impl DfPnSolver {
             let mv = match legal.iter().copied().find(|m| m.to_move16() == e.best) {
                 Some(m) => m,
                 None => {
-                    eprintln!("[v3pv] step {step}: best move16={:#06x} not in {} legal — break", e.best, legal.len());
+                    eprintln!(
+                        "[v3pv] step {step}: best move16={:#06x} not in {} legal — break",
+                        e.best,
+                        legal.len()
+                    );
                     break;
                 }
             };
@@ -832,8 +891,11 @@ impl DfPnSolver {
             last_dn = dn;
             if std::env::var("V3_DIAG").is_ok() {
                 let rlen = self.v3_tt.get(&board.hash).map(|e| e.len).unwrap_or(0);
-                eprintln!("[v3le] th=({thpn},{thdn}) -> pn={pn} dn={dn} rootlen={rlen} nodes={} tt={}",
-                    self.v3_nodes, self.v3_tt.len());
+                eprintln!(
+                    "[v3le] th=({thpn},{thdn}) -> pn={pn} dn={dn} rootlen={rlen} nodes={} tt={}",
+                    self.v3_nodes,
+                    self.v3_tt.len()
+                );
             }
             // V3ROOTI: root IDS iteration 毎の root children dump (KH KHROOT と突合する
             // return-value 乖離 hunting 用)．root expansion が iteration 後も残る
@@ -884,7 +946,10 @@ impl DfPnSolver {
             let (mut tt, mut tu) = (0u64, 0u64);
             for d in 1..40 {
                 if self.v3_ply_total[d] > 0 {
-                    eprintln!("V3PLY d={:>2} total={:>8} unique={:>8}", d, self.v3_ply_total[d], self.v3_ply_unique[d]);
+                    eprintln!(
+                        "V3PLY d={:>2} total={:>8} unique={:>8}",
+                        d, self.v3_ply_total[d], self.v3_ply_unique[d]
+                    );
                 }
                 tt += self.v3_ply_total[d];
                 tu += self.v3_ply_unique[d];
@@ -1005,7 +1070,9 @@ impl DfPnSolver {
             bucket.push((hand, pn, dn, min_depth));
         } else {
             // cap 超過: 最も情報量の小さい (pn+dn 最小) entry を置換する．
-            if let Some(idx) = (0..bucket.len()).min_by_key(|&i| bucket[i].1 as u64 + bucket[i].2 as u64) {
+            if let Some(idx) =
+                (0..bucket.len()).min_by_key(|&i| bucket[i].1 as u64 + bucket[i].2 as u64)
+            {
                 bucket[idx] = (hand, pn, dn, min_depth);
             }
         }
@@ -1054,7 +1121,8 @@ impl DfPnSolver {
                 (0u32, V3_INF_U, 0u16)
             };
             let md = self.v3_min_depth(hash, ply);
-            self.v3_tt.insert(hash, V3Entry::new64(p as u64, d as u64, l, 0, md));
+            self.v3_tt
+                .insert(hash, V3Entry::new64(p as u64, d as u64, l, 0, md));
             self.mid_expansion_pool.push(expansion);
             return Err((p, d, l, REPETITION_NONE));
         }
@@ -1095,7 +1163,12 @@ impl DfPnSolver {
         self.v3_chuai_buf.clear();
         let dump_this = env_v3selx().is_some_and(|t| board.sfen().starts_with(t));
         if dump_this {
-            eprintln!("V3SELX node or={} ply={} sfen={}", or_node, ply, board.sfen());
+            eprintln!(
+                "V3SELX node or={} ply={} sfen={}",
+                or_node,
+                ply,
+                board.sfen()
+            );
         }
         for mi in 0..expansion.moves.len() {
             let m = expansion.moves[mi];
@@ -1109,7 +1182,9 @@ impl DfPnSolver {
             // KH 中合い判定: AND ノードの drop で，受け方 support=0 のもの (support は do_move 前に計算)．
             let chuai_support0 = want_chuai
                 && m.is_drop()
-                && board.compute_checkers_at(m.to_sq(), defender_for_chuai).count()
+                && board
+                    .compute_checkers_at(m.to_sq(), defender_for_chuai)
+                    .count()
                     + super::king_supports(board, m.to_sq(), defender_for_chuai)
                     == 0;
             // KH `MoveBriefEvaluation` は常に **受け方 (詰まされる側) の玉** からの距離を使う
@@ -1154,8 +1229,7 @@ impl DfPnSolver {
                 } else {
                     let cap = board.squares[m.to_sq().index()];
                     if !cap.is_empty() {
-                        if let Some(hi) =
-                            cap.piece_type().unwrap().captured_to_hand().hand_index()
+                        if let Some(hi) = cap.piece_type().unwrap().captured_to_hand().hand_index()
                         {
                             hb[hi] += 1;
                         }
@@ -1174,7 +1248,10 @@ impl DfPnSolver {
                     Some(ak) => {
                         let pt = m.drop_piece_type().unwrap();
                         !crate::attack::piece_attacks(
-                            board.turn, pt, m.to_sq(), board.all_occupied(),
+                            board.turn,
+                            pt,
+                            m.to_sq(),
+                            board.all_occupied(),
                         )
                         .contains(ak)
                     }
@@ -1206,25 +1283,24 @@ impl DfPnSolver {
             // Phase 33e: hand-aware seeding — clean TT exact miss でも，同一 pos_key を
             // 別持駒で既に解いていれば child を proven/disproven で seed する (KH 主 TT 統合相当)．
             // entry 検査より前 (= 選択前) に効くため探索順序と coherent．
-            let ph_seed: Option<MidSearchResult> = if self.param_v3_proof_hand
-                && !self.v3_tt.contains_key(&ch)
-            {
-                if let Some((clen, _cbest)) = self.v3_proof_lookup(pk_after, hand_after) {
-                    self.v3_ph_hits += 1;
-                    let mut r = MidSearchResult::new_win(clen);
-                    r.is_first_visit = false;
-                    Some(r)
-                } else if self.v3_disproof_lookup(pk_after, hand_after) {
-                    self.v3_ph_hits += 1;
-                    let mut r = MidSearchResult::new_lose(0);
-                    r.is_first_visit = false;
-                    Some(r)
+            let ph_seed: Option<MidSearchResult> =
+                if self.param_v3_proof_hand && !self.v3_tt.contains_key(&ch) {
+                    if let Some((clen, _cbest)) = self.v3_proof_lookup(pk_after, hand_after) {
+                        self.v3_ph_hits += 1;
+                        let mut r = MidSearchResult::new_win(clen);
+                        r.is_first_visit = false;
+                        Some(r)
+                    } else if self.v3_disproof_lookup(pk_after, hand_after) {
+                        self.v3_ph_hits += 1;
+                        let mut r = MidSearchResult::new_lose(0);
+                        r.is_first_visit = false;
+                        Some(r)
+                    } else {
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
             let mut r = if let Some(&anc_ply) = self.v3_path.get(&ch) {
                 MidSearchResult::new_repetition(anc_ply)
             } else if let Some(dom_ply) = dom_rep {
@@ -1250,7 +1326,14 @@ impl DfPnSolver {
                     let (mut bpn, mut bdn, mut bsh) = (cpn, cdn, shallow);
                     let e_len = e.len;
                     if self.param_v3_xhand {
-                        self.v3_xh_bounds(pk_after, hand_after, ply + 1, &mut bpn, &mut bdn, &mut bsh);
+                        self.v3_xh_bounds(
+                            pk_after,
+                            hand_after,
+                            ply + 1,
+                            &mut bpn,
+                            &mut bdn,
+                            &mut bsh,
+                        );
                     }
                     let mut r = MidSearchResult::new_unknown(bpn, bdn);
                     r.is_first_visit = false;
@@ -1305,10 +1388,8 @@ impl DfPnSolver {
                     }
                 } else if !has_checks && env_v3obvd() {
                     // 攻め方に王手手段なし → 詰み不可能 → この応手は逃れ (disproven, absolute)．
-                    self.v3_tt.insert(
-                        ch,
-                        V3Entry::new64(V3_INF_U as u64, 0, 0, 0, cmd),
-                    );
+                    self.v3_tt
+                        .insert(ch, V3Entry::new64(V3_INF_U as u64, 0, 0, 0, cmd));
                     r = MidSearchResult::new_lose(0);
                     r.is_first_visit = false;
                 }
@@ -1316,8 +1397,16 @@ impl DfPnSolver {
             if dump_this {
                 eprintln!(
                     "V3SELX   {:7} sp={} sd={} spn={} sdn={} rpn={} rdn={} fv={} eval={} drop={}",
-                    m.to_usi(), sp, sd, seed_pn, seed_dn, r.pn, r.dn,
-                    r.is_first_visit as u8, eval, m.is_drop() as u8,
+                    m.to_usi(),
+                    sp,
+                    sd,
+                    seed_pn,
+                    seed_dn,
+                    r.pn,
+                    r.dn,
+                    r.is_first_visit as u8,
+                    eval,
+                    m.is_drop() as u8,
                 );
             }
             expansion.results.push(r);
@@ -1392,13 +1481,22 @@ impl DfPnSolver {
                 .iter()
                 .map(|&ir| {
                     let r = &expansion.results[ir as usize];
-                    format!("{}:{}/{}", expansion.moves[ir as usize].to_usi(), r.pn, r.dn)
+                    format!(
+                        "{}:{}/{}",
+                        expansion.moves[ir as usize].to_usi(),
+                        r.pn,
+                        r.dn
+                    )
                 })
                 .collect();
             eprintln!(
                 "V3SELX built curr_pn={} curr_dn={} nidx={} nmoves={} sumd={} maxd={} | idx: {}",
-                cr.pn, cr.dn, expansion.idx.len(), expansion.moves.len(),
-                expansion.dbg_sum_delta_except_best(), expansion.dbg_max_delta_except_best(),
+                cr.pn,
+                cr.dn,
+                expansion.idx.len(),
+                expansion.moves.len(),
+                expansion.dbg_sum_delta_except_best(),
+                expansion.dbg_max_delta_except_best(),
                 kids.join(" ")
             );
         }
@@ -1407,7 +1505,13 @@ impl DfPnSolver {
         if ply == 0 && std::env::var("KHDUMP").is_ok() {
             for (k, &ir) in expansion.idx.iter().enumerate() {
                 let r = &expansion.results[ir as usize];
-                eprintln!("V3ROOT {} {} pn={} dn={}", k, expansion.moves[ir as usize].to_usi(), r.pn, r.dn);
+                eprintln!(
+                    "V3ROOT {} {} pn={} dn={}",
+                    k,
+                    expansion.moves[ir as usize].to_usi(),
+                    r.pn,
+                    r.dn
+                );
             }
         }
         // Phase 33k: per-ply 1 階更新ごとの node selection 比較 (ユーザ指示)．
@@ -1434,8 +1538,13 @@ impl DfPnSolver {
             let r = &expansion.results[bi];
             eprintln!(
                 "V3TRACE {} ply={} or={} best={} bpn={} bdn={} sfen={}",
-                self.v3_trace_cnt, ply, if or_node { 1 } else { 0 },
-                expansion.moves[bi].to_usi(), r.pn, r.dn, board.sfen()
+                self.v3_trace_cnt,
+                ply,
+                if or_node { 1 } else { 0 },
+                expansion.moves[bi].to_usi(),
+                r.pn,
+                r.dn,
+                board.sfen()
             );
         }
         // KH ExpansionStack: double-count 補正で祖先の sum_mask を reset できるよう共有スタックへ push．
@@ -1503,13 +1612,15 @@ impl DfPnSolver {
                 self.v3_ph_hits += 1;
                 // PV 抽出用に exact key へも書き戻す．
                 let md = self.v3_min_depth(hash, ply);
-                self.v3_tt.insert(hash, V3Entry::new64(0, V3_INF_U as u64, len, best, md));
+                self.v3_tt
+                    .insert(hash, V3Entry::new64(0, V3_INF_U as u64, len, best, md));
                 return (0, V3_INF_U, len, REPETITION_NONE);
             }
             if self.v3_disproof_lookup(pk, &att_hand) {
                 self.v3_ph_hits += 1;
                 let md = self.v3_min_depth(hash, ply);
-                self.v3_tt.insert(hash, V3Entry::new64(V3_INF_U as u64, 0, 0, 0, md));
+                self.v3_tt
+                    .insert(hash, V3Entry::new64(V3_INF_U as u64, 0, 0, 0, md));
                 return (V3_INF_U, 0, 0, REPETITION_NONE);
             }
         }
@@ -1530,7 +1641,9 @@ impl DfPnSolver {
             }
         };
 
-        self.search_v3_le_frame(board, thpn, thdn, ply, path_key, inc_flag, stack_idx, root_keep)
+        self.search_v3_le_frame(
+            board, thpn, thdn, ply, path_key, inc_flag, stack_idx, root_keep,
+        )
     }
 
     /// `search_v3_le` の frame 駆動部 (KH SearchImpl 本体相当)．`stack_idx` の
@@ -1565,7 +1678,10 @@ impl DfPnSolver {
         if let Some(th_t) = env_v3th() {
             let th_s = board.sfen();
             if th_s.starts_with(th_t) {
-                eprintln!("V3TH depth={} thpn={} thdn={} sfen={}", ply, thpn, thdn, th_s);
+                eprintln!(
+                    "V3TH depth={} thpn={} thdn={} sfen={}",
+                    ply, thpn, thdn, th_s
+                );
             }
         }
 
@@ -1581,7 +1697,8 @@ impl DfPnSolver {
 
         // KH VisitHistory: dominance 有効時のみ自局面 (pos_key, 攻め方持駒) を path に push
         // (capacity 内)．子孫の IsInferior 判定で祖先として参照される．
-        let dom_pushed = if self.param_v3_dominance && self.path_len < super::solver::PATH_CAPACITY {
+        let dom_pushed = if self.param_v3_dominance && self.path_len < super::solver::PATH_CAPACITY
+        {
             self.path_pos_key[self.path_len] = super::position_key(board);
             self.path_hand[self.path_len] = board.hand[self.attacker.index()];
             self.path_len += 1;
@@ -1617,19 +1734,31 @@ impl DfPnSolver {
             let parent_hit = env_v3thx().is_some_and(|t| board.sfen().starts_with(t));
             let captured = board.do_move(best_mv);
             // probe_hit = この child が target prefix に一致 (= 戻り値/exit 理由も dump 対象)．
-            let probe_hit = parent_hit
-                || env_v3thx().is_some_and(|t| board.sfen().starts_with(t));
+            let probe_hit = parent_hit || env_v3thx().is_some_and(|t| board.sfen().starts_with(t));
             let probe_inc_before = *inc_flag;
             if probe_hit {
                 let exp = &self.mid_expansion_stack[stack_idx];
-                let kids: Vec<String> = exp.dbg_children().iter()
-                    .map(|(m, phi, delta, fv)| format!("{}:{}/{}{}", m.to_usi(), phi, delta, if *fv {"*"} else {""}))
+                let kids: Vec<String> = exp
+                    .dbg_children()
+                    .iter()
+                    .map(|(m, phi, delta, fv)| {
+                        format!(
+                            "{}:{}/{}{}",
+                            m.to_usi(),
+                            phi,
+                            delta,
+                            if *fv { "*" } else { "" }
+                        )
+                    })
                     .collect();
                 eprintln!(
                     "V3THX 2ndphi={} sumd={} cthpn={} cthdn={} best={} | kids[phi/delta]: {}",
                     exp.dbg_second_phi(),
                     exp.dbg_sum_delta_except_best(),
-                    cthpn, cthdn, best_mv.to_usi(), kids.join(" "),
+                    cthpn,
+                    cthdn,
+                    best_mv.to_usi(),
+                    kids.join(" "),
                 );
             }
             // KH EliminateDoubleCount: child が祖先 frame から到達可能 (DAG) なら，その祖先の
@@ -1655,8 +1784,7 @@ impl DfPnSolver {
                     // 超過しなければ **同じ frame を search_v3_le_frame へ渡して**深掘り
                     // (KH の Emplace→SearchImpl 再利用と同形; Stage 0 の二重 build を排除)．
                     let ch_hash = board.hash;
-                    match self.build_v3_le_expansion(board, ply + 1, !or_node, ch_hash, child_pk)
-                    {
+                    match self.build_v3_le_expansion(board, ply + 1, !or_node, ch_hash, child_pk) {
                         Err((p, d, l, rp)) => mk_result_u32(p, d, l, rp),
                         Ok(cidx) => {
                             let built = self.mid_expansion_stack[cidx].current_result();
@@ -1676,7 +1804,13 @@ impl DfPnSolver {
                                 // 親 build 時の子 seeding が担保済み)．ノード計数は深掘りのみ．
                                 self.v3_nodes += 1;
                                 let (cp, cd, cl, cr) = self.search_v3_le_frame(
-                                    board, cthpn, cthdn, ply + 1, child_pk, inc_flag, cidx,
+                                    board,
+                                    cthpn,
+                                    cthdn,
+                                    ply + 1,
+                                    child_pk,
+                                    inc_flag,
+                                    cidx,
                                     false,
                                 );
                                 mk_result_u32(cp, cd, cl, cr)
@@ -1684,7 +1818,8 @@ impl DfPnSolver {
                         }
                     }
                 } else {
-                    let (cp, cd, cl, cr) = self.search_v3_le(board, cthpn, cthdn, ply + 1, child_pk, inc_flag);
+                    let (cp, cd, cl, cr) =
+                        self.search_v3_le(board, cthpn, cthdn, ply + 1, child_pk, inc_flag);
                     mk_result_u32(cp, cd, cl, cr)
                 }
             } else {
@@ -1696,7 +1831,8 @@ impl DfPnSolver {
                 if cached.is_final() {
                     cached
                 } else {
-                    let (cp, cd, cl, cr) = self.search_v3_le(board, cthpn, cthdn, ply + 1, child_pk, inc_flag);
+                    let (cp, cd, cl, cr) =
+                        self.search_v3_le(board, cthpn, cthdn, ply + 1, child_pk, inc_flag);
                     mk_result_u32(cp, cd, cl, cr)
                 }
             };
@@ -1812,7 +1948,11 @@ impl DfPnSolver {
                 // 消えたら除去)．KH の TT UnknownData::sum_mask 書き戻しに相当．
                 if env_v3maskkeep() {
                     let nm = e.moves.len();
-                    let full = if nm >= 64 { u64::MAX } else { (1u64 << nm).wrapping_sub(1) };
+                    let full = if nm >= 64 {
+                        u64::MAX
+                    } else {
+                        (1u64 << nm).wrapping_sub(1)
+                    };
                     let cur = e.sum_mask_raw() & full;
                     if cur != full {
                         self.v3_dag_masks.insert(hash, cur);
@@ -1838,8 +1978,10 @@ impl DfPnSolver {
         let md_self = self.v3_min_depth(hash, ply);
         let ret_rep_min;
         if pn == 0 {
-            self.v3_tt
-                .insert(hash, V3Entry::new64(pn as u64, dn as u64, len, best16, md_self));
+            self.v3_tt.insert(
+                hash,
+                V3Entry::new64(pn as u64, dn as u64, len, best16, md_self),
+            );
             // Phase 33d: absolute proof を hand-aware store にも記録 (actual hand; Stage 1)．
             if self.param_v3_proof_hand {
                 let pk = super::position_key(board);
@@ -1862,8 +2004,10 @@ impl DfPnSolver {
                 }
                 ret_rep_min = node_rep_min;
             } else {
-                self.v3_tt
-                    .insert(hash, V3Entry::new64(pn as u64, dn as u64, len, best16, md_self));
+                self.v3_tt.insert(
+                    hash,
+                    V3Entry::new64(pn as u64, dn as u64, len, best16, md_self),
+                );
                 // Phase 33d: absolute disproof を hand-aware store にも記録．
                 if self.param_v3_proof_hand {
                     let pk = super::position_key(board);
@@ -1884,8 +2028,10 @@ impl DfPnSolver {
             // 呼ばないことの再現)．default は従来通り格納．
             if !(env_v3probenostore() && !descended) {
                 // 非 taint unknown のみ clean TT へ格納する．
-                self.v3_tt
-                    .insert(hash, V3Entry::new64(pn as u64, dn as u64, len, best16, md_self));
+                self.v3_tt.insert(
+                    hash,
+                    V3Entry::new64(pn as u64, dn as u64, len, best16, md_self),
+                );
                 // V3_XHAND: 非 taint unknown を cross-hand bucket へも upsert (KH UpdateUnknown 相当)．
                 if self.param_v3_xhand {
                     let pk = super::position_key(board);
@@ -1908,7 +2054,11 @@ impl DfPnSolver {
                 if c <= 100_000 {
                     eprintln!(
                         "V3RET {} ply={} pn={} dn={} sfen={}",
-                        c, ply, pn, dn, board.sfen()
+                        c,
+                        ply,
+                        pn,
+                        dn,
+                        board.sfen()
                     );
                 }
             }
@@ -1983,9 +2133,16 @@ impl DfPnSolver {
     /// child が parent_map 上で **immediate parent 以外の祖先** から到達可能 (DAG transposition) なら，
     /// その祖先フレームの branch move の sum_mask を off (max 集約) にして δ 二重計上を防ぐ．
     /// 発散判定 (祖先 chain の pn/dn が急増していたら別系統とみなす) は clean TT (`v3_tt`) を参照する．
-    fn eliminate_double_count_v3(&mut self, stack_idx: usize, child_fh: u64, immediate_parent_fh: u64) {
+    fn eliminate_double_count_v3(
+        &mut self,
+        stack_idx: usize,
+        child_fh: u64,
+        immediate_parent_fh: u64,
+    ) {
         // child_fh の最初の parent を記録 (既存は上書きしない)．
-        self.parent_map.entry(child_fh).or_insert(immediate_parent_fh);
+        self.parent_map
+            .entry(child_fh)
+            .or_insert(immediate_parent_fh);
 
         // KH `kAncestorSearchThreshold = 3 * kPnDnUnit` (unit-2)．
         const ANCESTOR_SEARCH_THRESHOLD: u32 = 3 * V3_U_U32;
@@ -2026,7 +2183,8 @@ impl DfPnSolver {
                     if allowed {
                         let branch_move = self.mid_frame_moves[anc_idx];
                         if branch_move != 0
-                            && self.mid_expansion_stack[anc_idx].reset_sum_mask_for_move(branch_move)
+                            && self.mid_expansion_stack[anc_idx]
+                                .reset_sum_mask_for_move(branch_move)
                         {
                             self.v3_dag_resets += 1;
                         }
@@ -2117,12 +2275,20 @@ fn v3_aggregate(children: &[V3Child], or_node: bool) -> (u64, u64, u16) {
             max_d = delta;
         }
     }
-    let delta = clamp_inf(sum_d.saturating_add(max_d).saturating_add(v3_deferred_penalty(children)));
+    let delta = clamp_inf(
+        sum_d
+            .saturating_add(max_d)
+            .saturating_add(v3_deferred_penalty(children)),
+    );
     if best_mv16 == 0 {
         // active が空 (異常) の保険．
         best_mv16 = children.first().map(|c| c.mv.to_move16()).unwrap_or(0);
     }
-    let (pn, dn) = if or_node { (min_phi, delta) } else { (delta, min_phi) };
+    let (pn, dn) = if or_node {
+        (min_phi, delta)
+    } else {
+        (delta, min_phi)
+    };
     (pn, dn, best_mv16)
 }
 
@@ -2229,7 +2395,11 @@ fn v3_sum_delta_except_best(children: &[V3Child], or_node: bool, best_idx: usize
             max_d = d;
         }
     }
-    clamp_inf(sum_d.saturating_add(max_d).saturating_add(v3_deferred_penalty(children)))
+    clamp_inf(
+        sum_d
+            .saturating_add(max_d)
+            .saturating_add(v3_deferred_penalty(children)),
+    )
 }
 
 /// proven (pn==0) 時の mate_len．OR=best proven 子の len+1 / AND=max 子 len+1．

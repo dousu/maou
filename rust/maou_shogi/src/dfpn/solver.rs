@@ -12,14 +12,12 @@ use crate::moves::Move;
 use crate::types::{Color, HAND_KINDS};
 
 use super::entry::PNS_MAX_ARENA_NODES;
-use super::tt::TranspositionTable;
 #[cfg(feature = "profile")]
 use super::profile::ProfileStats;
+use super::tt::TranspositionTable;
 use super::{
-    hand_gte_forward_chain,
-    CheckCache,
-    DEEP_DFPN_R, DISPROOF_THRESHOLD_ADAPTIVE, EPSILON_DENOM_ADAPTIVE,
-    MAX_MOVES,
+    hand_gte_forward_chain, CheckCache, DEEP_DFPN_R, DISPROOF_THRESHOLD_ADAPTIVE,
+    EPSILON_DENOM_ADAPTIVE, MAX_MOVES,
 };
 
 /// path 配列の容量．depth の最大値(41) + マージン．
@@ -43,13 +41,13 @@ pub(super) struct VisitBreakdown {
     pub th_pn_caused: u32,
     pub th_dn_caused: u32,
     pub exploration: u32,
-    pub expl_pn_first: u32,    // 初回 exploration 時の tt_pn
-    pub expl_dn_first: u32,    // 初回 exploration 時の tt_dn
-    pub expl_pn_last: u32,     // 最新 exploration 時の tt_pn
-    pub expl_dn_last: u32,     // 最新 exploration 時の tt_dn
-    pub expl_pn_stuck: u32,    // tt_pn が前回 exploration と同じだった回数
-    pub expl_tt_miss: u32,     // tt_dn == PN_UNIT (biased default = TT miss シグナル)
-    pub expl_tt_hit: u32,      // tt_dn != PN_UNIT (TT に格納済みの値)
+    pub expl_pn_first: u32, // 初回 exploration 時の tt_pn
+    pub expl_dn_first: u32, // 初回 exploration 時の tt_dn
+    pub expl_pn_last: u32,  // 最新 exploration 時の tt_pn
+    pub expl_dn_last: u32,  // 最新 exploration 時の tt_dn
+    pub expl_pn_stuck: u32, // tt_pn が前回 exploration と同じだった回数
+    pub expl_tt_miss: u32,  // tt_dn == PN_UNIT (biased default = TT miss シグナル)
+    pub expl_tt_hit: u32,   // tt_dn != PN_UNIT (TT に格納済みの値)
 }
 
 /// 詰将棋の探索結果．
@@ -373,7 +371,6 @@ pub struct DfPnSolver {
     /// child から先祖チェーンを辿る際に参照．solve() 開始時に clear．
     pub(super) parent_map: rustc_hash::FxHashMap<u64, u64>,
 
-
     /// Phase 20 (v0.99.0): KH `min_depth` 相当の max_remaining トラッキング．
     /// (pos_key, hand_hash) → max_remaining (= shallowest ply で stored)．
     /// store 時に更新，mid_v2 の has_old_child 判定で参照．
@@ -608,10 +605,10 @@ pub struct DfPnSolver {
     /// solve() 開始時にゼロクリア．
     pub(super) diag_dag_calls: u64,
     pub(super) diag_dag_true: u64,
-    pub(super) diag_dag_short_first: u64,  // step 0 で immediate_parent と一致して終了
-    pub(super) diag_dag_short_none: u64,   // parent_map に未登録で終了
+    pub(super) diag_dag_short_first: u64, // step 0 で immediate_parent と一致して終了
+    pub(super) diag_dag_short_none: u64,  // parent_map に未登録で終了
     pub(super) diag_dag_max_step: u32,
-    pub(super) diag_dag_walks_16: u64,     // 16 step 完走したケース
+    pub(super) diag_dag_walks_16: u64, // 16 step 完走したケース
 
     /// melodic-cascading-otter Plan B (v0.70.0): KH 流 TCA inc_flag を有効化する．
     ///
@@ -678,20 +675,20 @@ pub struct DfPnSolver {
     /// `(proven_count, total_children)` のヒストグラム．
     /// proven_count ratio が低いまま loop が exit → AND coverage が不足．
     pub(super) diag_and_visit_count: u64,
-    pub(super) diag_and_proven_sum: u64,    // proven_count の合計
-    pub(super) diag_and_total_sum: u64,     // total_children の合計
-    pub(super) diag_and_zero_proven: u64,   // proven_count == 0 で exit した回数
-    pub(super) diag_and_full_proven: u64,   // proven_count == total で exit (本来は ProveAND して exit)
+    pub(super) diag_and_proven_sum: u64,  // proven_count の合計
+    pub(super) diag_and_total_sum: u64,   // total_children の合計
+    pub(super) diag_and_zero_proven: u64, // proven_count == 0 で exit した回数
+    pub(super) diag_and_full_proven: u64, // proven_count == total で exit (本来は ProveAND して exit)
 
     /// 診断 (v0.78.0): OR scan coverage 統計 (AND と対称)．
     pub(super) diag_or_visit_count: u64,
-    pub(super) diag_or_proven_count_visits: u64,  // proven child があった visits の数
+    pub(super) diag_or_proven_count_visits: u64, // proven child があった visits の数
     pub(super) diag_or_total_sum: u64,
 
     /// 診断 (v0.79.0, A): per-position revisit count．`(pos_key, or_node) → visit_count`．
     /// max 1M entries に制限してメモリ暴走防止．
     pub(super) diag_pos_visits: rustc_hash::FxHashMap<u64, u32>,
-    pub(super) diag_pos_visits_capped: bool,  // 1M 超えたら collection 停止
+    pub(super) diag_pos_visits_capped: bool, // 1M 超えたら collection 停止
 
     /// 候補 C (v0.80.0): AND node exhaustive defender prove．
     /// default false．true で AND multi-child loop の best_idx 選択を
@@ -1090,7 +1087,8 @@ impl DfPnSolver {
         assert!(
             (depth as usize) < PATH_CAPACITY,
             "depth {} exceeds path capacity {}",
-            depth, PATH_CAPACITY,
+            depth,
+            PATH_CAPACITY,
         );
         DfPnSolver {
             depth,
@@ -1443,7 +1441,9 @@ impl DfPnSolver {
             0.0
         };
 
-        let mut sorted: Vec<(u64, u32, u8)> = self.visit_counts.iter()
+        let mut sorted: Vec<(u64, u32, u8)> = self
+            .visit_counts
+            .iter()
             .map(|(&h, &cnt)| {
                 let ply = self.visit_first_ply.get(&h).copied().unwrap_or(255);
                 (h, cnt, ply)
@@ -1469,7 +1469,9 @@ impl DfPnSolver {
         writeln!(out).unwrap();
 
         writeln!(out, "--- ply 別集計 (revisit 率が高い順) ---").unwrap();
-        let mut ply_rows: Vec<(usize, u64, u64)> = ply_total.iter().enumerate()
+        let mut ply_rows: Vec<(usize, u64, u64)> = ply_total
+            .iter()
+            .enumerate()
             .filter(|(_, &t)| t > 0)
             .map(|(p, &t)| {
                 let u = ply_unique[p];
@@ -1483,15 +1485,31 @@ impl DfPnSolver {
         });
         for (ply, total, unique) in &ply_rows {
             let rev = total.saturating_sub(*unique);
-            let rate = if *total > 0 { 100.0 * rev as f64 / *total as f64 } else { 0.0 };
-            writeln!(out, "  ply {:2}: total={:8}  unique={:7}  revisits={:7}  rate={:.1}%",
-                ply, total, unique, rev, rate).unwrap();
+            let rate = if *total > 0 {
+                100.0 * rev as f64 / *total as f64
+            } else {
+                0.0
+            };
+            writeln!(
+                out,
+                "  ply {:2}: total={:8}  unique={:7}  revisits={:7}  rate={:.1}%",
+                ply, total, unique, rev, rate
+            )
+            .unwrap();
         }
         writeln!(out).unwrap();
 
         writeln!(out, "--- 上位 {} 局面 (訪問回数順) ---", top_n).unwrap();
         for (rank, &(hash, cnt, ply)) in sorted.iter().take(top_n).enumerate() {
-            writeln!(out, "  {:3}. hash={:#018x}  count={:6}  first_ply={}", rank + 1, hash, cnt, ply).unwrap();
+            writeln!(
+                out,
+                "  {:3}. hash={:#018x}  count={:6}  first_ply={}",
+                rank + 1,
+                hash,
+                cnt,
+                ply
+            )
+            .unwrap();
         }
 
         // 訪問回数の分布ヒストグラム
@@ -1500,7 +1518,10 @@ impl DfPnSolver {
         let thresholds = [1u32, 2, 5, 10, 20, 50, 100, 500, 1000];
         let mut prev = 0u32;
         for &th in &thresholds {
-            let count = sorted.iter().filter(|&&(_, c, _)| c >= prev + 1 && c <= th).count();
+            let count = sorted
+                .iter()
+                .filter(|&&(_, c, _)| c >= prev + 1 && c <= th)
+                .count();
             writeln!(out, "  {}-{} 回: {} 局面", prev + 1, th, count).unwrap();
             prev = th;
         }
@@ -1524,7 +1545,9 @@ impl DfPnSolver {
     #[cfg(feature = "visit_diag")]
     pub fn hot_spot_summary(&self, top_n: usize) -> String {
         use std::fmt::Write as _;
-        let mut sorted: Vec<(u64, u32, u8)> = self.visit_counts.iter()
+        let mut sorted: Vec<(u64, u32, u8)> = self
+            .visit_counts
+            .iter()
             .map(|(&h, &c)| {
                 let ply = self.visit_first_ply.get(&h).copied().unwrap_or(255);
                 (h, c, ply)
@@ -1536,25 +1559,46 @@ impl DfPnSolver {
         writeln!(out, "=== 上位 {} 局面の exit 種別内訳 ===", top_n).unwrap();
         // tt_miss = tt_dn==PN_UNIT (biased default シグナル = TT eviction)
         // tt_hit  = tt_dn!=PN_UNIT (WorkingTT に格納済みの値を読んだ)
-        writeln!(out,
+        writeln!(
+            out,
             "{:>4} {:>20}  {:>6}  {:>6}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>8}  {:>6}",
-            "#", "hash", "total", "thresh",
-            "expl", "tt_miss", "tt_hit", "miss%",
-            "pn_1st", "dn_1st", "1stPly").unwrap();
+            "#",
+            "hash",
+            "total",
+            "thresh",
+            "expl",
+            "tt_miss",
+            "tt_hit",
+            "miss%",
+            "pn_1st",
+            "dn_1st",
+            "1stPly"
+        )
+        .unwrap();
 
         for (rank, &(hash, cnt, ply)) in sorted.iter().take(top_n).enumerate() {
-            let bd = self.visit_breakdown.get(&hash)
-                .cloned().unwrap_or_default();
+            let bd = self.visit_breakdown.get(&hash).cloned().unwrap_or_default();
             let miss_pct = if bd.exploration > 0 {
                 100.0 * bd.expl_tt_miss as f64 / bd.exploration as f64
-            } else { 0.0 };
-            writeln!(out,
+            } else {
+                0.0
+            };
+            writeln!(
+                out,
                 "{:>4}. {:#018x}  {:>6}  {:>6}  {:>8}  {:>8}  {:>8}  {:>7.1}%  {:>8}  {:>8}  {:>6}",
-                rank + 1, hash, cnt,
+                rank + 1,
+                hash,
+                cnt,
                 bd.threshold_exit,
-                bd.exploration, bd.expl_tt_miss, bd.expl_tt_hit, miss_pct,
-                bd.expl_pn_first, bd.expl_dn_first,
-                ply).unwrap();
+                bd.exploration,
+                bd.expl_tt_miss,
+                bd.expl_tt_hit,
+                miss_pct,
+                bd.expl_pn_first,
+                bd.expl_dn_first,
+                ply
+            )
+            .unwrap();
         }
         out
     }
@@ -1933,7 +1977,9 @@ impl DfPnSolver {
     pub fn get_pos_visit_histogram(&self) -> [u64; 24] {
         let mut h = [0u64; 24];
         for &count in self.diag_pos_visits.values() {
-            let bucket = if count == 0 { 0 } else {
+            let bucket = if count == 0 {
+                0
+            } else {
                 (32 - count.leading_zeros() - 1).min(23) as usize
             };
             h[bucket] += 1;
@@ -2160,7 +2206,9 @@ impl DfPnSolver {
     ///
     /// `mid_fallback` 内で各 IDS depth のMID 完了後，TT 遷移前に収集する．
     /// 返り値: `(ids_depth, nodes_searched, elapsed_secs, pn_hist, dn_hist, joint_hist)` のスライス
-    pub fn collect_pn_dn_dist_per_depth(&self) -> &[(u32, u64, f64, [u64; 32], [u64; 32], Vec<u64>)] {
+    pub fn collect_pn_dn_dist_per_depth(
+        &self,
+    ) -> &[(u32, u64, f64, [u64; 32], [u64; 32], Vec<u64>)] {
         &self.pn_dn_per_depth
     }
 
@@ -2175,12 +2223,7 @@ impl DfPnSolver {
     /// - `move_usi`: 監視対象の手(空文字列で ply のみフィルタ)
     /// - `max_iterations`: MID ループの反復回数上限(0 で無制限)
     #[cfg(feature = "tt_diag")]
-    pub fn set_tt_diag(
-        &mut self,
-        ply: u32,
-        move_usi: &str,
-        max_iterations: u32,
-    ) -> &mut Self {
+    pub fn set_tt_diag(&mut self, ply: u32, move_usi: &str, max_iterations: u32) -> &mut Self {
         self.diag_ply = ply;
         self.diag_move_usi = move_usi.to_string();
         self.diag_max_iterations = max_iterations;
@@ -2196,10 +2239,8 @@ impl DfPnSolver {
         // ProvenTT は v0.55.17 で FxHashMap 化されオーバーフローなし
         self.profile_stats.tt_proven_overflow_count = 0;
         self.profile_stats.tt_working_overflow_count = self.table.working_overflow_count;
-        self.profile_stats.tt_overflow_no_victim_count =
-            self.table.overflow_no_victim_count;
-        self.profile_stats.tt_max_entries_per_position =
-            self.table.max_entries_per_position;
+        self.profile_stats.tt_overflow_no_victim_count = self.table.overflow_no_victim_count;
+        self.profile_stats.tt_max_entries_per_position = self.table.max_entries_per_position;
         self.profile_stats.tt_proven_overflow_same_key_hist = [0; 9];
     }
 
@@ -2209,9 +2250,14 @@ impl DfPnSolver {
         self.timed_out || self.start_time.elapsed() >= self.timeout
     }
 
-
-    pub(super) fn is_dominated_in_path(&self, child_pos_key: u64, child_hand: &[u8; HAND_KINDS]) -> Option<u32> {
-        if !self.param_use_visit_history_dominance { return None; }
+    pub(super) fn is_dominated_in_path(
+        &self,
+        child_pos_key: u64,
+        child_hand: &[u8; HAND_KINDS],
+    ) -> Option<u32> {
+        if !self.param_use_visit_history_dominance {
+            return None;
+        }
         for i in 0..self.path_len {
             if self.path_pos_key[i] == child_pos_key
                 && hand_gte_forward_chain(&self.path_hand[i], child_hand)
@@ -2292,10 +2338,7 @@ impl DfPnSolver {
     /// (全コピー × 2) になるため，hit 時は cache 内 slice を直接
     /// `mate_move_in_1ply` へ渡す．生成内容・順序は従来と同一 (semantics 不変)．
     /// 返り値: (1 手詰の手, 王手手段の有無)．
-    pub(super) fn mate1ply_with_cached_checks(
-        &self,
-        board: &mut Board,
-    ) -> (Option<Move>, bool) {
+    pub(super) fn mate1ply_with_cached_checks(&self, board: &mut Board) -> (Option<Move>, bool) {
         let hash = board.hash;
         let turn = board.turn;
         if let Some(cached) = self.check_cache.get_slice(hash) {
@@ -2310,5 +2353,4 @@ impl DfPnSolver {
             !moves.is_empty(),
         )
     }
-
 }

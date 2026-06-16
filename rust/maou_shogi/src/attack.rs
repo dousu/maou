@@ -1,5 +1,5 @@
 use crate::bitboard::Bitboard;
-use crate::types::{Color, PIECE_BB_SIZE, PieceType, Square};
+use crate::types::{Color, PieceType, Square, PIECE_BB_SIZE};
 
 /// 駒の利きを計算する．
 ///
@@ -52,10 +52,8 @@ fn init_step_attacks() -> [[[Bitboard; 81]; PIECE_BB_SIZE]; 2] {
         );
 
         // 金(と金,成香,成桂,成銀も同じ): 前後左右+斜め前2方向
-        let gold_dirs_black: [(i8, i8); 6] =
-            [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (0, 1)];
-        let gold_dirs_white: [(i8, i8); 6] =
-            [(-1, 1), (0, 1), (1, 1), (-1, 0), (1, 0), (0, -1)];
+        let gold_dirs_black: [(i8, i8); 6] = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (0, 1)];
+        let gold_dirs_white: [(i8, i8); 6] = [(-1, 1), (0, 1), (1, 1), (-1, 0), (1, 0), (0, -1)];
 
         for &pt in &[
             PieceType::Gold,
@@ -64,16 +62,8 @@ fn init_step_attacks() -> [[[Bitboard; 81]; PIECE_BB_SIZE]; 2] {
             PieceType::ProKnight,
             PieceType::ProSilver,
         ] {
-            add_step(
-                &mut table[0][pt as usize],
-                sq,
-                &gold_dirs_black,
-            );
-            add_step(
-                &mut table[1][pt as usize],
-                sq,
-                &gold_dirs_white,
-            );
+            add_step(&mut table[0][pt as usize], sq, &gold_dirs_black);
+            add_step(&mut table[1][pt as usize], sq, &gold_dirs_white);
         }
 
         // 王: 全8方向
@@ -93,29 +83,13 @@ fn init_step_attacks() -> [[[Bitboard; 81]; PIECE_BB_SIZE]; 2] {
 
         // 馬(成角): 斜め走りは別途処理，前後左右1マスのステップ部分のみ
         let horse_step: [(i8, i8); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
-        add_step(
-            &mut table[0][PieceType::Horse as usize],
-            sq,
-            &horse_step,
-        );
-        add_step(
-            &mut table[1][PieceType::Horse as usize],
-            sq,
-            &horse_step,
-        );
+        add_step(&mut table[0][PieceType::Horse as usize], sq, &horse_step);
+        add_step(&mut table[1][PieceType::Horse as usize], sq, &horse_step);
 
         // 龍(成飛): 前後左右走りは別途処理，斜め1マスのステップ部分のみ
         let dragon_step: [(i8, i8); 4] = [(-1, -1), (1, -1), (-1, 1), (1, 1)];
-        add_step(
-            &mut table[0][PieceType::Dragon as usize],
-            sq,
-            &dragon_step,
-        );
-        add_step(
-            &mut table[1][PieceType::Dragon as usize],
-            sq,
-            &dragon_step,
-        );
+        add_step(&mut table[0][PieceType::Dragon as usize], sq, &dragon_step);
+        add_step(&mut table[1][PieceType::Dragon as usize], sq, &dragon_step);
     }
 
     table
@@ -317,7 +291,12 @@ fn init_pext_table(
     mask_fn: impl Fn(Square) -> Bitboard,
     attack_fn: impl Fn(Square, Bitboard) -> Bitboard,
 ) -> PextTable {
-    let dummy = PextEntry { mask_lo: 0, mask_hi: 0, lo_popcount: 0, offset: 0 };
+    let dummy = PextEntry {
+        mask_lo: 0,
+        mask_hi: 0,
+        lo_popcount: 0,
+        offset: 0,
+    };
     // Safety: PextEntry is Copy-like (all primitives)
     let mut entries: [PextEntry; 81] = unsafe { std::mem::zeroed() };
     let _ = dummy; // suppress unused
@@ -610,7 +589,11 @@ pub fn line_through(sq1: Square, sq2: Square) -> Bitboard {
     } else if dr == 0 {
         DIR_W
     } else if adc == adr {
-        if (dc > 0) == (dr > 0) { DIR_SE } else { DIR_NE }
+        if (dc > 0) == (dr > 0) {
+            DIR_SE
+        } else {
+            DIR_NE
+        }
     } else {
         return Bitboard::EMPTY;
     };
@@ -709,7 +692,11 @@ mod tests {
                 }
                 let pext_b = PEXT_LANCE_BLACK.lookup(sq, occ);
                 let ray_b = ray_attack_negative(DIR_N, sq, occ);
-                assert_eq!(pext_b, ray_b, "lance black mismatch at sq={}, occ={:?}", sq_idx, occ);
+                assert_eq!(
+                    pext_b, ray_b,
+                    "lance black mismatch at sq={}, occ={:?}",
+                    sq_idx, occ
+                );
 
                 let pext_w = PEXT_LANCE_WHITE.lookup(sq, occ);
                 let ray_w = ray_attack_positive(DIR_S, sq, occ);

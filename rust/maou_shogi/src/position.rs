@@ -72,7 +72,10 @@ impl Position {
         let gives_check = self.board.is_in_check(self.board.turn);
 
         let history_idx = self.history.len();
-        let entry = self.hash_count.entry(self.board.hash).or_insert((0, history_idx));
+        let entry = self
+            .hash_count
+            .entry(self.board.hash)
+            .or_insert((0, history_idx));
         entry.0 += 1;
 
         self.history.push(StateInfo {
@@ -246,26 +249,45 @@ mod tests {
         let initial_hash = pos.hash();
 
         // 1サイクル目: 全ての手が合法
-        assert!(find_move(&mut pos, "3b3a").is_some(), "cycle 1: 3b3a should be legal");
-        let m = find_move(&mut pos, "3b3a").unwrap(); pos.do_move(m);
-        let m = find_move(&mut pos, "1a1b").unwrap(); pos.do_move(m);
-        let m = find_move(&mut pos, "3a3b").unwrap(); pos.do_move(m);
-        let m = find_move(&mut pos, "1b1a").unwrap(); pos.do_move(m);
+        assert!(
+            find_move(&mut pos, "3b3a").is_some(),
+            "cycle 1: 3b3a should be legal"
+        );
+        let m = find_move(&mut pos, "3b3a").unwrap();
+        pos.do_move(m);
+        let m = find_move(&mut pos, "1a1b").unwrap();
+        pos.do_move(m);
+        let m = find_move(&mut pos, "3a3b").unwrap();
+        pos.do_move(m);
+        let m = find_move(&mut pos, "1b1a").unwrap();
+        pos.do_move(m);
 
         // 1サイクル後: 元の局面に戻る
-        assert_eq!(pos.hash(), initial_hash, "hash should return to initial after 1 cycle");
+        assert_eq!(
+            pos.hash(),
+            initial_hash,
+            "hash should return to initial after 1 cycle"
+        );
 
         // 2サイクル目
-        let m = find_move(&mut pos, "3b3a").unwrap(); pos.do_move(m);
-        let m = find_move(&mut pos, "1a1b").unwrap(); pos.do_move(m);
-        let m = find_move(&mut pos, "3a3b").unwrap(); pos.do_move(m);
-        let m = find_move(&mut pos, "1b1a").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "3b3a").unwrap();
+        pos.do_move(m);
+        let m = find_move(&mut pos, "1a1b").unwrap();
+        pos.do_move(m);
+        let m = find_move(&mut pos, "3a3b").unwrap();
+        pos.do_move(m);
+        let m = find_move(&mut pos, "1b1a").unwrap();
+        pos.do_move(m);
 
         // 3サイクル目
-        let m = find_move(&mut pos, "3b3a").unwrap(); pos.do_move(m);
-        let m = find_move(&mut pos, "1a1b").unwrap(); pos.do_move(m);
-        let m = find_move(&mut pos, "3a3b").unwrap(); pos.do_move(m);
-        let m = find_move(&mut pos, "1b1a").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "3b3a").unwrap();
+        pos.do_move(m);
+        let m = find_move(&mut pos, "1a1b").unwrap();
+        pos.do_move(m);
+        let m = find_move(&mut pos, "3a3b").unwrap();
+        pos.do_move(m);
+        let m = find_move(&mut pos, "1b1a").unwrap();
+        pos.do_move(m);
 
         // 4サイクル目: 連続王手の千日手が成立 → 3b3aが合法手から除外される
         assert!(
@@ -276,10 +298,7 @@ mod tests {
         // 他の手はまだ合法
         let moves = pos.legal_moves();
         let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-        assert!(
-            !moves.is_empty(),
-            "should still have other legal moves"
-        );
+        assert!(!moves.is_empty(), "should still have other legal moves");
         assert!(
             !usi_moves.contains(&"3b3a".to_string()),
             "3b3a must not be in legal moves"
@@ -301,20 +320,28 @@ mod tests {
 
         // 2サイクル実行
         for _ in 0..2 {
-            let m = find_move(&mut pos, "3b3a").unwrap(); pos.do_move(m);
-            let m = find_move(&mut pos, "1a1b").unwrap(); pos.do_move(m);
-            let m = find_move(&mut pos, "3a3b").unwrap(); pos.do_move(m);
-            let m = find_move(&mut pos, "1b1a").unwrap(); pos.do_move(m);
+            let m = find_move(&mut pos, "3b3a").unwrap();
+            pos.do_move(m);
+            let m = find_move(&mut pos, "1a1b").unwrap();
+            pos.do_move(m);
+            let m = find_move(&mut pos, "3a3b").unwrap();
+            pos.do_move(m);
+            let m = find_move(&mut pos, "1b1a").unwrap();
+            pos.do_move(m);
         }
 
         // 中断: 龍を別のマスに動かす(王手でない手)
-        let m = find_move(&mut pos, "3b3c").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "3b3c").unwrap();
+        pos.do_move(m);
         // 白は適当に動く
-        let m = find_move(&mut pos, "1a1b").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "1a1b").unwrap();
+        pos.do_move(m);
         // 龍を3bに戻す
-        let m = find_move(&mut pos, "3c3b").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "3c3b").unwrap();
+        pos.do_move(m);
         // 白も戻る
-        let m = find_move(&mut pos, "1b1a").unwrap(); pos.do_move(m);
+        let m = find_move(&mut pos, "1b1a").unwrap();
+        pos.do_move(m);
 
         // 再度サイクルを開始 → 連続王手が途切れているので千日手にならない
         // (中断前の2回 + 中断後1回 = 3回だが，間に王手でない手がある)
@@ -341,9 +368,8 @@ mod tests {
 
         // 3サイクル実行
         for cycle in 0..3 {
-            let m = find_move(&mut pos, "3b3a").unwrap_or_else(
-                || panic!("cycle {}: 3b3a should be legal", cycle + 1),
-            );
+            let m = find_move(&mut pos, "3b3a")
+                .unwrap_or_else(|| panic!("cycle {}: 3b3a should be legal", cycle + 1));
             pos.do_move(m);
             let m = find_move(&mut pos, "1a1b").unwrap();
             pos.do_move(m);

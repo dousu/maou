@@ -432,7 +432,6 @@ pub(crate) fn must_promote(color: Color, pt: PieceType, to: Square) -> bool {
 mod tests {
     use super::*;
 
-
     #[test]
     fn test_hirate_legal_moves_count() {
         let mut board = Board::new();
@@ -442,16 +441,19 @@ mod tests {
         // 実際は: 歩9 + 角0(塞がってる) + 飛0(塞がってる) + 銀0 + 金0 + 桂0 + 香0 + 王0
         // = 歩前進9手 + 角2手(USI: 8h7g, 8h9i?→いや壁) → 要確認
         // cshogiでの正解値: 30手
-        assert_eq!(moves.len(), 30, "hirate legal moves should be 30, got {}", moves.len());
+        assert_eq!(
+            moves.len(),
+            30,
+            "hirate legal moves should be 30, got {}",
+            moves.len()
+        );
     }
 
     #[test]
     fn test_drop_pawn_nifu() {
         // 二歩テスト: 5筋に歩がある状態で5筋に歩を打てない
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/9/9/9/4P4/9/9/9/4K4 b P 1")
-            .unwrap();
+        board.set_sfen("4k4/9/9/9/4P4/9/9/9/4K4 b P 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         // 歩を打てるマスに5筋が含まれていないことを確認
         for m in &moves {
@@ -497,21 +499,41 @@ mod tests {
         // 盤上の駒の移動手を検証
         // 馬(4b): 3a, 3c, 4a, 5a, 5b, 5c, 6d, 7e, 8f, 9g
         let horse_moves: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("4b")).collect();
-        assert_eq!(horse_moves.len(), 10, "horse should have 10 moves: {:?}", horse_moves);
+        assert_eq!(
+            horse_moves.len(),
+            10,
+            "horse should have 10 moves: {:?}",
+            horse_moves
+        );
 
         // 歩(2d): 2c, 2c+(成り)
         let pawn_moves: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("2d")).collect();
-        assert_eq!(pawn_moves.len(), 2, "pawn should have 2 moves: {:?}", pawn_moves);
+        assert_eq!(
+            pawn_moves.len(),
+            2,
+            "pawn should have 2 moves: {:?}",
+            pawn_moves
+        );
 
         // 桂(4c): 3a+(成り必須), 5a+(成り必須)
         let knight_moves: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("4c")).collect();
-        assert_eq!(knight_moves.len(), 2, "knight should have 2 moves (forced promotion): {:?}", knight_moves);
-        assert!(knight_moves.iter().all(|u| u.ends_with('+')), "knight moves to row 0 must promote");
+        assert_eq!(
+            knight_moves.len(),
+            2,
+            "knight should have 2 moves (forced promotion): {:?}",
+            knight_moves
+        );
+        assert!(
+            knight_moves.iter().all(|u| u.ends_with('+')),
+            "knight moves to row 0 must promote"
+        );
 
         // 二歩チェック: 2筋(col=1)と3筋(col=2)に歩があるので歩打ち不可
         let pawn_drops: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("P*")).collect();
         assert!(
-            pawn_drops.iter().all(|u| !u.starts_with("P*2") && !u.starts_with("P*3")),
+            pawn_drops
+                .iter()
+                .all(|u| !u.starts_with("P*2") && !u.starts_with("P*3")),
             "should not have pawn drops on files 2 and 3 (nifu)"
         );
     }
@@ -547,11 +569,21 @@ mod tests {
 
         // 盤上の駒の移動手を検証(34手)
         let board_moves: Vec<&String> = usi_moves.iter().filter(|u| !u.contains('*')).collect();
-        assert_eq!(board_moves.len(), 34, "board moves should be 34: {:?}", board_moves);
+        assert_eq!(
+            board_moves.len(),
+            34,
+            "board moves should be 34: {:?}",
+            board_moves
+        );
 
         // 飛車打ち(64手)
         let rook_drops: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("R*")).collect();
-        assert_eq!(rook_drops.len(), 64, "rook drops should be 64: {:?}", rook_drops);
+        assert_eq!(
+            rook_drops.len(),
+            64,
+            "rook drops should be 64: {:?}",
+            rook_drops
+        );
 
         // 歩打ちがないこと(手持ちに歩がない)
         let pawn_drops: Vec<&String> = usi_moves.iter().filter(|u| u.starts_with("P*")).collect();
@@ -579,9 +611,7 @@ mod tests {
         // 二歩テスト: 3筋,5筋,7筋に先手の歩がある局面
         // → これらの筋には歩を打てない
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/9/9/9/9/9/2P1P1P2/9/4K4 b P 1")
-            .unwrap();
+        board.set_sfen("4k4/9/9/9/9/9/2P1P1P2/9/4K4 b P 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
@@ -626,20 +656,14 @@ mod tests {
         );
 
         // 3筋に歩打ちがあること(と金は二歩対象外)
-        let p3_drops: Vec<&String> = usi_tokin
-            .iter()
-            .filter(|u| u.starts_with("P*3"))
-            .collect();
+        let p3_drops: Vec<&String> = usi_tokin.iter().filter(|u| u.starts_with("P*3")).collect();
         assert!(
             !p3_drops.is_empty(),
             "should have pawn drops on file 3 (tokin is not nifu)"
         );
 
         // 5筋に歩打ちがないこと(歩がある)
-        let p5_drops: Vec<&String> = usi_tokin
-            .iter()
-            .filter(|u| u.starts_with("P*5"))
-            .collect();
+        let p5_drops: Vec<&String> = usi_tokin.iter().filter(|u| u.starts_with("P*5")).collect();
         assert!(
             p5_drops.is_empty(),
             "should not have pawn drops on file 5 (nifu), but found: {:?}",
@@ -652,9 +676,7 @@ mod tests {
         // 打ち歩詰め局面: 後手玉1a，白桂2a，黒金2c，黒飛2d，黒玉9i
         // P*1bは打ち歩詰め(玉の逃げ場なし)なので合法手に含まれない
         let mut board = Board::empty();
-        board
-            .set_sfen("7nk/9/7G1/7R1/9/9/9/9/K8 b P 1")
-            .unwrap();
+        board.set_sfen("7nk/9/7G1/7R1/9/9/9/9/K8 b P 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
@@ -708,9 +730,7 @@ mod tests {
         // 王手放置禁止テスト: 後手飛車5aが先手玉5iに王手
         // 玉の移動のみ合法(5筋を離れる手のみ)
         let mut board = Board::empty();
-        board
-            .set_sfen("4r4/9/9/9/9/9/9/9/4K4 b - 1")
-            .unwrap();
+        board.set_sfen("4r4/9/9/9/9/9/9/9/4K4 b - 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
@@ -736,9 +756,7 @@ mod tests {
         // ピンテスト: 後手飛車5a，先手金5h，先手玉5i
         // 金は飛車と玉の間にピンされている → 5筋に沿った手のみ合法
         let mut board = Board::empty();
-        board
-            .set_sfen("4r4/9/9/9/9/9/9/4G4/4K4 b - 1")
-            .unwrap();
+        board.set_sfen("4r4/9/9/9/9/9/9/4G4/4K4 b - 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
@@ -767,9 +785,7 @@ mod tests {
         // 先手玉5i，先手角5g，後手香5a
         // 角は縦に動けないため全ての角の手が不合法
         let mut board = Board::empty();
-        board
-            .set_sfen("4l4/9/9/9/9/9/4B4/9/4K4 b - 1")
-            .unwrap();
+        board.set_sfen("4l4/9/9/9/9/9/4B4/9/4K4 b - 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
@@ -798,9 +814,7 @@ mod tests {
         // 先手玉5i，先手角7i，後手飛9i
         // 角は横に動けないため全ての角の手が不合法
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/9/9/9/9/9/9/9/r1B1K4 b - 1")
-            .unwrap();
+        board.set_sfen("4k4/9/9/9/9/9/9/9/r1B1K4 b - 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
@@ -829,9 +843,7 @@ mod tests {
         // 先手玉5i，先手角6h，後手角8f
         // 斜めライン上の移動のみ合法(7gと8f=角取り)
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/9/9/9/9/1b7/9/3B5/4K4 b - 1")
-            .unwrap();
+        board.set_sfen("4k4/9/9/9/9/1b7/9/3B5/4K4 b - 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
@@ -860,9 +872,7 @@ mod tests {
         // 先手玉5i，先手飛6h，後手角8f
         // 飛は斜めに動けないため全ての飛の手が不合法
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/9/9/9/9/1b7/9/3R5/4K4 b - 1")
-            .unwrap();
+        board.set_sfen("4k4/9/9/9/9/1b7/9/3R5/4K4 b - 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         let mut usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
         usi_moves.sort();
@@ -889,9 +899,7 @@ mod tests {
     fn test_immovable_drop_knight() {
         // 桂打ち制限: 先手は1-2段目(row a,b)に桂を打てない
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/9/9/9/9/9/9/9/4K4 b N 1")
-            .unwrap();
+        board.set_sfen("4k4/9/9/9/9/9/9/9/4K4 b N 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
 
@@ -919,9 +927,7 @@ mod tests {
     fn test_immovable_drop_lance() {
         // 香打ち制限: 先手は1段目(row a)に香を打てない
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/9/9/9/9/9/9/9/4K4 b L 1")
-            .unwrap();
+        board.set_sfen("4k4/9/9/9/9/9/9/9/4K4 b L 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
 
@@ -949,9 +955,7 @@ mod tests {
     fn test_immovable_drop_pawn() {
         // 歩打ち制限: 先手は1段目(row a)に歩を打てない
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/9/9/9/9/9/9/9/4K4 b P 1")
-            .unwrap();
+        board.set_sfen("4k4/9/9/9/9/9/9/9/4K4 b P 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
 
@@ -979,9 +983,7 @@ mod tests {
     fn test_tsume_single_king() {
         // 片玉局面: 攻め方(先手)に玉がない
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/9/4G4/9/9/9/9/9/9 b G 1")
-            .unwrap();
+        board.set_sfen("4k4/9/4G4/9/9/9/9/9/9 b G 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         // 合法手が生成できること(玉がなくてもpanicしない)
         assert!(!moves.is_empty(), "tsume position should have legal moves");
@@ -991,9 +993,7 @@ mod tests {
     fn test_tsume_defender_turn() {
         // 片玉局面: 受け方(後手)の手番
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/4G4/9/9/9/9/9/9/9 w - 1")
-            .unwrap();
+        board.set_sfen("4k4/4G4/9/9/9/9/9/9/9 w - 1").unwrap();
         let moves = generate_legal_moves(&mut board);
         // 後手は王手されているので応手が必要
         // 合法手が生成できること

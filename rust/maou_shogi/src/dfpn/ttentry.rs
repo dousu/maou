@@ -10,7 +10,7 @@
 //! `std::atomic<Hand>` / `std::atomic<min_depth>` / `shared_lock` は plain field とする
 //! (single-thread では値の意味論は同一)．
 
-use super::mate_len::{MateLen, DEPTH_MAX_PLUS1_MATE_LEN, MINUS1_MATE_LEN, KDEPTH_MAX};
+use super::mate_len::{MateLen, DEPTH_MAX_PLUS1_MATE_LEN, KDEPTH_MAX, MINUS1_MATE_LEN};
 use super::search_result::{BitSet64, Depth, Hand, PnDn, SearchAmount, K_INFINITE_PN_DN};
 use crate::types::HAND_KINDS;
 
@@ -51,10 +51,10 @@ fn saturated_add(a: SearchAmount, b: SearchAmount) -> SearchAmount {
 /// KH `tt::detail::Entry` (ttentry.hpp:155-)．
 #[derive(Clone, Copy)]
 pub(super) struct Entry {
-    hand: Hand,            // 現局面の持ち駒 (NULL_HAND = 空 slot)
-    amount: SearchAmount,  // 探索量
-    board_key: u64,        // 盤面ハッシュ値 (KH `Key`)
-    proven_len: MateLen,   // 詰み手数 (これ以上の len なら詰み)
+    hand: Hand,             // 現局面の持ち駒 (NULL_HAND = 空 slot)
+    amount: SearchAmount,   // 探索量
+    board_key: u64,         // 盤面ハッシュ値 (KH `Key`)
+    proven_len: MateLen,    // 詰み手数 (これ以上の len なら詰み)
     disproven_len: MateLen, // 不詰手数 (これ以下の len なら不詰)
     pn: PnDn,
     dn: PnDn,
@@ -62,7 +62,7 @@ pub(super) struct Entry {
     parent_board_key: u64, // 親局面 (DAG 二重カウント補正の LookUpParent 用)
     parent_hand: Hand,
     repetition_state: RepetitionState,
-    sum_mask: BitSet64,    // δ を和で計上する子の集合
+    sum_mask: BitSet64, // δ を和で計上する子の集合
 }
 
 impl Entry {
@@ -375,7 +375,14 @@ mod tests {
 
         let (mut pn, mut dn, mut old) = (1u64, 1u64, false);
         // len=11 >= proven_len(10) => proven
-        assert!(e.look_up(hand(1), 0, MateLen::from_len(11), &mut pn, &mut dn, &mut old));
+        assert!(e.look_up(
+            hand(1),
+            0,
+            MateLen::from_len(11),
+            &mut pn,
+            &mut dn,
+            &mut old
+        ));
         assert_eq!((pn, dn), (0, K_INFINITE_PN_DN));
 
         let (mut pn, mut dn) = (1u64, 1u64);
@@ -393,7 +400,14 @@ mod tests {
         // len=10 は (disproven=2, proven=50) の間 => pn/dn を max へ lift．
         let (mut pn, mut dn, mut old) = (1u64, 1u64, false);
         // depth(0) < min_depth(3) => min_depth を 0 へ下げる (KH atomic store)．old_child は min_depth<depth が条件で立たない．
-        e.look_up(hand(1), 0, MateLen::from_len(10), &mut pn, &mut dn, &mut old);
+        e.look_up(
+            hand(1),
+            0,
+            MateLen::from_len(10),
+            &mut pn,
+            &mut dn,
+            &mut old,
+        );
         assert_eq!((pn, dn), (7, 9));
         assert_eq!(e.min_depth(), 0); // depth16(0) < 旧 min_depth(3) => 0 へ更新
         assert!(!old);
@@ -405,7 +419,14 @@ mod tests {
         let mut e = fresh(0x1, hand(1));
         e.update_proven(MateLen::from_len(10), 1);
         let (mut pn, mut dn, mut old) = (1u64, 1u64, false);
-        let ret = e.look_up(hand(3), 0, MateLen::from_len(12), &mut pn, &mut dn, &mut old);
+        let ret = e.look_up(
+            hand(3),
+            0,
+            MateLen::from_len(12),
+            &mut pn,
+            &mut dn,
+            &mut old,
+        );
         assert!(ret);
         assert_eq!((pn, dn), (0, K_INFINITE_PN_DN)); // 優等 => 詰み
     }
@@ -428,7 +449,14 @@ mod tests {
         s[5] = 1; // some non-pawn piece
         let mut e = fresh(0x1, s);
         let (mut pn, mut dn, mut old) = (1u64, 1u64, false);
-        let ret = e.look_up(hand(1), 0, MateLen::from_len(10), &mut pn, &mut dn, &mut old);
+        let ret = e.look_up(
+            hand(1),
+            0,
+            MateLen::from_len(10),
+            &mut pn,
+            &mut dn,
+            &mut old,
+        );
         assert!(!ret);
         assert_eq!((pn, dn), (1, 1)); // unchanged
     }

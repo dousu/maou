@@ -112,7 +112,11 @@ impl DelayedMoveList {
     #[inline(always)]
     pub(super) fn prev(&self, i_raw: usize) -> Option<usize> {
         let p = self.prev[i_raw];
-        if p == 0 { None } else { Some((p - 1) as usize) }
+        if p == 0 {
+            None
+        } else {
+            Some((p - 1) as usize)
+        }
     }
 
     /// `i_raw` の直後に展開すべき手の index．無ければ `None`．
@@ -120,12 +124,20 @@ impl DelayedMoveList {
     #[allow(dead_code)] // 将来の Next() walking 用に保持
     pub(super) fn next(&self, i_raw: usize) -> Option<usize> {
         let n = self.next[i_raw];
-        if n == 0 { None } else { Some((n - 1) as usize) }
+        if n == 0 {
+            None
+        } else {
+            Some((n - 1) as usize)
+        }
     }
 
     /// `i_raw` の prev chain に未解決の手があるか．
     /// `is_resolved(j)` が `true` なら j は解決済み (final)．
-    pub(super) fn has_unresolved_prev<F: Fn(usize) -> bool>(&self, i_raw: usize, is_resolved: F) -> bool {
+    pub(super) fn has_unresolved_prev<F: Fn(usize) -> bool>(
+        &self,
+        i_raw: usize,
+        is_resolved: F,
+    ) -> bool {
         let mut cur = self.prev(i_raw);
         while let Some(j) = cur {
             if !is_resolved(j) {
@@ -201,8 +213,13 @@ fn is_delayable(m: Move, or_node: bool) -> bool {
                 || is_in_enemy_field(to, true)
                 || is_in_enemy_field(from, false)
                 || is_in_enemy_field(to, false);
-            if !in_enemy { return false; }
-            matches!(pt, PieceType::Pawn | PieceType::Bishop | PieceType::Rook | PieceType::Lance)
+            if !in_enemy {
+                return false;
+            }
+            matches!(
+                pt,
+                PieceType::Pawn | PieceType::Bishop | PieceType::Rook | PieceType::Lance
+            )
         } else {
             false
         }
@@ -272,7 +289,7 @@ mod tests {
         let m_n = Move::new_drop(sq, PieceType::Knight);
         let moves = vec![m_p, m_l, m_n];
 
-        let dml = DelayedMoveList::build(&moves, /*or_node=*/false);
+        let dml = DelayedMoveList::build(&moves, /*or_node=*/ false);
         // index 0 が head (prev=None), 1,2 は prev あり
         assert_eq!(dml.prev(0), None);
         assert_eq!(dml.prev(1), Some(0));
@@ -293,7 +310,7 @@ mod tests {
         let m_la = Move::new_drop(sq_a, PieceType::Lance);
         let moves = vec![m_pa, m_pb, m_la];
 
-        let dml = DelayedMoveList::build(&moves, /*or_node=*/false);
+        let dml = DelayedMoveList::build(&moves, /*or_node=*/ false);
         // index 0 と 1 はそれぞれ head (異なる sq)
         assert_eq!(dml.prev(0), None);
         assert_eq!(dml.prev(1), None);
@@ -309,7 +326,7 @@ mod tests {
         let m_l = Move::new_drop(sq, PieceType::Lance);
         let moves = vec![m_p, m_l];
 
-        let dml = DelayedMoveList::build(&moves, /*or_node=*/true);
+        let dml = DelayedMoveList::build(&moves, /*or_node=*/ true);
         // OR ノードの drop は遅延対象外なので chain なし
         assert_eq!(dml.prev(0), None);
         assert_eq!(dml.prev(1), None);
@@ -324,7 +341,7 @@ mod tests {
             Move::new_drop(sq, PieceType::Lance),
             Move::new_drop(sq, PieceType::Knight),
         ];
-        let dml = DelayedMoveList::build(&moves, /*or_node=*/false);
+        let dml = DelayedMoveList::build(&moves, /*or_node=*/ false);
 
         // index 0: prev なし → 常に false
         assert!(!dml.has_unresolved_prev(0, |_| true));

@@ -287,12 +287,17 @@ mod tests {
             let key = (i + 1) | ((i + 1) << 32);
             m.insert(key, i as u32, 5);
         }
-        let live = (1..=n).filter(|i| {
-            let key = i | (i << 32);
-            m.contains(key, 5).is_some()
-        }).count();
+        let live = (1..=n)
+            .filter(|i| {
+                let key = i | (i << 32);
+                m.contains(key, 5).is_some()
+            })
+            .count();
         // 古い世代は GC で削除され，全件は残っていない．直近世代は残っている．
-        assert!(live < n as usize, "GC should evict old generations (live={live})");
+        assert!(
+            live < n as usize,
+            "GC should evict old generations (live={live})"
+        );
         let last_key = n | (n << 32);
         assert_eq!(m.contains(last_key, 5), Some(((n - 1) as u32, 5)));
     }

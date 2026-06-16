@@ -269,7 +269,11 @@ impl TranspositionTable {
     /// fall back する．**KH は dominant bound の親で常に上書きするが，maou ではそれが false DAG 辺を
     /// 生み退行する** (29te 11,143→13,092)．exact 優先 + cross-hand fallback が正 (29te 11,286 /
     /// 39te 14.5M→13.4M / 62s→58s; いずれも STRICT sound)．pn/dn 境界は KH どおり cross-hand 合成のまま．
-    pub(super) fn look_up_parent(&self, board_key: u64, hand: Hand) -> Option<(u64, Hand, PnDn, PnDn)> {
+    pub(super) fn look_up_parent(
+        &self,
+        board_key: u64,
+        hand: Hand,
+    ) -> Option<(u64, Hand, PnDn, PnDn)> {
         use super::ttentry::hand_is_equal_or_superior;
         let mut pn: PnDn = 1;
         let mut dn: PnDn = 1;
@@ -372,7 +376,12 @@ impl TranspositionTable {
                     let e = &self.regular.entries[idx];
                     amount = amount.max(e.amount());
                     if pn == 0 {
-                        return SearchResult::make_final(true, e.get_hand(), e.proven_len(), amount);
+                        return SearchResult::make_final(
+                            true,
+                            e.get_hand(),
+                            e.proven_len(),
+                            amount,
+                        );
                     } else if dn == 0 {
                         return SearchResult::make_final(
                             false,
@@ -411,7 +420,12 @@ impl TranspositionTable {
     }
 
     /// **置換表の書き込み** (KH `Query::SetResult`, ttquery.hpp:248)．
-    pub(super) fn set_result(&mut self, ctx: &TtContext, result: SearchResult, parent: (u64, Hand)) {
+    pub(super) fn set_result(
+        &mut self,
+        ctx: &TtContext,
+        result: SearchResult,
+        parent: (u64, Hand),
+    ) {
         if result.pn() == 0 {
             self.set_final(ctx, true, result);
         } else if result.dn() == 0 {

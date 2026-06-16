@@ -1,9 +1,9 @@
 use crate::attack;
 use crate::bitboard::Bitboard;
 use crate::moves::Move;
-use crate::sfen::{self, HIRATE_SFEN};
 pub use crate::sfen::SfenError;
-use crate::types::{Color, HAND_KINDS, Piece, PIECE_BB_SIZE, PieceType, Square};
+use crate::sfen::{self, HIRATE_SFEN};
+use crate::types::{Color, Piece, PieceType, Square, HAND_KINDS, PIECE_BB_SIZE};
 use crate::zobrist::ZOBRIST;
 
 thread_local! {
@@ -627,12 +627,12 @@ impl Board {
         occ_nk: Bitboard,
     ) -> EscInfo {
         let pb = &self.piece_bb[att_idx];
-        let mut steps = attack::step_attacks(defender, PieceType::Pawn, esc)
-            & pb[PieceType::Pawn as usize];
-        steps |= attack::step_attacks(defender, PieceType::Knight, esc)
-            & pb[PieceType::Knight as usize];
-        steps |= attack::step_attacks(defender, PieceType::Silver, esc)
-            & pb[PieceType::Silver as usize];
+        let mut steps =
+            attack::step_attacks(defender, PieceType::Pawn, esc) & pb[PieceType::Pawn as usize];
+        steps |=
+            attack::step_attacks(defender, PieceType::Knight, esc) & pb[PieceType::Knight as usize];
+        steps |=
+            attack::step_attacks(defender, PieceType::Silver, esc) & pb[PieceType::Silver as usize];
         let gold_movers = pb[PieceType::Gold as usize]
             | pb[PieceType::ProPawn as usize]
             | pb[PieceType::ProLance as usize]
@@ -650,7 +650,11 @@ impl Board {
             & pb[PieceType::Lance as usize])
             | (ba & (pb[PieceType::Bishop as usize] | pb[PieceType::Horse as usize]))
             | (ra & (pb[PieceType::Rook as usize] | pb[PieceType::Dragon as usize]));
-        EscInfo { steps, sliders, qvis: ba | ra }
+        EscInfo {
+            steps,
+            sliders,
+            qvis: ba | ra,
+        }
     }
 
     /// ビットボード演算のみで1手詰めを判定する(do_move/undo_move 不要)．
@@ -664,11 +668,7 @@ impl Board {
     /// 1. 玉に逃げ場がないか(ビットボード利き計算)
     /// 2. 王手駒を取り返せないか(ピン判定含む)
     /// 3. 合い駒が効かないか(飛び駒の王手のみ)
-    pub fn mate_move_in_1ply(
-        &mut self,
-        checks: &[Move],
-        attacker: Color,
-    ) -> Option<Move> {
+    pub fn mate_move_in_1ply(&mut self, checks: &[Move], attacker: Color) -> Option<Move> {
         if checks.is_empty() {
             return None;
         }
@@ -699,8 +699,8 @@ impl Board {
 
         for &m in checks {
             match self.is_checkmate_after_bb(
-                m, attacker, defender, king_sq, king_bb, king_step,
-                all_occ, def_occ, att_idx, def_idx, &mut ctx,
+                m, attacker, defender, king_sq, king_bb, king_step, all_occ, def_occ, att_idx,
+                def_idx, &mut ctx,
             ) {
                 Some(true) => return Some(m),
                 Some(false) => {}
@@ -708,8 +708,8 @@ impl Board {
                     // 開き王手 / 両王手 / 非王手: ビットボード判定の前提外なので do_move +
                     // 合法手生成で確定検証する (正確だが低速; これらの手は稀)．
                     let captured = self.do_move(m);
-                    let mated = self.is_in_check(defender)
-                        && !crate::movegen::has_any_legal_move(self);
+                    let mated =
+                        self.is_in_check(defender) && !crate::movegen::has_any_legal_move(self);
                     self.undo_move(m, captured);
                     if mated {
                         return Some(m);
@@ -786,7 +786,14 @@ impl Board {
         let direct_check = checker_attacks.contains(king_sq);
         let other_checker = match from_opt {
             Some(from) if ctx.discoverers.contains(from) => self.is_sq_attacked_after_move(
-                king_sq, attacker, occ_no_king, att_idx, def_idx, from_opt, to_sq, false,
+                king_sq,
+                attacker,
+                occ_no_king,
+                att_idx,
+                def_idx,
+                from_opt,
+                to_sq,
+                false,
             ),
             _ => false,
         };
@@ -850,7 +857,14 @@ impl Board {
             match from_opt {
                 Some(f) if info.qvis.contains(f) => {
                     if !self.is_sq_attacked_after_move(
-                        esc, attacker, occ_no_king, att_idx, def_idx, from_opt, to_sq, false,
+                        esc,
+                        attacker,
+                        occ_no_king,
+                        att_idx,
+                        def_idx,
+                        from_opt,
+                        to_sq,
+                        false,
                     ) {
                         return Some(false); // 安全な逃げ場がある
                     }
@@ -869,9 +883,7 @@ impl Board {
                     info_opt = Some(match ctx.esc_info[slot] {
                         Some(i) => i,
                         None => {
-                            let i = self.compute_esc_info(
-                                to_sq, defender, att_idx, ctx.occ_nk_pre,
-                            );
+                            let i = self.compute_esc_info(to_sq, defender, att_idx, ctx.occ_nk_pre);
                             ctx.esc_info[slot] = Some(i);
                             i
                         }
@@ -880,9 +892,8 @@ impl Board {
                 }
             }
             // to が受け方駒のマス (捕獲) の場合は esc_sqs に無いので ad hoc 計算
-            let info = info_opt.unwrap_or_else(|| {
-                self.compute_esc_info(to_sq, defender, att_idx, ctx.occ_nk_pre)
-            });
+            let info = info_opt
+                .unwrap_or_else(|| self.compute_esc_info(to_sq, defender, att_idx, ctx.occ_nk_pre));
             let covered = (info.steps & from_mask).is_not_empty()
                 || (info.sliders & from_mask).is_not_empty();
             if !covered {
@@ -907,13 +918,25 @@ impl Board {
         // になる (39te 偽証明 @17.9M nodes の真因, 2026-06-11)．移動後の攻め方 slider
         // 配置 (from 除去・to 追加, 成り考慮) で pin を再計算する．
         let pinned_after = self.compute_pinned_after_bb(
-            defender, king_sq, occ_after, def_occ_after, from_opt, to_sq, checker_pt,
+            defender,
+            king_sq,
+            occ_after,
+            def_occ_after,
+            from_opt,
+            to_sq,
+            checker_pt,
         );
 
         // === 2. 王手駒の捕獲チェック(玉以外) ===
         // ピンされていない守備駒で王手駒を取れるか
         if self.can_capture_checker_bb(
-            to_sq, king_sq, defender, occ_after, def_occ, def_idx, &pinned_after,
+            to_sq,
+            king_sq,
+            defender,
+            occ_after,
+            def_occ,
+            def_idx,
+            &pinned_after,
         ) {
             return Some(false);
         }
@@ -923,8 +946,15 @@ impl Board {
             let between = attack::between_bb(to_sq, king_sq);
             if between.is_not_empty()
                 && self.can_interpose_bb(
-                    &between, king_sq, defender, occ_after, def_occ,
-                    def_idx, att_idx, &pinned_after, from_opt,
+                    &between,
+                    king_sq,
+                    defender,
+                    occ_after,
+                    def_occ,
+                    def_idx,
+                    att_idx,
+                    &pinned_after,
+                    from_opt,
                 )
             {
                 return Some(false);
@@ -990,13 +1020,11 @@ impl Board {
         }
 
         // 香によるピン
-        let mut lance_like =
-            self.piece_bb[ai][PieceType::Lance as usize] & !from_mask;
+        let mut lance_like = self.piece_bb[ai][PieceType::Lance as usize] & !from_mask;
         if checker_pt == PieceType::Lance {
             lance_like |= to_bb;
         }
-        let lance_pinners =
-            attack::lance_attacks(defender, king_sq, Bitboard::EMPTY) & lance_like;
+        let lance_pinners = attack::lance_attacks(defender, king_sq, Bitboard::EMPTY) & lance_like;
         for pinner_sq in lance_pinners {
             let blockers = attack::between_bb(king_sq, pinner_sq) & occ_after;
             if blockers.count() == 1 {
@@ -1269,8 +1297,7 @@ impl Board {
                     }
                     // 二歩チェック
                     if pt == PieceType::Pawn {
-                        let our_pawns =
-                            self.piece_bb[defender.index()][PieceType::Pawn as usize];
+                        let our_pawns = self.piece_bb[defender.index()][PieceType::Pawn as usize];
                         let file = Bitboard::file_mask(to.col());
                         if (our_pawns & file).is_not_empty() {
                             continue;
@@ -1339,7 +1366,7 @@ impl Board {
                     | self.piece_bb[def_idx][PieceType::Horse as usize])
                 & !*pinned
                 & !Bitboard::from_square(king_sq))
-                .is_not_empty()
+            .is_not_empty()
             {
                 return true;
             }
@@ -1349,7 +1376,7 @@ impl Board {
                     | self.piece_bb[def_idx][PieceType::Dragon as usize])
                 & !*pinned
                 & !Bitboard::from_square(king_sq))
-                .is_not_empty()
+            .is_not_empty()
             {
                 return true;
             }
@@ -1541,10 +1568,12 @@ impl Board {
             // 持ち駒から減らす
             let hi = pt.hand_index().unwrap();
             debug_assert!(self.hand[self.turn.index()][hi] > 0);
-            self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+            self.hash ^=
+                ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
             self.hand[self.turn.index()][hi] -= 1;
             if self.hand[self.turn.index()][hi] > 0 {
-                self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                self.hash ^=
+                    ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
             }
 
             self.put_piece(to, piece);
@@ -1567,10 +1596,15 @@ impl Board {
                 // 疑似合法手の検証中に発生しうる)
                 if let Some(hi) = cap_hand_pt.hand_index() {
                     if self.hand[self.turn.index()][hi] > 0 {
-                        self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                        self.hash ^= ZOBRIST.hand_hash(
+                            self.turn,
+                            hi,
+                            self.hand[self.turn.index()][hi] as usize,
+                        );
                     }
                     self.hand[self.turn.index()][hi] += 1;
-                    self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                    self.hash ^=
+                        ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
                 }
                 captured = cap;
             } else {
@@ -1623,10 +1657,12 @@ impl Board {
             // 持ち駒に戻す
             let hi = pt.hand_index().unwrap();
             if self.hand[self.turn.index()][hi] > 0 {
-                self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                self.hash ^=
+                    ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
             }
             self.hand[self.turn.index()][hi] += 1;
-            self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+            self.hash ^=
+                ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
         } else {
             let from = m.from_sq();
             let to = m.to_sq();
@@ -1653,10 +1689,15 @@ impl Board {
                 // 持ち駒から取った駒を除去(王は持ち駒にならない)
                 let cap_hand_pt = cap_pt.captured_to_hand();
                 if let Some(hi) = cap_hand_pt.hand_index() {
-                    self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                    self.hash ^=
+                        ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
                     self.hand[self.turn.index()][hi] -= 1;
                     if self.hand[self.turn.index()][hi] > 0 {
-                        self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                        self.hash ^= ZOBRIST.hand_hash(
+                            self.turn,
+                            hi,
+                            self.hand[self.turn.index()][hi] as usize,
+                        );
                     }
                 }
             }
@@ -1769,9 +1810,8 @@ impl Board {
         for (i, &max) in PieceType::MAX_HAND_COUNT.iter().enumerate() {
             let hand_total = self.hand[0][i] as u32 + self.hand[1][i] as u32;
             let base_pt = PieceType::HAND_PIECES[i];
-            let mut on_board = (self.piece_bb[0][base_pt as usize]
-                | self.piece_bb[1][base_pt as usize])
-                .count();
+            let mut on_board =
+                (self.piece_bb[0][base_pt as usize] | self.piece_bb[1][base_pt as usize]).count();
             // 成駒も盤上枚数に含める
             if let Some(promoted) = base_pt.promoted() {
                 on_board += (self.piece_bb[0][promoted as usize]
@@ -1845,7 +1885,13 @@ impl Board {
             }
             let moving_pt = moving_piece.piece_type()? as u8;
             let captured = self.squares[to.index()].0;
-            Some(Move::new_move(from, to, m16.is_promotion(), captured, moving_pt))
+            Some(Move::new_move(
+                from,
+                to,
+                m16.is_promotion(),
+                captured,
+                moving_pt,
+            ))
         }
     }
 }
@@ -2033,14 +2079,10 @@ mod tests {
     fn test_is_in_check() {
         // 王手がかかっている局面を設定
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/9/9/9/9/9/9/9/4K3R b - 1")
-            .unwrap();
+        board.set_sfen("4k4/9/9/9/9/9/9/9/4K3R b - 1").unwrap();
         // 先手の飛車(1九=col8,row8)は後手の玉(5一=col4,row0)に利いていない(別の行)
         // → 別の局面にする
-        board
-            .set_sfen("4k4/9/9/9/9/9/9/9/4K4 b R 1")
-            .unwrap();
+        board.set_sfen("4k4/9/9/9/9/9/9/9/4K4 b R 1").unwrap();
         assert!(!board.is_in_check(Color::White));
     }
 
@@ -2048,9 +2090,7 @@ mod tests {
     fn test_single_king_tsume() {
         // 片玉局面(詰将棋): 攻め方に玉がない
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/9/4G4/9/9/9/9/9/9 b G 1")
-            .unwrap();
+        board.set_sfen("4k4/9/4G4/9/9/9/9/9/9 b G 1").unwrap();
         assert!(board.is_ok());
         assert_eq!(board.king_square(Color::Black), None);
         assert!(board.king_square(Color::White).is_some());
@@ -2100,6 +2140,9 @@ mod tests {
         assert!(output.contains("金2"), "should show 2 golds");
         assert!(output.contains("歩3"), "should show 3 pawns");
         // 後手: 角1銀1
-        assert!(output.contains("後手の持駒：角 銀"), "should show bishop and silver");
+        assert!(
+            output.contains("後手の持駒：角 銀"),
+            "should show bishop and silver"
+        );
     }
 }

@@ -1,6 +1,5 @@
 //! 手生成，PNS (Proof Number Search)，PV 復元，公開 API．
 
-
 #[cfg(feature = "profile")]
 use std::time::Instant;
 
@@ -9,13 +8,11 @@ use crate::board::Board;
 use super::solver::{DfPnSolver, TsumeResult};
 
 impl DfPnSolver {
-
     /// 探索ノード数を返す．
     pub fn nodes_searched(&self) -> u64 {
         self.nodes_searched
     }
 }
-
 
 /// デフォルトタイムアウト(300秒)で詰将棋を解く便利関数．
 ///

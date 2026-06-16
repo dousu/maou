@@ -4,7 +4,6 @@
 //! **恒久的** な movegen ヘルパ．pns.rs から切り出した（v2.0.x, mid/pns 廃止方針）．
 //! ここには探索ロジックを置かない（手生成・合法性判定のみ）．
 
-
 use arrayvec::ArrayVec;
 #[cfg(feature = "profile")]
 use std::time::Instant;
@@ -17,9 +16,7 @@ use crate::moves::Move;
 use crate::types::{Color, PieceType, Square};
 
 use super::solver::DfPnSolver;
-use super::{
-    push_move, MAX_MOVES,
-};
+use super::{push_move, MAX_MOVES};
 
 impl DfPnSolver {
     /// 玉方の王手回避手を生成する(合い効かずを除外)．
@@ -214,9 +211,7 @@ impl DfPnSolver {
             let from = can_capture.pop_lsb();
             // 捕獲は王手を必ず解消するので，合法性は pin 述語だけで決まる
             // (is_evasion_legal の do/undo + is_in_check と同値; 呼び出し元コメント参照)．
-            if pinned.contains(from)
-                && !attack::line_through(king_sq, from).contains(checker_sq)
-            {
+            if pinned.contains(from) && !attack::line_through(king_sq, from).contains(checker_sq) {
                 continue;
             }
             let piece = board.squares[from.index()];
@@ -268,11 +263,7 @@ impl DfPnSolver {
         defender: Color,
         attacker: Color,
     ) -> (Bitboard, Bitboard) {
-        let king_step = attack::step_attacks(
-            defender.opponent(),
-            PieceType::King,
-            king_sq,
-        );
+        let king_step = attack::step_attacks(defender.opponent(), PieceType::King, king_sq);
         let mut futile = Bitboard::EMPTY;
 
         for sq in *between {
@@ -422,11 +413,7 @@ impl DfPnSolver {
         _our_occ: Bitboard,
         pinned: Bitboard,
     ) {
-        let king_step = attack::step_attacks(
-            defender.opponent(),
-            PieceType::King,
-            king_sq,
-        );
+        let king_step = attack::step_attacks(defender.opponent(), PieceType::King, king_sq);
         let attacker = defender.opponent();
         // futile | chain = 駒移動の無駄合いフィルタ対象
         let futile_or_chain = *futile | *chain;
@@ -470,9 +457,7 @@ impl DfPnSolver {
                 // 合駒 (to∈between) は王手を必ず遮断するので，合法性は pin 述語だけで
                 // 決まる (is_evasion_legal の do/undo + is_in_check と同値;
                 // generate_defense_moves_inner のコメント参照)．
-                if pinned.contains(from)
-                    && !attack::line_through(king_sq, from).contains(to)
-                {
+                if pinned.contains(from) && !attack::line_through(king_sq, from).contains(to) {
                     continue;
                 }
                 let piece = board.squares[from.index()];
@@ -484,9 +469,8 @@ impl DfPnSolver {
                 // (b) 移動元が玉の隣接マスで，空いた後に攻め方から利かれず
                 //     玉の逃げ道が新たに生まれる
                 if futile_or_chain.contains(to) {
-                    let has_support = board.is_attacked_by_excluding(
-                        to, defender, true, Some(from),
-                    );
+                    let has_support =
+                        board.is_attacked_by_excluding(to, defender, true, Some(from));
                     let opens_escape = king_step.contains(from)
                         && !board.is_attacked_by_excluding(from, attacker, false, None);
                     if !has_support && !opens_escape {
@@ -564,8 +548,7 @@ impl DfPnSolver {
                         continue;
                     }
                     if pt == PieceType::Pawn {
-                        let our_pawns =
-                            board.piece_bb[defender.index()][PieceType::Pawn as usize];
+                        let our_pawns = board.piece_bb[defender.index()][PieceType::Pawn as usize];
                         let col = to.col();
                         if (our_pawns & Bitboard::file_mask(col)).is_not_empty() {
                             continue;
@@ -720,10 +703,7 @@ impl DfPnSolver {
     ///
     /// 最適化: 玉方の玉に王手がかかる手のみを直接生成する．
     /// 全合法手を生成してからフィルタする方式と比べ，生成候補を大幅に削減する．
-    pub(super) fn generate_check_moves(
-        &self,
-        board: &mut Board,
-    ) -> ArrayVec<Move, MAX_MOVES> {
+    pub(super) fn generate_check_moves(&self, board: &mut Board) -> ArrayVec<Move, MAX_MOVES> {
         let us = board.turn;
         let them = us.opponent();
         let has_own_king = board.king_square(us).is_some();
@@ -814,9 +794,7 @@ impl DfPnSolver {
             // この駒の移動が自玉を露出させ得ないなら per-move の do/undo 検証
             // (is_legal_quick) を省略する (結果は同値; 上記コメント参照)．
             let fast_legal = !has_own_king
-                || (!own_in_check
-                    && Some(from) != own_king_sq
-                    && !pinned_own.contains(from));
+                || (!own_in_check && Some(from) != own_king_sq && !pinned_own.contains(from));
 
             for to in scan {
                 let captured_piece = board.squares[to.index()];
@@ -825,8 +803,8 @@ impl DfPnSolver {
 
                 // 開き王手の判定: to が from→king_sq のライン上にある場合，
                 // 移動後も飛び駒の利きを遮断するため開き王手にならない
-                let gives_discovered = is_discoverer
-                    && !attack::line_through(from, king_sq).contains(to);
+                let gives_discovered =
+                    is_discoverer && !attack::line_through(from, king_sq).contains(to);
 
                 // 成り先の駒種での王手チェック (逆利き mask の O(1) contains;
                 // attacks_square と同値)
