@@ -90,6 +90,14 @@ pub(super) fn khorder_enabled() -> bool {
     *C.get_or_init(|| std::env::var("V4_KHORDER").is_ok())
 }
 
+/// `V4_INTROSORT` 実験 (process 内 1 回読み)．idx ソートに libstdc++ introsort 移植 (`kh_std_sort`) を使う．
+/// default OFF = stable sort (movegen 順保持)．KH を `std::stable_sort` にした診断ビルドと突合する際は
+/// 両者 stable に揃えるため本フラグを **OFF** のままにする．
+pub(super) fn introsort_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4_INTROSORT").is_ok())
+}
+
 /// `V4TRACE` env (process 内 1 回読み)．KH `KHTRACE` と同形式で各 build の best 子 (idx[0]) の
 /// move/pn/dn を sfen 付き chronological dump し，最初の探索乖離を突合する ([[feedback_kh_divergence_hunting]])．
 fn v4trace_enabled() -> bool {

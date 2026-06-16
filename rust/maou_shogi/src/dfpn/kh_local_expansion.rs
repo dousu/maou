@@ -333,12 +333,13 @@ impl LocalExpansion {
     /// idx_ 全体を comparer で sort する (KH `std::sort(idx_.begin(), idx_.end(), ...)`)．
     fn sort_idx(&mut self) {
         let mut idx = std::mem::take(&mut self.idx);
-        if super::mid_v4::khorder_enabled() {
-            // KH tie-break 忠実化: libstdc++ `std::sort`(introsort) を bit 単位で再現する．
+        if super::mid_v4::khorder_enabled() && super::mid_v4::introsort_enabled() {
+            // KH tie-break 忠実化: libstdc++ `std::sort`(introsort) を bit 単位で再現する (V4_INTROSORT 時)．
             // 入力順 (V4_KHORDER で movegen 順を KH に一致) + comparator + sort algorithm が揃い，
             // >16 子ノードの完全同点 tie の置換が KH と一致する (stable sort では movegen 順を保ち乖離)．
             kh_std_sort(&mut idx, &|a, b| self.compare_idx(a, b) == Ordering::Less);
         } else {
+            // default = stable sort (movegen 順保持)．KH を std::stable_sort にした診断ビルドと tie 順が揃う．
             idx.sort_by(|&a, &b| self.compare_idx(a, b));
         }
         self.idx = idx;
