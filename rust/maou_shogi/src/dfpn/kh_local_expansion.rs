@@ -13,7 +13,7 @@
 //!
 //! KH 定数: `kForceSumPnDn = kInfinitePnDn/1024` (local_expansion.hpp:35)．
 
-use super::mate_len::{MateLen, DEPTH_MAX_PLUS1_MATE_LEN, MINUS1_MATE_LEN};
+use super::mate_len::{MateLen, MINUS1_MATE_LEN};
 use super::search_result::{
     clamp_pn_dn, compare_results, BitSet64, Depth, Hand, Ordering3, PnDn, SearchAmount,
     SearchResult, K_INFINITE_PN_DN,
@@ -597,9 +597,11 @@ impl LocalExpansion {
                     front.repetition_start(),
                 );
             }
-            // mate_len: OR=最短子 len / AND=最長子 len，+1．amount=max 子 amount + (子数-1)．
+            // mate_len: OR=min(len_, 最短子 len) / AND=最長子 len，+1．amount=max 子 amount + (子数-1)．
+            // KH GetLoseResult: OR は `mate_len = len_` 起点で min を取る (len_ cap; 旧実装は DEPTH_MAX_PLUS1
+            // 起点で cap を欠き disproven_len が過大 → len-aware cross-hand が過剰適用していた)．
             let mut mate_len = if self.or_node {
-                DEPTH_MAX_PLUS1_MATE_LEN
+                self.len
             } else {
                 MINUS1_MATE_LEN
             };
