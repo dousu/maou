@@ -104,6 +104,13 @@ fn v4node_prefix() -> Option<String> {
         .clone()
 }
 
+/// `V4TH` env: 指定 sfen prefix に一致するノードが受け取った thpn/thdn を dump (KH `KHTH` と同形式)．
+fn v4th_prefix() -> Option<String> {
+    static C: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    C.get_or_init(|| std::env::var("V4TH").ok().filter(|s| !s.is_empty()))
+        .clone()
+}
+
 /// `V4_SMPROP` env: KH `FrontSumMask` の cross-expansion propagation を**有効化**する (process 内 1 回読み)．
 /// **default OFF**．理由: propagation 単体は default 探索順 (movegen 順 ≠ KH) では DAG (EliminateDoubleCount)
 /// の効果を打ち消し 11,286→18,470 と退行する (KHTRACE 突合で cnt=24 tie-break 乖離が真因と判明)．
@@ -256,50 +263,62 @@ impl DfPnSolver {
         };
         let mut tt = TranspositionTable::new(size);
 
-        let mut thpn: PnDn = 1;
-        let mut thdn: PnDn = 1;
-        let mut last = SearchResult::make_unknown(1, 1, DEPTH_MAX_MATE_LEN, 1, BitSet64::full());
         // do_move 数を計測開始 (KH `info nodes` = do_move と同単位; verify は除外するため探索後に読む)．
         crate::board::reset_do_move_count();
-        loop {
-            if self.v3_nodes >= self.max_nodes || self.is_timed_out() {
-                self.timed_out = self.is_timed_out();
-                break;
-            }
-            let mut inc_flag = 0u32;
-            last = self.search_impl_v4(
-                &mut tt,
-                board,
-                thpn,
-                thdn,
-                DEPTH_MAX_MATE_LEN,
-                0,
-                0u64,
-                true,
-                BitSet64::full(),
-                &mut inc_flag,
-            );
-            if last.pn() == 0 || last.dn() == 0 {
-                break;
-            }
-            if last.pn() >= K_INFINITE_PN_DN || last.dn() >= K_INFINITE_PN_DN {
-                break;
-            }
-            // NextPnDnThresholds: th = max(curr, val*1.7+1)．
-            let cap = K_INFINITE_PN_DN - 1;
-            let ntpn = thpn.max((last.pn() as f64 * 1.7) as PnDn + 1).min(cap);
-            let ntdn = thdn.max((last.dn() as f64 * 1.7) as PnDn + 1).min(cap);
-            if ntpn == thpn && ntdn == thdn {
-                thpn = thpn.saturating_mul(2).saturating_add(1).min(cap);
-                thdn = thdn.saturating_mul(2).saturating_add(1).min(cap);
-                if thpn >= cap && thdn >= cap {
-                    break;
+        // KH `SearchEntry` (komoring_heights.cpp:265): root expansion を **一度だけ** 構築し，閾値反復
+        // (IDS) 間で `v4_stack[0]` に**持続**させる (旧実装は反復毎に root を rebuild = KH IDS 構造との乖離．
+        // root を持続させると子の results/idx/sum_mask/excluded が反復跨ぎで KH と同様に累積する)．
+        let attacker_hand = board.hand[self.attacker.index()];
+        let last = match self.build_v4_expansion(
+            &mut tt,
+            board,
+            DEPTH_MAX_MATE_LEN,
+            0,
+            0u64,
+            true,
+            BitSet64::full(),
+        ) {
+            // root が終局 (王手なし=不詰 / 受けなし=詰み)．即結果 (KH: 空 expansion の CurrentResult)．
+            Err(terminal) => terminal,
+            Ok(root_exp) => {
+                self.v3_nodes += 1; // root build を 1 visit 計上 (KHEMP builds と同単位)．
+                self.dump_node_diag(&root_exp, board, 0);
+                self.v4_stack.push(root_exp);
+                self.v4_stack[0].set_key_hand_pair((super::position_key(board), attacker_hand));
+                // KH: thpn=thdn=tl_thread_id(=0) (len==kDepthMaxMateLen)．初反復は no-op warmup．
+                let mut thpn: PnDn = 0;
+                let mut thdn: PnDn = 0;
+                let cap = K_INFINITE_PN_DN - 1;
+                let mut result = self.v4_stack[0].current_result(board, 0);
+                loop {
+                    if self.v3_nodes >= self.max_nodes || self.is_timed_out() {
+                        self.timed_out = self.is_timed_out();
+                        break;
+                    }
+                    result =
+                        self.search_impl_v4_root(&mut tt, board, thpn, thdn, DEPTH_MAX_MATE_LEN);
+                    if result.pn() == 0 || result.dn() == 0 {
+                        break;
+                    }
+                    if result.pn() >= K_INFINITE_PN_DN || result.dn() >= K_INFINITE_PN_DN {
+                        break;
+                    }
+                    // KH NextPnDnThresholds: th = max(curr_th, val*1.7+1) (INF clamp)．val>=1 かつ
+                    // val≈th なので必ず増加 = stall 無し (budget/timeout は loop 冒頭で break するため
+                    // 旧実装の *2 fallback は不要)．
+                    thpn = thpn.max((result.pn() as f64 * 1.7) as PnDn + 1).min(cap);
+                    thdn = thdn.max((result.dn() as f64 * 1.7) as PnDn + 1).min(cap);
+                    if thpn >= cap && thdn >= cap {
+                        break;
+                    }
                 }
-            } else {
-                thpn = ntpn;
-                thdn = ntdn;
+                // KH SearchEntry 末尾: `query.SetResult(result); expansion_list_.Pop()`．
+                let root_q = tt.build_query(0, super::position_key(board), attacker_hand, 0);
+                tt.set_result(&root_q, result, (0u64, super::ttentry::NULL_HAND));
+                self.v4_stack.clear();
+                result
             }
-        }
+        };
 
         // KH と単位を揃えた 2 指標を併記: nodes = SearchImpl 訪問数 (v3_nodes; KH KHEMP builds と同単位),
         // do_moves = do_move 数 (KH `info nodes`/`nodes_searched` と同単位)．混同しないこと．
@@ -383,6 +402,16 @@ impl DfPnSolver {
             let attacker_hand = board.hand[self.attacker.index()];
             return SearchResult::make_repetition(attacker_hand, len, 1, 0);
         }
+        // V4TH: 受け取った thpn/thdn を dump (KH `KHTH` と同形式; threshold 乖離 hunting)．
+        if let Some(prefix) = v4th_prefix() {
+            let sfen = board.sfen();
+            if sfen.starts_with(prefix.as_str()) {
+                eprintln!(
+                    "V4TH depth={} thpn={} thdn={} sfen={}",
+                    depth, thpn, thdn, sfen
+                );
+            }
+        }
 
         // KH 流 GC (komoring_heights.cpp:446): hashfull が 50% を超えたら低 amount entry を
         // 間引く．これを怠るとテーブル満杯時に `look_up` の probe が O(cap) へ退化し，39te の
@@ -406,73 +435,7 @@ impl DfPnSolver {
             Ok(e) => e,
             Err(terminal) => return terminal,
         };
-        // V4TRACE: 各 build の best 子 (idx[0]) を chronological dump (KH KHTRACE と 1:1 join)．
-        if v4trace_enabled() {
-            let cnt = V4TRACE_CNT.with(|c| {
-                let v = c.get() + 1;
-                c.set(v);
-                v
-            });
-            if cnt <= 20000 {
-                let oc = if board.turn == self.attacker { 1 } else { 0 };
-                let children = exp.trace_children();
-                if let Some((m, pn, dn, _ev, _am)) = children.first() {
-                    eprintln!(
-                        "V4TRACE {} ply={} or={} best={} bpn={} bdn={} sfen={}",
-                        cnt,
-                        depth,
-                        oc,
-                        m.to_usi(),
-                        pn,
-                        dn,
-                        board.sfen()
-                    );
-                }
-            }
-        }
-        // V4NODE: 指定 sfen prefix に一致するノードで sort 済子リストを dump (任意 ply, 全 occurrence)．
-        if let Some(prefix) = v4node_prefix() {
-            let sfen = board.sfen();
-            if sfen.starts_with(prefix.as_str()) {
-                let oc = if board.turn == self.attacker { 1 } else { 0 };
-                eprintln!("V4NODE ply={} or={} sfen={}", depth, oc, sfen);
-                for (k, (m, pn, dn, ev, am)) in exp.trace_children().iter().enumerate() {
-                    eprintln!(
-                        "V4NODE   {} {} pn={} dn={} ev={} am={}",
-                        k,
-                        m.to_usi(),
-                        pn,
-                        dn,
-                        ev,
-                        am
-                    );
-                }
-            }
-        }
-        // V4SEL: ply 0-7 の初出ノードで sort 済子リストを dump (KH KHSEL と sfen で突合する)．
-        if v4sel_enabled() && depth <= 7 {
-            let bit = 1u8 << depth;
-            let already = V4SEL_DUMPED.with(|c| {
-                let v = c.get();
-                c.set(v | bit);
-                v & bit != 0
-            });
-            if !already {
-                let oc = if board.turn == self.attacker { 1 } else { 0 };
-                eprintln!("V4SEL ply={} or={} sfen={}", depth, oc, board.sfen());
-                for (k, (m, pn, dn, ev, am)) in exp.trace_children().iter().enumerate() {
-                    eprintln!(
-                        "V4SEL   {} {} pn={} dn={} ev={} am={}",
-                        k,
-                        m.to_usi(),
-                        pn,
-                        dn,
-                        ev,
-                        am
-                    );
-                }
-            }
-        }
+        self.dump_node_diag(&exp, board, depth);
         // KH `expansion_list_.Emplace`: 自 LocalExpansion を明示 stack へ積む (祖先から辿れるように)．
         // 以降 `self.v4_stack[my]` 経由で操作する (EliminateDoubleCount が祖先 frame を変更するため)．
         self.v4_stack.push(exp);
@@ -605,6 +568,198 @@ impl DfPnSolver {
         self.v4_stack.truncate(my); // KH `expansion_list_.Pop()`
         *inc_flag = (*inc_flag).min(orig_inc);
         curr
+    }
+
+    /// KH `SearchImplForRoot` (komoring_heights.cpp:325) の忠実移植．
+    ///
+    /// root expansion は **solve_via_v4 が一度だけ構築**し `v4_stack[0]` に持続させる (KH `SearchEntry` が
+    /// Emplace を 1 回だけ呼び閾値反復間で再利用するのと同型)．本関数は毎反復その持続 expansion を再利用し，
+    /// 子だけを [`search_impl_v4`] で展開する．SearchImpl との差: inc_flag は local (親 inc_flag 無し)，
+    /// 末尾の `orig_inc break` / `inc_flag = min(...)` は無い．
+    fn search_impl_v4_root(
+        &mut self,
+        tt: &mut TranspositionTable,
+        board: &mut Board,
+        mut thpn: PnDn,
+        mut thdn: PnDn,
+        len: MateLen,
+    ) -> SearchResult {
+        let attacker_hand = board.hand[self.attacker.index()];
+        let orig_thpn = thpn;
+        let orig_thdn = thdn;
+        let mut inc_flag = 0u32;
+
+        if !v4_nodag() {
+            self.eliminate_double_count_v4(tt, board, 0, 0);
+        }
+        let mut curr = self.v4_stack[0].current_result(board, 0);
+        if self.v4_stack[0].does_have_old_child() {
+            inc_flag += 1;
+        }
+        if inc_flag > 0 {
+            extend_search_threshold(curr, &mut thpn, &mut thdn);
+        }
+
+        // KH VisitHistory `Visit`: 子探索中 root を path に積む (子が IsRepetition/Inferior で参照)．
+        self.v3_path.insert(board.hash, 0);
+        if self.param_v4_path_dominance {
+            self.v4_dom_path
+                .entry(super::position_key(board))
+                .or_default()
+                .push((attacker_hand, 0));
+        }
+
+        while curr.pn() < thpn && curr.dn() < thdn {
+            if self.v3_nodes >= self.max_nodes || self.timed_out {
+                break;
+            }
+            let best_move = self.v4_stack[0].best_move();
+            let is_first = self.v4_stack[0].front_is_first_visit();
+            let (cthpn, cthdn) = self.v4_stack[0].front_pn_dn_thresholds(thpn, thdn);
+            let best_raw = self.v4_stack[0].front_raw();
+            let child_query = self.v4_stack[0].query_at(best_raw);
+            let child_sum_mask = if v4_smprop() {
+                self.v4_stack[0].front_sum_mask()
+            } else {
+                BitSet64::full()
+            };
+
+            let captured = board.do_move(best_move);
+            let child_pk = path_key_after(0, best_move, 0);
+
+            let child_result = if is_first {
+                let initial = self.v4_stack[0].front_result();
+                if inc_flag > 0 {
+                    inc_flag -= 1;
+                }
+                if initial.is_final() || initial.pn() >= cthpn || initial.dn() >= cthdn {
+                    initial
+                } else {
+                    self.search_impl_v4(
+                        tt,
+                        board,
+                        cthpn,
+                        cthdn,
+                        len.sub(1),
+                        1,
+                        child_pk,
+                        is_first,
+                        child_sum_mask,
+                        &mut inc_flag,
+                    )
+                }
+            } else {
+                self.search_impl_v4(
+                    tt,
+                    board,
+                    cthpn,
+                    cthdn,
+                    len.sub(1),
+                    1,
+                    child_pk,
+                    is_first,
+                    child_sum_mask,
+                    &mut inc_flag,
+                )
+            };
+
+            board.undo_move(best_move, captured);
+
+            self.v4_stack[0].update_best_child(child_result);
+            tt.set_result(
+                &child_query,
+                child_result,
+                (super::position_key(board), attacker_hand),
+            );
+
+            curr = self.v4_stack[0].current_result(board, 0);
+
+            thpn = orig_thpn;
+            thdn = orig_thdn;
+            if inc_flag > 0 {
+                extend_search_threshold(curr, &mut thpn, &mut thdn);
+            }
+            // NOTE: KH SearchImplForRoot には SearchImpl の `else if inc_flag==0 && orig_inc>0 break`
+            // は無い (root は親 inc_flag を持たないため)．末尾の min も無い．
+        }
+
+        self.v3_path.remove(&board.hash);
+        if self.param_v4_path_dominance {
+            let pk = super::position_key(board);
+            if let Some(v) = self.v4_dom_path.get_mut(&pk) {
+                v.pop();
+                if v.is_empty() {
+                    self.v4_dom_path.remove(&pk);
+                }
+            }
+        }
+        curr
+    }
+
+    /// V4TRACE / V4NODE / V4SEL の chronological / 子リスト診断 dump (env-gated)．search_impl_v4 と
+    /// 持続 root build の双方から呼び，KH `KHTRACE`/`KHSEL` と 1:1 で突合する ([[feedback_kh_divergence_hunting]])．
+    fn dump_node_diag(&self, exp: &LocalExpansion, board: &Board, depth: u32) {
+        let oc = if board.turn == self.attacker { 1 } else { 0 };
+        if v4trace_enabled() {
+            let cnt = V4TRACE_CNT.with(|c| {
+                let v = c.get() + 1;
+                c.set(v);
+                v
+            });
+            if cnt <= 20000 {
+                if let Some((m, pn, dn, _ev, _am)) = exp.trace_children().first() {
+                    eprintln!(
+                        "V4TRACE {} ply={} or={} best={} bpn={} bdn={} sfen={}",
+                        cnt,
+                        depth,
+                        oc,
+                        m.to_usi(),
+                        pn,
+                        dn,
+                        board.sfen()
+                    );
+                }
+            }
+        }
+        if let Some(prefix) = v4node_prefix() {
+            let sfen = board.sfen();
+            if sfen.starts_with(prefix.as_str()) {
+                eprintln!("V4NODE ply={} or={} sfen={}", depth, oc, sfen);
+                for (k, (m, pn, dn, ev, am)) in exp.trace_children().iter().enumerate() {
+                    eprintln!(
+                        "V4NODE   {} {} pn={} dn={} ev={} am={}",
+                        k,
+                        m.to_usi(),
+                        pn,
+                        dn,
+                        ev,
+                        am
+                    );
+                }
+            }
+        }
+        if v4sel_enabled() && depth <= 7 {
+            let bit = 1u8 << depth;
+            let already = V4SEL_DUMPED.with(|c| {
+                let v = c.get();
+                c.set(v | bit);
+                v & bit != 0
+            });
+            if !already {
+                eprintln!("V4SEL ply={} or={} sfen={}", depth, oc, board.sfen());
+                for (k, (m, pn, dn, ev, am)) in exp.trace_children().iter().enumerate() {
+                    eprintln!(
+                        "V4SEL   {} {} pn={} dn={} ev={} am={}",
+                        k,
+                        m.to_usi(),
+                        pn,
+                        dn,
+                        ev,
+                        am
+                    );
+                }
+            }
+        }
     }
 
     /// KH `LocalExpansion` ctor (3b 配線): movegen + 各子 seed (faithful TT LookUp) + 千日手．
