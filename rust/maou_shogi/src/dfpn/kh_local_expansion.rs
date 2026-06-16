@@ -30,6 +30,202 @@ const K_FORCE_SUM_PN_DN: PnDn = K_INFINITE_PN_DN / 1024;
 /// 親子間 pn/dn 差がこれを超えたら二重カウントでないとみなす (mid_v4 は unit-2 scale)．
 pub(super) const K_ANCESTOR_SEARCH_THRESHOLD: PnDn = 6;
 
+// ===== libstdc++ `std::sort` (introsort) の忠実移植 (gcc 13 `bits/stl_algo.h`) =====
+// KH `std::sort(idx_.begin(), idx_.end(), comp)` の完全同点手の置換を bit 単位で再現する．
+// `lt(a, b)` = a が b より前 (strict weak ordering)．`_S_threshold = 16`．
+
+/// libstdc++ `std::__insertion_sort` の guarded linear insert (`__unguarded_linear_insert`)．
+/// `last` 位置の要素を `[.., last)` の整列済列へ後ろから挿入する (`lt(val, prev)` で停止 = stable)．
+fn ks_linear_insert<F: Fn(u32, u32) -> bool>(v: &mut [u32], last: usize, lt: &F) {
+    let val = v[last];
+    let mut l = last;
+    while l > 0 && lt(val, v[l - 1]) {
+        v[l] = v[l - 1];
+        l -= 1;
+    }
+    v[l] = val;
+}
+
+/// libstdc++ `__insertion_sort(first, last)` (range [first, last))．
+fn ks_insertion_sort<F: Fn(u32, u32) -> bool>(v: &mut [u32], first: usize, last: usize, lt: &F) {
+    if first == last {
+        return;
+    }
+    for i in (first + 1)..last {
+        if lt(v[i], v[first]) {
+            // 先頭より小: [first, i) を 1 つ後ろへずらし v[i] を先頭へ (`__move_backward`)．
+            let val = v[i];
+            let mut j = i;
+            while j > first {
+                v[j] = v[j - 1];
+                j -= 1;
+            }
+            v[first] = val;
+        } else {
+            ks_linear_insert(v, i, lt);
+        }
+    }
+}
+
+/// libstdc++ `__move_median_to_first(result, a, b, c)`: 3 値中央値を `result` へ swap．
+fn ks_median_to_first<F: Fn(u32, u32) -> bool>(
+    v: &mut [u32],
+    result: usize,
+    a: usize,
+    b: usize,
+    c: usize,
+    lt: &F,
+) {
+    if lt(v[a], v[b]) {
+        if lt(v[b], v[c]) {
+            v.swap(result, b);
+        } else if lt(v[a], v[c]) {
+            v.swap(result, c);
+        } else {
+            v.swap(result, a);
+        }
+    } else if lt(v[a], v[c]) {
+        v.swap(result, a);
+    } else if lt(v[b], v[c]) {
+        v.swap(result, c);
+    } else {
+        v.swap(result, b);
+    }
+}
+
+/// libstdc++ `__unguarded_partition(first, last, pivot)`: pivot 値で [first, last) を分割し境界を返す．
+fn ks_partition<F: Fn(u32, u32) -> bool>(
+    v: &mut [u32],
+    mut first: usize,
+    mut last: usize,
+    pivot: usize,
+    lt: &F,
+) -> usize {
+    loop {
+        while lt(v[first], v[pivot]) {
+            first += 1;
+        }
+        last -= 1;
+        while lt(v[pivot], v[last]) {
+            last -= 1;
+        }
+        if first >= last {
+            return first;
+        }
+        v.swap(first, last);
+        first += 1;
+    }
+}
+
+/// libstdc++ `__unguarded_partition_pivot(first, last)`: median-of-3 を pivot に [first+1, last) を分割．
+fn ks_partition_pivot<F: Fn(u32, u32) -> bool>(
+    v: &mut [u32],
+    first: usize,
+    last: usize,
+    lt: &F,
+) -> usize {
+    let mid = first + (last - first) / 2;
+    ks_median_to_first(v, first, first + 1, mid, last - 1, lt);
+    ks_partition(v, first + 1, last, first, lt)
+}
+
+/// libstdc++ heapsort fallback (`__partial_sort(first, last, last)` = make_heap + sort_heap)．
+/// depth_limit 枯渇時のみ (move 数 < 64 では発火しないが忠実性のため移植)．
+fn ks_heapsort<F: Fn(u32, u32) -> bool>(v: &mut [u32], first: usize, last: usize, lt: &F) {
+    let n = last - first;
+    if n < 2 {
+        return;
+    }
+    // make_heap (max-heap): [first, last)．
+    let sift_down = |v: &mut [u32], mut hole: usize, len: usize, lt: &F| {
+        let val = v[first + hole];
+        let mut child = hole;
+        while child < (len - 1) / 2 {
+            child = 2 * child + 2;
+            if lt(v[first + child], v[first + child - 1]) {
+                child -= 1;
+            }
+            v[first + hole] = v[first + child];
+            hole = child;
+        }
+        if len % 2 == 0 && child == (len - 2) / 2 {
+            child = 2 * child + 1;
+            v[first + hole] = v[first + child];
+            hole = child;
+        }
+        // push val up (libstdc++ __push_heap)．
+        let top = 0usize;
+        let mut idx = hole;
+        while idx > top {
+            let parent = (idx - 1) / 2;
+            if lt(v[first + parent], val) {
+                v[first + idx] = v[first + parent];
+                idx = parent;
+            } else {
+                break;
+            }
+        }
+        v[first + idx] = val;
+    };
+    let mut parent = n / 2;
+    loop {
+        parent -= 1;
+        sift_down(v, parent, n, lt);
+        if parent == 0 {
+            break;
+        }
+    }
+    // sort_heap: 末尾へ最大値を運ぶ．
+    let mut end = n;
+    while end > 1 {
+        end -= 1;
+        v.swap(first, first + end);
+        sift_down(v, 0, end, lt);
+    }
+}
+
+/// libstdc++ `__introsort_loop(first, last, depth_limit)`．
+fn ks_introsort_loop<F: Fn(u32, u32) -> bool>(
+    v: &mut [u32],
+    first: usize,
+    mut last: usize,
+    mut depth: i32,
+    lt: &F,
+) {
+    const THRESHOLD: usize = 16;
+    while last - first > THRESHOLD {
+        if depth == 0 {
+            ks_heapsort(v, first, last, lt);
+            return;
+        }
+        depth -= 1;
+        let cut = ks_partition_pivot(v, first, last, lt);
+        ks_introsort_loop(v, cut, last, depth, lt);
+        last = cut;
+    }
+}
+
+/// libstdc++ `std::sort(first, last, comp)` の忠実移植 (introsort + final insertion sort)．
+fn kh_std_sort<F: Fn(u32, u32) -> bool>(v: &mut [u32], lt: &F) {
+    const THRESHOLD: usize = 16;
+    let n = v.len();
+    if n < 2 {
+        return;
+    }
+    // depth_limit = 2 * floor(log2(n))  (libstdc++ `std::__lg(n) * 2`)．
+    let depth = 2 * (usize::BITS - 1 - n.leading_zeros()) as i32;
+    ks_introsort_loop(v, 0, n, depth, lt);
+    // __final_insertion_sort: 先頭 16 を guarded, 残りを unguarded で挿入．
+    if n > THRESHOLD {
+        ks_insertion_sort(v, 0, THRESHOLD, lt);
+        for i in THRESHOLD..n {
+            ks_linear_insert(v, i, lt);
+        }
+    } else {
+        ks_insertion_sort(v, 0, n, lt);
+    }
+}
+
 /// KH `BranchRootEdge` (double_count_elimination.hpp:74)．二重カウントの分岐元の辺．
 #[derive(Clone, Copy)]
 pub(super) struct BranchRootEdge {
@@ -137,9 +333,14 @@ impl LocalExpansion {
     /// idx_ 全体を comparer で sort する (KH `std::sort(idx_.begin(), idx_.end(), ...)`)．
     fn sort_idx(&mut self) {
         let mut idx = std::mem::take(&mut self.idx);
-        // stable sort (KH の std::sort は introsort=unstable だが，完全同点手の置換差は
-        // libstdc++ 実装依存の人工物であり再現対象外 = guidance 忠実化の範囲外と結論)．
-        idx.sort_by(|&a, &b| self.compare_idx(a, b));
+        if super::mid_v4::khorder_enabled() {
+            // KH tie-break 忠実化: libstdc++ `std::sort`(introsort) を bit 単位で再現する．
+            // 入力順 (V4_KHORDER で movegen 順を KH に一致) + comparator + sort algorithm が揃い，
+            // >16 子ノードの完全同点 tie の置換が KH と一致する (stable sort では movegen 順を保ち乖離)．
+            kh_std_sort(&mut idx, &|a, b| self.compare_idx(a, b) == Ordering::Less);
+        } else {
+            idx.sort_by(|&a, &b| self.compare_idx(a, b));
+        }
         self.idx = idx;
     }
 
@@ -561,6 +762,34 @@ impl LocalExpansion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// kh_std_sort (libstdc++ introsort 移植) が >16 要素の完全同点で stable sort と**異なる**置換を
+    /// 生むことを確認する (= introsort が tie を並べ替えている証拠; no-op バグ検出)．
+    #[test]
+    fn kh_std_sort_reorders_ties_unstable() {
+        // key = value/100 で比較 (多数が同点)．18 要素 (>16) で introsort path を通す．
+        let keys: Vec<i32> = vec![
+            500, 400, 600, 600, 400, 600, 200, 200, 200, 400, 600, 100, 600, 100, 600, 100, 600,
+            600,
+        ];
+        let lt = |a: u32, b: u32| keys[a as usize] < keys[b as usize];
+        let mut intro: Vec<u32> = (0..18u32).collect();
+        kh_std_sort(&mut intro, &lt);
+        let mut stable: Vec<u32> = (0..18u32).collect();
+        stable.sort_by(|&a, &b| keys[a as usize].cmp(&keys[b as usize]));
+        // sort の正しさ (key 昇順) は両者満たすこと．
+        for w in intro.windows(2) {
+            assert!(
+                keys[w[0] as usize] <= keys[w[1] as usize],
+                "introsort not sorted"
+            );
+        }
+        // 完全同点の置換が stable と異なる (introsort=unstable) ことを確認．
+        assert_ne!(
+            intro, stable,
+            "kh_std_sort behaved like stable sort (no tie reorder)"
+        );
+    }
 
     fn unk(pn: PnDn, dn: PnDn) -> SearchResult {
         SearchResult::make_unknown(pn, dn, MateLen::from_len(10), 1, BitSet64::full())
