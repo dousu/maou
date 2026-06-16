@@ -90,6 +90,13 @@ pub(super) fn khorder_enabled() -> bool {
     *C.get_or_init(|| std::env::var("V4_KHORDER").is_ok())
 }
 
+/// `V4_HANDSET` 実験 (process 内 1 回読み)．proof/disproof hand を KH `HandSet` で極小化する
+/// (default OFF = full attacker_hand)．cross-hand TT 再利用が KH と一致し count 収束を狙う．
+pub(super) fn handset_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4_HANDSET").is_ok())
+}
+
 /// `V4_INTROSORT` 実験 (process 内 1 回読み)．idx ソートに libstdc++ introsort 移植 (`kh_std_sort`) を使う．
 /// default OFF = stable sort (movegen 順保持)．KH を `std::stable_sort` にした診断ビルドと突合する際は
 /// 両者 stable に揃えるため本フラグを **OFF** のままにする．
@@ -775,12 +782,23 @@ impl DfPnSolver {
 
         if moves.is_empty() {
             // OR (王手なし) = 不詰 disproven / AND (受けなし=詰み) = proven (詰み完了 len 0)．
-            // hand は full attacker_hand (KH HandSet 極小化は cross-hand 有効時 unsound のため不使用)．
+            // KH 終端 hand: OR=DisproofHandSet.Get(子なし)=remove_if(MAX) / AND=ProofHandSet.Get(子なし)=add_if(空)．
             let attacker_hand = board.hand[attacker.index()];
+            let use_handset = handset_enabled();
             let r = if or_node {
-                SearchResult::make_final(false, attacker_hand, DEPTH_MAX_MATE_LEN, 1)
+                let hand = if use_handset {
+                    super::proof_hand::disproof_hand_terminal_or(board)
+                } else {
+                    attacker_hand
+                };
+                SearchResult::make_final(false, hand, DEPTH_MAX_MATE_LEN, 1)
             } else {
-                SearchResult::make_final(true, attacker_hand, ZERO_MATE_LEN, 1)
+                let hand = if use_handset {
+                    super::proof_hand::proof_hand_terminal_and(board)
+                } else {
+                    attacker_hand
+                };
+                SearchResult::make_final(true, hand, ZERO_MATE_LEN, 1)
             };
             return Err(r);
         }
@@ -961,20 +979,31 @@ impl DfPnSolver {
     /// 極小化は cross-hand TT 有効時に偽証明 (mate-39) を生むため不使用 (sound 優先)．
     fn check_obvious_final_or_node_v4(&self, board: &mut Board) -> Option<SearchResult> {
         let or_hand = board.hand[board.turn.index()];
+        let use_handset = handset_enabled();
         let (mm_opt, has_checks) = self.mate1ply_with_cached_checks(board);
         if !has_checks {
             // 攻め方に王手手段なし → 詰み不可能 → 不詰 (KH MakeFinal<false>, kDepthMaxMateLen)．
-            Some(SearchResult::make_final(
-                false,
-                or_hand,
-                DEPTH_MAX_MATE_LEN,
-                1,
-            ))
-        } else if mm_opt.is_some() {
-            // 1 手詰 → 詰み proven (mate-1)．
+            // KH: HandSet{DisproofHandTag}.Get(pos) = remove_if(MAX)．
+            let hand = if use_handset {
+                super::proof_hand::disproof_hand_terminal_or(board)
+            } else {
+                or_hand
+            };
+            Some(SearchResult::make_final(false, hand, DEPTH_MAX_MATE_LEN, 1))
+        } else if let Some(mate_move) = mm_opt {
+            // 1 手詰 → 詰み proven (mate-1)．KH CheckMate1Ply:
+            // BeforeHand(mate_move, ProofHandSet.Get(詰み局面))．
+            let hand = if use_handset {
+                let cap = board.do_move(mate_move);
+                let proof_after = super::proof_hand::proof_hand_terminal_and(board);
+                board.undo_move(mate_move, cap);
+                super::proof_hand::before_hand(board, mate_move, proof_after)
+            } else {
+                or_hand
+            };
             Some(SearchResult::make_final(
                 true,
-                or_hand,
+                hand,
                 MateLen::from_len(1),
                 1,
             ))

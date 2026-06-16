@@ -554,6 +554,7 @@ impl LocalExpansion {
             board.turn.opponent()
         };
         let attacker_hand = board.hand[attacker.index()];
+        let use_handset = super::mid_v4::handset_enabled();
         if self.get_phi() == 0 {
             // 手番 win (KH GetWinResult): OR=詰み proven / AND=逃れ disproven．
             // 「最も良い手」は excluded に関係なく idx[0] (KH: FrontResult は使えない)．
@@ -562,7 +563,23 @@ impl LocalExpansion {
             let amount = front
                 .amount()
                 .saturating_add(self.moves.len().max(1) as SearchAmount - 1);
-            SearchResult::make_final(self.or_node, attacker_hand, mate_len, amount)
+            // KH GetWinResult の hand: OR=BeforeHand(best, child 証明駒) / AND=child 反証駒 + 駒打ち補正．
+            let hand = if use_handset {
+                let best_move = self.moves[self.idx[0] as usize];
+                if self.or_node {
+                    super::proof_hand::before_hand(board, best_move, front.hand())
+                } else {
+                    super::proof_hand::and_node_escape_disproof(
+                        board,
+                        best_move,
+                        front.hand(),
+                        attacker,
+                    )
+                }
+            } else {
+                attacker_hand
+            };
+            SearchResult::make_final(self.or_node, hand, mate_len, amount)
         } else if self.get_delta() == 0 {
             // 手番 lose (KH GetLoseResult): OR=不詰 disproven / AND=詰み proven．
             // 千日手: 先頭子が repetition (rep_start < depth) なら伝播する (GHI soundness)．
@@ -572,6 +589,7 @@ impl LocalExpansion {
                 let amount = front
                     .amount()
                     .saturating_add(self.moves.len().max(1) as SearchAmount - 1);
+                // KH: 千日手は n.OrHand() (full attacker hand) で返す．
                 return SearchResult::make_repetition(
                     attacker_hand,
                     mate_len,
@@ -598,8 +616,30 @@ impl LocalExpansion {
                 }
             }
             amount = amount.saturating_add(self.moves.len().max(1) as SearchAmount - 1);
-            // OR lose=disproven(false) / AND lose=proven(true)．hand は full attacker_hand (上記参照)．
-            SearchResult::make_final(!self.or_node, attacker_hand, mate_len.add(1), amount)
+            // KH GetLoseResult の hand: OR=DisproofHandSet(子の before_hand 反証駒 min)+remove_if /
+            // AND=ProofHandSet(子の証明駒 max)+add_if．
+            let hand = if use_handset {
+                if self.or_node {
+                    let mut set = super::proof_hand::DisproofHandSet::new();
+                    for &ir in &self.idx {
+                        let r = self.results[ir as usize];
+                        let cm = self.moves[ir as usize];
+                        let cdh = super::proof_hand::before_hand(board, cm, r.hand());
+                        set.update(&cdh);
+                    }
+                    set.get(board)
+                } else {
+                    let mut set = super::proof_hand::ProofHandSet::new();
+                    for &ir in &self.idx {
+                        set.update(&self.results[ir as usize].hand());
+                    }
+                    set.get(board)
+                }
+            } else {
+                attacker_hand
+            };
+            // OR lose=disproven(false) / AND lose=proven(true)．
+            SearchResult::make_final(!self.or_node, hand, mate_len.add(1), amount)
         } else {
             self.current_result_unknown()
         }

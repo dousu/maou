@@ -29,6 +29,88 @@ use crate::bitboard::Bitboard;
 use crate::board::Board;
 use crate::types::{Color, PieceType, Square, HAND_KINDS};
 
+/// drop 駒種 → hand index (歩0 香1 桂2 銀3 金4 角5 飛6)．
+#[inline]
+fn drop_hand_index(pt: PieceType) -> usize {
+    match pt {
+        PieceType::Pawn => 0,
+        PieceType::Lance => 1,
+        PieceType::Knight => 2,
+        PieceType::Silver => 3,
+        PieceType::Gold => 4,
+        PieceType::Bishop => 5,
+        PieceType::Rook => 6,
+        _ => 0,
+    }
+}
+
+/// 捕獲駒 (raw piece type, 成駒含む) → hand index (成駒は base へ降格)．王/空は None．
+#[inline]
+fn captured_hand_index(raw_pt: u8) -> Option<usize> {
+    match raw_pt & 0x0F {
+        1 | 9 => Some(0),  // Pawn / ProPawn
+        2 | 10 => Some(1), // Lance / ProLance
+        3 | 11 => Some(2), // Knight / ProKnight
+        4 | 12 => Some(3), // Silver / ProSilver
+        7 => Some(4),      // Gold
+        5 | 13 => Some(5), // Bishop / Horse
+        6 | 14 => Some(6), // Rook / Dragon
+        _ => None,         // King / empty
+    }
+}
+
+/// KH `BeforeHand` (hands.hpp:57)．`move` 後の攻め方持駒が `after_hand` のとき，移動前の持駒を返す．
+///
+/// - 駒打ち: 打った駒を打つ前は持っていた → `after_hand` にその駒種を 1 枚加える (上限 clamp)．
+/// - 駒取り: 取った駒は取る前は持っていなかった → `after_hand` からその駒種を 1 枚引く (あれば)．
+/// - 非取り盤上移動: 持駒不変．
+///
+/// `board` は `move` を指す**前**の局面 (to-square に被捕獲駒がいる)．
+pub(super) fn before_hand(
+    board: &Board,
+    m: crate::moves::Move,
+    after_hand: [u8; HAND_KINDS],
+) -> [u8; HAND_KINDS] {
+    let mut h = after_hand;
+    if let Some(pt) = m.drop_piece_type() {
+        let hi = drop_hand_index(pt);
+        h[hi] = (h[hi] + 1).min(PieceType::MAX_HAND_COUNT[hi]);
+    } else {
+        let to_raw = board.piece_at(m.to_sq()) & 0x0F;
+        if to_raw != 0 {
+            if let Some(hi) = captured_hand_index(to_raw) {
+                if h[hi] > 0 {
+                    h[hi] -= 1;
+                }
+            }
+        }
+    }
+    h
+}
+
+/// KH `GetWinResult` の AND-node 逃れ (disproven) の駒打ち補正 (local_expansion.hpp:651-663)．
+///
+/// AND ノードが best_move (受け方の手) で詰みを逃れるとき，その手が駒打ちなら，攻め方の反証駒が
+/// その駒種を独占していると受け方が打てなくなる．攻め方の枚数を「総枚数-1」へ抑え受け方に 1 枚残す．
+/// `attacker` = 攻め方 (= board.turn.opponent())．
+pub(super) fn and_node_escape_disproof(
+    board: &Board,
+    best_move: crate::moves::Move,
+    after_hand: [u8; HAND_KINDS],
+    attacker: Color,
+) -> [u8; HAND_KINDS] {
+    let mut dh = after_hand;
+    if let Some(pt) = best_move.drop_piece_type() {
+        let hi = drop_hand_index(pt);
+        let total = board.hand[attacker.index()][hi] + board.hand[attacker.opponent().index()][hi];
+        if total <= dh[hi] {
+            // 攻め方が独占 (反証駒 >= 総枚数) → 総枚数-1 へ抑え受け方に 1 枚残す．
+            dh[hi] = total.saturating_sub(1);
+        }
+    }
+    dh
+}
+
 /// 要素ごとの max (KH `HandSet::Update`, ProofHand 用)．
 #[inline]
 pub(super) fn hand_max(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> [u8; HAND_KINDS] {
