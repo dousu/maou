@@ -226,6 +226,21 @@ fn kh_std_sort<F: Fn(u32, u32) -> bool>(v: &mut [u32], lt: &F) {
     }
 }
 
+/// `V4HAND` 計装: 指定 sfen prefix のノードの final hand (proof/disproof) を dump (KH `KHHAND` と突合)．
+fn dump_v4hand(board: &Board, proven: bool, hand: &[u8; crate::types::HAND_KINDS]) {
+    if let Some(prefix) = super::mid_v4::v4hand_prefix() {
+        let sfen = board.sfen();
+        if sfen.starts_with(prefix.as_str()) {
+            let kind = if proven { "proof" } else { "disproof" };
+            // hand 順: 歩 香 桂 銀 金 角 飛 (hand_index)．
+            eprintln!(
+                "V4HAND {} P{} L{} N{} S{} G{} B{} R{} sfen={}",
+                kind, hand[0], hand[1], hand[2], hand[3], hand[4], hand[5], hand[6], sfen
+            );
+        }
+    }
+}
+
 /// KH `BranchRootEdge` (double_count_elimination.hpp:74)．二重カウントの分岐元の辺．
 #[derive(Clone, Copy)]
 pub(super) struct BranchRootEdge {
@@ -579,6 +594,18 @@ impl LocalExpansion {
             } else {
                 attacker_hand
             };
+            // KH GetWinResult AND-case (逃れ disproven): best 逃れ子が千日手なら MakeRepetition で返す
+            // (local_expansion.hpp:667)．これを欠くと path 依存の千日手を position-keyed な通常 disproof
+            // として TT へ書き，別 path で過剰適用してしまう (Emplace#224 で 7g8h を誤って disproof 済に)．
+            if !self.or_node && front.is_repetition() && front.repetition_start() < depth {
+                return SearchResult::make_repetition(
+                    attacker_hand,
+                    mate_len,
+                    amount,
+                    front.repetition_start(),
+                );
+            }
+            dump_v4hand(board, self.or_node, &hand);
             SearchResult::make_final(self.or_node, hand, mate_len, amount)
         } else if self.get_delta() == 0 {
             // 手番 lose (KH GetLoseResult): OR=不詰 disproven / AND=詰み proven．
@@ -641,6 +668,7 @@ impl LocalExpansion {
                 attacker_hand
             };
             // OR lose=disproven(false) / AND lose=proven(true)．
+            dump_v4hand(board, !self.or_node, &hand);
             SearchResult::make_final(!self.or_node, hand, mate_len.add(1), amount)
         } else {
             self.current_result_unknown()

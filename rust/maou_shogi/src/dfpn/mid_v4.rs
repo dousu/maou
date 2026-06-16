@@ -126,6 +126,13 @@ fn v4th_prefix() -> Option<String> {
         .clone()
 }
 
+/// `V4HAND` env: 指定 sfen prefix のノードの final 結果 (proof/disproof hand) を dump (KH `KHHAND` と突合)．
+pub(super) fn v4hand_prefix() -> Option<String> {
+    static C: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    C.get_or_init(|| std::env::var("V4HAND").ok().filter(|s| !s.is_empty()))
+        .clone()
+}
+
 /// `V4_SMPROP` env: KH `FrontSumMask` の cross-expansion propagation を**有効化**する (process 内 1 回読み)．
 /// **default OFF**．理由: propagation 単体は default 探索順 (movegen 順 ≠ KH) では DAG (EliminateDoubleCount)
 /// の効果を打ち消し 11,286→18,470 と退行する (KHTRACE 突合で cnt=24 tie-break 乖離が真因と判明)．
