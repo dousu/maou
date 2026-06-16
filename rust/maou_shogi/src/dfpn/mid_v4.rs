@@ -269,7 +269,7 @@ impl DfPnSolver {
         // (IDS) 間で `v4_stack[0]` に**持続**させる (旧実装は反復毎に root を rebuild = KH IDS 構造との乖離．
         // root を持続させると子の results/idx/sum_mask/excluded が反復跨ぎで KH と同様に累積する)．
         let attacker_hand = board.hand[self.attacker.index()];
-        let last = match self.build_v4_expansion(
+        let last = match self.emplace_v4(
             &mut tt,
             board,
             DEPTH_MAX_MATE_LEN,
@@ -280,11 +280,8 @@ impl DfPnSolver {
         ) {
             // root が終局 (王手なし=不詰 / 受けなし=詰み)．即結果 (KH: 空 expansion の CurrentResult)．
             Err(terminal) => terminal,
-            Ok(root_exp) => {
-                self.v3_nodes += 1; // root build を 1 visit 計上 (KHEMP builds と同単位)．
-                self.dump_node_diag(&root_exp, board, 0);
-                self.v4_stack.push(root_exp);
-                self.v4_stack[0].set_key_hand_pair((super::position_key(board), attacker_hand));
+            Ok(()) => {
+                // root は v4_stack[0] に push 済 (emplace_v4 が v3_nodes++/dump/key_hand_pair も実施)．
                 // KH: thpn=thdn=tl_thread_id(=0) (len==kDepthMaxMateLen)．初反復は no-op warmup．
                 let mut thpn: PnDn = 0;
                 let mut thdn: PnDn = 0;
@@ -297,6 +294,16 @@ impl DfPnSolver {
                     }
                     result =
                         self.search_impl_v4_root(&mut tt, board, thpn, thdn, DEPTH_MAX_MATE_LEN);
+                    // V4ROOT: root IDS 反復ごとの th と結果 (KH `KHROOT` と突合)．
+                    if std::env::var("V4ROOT").is_ok() {
+                        eprintln!(
+                            "V4ROOT th=({},{}) -> pn={} dn={}",
+                            thpn,
+                            thdn,
+                            result.pn(),
+                            result.dn()
+                        );
+                    }
                     if result.pn() == 0 || result.dn() == 0 {
                         break;
                     }
@@ -375,53 +382,38 @@ impl DfPnSolver {
         }
     }
 
-    /// KH `SearchImpl` (komoring_heights.cpp:389) の忠実移植．len threading 込み．
-    #[allow(clippy::too_many_arguments)]
-    fn search_impl_v4(
+    /// KH `tt::LocalExpansion` の Emplace に相当する build + push (komoring_heights.cpp:351/470)．
+    ///
+    /// **KH は子展開を「親のループ内」で Emplace** し，その**集約済 `CurrentResult`** を first-visit-exceed
+    /// 判定に使う (= 子の合法手を全列挙し 1 段深い δ 集約で評価)．maou 旧実装は子を recurse 時まで build せず
+    /// first-visit を **flat な InitialPnDn seed** で評価していたため exceed 判定が緩く over-explore していた
+    /// (mid_v3 から続く構造的乖離の本丸; root IDS iter5 で dn 126 vs KH 136 として観測)．
+    /// `Err(result)` = 終局/budget/深さ上限 (push しない; 親が即時結果に使う)．`Ok(())` = expansion を top へ push．
+    fn emplace_v4(
         &mut self,
         tt: &mut TranspositionTable,
         board: &mut Board,
-        mut thpn: PnDn,
-        mut thdn: PnDn,
         len: MateLen,
         depth: u32,
         path_key: u64,
         first_search: bool,
         sum_mask: BitSet64,
-        inc_flag: &mut u32,
-    ) -> SearchResult {
-        self.v3_nodes += 1;
+    ) -> Result<(), SearchResult> {
+        self.v3_nodes += 1; // KH `KHEMP` builds と同単位 (Emplace 毎に 1)．
         if self.v3_nodes >= self.max_nodes || (self.v3_nodes & 0x3FF == 0 && self.is_timed_out()) {
             self.timed_out = self.timed_out || self.is_timed_out();
-            // budget 切れは非 final unknown で unwind (root の IDS が次で break)．
-            return SearchResult::make_first_visit(1, 1, len, 1);
+            // budget 切れは非 final unknown で unwind (root IDS が次で break)．
+            return Err(SearchResult::make_first_visit(1, 1, len, 1));
         }
         // KH `if (n.GetDepth() >= kDepthMax) return MakeRepetition(...)` (komoring_heights.cpp:428)．
-        // 病的な深さでの無限再帰を千日手扱いで打ち切る (29te/39te では発火しない)．
         if depth as usize >= super::mate_len::KDEPTH_MAX as usize {
             let attacker_hand = board.hand[self.attacker.index()];
-            return SearchResult::make_repetition(attacker_hand, len, 1, 0);
+            return Err(SearchResult::make_repetition(attacker_hand, len, 1, 0));
         }
-        // V4TH: 受け取った thpn/thdn を dump (KH `KHTH` と同形式; threshold 乖離 hunting)．
-        if let Some(prefix) = v4th_prefix() {
-            let sfen = board.sfen();
-            if sfen.starts_with(prefix.as_str()) {
-                eprintln!(
-                    "V4TH depth={} thpn={} thdn={} sfen={}",
-                    depth, thpn, thdn, sfen
-                );
-            }
-        }
-
-        // KH 流 GC (komoring_heights.cpp:446): hashfull が 50% を超えたら低 amount entry を
-        // 間引く．これを怠るとテーブル満杯時に `look_up` の probe が O(cap) へ退化し，39te の
-        // ような大規模探索で per-node 時間が爆発する (KH は探索中つねに <50% を維持)．
-        // 4096 node 毎にだけ確認 (KH `kHashfullCheeckSkipRatio`)．節点が少ない局面 (29te) では
-        // 50% に到達しないため no-op = 既存挙動不変．
+        // KH 流 GC (komoring_heights.cpp:446): table-fill による look_up O(cap) 退化を防ぐ (4096 build 毎)．
         if self.v3_nodes & 0xFFF == 0 {
             tt.maybe_collect_garbage();
         }
-
         let attacker_hand = board.hand[self.attacker.index()];
         let exp = match self.build_v4_expansion(
             tt,
@@ -433,16 +425,131 @@ impl DfPnSolver {
             sum_mask,
         ) {
             Ok(e) => e,
-            Err(terminal) => return terminal,
+            Err(terminal) => return Err(terminal),
         };
         self.dump_node_diag(&exp, board, depth);
-        // KH `expansion_list_.Emplace`: 自 LocalExpansion を明示 stack へ積む (祖先から辿れるように)．
-        // 以降 `self.v4_stack[my]` 経由で操作する (EliminateDoubleCount が祖先 frame を変更するため)．
         self.v4_stack.push(exp);
         let my = self.v4_stack.len() - 1;
         self.v4_stack[my].set_key_hand_pair((super::position_key(board), attacker_hand));
-        // KH `EliminateDoubleCount` (komoring_heights.cpp:432): best_move が TT 親鎖で祖先へ合流する
-        // (DAG) なら，その分岐元の合流子を sum→max 集約へ落とし pn/dn 二重カウントを抑止する．
+        Ok(())
+    }
+
+    /// 親ループの 1 子処理 (KH `SearchImpl` ループ本体, komoring_heights.cpp:454-514)．`my` = 親 expansion の
+    /// stack index．best child を DoMove → **Emplace (build)** → first-visit は **子の集約済 CurrentResult**
+    /// で exceed 判定 → 非 exceed なら `search_impl_v4` 再帰 → Pop → UndoMove → UpdateBestChild + TT 書込．
+    #[allow(clippy::too_many_arguments)]
+    fn step_best_child(
+        &mut self,
+        tt: &mut TranspositionTable,
+        board: &mut Board,
+        my: usize,
+        depth: u32,
+        len: MateLen,
+        path_key: u64,
+        thpn: PnDn,
+        thdn: PnDn,
+        inc_flag: &mut u32,
+    ) {
+        let attacker_hand = board.hand[self.attacker.index()];
+        let best_move = self.v4_stack[my].best_move();
+        let is_first = self.v4_stack[my].front_is_first_visit();
+        let (cthpn, cthdn) = self.v4_stack[my].front_pn_dn_thresholds(thpn, thdn);
+        let best_raw = self.v4_stack[my].front_raw();
+        let child_query = self.v4_stack[my].query_at(best_raw);
+        // KH `sum_mask = local_expansion.FrontSumMask()` (komoring_heights.cpp:458)．V4_SMPROP opt-in．
+        let child_sum_mask = if v4_smprop() {
+            self.v4_stack[my].front_sum_mask()
+        } else {
+            BitSet64::full()
+        };
+
+        let captured = board.do_move(best_move);
+        let child_pk = path_key_after(path_key, best_move, depth as usize);
+        let child_result = match self.emplace_v4(
+            tt,
+            board,
+            len.sub(1),
+            depth + 1,
+            child_pk,
+            is_first,
+            child_sum_mask,
+        ) {
+            // 終局/budget/深さ上限: push されていない (Pop 不要)．
+            Err(terminal) => terminal,
+            Ok(()) => {
+                let cidx = self.v4_stack.len() - 1;
+                let r = if is_first {
+                    if *inc_flag > 0 {
+                        *inc_flag -= 1;
+                    }
+                    // KH: 子 expansion の集約済 CurrentResult で exceed 判定 (flat seed でない)．
+                    let cur = self.v4_stack[cidx].current_result(board, (depth + 1) as i32);
+                    if cur.is_final() || cur.pn() >= cthpn || cur.dn() >= cthdn {
+                        cur
+                    } else {
+                        self.search_impl_v4(
+                            tt,
+                            board,
+                            cthpn,
+                            cthdn,
+                            len.sub(1),
+                            depth + 1,
+                            child_pk,
+                            inc_flag,
+                        )
+                    }
+                } else {
+                    self.search_impl_v4(
+                        tt,
+                        board,
+                        cthpn,
+                        cthdn,
+                        len.sub(1),
+                        depth + 1,
+                        child_pk,
+                        inc_flag,
+                    )
+                };
+                self.v4_stack.truncate(cidx); // KH `CHILD_SEARCH_END: expansion_list_.Pop()`
+                r
+            }
+        };
+
+        board.undo_move(best_move, captured);
+        self.v4_stack[my].update_best_child(child_result);
+        // KH UpdateBestChild 内 query.SetResult: 親 board_key は position-only (cross-hand のため hand 別管理)．
+        tt.set_result(
+            &child_query,
+            child_result,
+            (super::position_key(board), attacker_hand),
+        );
+    }
+
+    /// KH `SearchImpl` (komoring_heights.cpp:389)．**呼出し前に親が `emplace_v4` で expansion を push 済**
+    /// (KH が `expansion_list_.Current()` を使うのと同型)．自分では build も Pop もしない (親が Pop する)．
+    fn search_impl_v4(
+        &mut self,
+        tt: &mut TranspositionTable,
+        board: &mut Board,
+        mut thpn: PnDn,
+        mut thdn: PnDn,
+        len: MateLen,
+        depth: u32,
+        path_key: u64,
+        inc_flag: &mut u32,
+    ) -> SearchResult {
+        let my = self.v4_stack.len() - 1;
+        // V4TH: 受領 thpn/thdn dump (KH `KHTH` と同形式; threshold 乖離 hunting)．
+        if let Some(prefix) = v4th_prefix() {
+            let sfen = board.sfen();
+            if sfen.starts_with(prefix.as_str()) {
+                eprintln!(
+                    "V4TH depth={} thpn={} thdn={} sfen={}",
+                    depth, thpn, thdn, sfen
+                );
+            }
+        }
+        // KH `EliminateDoubleCount` (komoring_heights.cpp:432)．
         if !v4_nodag() {
             self.eliminate_double_count_v4(tt, board, my, depth);
         }
@@ -453,8 +560,7 @@ impl DfPnSolver {
 
         let mut curr = self.v4_stack[my].current_result(board, depth as i32);
         if curr.is_final() {
-            self.v4_stack.truncate(my); // KH `expansion_list_.Pop()`
-            return curr;
+            return curr; // 親 (step_best_child) が Pop する．
         }
         if self.v4_stack[my].does_have_old_child() {
             *inc_flag += 1;
@@ -464,9 +570,8 @@ impl DfPnSolver {
         }
 
         self.v3_path.insert(board.hash, depth);
-        // KH VisitHistory `Visit`: 本ノードの (board_key, attacker_hand, depth) を path へ積む．
-        // 子展開時に `IsRepetitionOrInferiorAfter` で劣位反復を刈るために参照する．
         if self.param_v4_path_dominance {
+            let attacker_hand = board.hand[self.attacker.index()];
             self.v4_dom_path
                 .entry(super::position_key(board))
                 .or_default()
@@ -477,72 +582,7 @@ impl DfPnSolver {
             if self.v3_nodes >= self.max_nodes || self.timed_out {
                 break;
             }
-            let best_move = self.v4_stack[my].best_move();
-            let is_first = self.v4_stack[my].front_is_first_visit();
-            let (cthpn, cthdn) = self.v4_stack[my].front_pn_dn_thresholds(thpn, thdn);
-            let best_raw = self.v4_stack[my].front_raw();
-            let child_query = self.v4_stack[my].query_at(best_raw);
-            // KH `sum_mask = local_expansion.FrontSumMask()` (komoring_heights.cpp:458): 子展開へ
-            // 渡す sum_mask は best 子の結果が保持する mask．これにより子の sum→max 集約が再展開を
-            // 跨いで保たれる (build 時の `BitSet64::full()` 上書きで失われていた = δ集約の忠実性欠落)．
-            // default OFF (V4_SMPROP opt-in)．単体 propagation は DAG を打ち消し退行するため，
-            // 忠実 bundle (V4_KHORDER+V4_DOM) と併用時のみ有効化する．
-            let child_sum_mask = if v4_smprop() {
-                self.v4_stack[my].front_sum_mask()
-            } else {
-                BitSet64::full()
-            };
-
-            let captured = board.do_move(best_move);
-            let child_pk = path_key_after(path_key, best_move, depth as usize);
-
-            let child_result = if is_first {
-                let initial = self.v4_stack[my].front_result();
-                if *inc_flag > 0 {
-                    *inc_flag -= 1;
-                }
-                if initial.is_final() || initial.pn() >= cthpn || initial.dn() >= cthdn {
-                    initial
-                } else {
-                    self.search_impl_v4(
-                        tt,
-                        board,
-                        cthpn,
-                        cthdn,
-                        len.sub(1),
-                        depth + 1,
-                        child_pk,
-                        is_first,
-                        child_sum_mask,
-                        inc_flag,
-                    )
-                }
-            } else {
-                self.search_impl_v4(
-                    tt,
-                    board,
-                    cthpn,
-                    cthdn,
-                    len.sub(1),
-                    depth + 1,
-                    child_pk,
-                    is_first,
-                    child_sum_mask,
-                    inc_flag,
-                )
-            };
-
-            board.undo_move(best_move, captured);
-
-            self.v4_stack[my].update_best_child(child_result);
-            // KH UpdateBestChild 内 query.SetResult: 子結果を子 query で TT へ (親 = 本ノード)．
-            // 親 board_key は **position-only** (KH BoardKeyHandPair; cross-hand のため hand は別管理)．
-            tt.set_result(
-                &child_query,
-                child_result,
-                (super::position_key(board), attacker_hand),
-            );
-
+            self.step_best_child(tt, board, my, depth, len, path_key, thpn, thdn, inc_flag);
             curr = self.v4_stack[my].current_result(board, depth as i32);
 
             thpn = orig_thpn;
@@ -555,7 +595,6 @@ impl DfPnSolver {
         }
 
         self.v3_path.remove(&board.hash);
-        // KH VisitHistory `Leave`: 本ノードの entry を path から外す (stack 規律で末尾を pop)．
         if self.param_v4_path_dominance {
             let pk = super::position_key(board);
             if let Some(v) = self.v4_dom_path.get_mut(&pk) {
@@ -565,7 +604,6 @@ impl DfPnSolver {
                 }
             }
         }
-        self.v4_stack.truncate(my); // KH `expansion_list_.Pop()`
         *inc_flag = (*inc_flag).min(orig_inc);
         curr
     }
@@ -613,65 +651,7 @@ impl DfPnSolver {
             if self.v3_nodes >= self.max_nodes || self.timed_out {
                 break;
             }
-            let best_move = self.v4_stack[0].best_move();
-            let is_first = self.v4_stack[0].front_is_first_visit();
-            let (cthpn, cthdn) = self.v4_stack[0].front_pn_dn_thresholds(thpn, thdn);
-            let best_raw = self.v4_stack[0].front_raw();
-            let child_query = self.v4_stack[0].query_at(best_raw);
-            let child_sum_mask = if v4_smprop() {
-                self.v4_stack[0].front_sum_mask()
-            } else {
-                BitSet64::full()
-            };
-
-            let captured = board.do_move(best_move);
-            let child_pk = path_key_after(0, best_move, 0);
-
-            let child_result = if is_first {
-                let initial = self.v4_stack[0].front_result();
-                if inc_flag > 0 {
-                    inc_flag -= 1;
-                }
-                if initial.is_final() || initial.pn() >= cthpn || initial.dn() >= cthdn {
-                    initial
-                } else {
-                    self.search_impl_v4(
-                        tt,
-                        board,
-                        cthpn,
-                        cthdn,
-                        len.sub(1),
-                        1,
-                        child_pk,
-                        is_first,
-                        child_sum_mask,
-                        &mut inc_flag,
-                    )
-                }
-            } else {
-                self.search_impl_v4(
-                    tt,
-                    board,
-                    cthpn,
-                    cthdn,
-                    len.sub(1),
-                    1,
-                    child_pk,
-                    is_first,
-                    child_sum_mask,
-                    &mut inc_flag,
-                )
-            };
-
-            board.undo_move(best_move, captured);
-
-            self.v4_stack[0].update_best_child(child_result);
-            tt.set_result(
-                &child_query,
-                child_result,
-                (super::position_key(board), attacker_hand),
-            );
-
+            self.step_best_child(tt, board, 0, 0, len, 0u64, thpn, thdn, &mut inc_flag);
             curr = self.v4_stack[0].current_result(board, 0);
 
             thpn = orig_thpn;
