@@ -735,6 +735,28 @@ impl LocalExpansion {
         }
     }
 
+    /// V4THX: KH `FrontPnDnThresholds` の KHTHX dump と同形式の breakdown 文字列を返す (診断専用)．
+    pub(super) fn thx_breakdown(&self, thpn: PnDn, thdn: PnDn) -> String {
+        let (thphi, thdelta) = if self.or_node {
+            (thpn, thdn)
+        } else {
+            (thdn, thpn)
+        };
+        let (cthpn, cthdn) = self.front_pn_dn_thresholds(thpn, thdn);
+        let (best_pn, best_dn) = if self.excluded_moves < self.idx.len() {
+            let r = &self.results[self.idx[self.excluded_moves] as usize];
+            (r.pn(), r.dn())
+        } else {
+            (0, 0)
+        };
+        format!(
+            "or={} th=({},{}) thphi={} thdelta={} 2ndphi={} sumd={} maxd={} excl={} nmoves={} nidx={} best_pn={} best_dn={} -> cth=({},{})",
+            self.or_node as i32, thpn, thdn, thphi, thdelta, self.get_second_phi(),
+            self.sum_delta_except_best, self.max_delta_except_best, self.excluded_moves,
+            self.moves.len(), self.idx.len(), best_pn, best_dn, cthpn, cthdn
+        )
+    }
+
     /// δ 一時変数を全再計算する (KH `RecalcDelta`, :615)．**maou 旧近道はこれを resort 後に省いていた**．
     fn recalc_delta(&mut self) {
         self.sum_delta_except_best = 0;

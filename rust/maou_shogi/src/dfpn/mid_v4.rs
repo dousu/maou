@@ -135,6 +135,14 @@ fn v4th_prefix() -> Option<String> {
         .clone()
 }
 
+/// `V4THX` env: 指定 sfen prefix に一致するノードの SearchImpl ループを per-iteration dump
+/// (KH `KHTHX`/`KHTHXR` と同形式; inc_flag/threshold/best/curr の乖離 hunting)．
+fn v4thx_prefix() -> Option<String> {
+    static C: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    C.get_or_init(|| std::env::var("V4THX").ok().filter(|s| !s.is_empty()))
+        .clone()
+}
+
 /// `V4HAND` env: 指定 sfen prefix のノードの final 結果 (proof/disproof hand) を dump (KH `KHHAND` と突合)．
 pub(super) fn v4hand_prefix() -> Option<String> {
     static C: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
@@ -485,6 +493,12 @@ impl DfPnSolver {
         let best_move = self.v4_stack[my].best_move();
         let is_first = self.v4_stack[my].front_is_first_visit();
         let (cthpn, cthdn) = self.v4_stack[my].front_pn_dn_thresholds(thpn, thdn);
+        if v4thx_prefix()
+            .map(|p| board.sfen().starts_with(p.as_str()))
+            .unwrap_or(false)
+        {
+            eprintln!("V4THX {}", self.v4_stack[my].thx_breakdown(thpn, thdn));
+        }
         let best_raw = self.v4_stack[my].front_raw();
         let child_query = self.v4_stack[my].query_at(best_raw);
         // KH `sum_mask = local_expansion.FrontSumMask()` (komoring_heights.cpp:458)．V4_SMPROP opt-in．
@@ -585,6 +599,14 @@ impl DfPnSolver {
             self.eliminate_double_count_v4(tt, board, my, depth);
         }
 
+        // V4THX: SearchImpl per-iteration dump (KH KHTHX/KHTHXR と突合; inc_flag/threshold 乖離 hunting)．
+        let khthx_here = v4thx_prefix()
+            .map(|p| board.sfen().starts_with(p.as_str()))
+            .unwrap_or(false);
+        if khthx_here {
+            eprintln!("V4THX enter depth={} th=({},{})", depth, thpn, thdn);
+        }
+
         let orig_thpn = thpn;
         let orig_thdn = thdn;
         let orig_inc = *inc_flag;
@@ -613,16 +635,45 @@ impl DfPnSolver {
             if self.v3_nodes >= self.max_nodes || self.timed_out {
                 break;
             }
+            if khthx_here {
+                eprintln!(
+                    "V4THX best={} first={}",
+                    self.v4_stack[my].best_move().to_usi(),
+                    self.v4_stack[my].front_is_first_visit() as i32
+                );
+            }
             self.step_best_child(tt, board, my, depth, len, path_key, thpn, thdn, inc_flag);
             curr = self.v4_stack[my].current_result(board, depth as i32);
+            if khthx_here {
+                eprintln!(
+                    "V4THXR -> curr pn={} dn={} inc={} (th={},{})",
+                    curr.pn(),
+                    curr.dn(),
+                    *inc_flag,
+                    thpn,
+                    thdn
+                );
+            }
 
             thpn = orig_thpn;
             thdn = orig_thdn;
             if *inc_flag > 0 {
                 extend_search_threshold(curr, &mut thpn, &mut thdn);
             } else if *inc_flag == 0 && orig_inc > 0 {
+                if khthx_here {
+                    eprintln!("V4THX break (inc==0 && orig_inc>0)");
+                }
                 break;
             }
+        }
+        if khthx_here {
+            eprintln!(
+                "V4THX exit depth={} curr=(pn{},dn{}) inc={}",
+                depth,
+                curr.pn(),
+                curr.dn(),
+                *inc_flag
+            );
         }
 
         self.v3_path.remove(&board.hash);
