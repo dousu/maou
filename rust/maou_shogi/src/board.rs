@@ -657,6 +657,201 @@ impl Board {
         }
     }
 
+    /// KH `DoesHaveMatePossibility` (typedefs.hpp:310) の忠実移植．OR node 限定の簡易不詰判定．
+    ///
+    /// `us` (攻め方) が敵玉に王手をかけられる *可能性* を **blocker 無視の over-approximation** で返す．
+    /// - `false` → 確実に王手手段なし (= 不詰確定)．
+    /// - `true`  → 不明 (実際には王手が無いこともある; KH check_candidate_bb と同じ保守性)．
+    ///
+    /// look-ahead disproof (`check_obvious_final_or_node_v4`) を KH と一致させるための判定．maou の
+    /// exact `generate_check_moves` は KH の本判定より厳密で，blocker で塞がれた王手候補を不詰と即断
+    /// (KH は defer) してしまい探索経路が乖離する．本判定を使うと KH と同じ局面で disproof を保留する．
+    pub fn does_have_mate_possibility(&self, us: Color) -> bool {
+        let them = us.opponent();
+        let king_sq = match self.king_square(them) {
+            Some(k) => k,
+            None => return false,
+        };
+        let all_occ = self.all_occupied();
+        let empty = !all_occ;
+        let us_pb = &self.piece_bb[us.index()];
+
+        // 1. 駒打ち王手 (occupancy 考慮 = KH check_squares と同じ exact)．
+        for (hi, &pr) in PieceType::HAND_PIECES.iter().enumerate() {
+            if self.hand[us.index()][hi] == 0 {
+                continue;
+            }
+            if pr == PieceType::Pawn
+                && (us_pb[PieceType::Pawn as usize] & Bitboard::file_mask(king_sq.col()))
+                    .is_not_empty()
+            {
+                continue; // 二歩
+            }
+            // 玉から見た pr の逆利き = pr を打って王手になるマス．
+            let cs = match pr {
+                PieceType::Pawn => attack::step_attacks(them, PieceType::Pawn, king_sq),
+                PieceType::Knight => attack::step_attacks(them, PieceType::Knight, king_sq),
+                PieceType::Silver => attack::step_attacks(them, PieceType::Silver, king_sq),
+                PieceType::Gold => attack::step_attacks(them, PieceType::Gold, king_sq),
+                PieceType::Lance => attack::lance_attacks(them, king_sq, all_occ),
+                PieceType::Bishop => attack::bishop_attacks(king_sq, all_occ),
+                PieceType::Rook => attack::rook_attacks(king_sq, all_occ),
+                _ => Bitboard::EMPTY,
+            };
+            if (cs & empty).is_not_empty() {
+                return true;
+            }
+        }
+
+        // 2. 盤上駒の王手候補 (blocker 無視 = KH `CheckCandidateBB`, bitboard.cpp:421-481 を忠実移植)．
+        //    成り (敵陣) による金化・馬化の augmentation を含む over-approx．
+        let king_bb = Bitboard::from_square(king_sq);
+        let not_k = !king_bb;
+        let empty_occ = Bitboard::EMPTY;
+        // enemy_field(us) = us の成りゾーン (us が敵玉に向かう側の 3 段)．
+        let ef = match us {
+            Color::Black => {
+                Bitboard::rank_mask(0) | Bitboard::rank_mask(1) | Bitboard::rank_mask(2)
+            }
+            Color::White => {
+                Bitboard::rank_mask(6) | Bitboard::rank_mask(7) | Bitboard::rank_mask(8)
+            }
+        };
+        // enemyGold = goldEffect(them, ksq) & enemy_field(us)．
+        let enemy_gold = attack::step_attacks(them, PieceType::Gold, king_sq) & ef;
+        // FOREACH(bb, step pt): ∪_{s∈bb} step_attacks(them, pt, s)．
+        let union_step = |bb: Bitboard, pt: PieceType| -> Bitboard {
+            let mut acc = Bitboard::EMPTY;
+            let mut b = bb;
+            while b.is_not_empty() {
+                acc |= attack::step_attacks(them, pt, b.pop_lsb());
+            }
+            acc
+        };
+        // FOREACH(bb, ef & silverEffect): ∪_{s∈bb} (ef & silver(them,s))．
+        let union_silver_ef = |bb: Bitboard| -> Bitboard {
+            let mut acc = Bitboard::EMPTY;
+            let mut b = bb;
+            while b.is_not_empty() {
+                acc |= ef & attack::step_attacks(them, PieceType::Silver, b.pop_lsb());
+            }
+            acc
+        };
+        // FOREACH_BR(bb, bishop): ∪_{s∈bb} bishop(s, 0)．
+        let union_bishop = |bb: Bitboard| -> Bitboard {
+            let mut acc = Bitboard::EMPTY;
+            let mut b = bb;
+            while b.is_not_empty() {
+                acc |= attack::bishop_attacks(b.pop_lsb(), empty_occ);
+            }
+            acc
+        };
+
+        // 飛・龍は無条件全域 (KH: pieces(ROOK_DRAGON))．
+        if (us_pb[PieceType::Rook as usize] | us_pb[PieceType::Dragon as usize]).is_not_empty() {
+            return true;
+        }
+        // 歩: ∪pawn(pawn_check) ∪ ∪pawn(enemyGold)．
+        let pawns = us_pb[PieceType::Pawn as usize];
+        if pawns.is_not_empty() {
+            let pawn_check = attack::step_attacks(them, PieceType::Pawn, king_sq);
+            let cand = (union_step(pawn_check, PieceType::Pawn)
+                | union_step(enemy_gold, PieceType::Pawn))
+                & not_k;
+            if (pawns & cand).is_not_empty() {
+                return true;
+            }
+        }
+        // 香: lanceStepEffect(them,ksq) + (玉が敵陣なら両隣 file の香利き)．
+        let lances = us_pb[PieceType::Lance as usize];
+        if lances.is_not_empty() {
+            let mut cand = attack::lance_attacks(them, king_sq, empty_occ);
+            if (ef & king_bb).is_not_empty() {
+                let (c, r) = (king_sq.col(), king_sq.row());
+                if c > 0 {
+                    cand |= attack::lance_attacks(them, Square::new(c - 1, r), empty_occ);
+                }
+                if c < 8 {
+                    cand |= attack::lance_attacks(them, Square::new(c + 1, r), empty_occ);
+                }
+            }
+            if (lances & cand).is_not_empty() {
+                return true;
+            }
+        }
+        // 桂: ∪knight(knight_check ∪ enemyGold)．
+        let knights = us_pb[PieceType::Knight as usize];
+        if knights.is_not_empty() {
+            let kc = attack::step_attacks(them, PieceType::Knight, king_sq);
+            let cand = union_step(kc | enemy_gold, PieceType::Knight) & not_k;
+            if (knights & cand).is_not_empty() {
+                return true;
+            }
+        }
+        // 銀: ∪silver(silver_check) ∪ ∪silver(enemyGold) ∪ ∪(ef&silver)(gold_check)．
+        let silvers = us_pb[PieceType::Silver as usize];
+        if silvers.is_not_empty() {
+            let sc = attack::step_attacks(them, PieceType::Silver, king_sq);
+            let gc = attack::step_attacks(them, PieceType::Gold, king_sq);
+            let cand = (union_step(sc, PieceType::Silver)
+                | union_step(enemy_gold, PieceType::Silver)
+                | union_silver_ef(gc))
+                & not_k;
+            if (silvers & cand).is_not_empty() {
+                return true;
+            }
+        }
+        // 金系 (金/と/成香/成桂/成銀): ∪gold(gold_check)．
+        let golds = us_pb[PieceType::Gold as usize]
+            | us_pb[PieceType::ProPawn as usize]
+            | us_pb[PieceType::ProLance as usize]
+            | us_pb[PieceType::ProKnight as usize]
+            | us_pb[PieceType::ProSilver as usize];
+        if golds.is_not_empty() {
+            let gc = attack::step_attacks(them, PieceType::Gold, king_sq);
+            let cand = union_step(gc, PieceType::Gold) & not_k;
+            if (golds & cand).is_not_empty() {
+                return true;
+            }
+        }
+        // 角: ∪bishop(bishop_check) ∪ ∪bishop(king8&ef) ∪ ∪(ef&bishop)(king8)．
+        let bishops = us_pb[PieceType::Bishop as usize];
+        if bishops.is_not_empty() {
+            let king8 = attack::step_attacks(them, PieceType::King, king_sq);
+            let bc = attack::bishop_attacks(king_sq, empty_occ);
+            let mut cand = union_bishop(bc) | union_bishop(king8 & ef);
+            let mut b = king8;
+            while b.is_not_empty() {
+                cand |= ef & attack::bishop_attacks(b.pop_lsb(), empty_occ);
+            }
+            cand &= not_k;
+            if (bishops & cand).is_not_empty() {
+                return true;
+            }
+        }
+        // 馬 (KH: ROOK slot に horse 候補を格納): ∪horse(horse_check)．
+        let horses = us_pb[PieceType::Horse as usize];
+        if horses.is_not_empty() {
+            let hc = attack::horse_attacks(them, king_sq, empty_occ);
+            let mut cand = Bitboard::EMPTY;
+            let mut b = hc;
+            while b.is_not_empty() {
+                cand |= attack::horse_attacks(them, b.pop_lsb(), empty_occ);
+            }
+            cand &= not_k;
+            if (horses & cand).is_not_empty() {
+                return true;
+            }
+        }
+
+        // 3. 開き王手候補 (KH: blockers_for_king(them) & pieces(us))．
+        if self.compute_discoverers(us, king_sq).is_not_empty() {
+            return true;
+        }
+
+        false
+    }
+
     /// ビットボード演算のみで1手詰めを判定する(do_move/undo_move 不要)．
     ///
     /// cshogi の `mateMoveIn1Ply()` に相当する高速版．

@@ -802,6 +802,46 @@ fn test_tsume_5() {
     }
 }
 
+/// `does_have_mate_possibility` (KH `DoesHaveMatePossibility` 移植) の回帰テスト．
+///
+/// over-approximation の soundness は「実王手があれば必ず true」(false negative 不可)．加えて
+/// KH と一致すべき代表局面を固定する: post-Kx7i (白の実王手 0 だが香の成り王手候補で KH DHMP=true)．
+/// これを取りこぼすと look-ahead が KH より早く disproof し探索経路が乖離する (cnt=487 の真因)．
+#[test]
+fn test_does_have_mate_possibility() {
+    // (sfen, expected, label)．
+    let cases = [
+        // post-Kx7i: 白王手0 だが 8f の香が file8 で 9i 段(敵陣)へ進めば成って金王手候補 → KH DHMP=true．
+        (
+            "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/NP1S5/2G2+p3/L1K6 w 2RB3GSPn4p 9",
+            true,
+            "post-Kx7i (KH DHMP=true; 香 promote 候補)",
+        ),
+        // 29te root: 白に実王手あり → 自明に true．
+        (
+            "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1",
+            true,
+            "29te-root (実王手あり)",
+        ),
+    ];
+    for (sfen, expected, label) in cases {
+        let mut b = Board::new();
+        b.set_sfen(sfen).unwrap();
+        let s = DfPnSolver::with_timeout(31, 1_000, 32767, 5);
+        let checks = s.generate_check_moves_cached(&mut b);
+        let dhmp = b.does_have_mate_possibility(b.turn);
+        // soundness: 実王手があれば DHMP は必ず true．
+        if !checks.is_empty() {
+            assert!(
+                dhmp,
+                "{label}: 実王手 {} 個あるのに DHMP=false ({sfen})",
+                checks.len()
+            );
+        }
+        assert_eq!(dhmp, expected, "{label}: DHMP 期待値不一致 ({sfen})");
+    }
+}
+
 /// `mate_move_in_1ply` の false mate-1 回帰テスト．
 ///
 /// `is_checkmate_after_bb` / `generate_check_moves` には以下 3 つの false mate-1 バグがあり，

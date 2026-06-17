@@ -241,6 +241,26 @@ fn dump_v4hand(board: &Board, proven: bool, hand: &[u8; crate::types::HAND_KINDS
     }
 }
 
+/// `V4HAND` 計装の子内訳版: 指定 sfen prefix のノードで集約前の各子 (move + 子 hand) を dump．
+/// proof/disproof hand 再帰の駒種差 (R vs G) がどの子由来かを特定するため．
+fn dump_v4hand_child(board: &Board, m: Move, hand: &[u8; crate::types::HAND_KINDS]) {
+    if let Some(prefix) = super::mid_v4::v4hand_prefix() {
+        if board.sfen().starts_with(prefix.as_str()) {
+            eprintln!(
+                "V4HAND   child {} P{} L{} N{} S{} G{} B{} R{}",
+                m.to_usi(),
+                hand[0],
+                hand[1],
+                hand[2],
+                hand[3],
+                hand[4],
+                hand[5],
+                hand[6]
+            );
+        }
+    }
+}
+
 /// KH `BranchRootEdge` (double_count_elimination.hpp:74)．二重カウントの分岐元の辺．
 #[derive(Clone, Copy)]
 pub(super) struct BranchRootEdge {
@@ -660,7 +680,9 @@ impl LocalExpansion {
                 } else {
                     let mut set = super::proof_hand::ProofHandSet::new();
                     for &ir in &self.idx {
-                        set.update(&self.results[ir as usize].hand());
+                        let ch = self.results[ir as usize].hand();
+                        dump_v4hand_child(board, self.moves[ir as usize], &ch);
+                        set.update(&ch);
                     }
                     set.get(board)
                 }

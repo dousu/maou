@@ -97,6 +97,15 @@ pub(super) fn handset_enabled() -> bool {
     *C.get_or_init(|| std::env::var("V4_HANDSET").is_ok())
 }
 
+/// look-ahead 不詰判定を KH `DoesHaveMatePossibility` (blocker 無視 over-approx) に合わせる．
+/// **default ON** (`V4_NODHMP` で opt-out)．exact `!has_checks` だと KH が defer する局面 (例
+/// cnt=487 Kx7i: 白王手0 だが lance promote 候補で DHMP=true) を maou が即 disproof し探索経路が
+/// 乖離する (487→941 まで KH と byte 一致, 29te bundle 13,296→8,587 sound)．[[feedback_kh_divergence_hunting]]．
+pub(super) fn dhmp_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4_NODHMP").is_err())
+}
+
 /// `V4_INTROSORT` 実験 (process 内 1 回読み)．idx ソートに libstdc++ introsort 移植 (`kh_std_sort`) を使う．
 /// default OFF = stable sort (movegen 順保持)．KH を `std::stable_sort` にした診断ビルドと突合する際は
 /// 両者 stable に揃えるため本フラグを **OFF** のままにする．
@@ -931,6 +940,15 @@ impl DfPnSolver {
             // AND node の first-visit child は子が OR node (攻め方手番)．board は do_move 済 (= 子局面)
             // なので攻め方の 1 手詰／詰み無を先読みし，proven/disproven を seed する．これにより
             // 「詰む応手」を展開せず除外，「逃れる応手」を即 disproof し breadth を抑える．
+            // [diag] V4SEED: 指定 sfen prefix の親ノードで各子の look_up 結果 (TT/cross-hand) と
+            // look-ahead 前後を dump し，disproof の出所 (cross-hand TT vs fresh look-ahead) を特定する．
+            let seed_diag = std::env::var("V4SEED")
+                .ok()
+                .filter(|p| !p.is_empty())
+                .map(|p| board.sfen().starts_with(p.as_str()))
+                .unwrap_or(false);
+            let pre_lu = (r.pn(), r.dn(), r.is_final(), r.is_first_visit());
+
             // 子結果が final になったら KH `query.SetResult` 相当で TT へ格納する (PV/伝播の整合)．
             if !is_skipped && !or_node && first_search && r.is_first_visit() {
                 // 子局面 (do_move 済) が必要なのはここだけ．KH も CheckObviousFinalOrNode 内で
@@ -941,6 +959,22 @@ impl DfPnSolver {
                     r = res;
                 }
                 board.undo_move(m, captured);
+            }
+            if seed_diag {
+                eprintln!(
+                    "V4SEED child={} skip={} seed=({},{}) lookup=(pn{} dn{} fin{} fv{}) final=(pn{} dn{} fin{})",
+                    m.to_usi(),
+                    is_skipped,
+                    seed.0,
+                    seed.1,
+                    pre_lu.0,
+                    pre_lu.1,
+                    pre_lu.2,
+                    pre_lu.3,
+                    r.pn(),
+                    r.dn(),
+                    r.is_final()
+                );
             }
 
             evals.push(eval);
@@ -988,7 +1022,15 @@ impl DfPnSolver {
         let or_hand = board.hand[board.turn.index()];
         let use_handset = handset_enabled();
         let (mm_opt, has_checks) = self.mate1ply_with_cached_checks(board);
-        if !has_checks {
+        // KH `CheckObviousFinalOrNode` は不詰判定に `!DoesHaveMatePossibility` (blocker 無視の
+        // over-approx) を使う．maou の exact `!has_checks` は blocker で塞がれた王手候補を即不詰断定
+        // して KH より早く disproof し探索経路が乖離する (例: cnt=487 の Kx7i)．V4_DHMP で KH と一致．
+        let no_mate = if dhmp_enabled() {
+            !board.does_have_mate_possibility(board.turn)
+        } else {
+            !has_checks
+        };
+        if no_mate {
             // 攻め方に王手手段なし → 詰み不可能 → 不詰 (KH MakeFinal<false>, kDepthMaxMateLen)．
             // KH: HandSet{DisproofHandTag}.Get(pos) = remove_if(MAX)．
             let hand = if use_handset {
@@ -1008,6 +1050,23 @@ impl DfPnSolver {
             } else {
                 or_hand
             };
+            // [diag] V4MATE: look-ahead 1 手詰の手と proof hand を dump (V4HAND prefix gate)．
+            if let Some(prefix) = v4hand_prefix() {
+                if board.sfen().starts_with(prefix.as_str()) {
+                    eprintln!(
+                        "V4MATE mate1ply={} proof P{} L{} N{} S{} G{} B{} R{} sfen={}",
+                        mate_move.to_usi(),
+                        hand[0],
+                        hand[1],
+                        hand[2],
+                        hand[3],
+                        hand[4],
+                        hand[5],
+                        hand[6],
+                        board.sfen()
+                    );
+                }
+            }
             Some(SearchResult::make_final(
                 true,
                 hand,
