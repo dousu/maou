@@ -77,6 +77,29 @@ fn is_sum_delta_node(board: &Board, m: crate::moves::Move, or_node: bool) -> boo
     !hit
 }
 
+/// `defender` が `to` に駒 `pt` を打つと `atk_king` (攻め方玉) に王手がかかるか (KH `gives_check`)．
+/// drop は不成駒なので基本駒種の利きで判定する (DML 中合い対称性の逆王手判定用)．
+fn drop_gives_check(
+    board: &Board,
+    to: crate::types::Square,
+    pt: crate::types::PieceType,
+    defender: crate::types::Color,
+    atk_king: crate::types::Square,
+) -> bool {
+    use crate::types::PieceType;
+    let occ = board.all_occupied();
+    let atk = match pt {
+        PieceType::Pawn | PieceType::Knight | PieceType::Silver | PieceType::Gold => {
+            crate::attack::step_attacks(defender, pt, to)
+        }
+        PieceType::Lance => crate::attack::lance_attacks(defender, to, occ),
+        PieceType::Bishop => crate::attack::bishop_attacks(to, occ),
+        PieceType::Rook => crate::attack::rook_attacks(to, occ),
+        _ => return false,
+    };
+    atk.contains(atk_king)
+}
+
 /// `V4SEL` env (process 内 1 回読み)．KH `KHSEL` と同形式で ply 0-7 初出ノードの sort 済
 /// 子リスト (move/pn/dn) を sfen 付きで dump し，KH との guidance 乖離を突合する．
 fn v4sel_enabled() -> bool {
@@ -907,7 +930,36 @@ impl DfPnSolver {
                 })
                 .collect();
             let us_black = board.turn == crate::types::Color::Black;
-            DelayedMoveList::build_with_types(&moves, or_node, &raw_pts, us_black)
+            if super::v4_kh_moves() && !or_node {
+                // KH `IsSame` 中合い対称性 (delayed_move_list.hpp:152-156): AND node の drop で
+                // 「攻方支援なし & 逆王手でない」もの同士は別マスでも同一 chain とみなし後回し．
+                let defender = board.turn;
+                let atk_king = board.king_square(attacker);
+                let interp_chain: Vec<bool> = moves
+                    .iter()
+                    .map(|&m| {
+                        if !m.is_drop() {
+                            return false;
+                        }
+                        let to = m.to_sq();
+                        let unsupported = !board.is_attacked_by(to, defender);
+                        let no_check = match (atk_king, m.drop_piece_type()) {
+                            (Some(k), Some(pt)) => !drop_gives_check(board, to, pt, defender, k),
+                            _ => true,
+                        };
+                        unsupported && no_check
+                    })
+                    .collect();
+                DelayedMoveList::build_with_types_interp(
+                    &moves,
+                    or_node,
+                    &raw_pts,
+                    us_black,
+                    &interp_chain,
+                )
+            } else {
+                DelayedMoveList::build_with_types(&moves, or_node, &raw_pts, us_black)
+            }
         } else {
             DelayedMoveList::build(&moves, or_node)
         };

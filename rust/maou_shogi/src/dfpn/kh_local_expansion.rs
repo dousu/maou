@@ -749,11 +749,30 @@ impl LocalExpansion {
         } else {
             (0, 0)
         };
+        let mut kids = String::from(" kids:");
+        for (k, &i_raw) in self.idx.iter().enumerate() {
+            if k >= 16 {
+                break;
+            }
+            let r = &self.results[i_raw as usize];
+            let star = if self.sum_mask.test(i_raw as usize) {
+                "*"
+            } else {
+                ""
+            };
+            kids.push_str(&format!(
+                " {}:{}/{}{}",
+                self.moves[i_raw as usize].to_usi(),
+                r.pn(),
+                r.dn(),
+                star
+            ));
+        }
         format!(
-            "or={} th=({},{}) thphi={} thdelta={} 2ndphi={} sumd={} maxd={} excl={} nmoves={} nidx={} best_pn={} best_dn={} -> cth=({},{})",
+            "or={} th=({},{}) thphi={} thdelta={} 2ndphi={} sumd={} maxd={} excl={} nmoves={} nidx={} best_pn={} best_dn={} -> cth=({},{}){}",
             self.or_node as i32, thpn, thdn, thphi, thdelta, self.get_second_phi(),
             self.sum_delta_except_best, self.max_delta_except_best, self.excluded_moves,
-            self.moves.len(), self.idx.len(), best_pn, best_dn, cthpn, cthdn
+            self.moves.len(), self.idx.len(), best_pn, best_dn, cthpn, cthdn, kids
         )
     }
 

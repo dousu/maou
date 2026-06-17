@@ -71,6 +71,30 @@ impl DelayedMoveList {
         raw_pts: &[u8],
         us_black: bool,
     ) -> Self {
+        Self::build_inner(moves, or_node, raw_pts, us_black, &[])
+    }
+
+    /// `build_with_types` + KH `IsSame` の中合い対称性 (delayed_move_list.hpp:152-156)．
+    /// `interp_chain[i]` = `moves[i]` が「攻方支援なし & 逆王手でない drop」なら true
+    /// (呼出側で Board から算出)．この条件を満たす 2 つの drop は **別 to_sq でも同一 chain**
+    /// とみなし後回しにする (KH 忠実版; 「逆王手でない中合いはだいたい無意味」)．
+    pub(super) fn build_with_types_interp(
+        moves: &[Move],
+        or_node: bool,
+        raw_pts: &[u8],
+        us_black: bool,
+        interp_chain: &[bool],
+    ) -> Self {
+        Self::build_inner(moves, or_node, raw_pts, us_black, interp_chain)
+    }
+
+    fn build_inner(
+        moves: &[Move],
+        or_node: bool,
+        raw_pts: &[u8],
+        us_black: bool,
+        interp_chain: &[bool],
+    ) -> Self {
         let n = moves.len();
         let mut prev = vec![0u32; n];
         let mut next = vec![0u32; n];
@@ -89,7 +113,15 @@ impl DelayedMoveList {
             let mut linked = false;
             for j in 0..heads_len {
                 let (head_move, head_idx) = heads[j];
-                if is_same(head_move, m) {
+                // KH IsSame: 同 to_sq (同マス合駒/成不成ペア) または「支援なし & 非逆王手」の
+                // 別マス中合いペア (interp_chain 両 true)．
+                let same = is_same(head_move, m)
+                    || (interp_chain
+                        .get(head_idx as usize)
+                        .copied()
+                        .unwrap_or(false)
+                        && interp_chain.get(i_raw).copied().unwrap_or(false));
+                if same {
                     // 既存 chain の末尾に追加: head_idx → i_raw
                     next[head_idx as usize] = i_raw as u32 + 1;
                     prev[i_raw] = head_idx + 1;
@@ -233,8 +265,10 @@ fn is_delayable(m: Move, or_node: bool) -> bool {
 /// - drop と非 drop の混合: 同等でない．
 ///
 /// **注意**: KH では更に「support_cnt==0 で no-check のドロップは別 to でも同等」
-/// という条件があるが (delayed_move_list.hpp:152-156)，maou では未実装．
-/// これは 攻方支援なし & 王手にならない中合の対称性検出で，後段の Phase で追加可能．
+/// という条件がある (delayed_move_list.hpp:152-156)．これは 攻方支援なし & 王手に
+/// ならない中合の対称性検出で，[`DelayedMoveList::build_with_types_interp`] に
+/// `interp_chain` flag (呼出側で Board から算出) として実装済 (V4_KHMOVES gate)．
+/// 本 `is_same` 自体は Board を持たないため同マス/成不成のみ判定する．
 #[inline]
 fn is_same(m1: Move, m2: Move) -> bool {
     if m1.is_drop() && m2.is_drop() {
