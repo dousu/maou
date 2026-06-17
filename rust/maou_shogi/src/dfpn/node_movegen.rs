@@ -468,7 +468,8 @@ impl DfPnSolver {
                 // (a) 移動後の駒にひもがついている(from を除いた守備側の利き)
                 // (b) 移動元が玉の隣接マスで，空いた後に攻め方から利かれず
                 //     玉の逃げ道が新たに生まれる
-                if futile_or_chain.contains(to) {
+                // V4_KHMOVES (faithful): KH MovePicker は無駄合い piece-move も生成するため filter を無効化．
+                if !super::v4_kh_moves() && futile_or_chain.contains(to) {
                     let has_support =
                         board.is_attacked_by_excluding(to, defender, true, Some(from));
                     let opens_escape = king_step.contains(from)
@@ -500,16 +501,21 @@ impl DfPnSolver {
             // 全駒生成し DML chain に委ねる) を試したが 39te @3M deep frontier +21% 退行
             // (p13 77,791→94,355) かつ標的の 29te iter2 G*7g pn 乖離も不変で revert．
             // deferred 数 (mp-idx) 由来の penalty 差仮説は当該乖離の真因ではない．
-            if futile.contains(to) {
-                // 完全無駄合い: スキップ
-                continue;
+            // V4_KHMOVES (faithful): KH MovePicker は全合駒 drop を生成し DML chain で defer するため，
+            // futile skip / chain 代表駒 reduction を無効化し全駒種を生成する (idx/deferred 分割は DML 一致)．
+            if !super::v4_kh_moves() {
+                if futile.contains(to) {
+                    // 完全無駄合い: スキップ
+                    continue;
+                }
+                if chain.contains(to) {
+                    // chain マス: 3カテゴリの代表駒のみ生成
+                    self.generate_chain_drops(board, moves, to, defender);
+                    continue;
+                }
             }
-            let is_chain = chain.contains(to);
-            if is_chain {
-                // chain マス: 3カテゴリの代表駒のみ生成
-                self.generate_chain_drops(board, moves, to, defender);
-            } else {
-                // 通常マス: 全駒種を生成する．
+            {
+                // 通常マス (および V4_KHMOVES faithful path): 全駒種を生成する．
                 // KH/yaneuraou parity (V3_KHPAR): 生成順は 歩→桂→香→銀→金→角→飛
                 // (yaneuraou movegen.cpp GenerateDropMoves: PAWN 先行 + drops[] が
                 // KNIGHT,LANCE,SILVER,GOLD,BISHOP,ROOK 順)．同 to_sq drop は DML で

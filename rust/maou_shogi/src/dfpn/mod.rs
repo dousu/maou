@@ -70,6 +70,16 @@ pub(super) fn kh_parity_order() -> bool {
     *C.get_or_init(|| std::env::var("V3_KHPAR").is_ok() || std::env::var("V3_V4").is_ok())
 }
 
+/// V4_KHMOVES: AND node の合駒生成を KH `MovePicker` に忠実化する gate．
+/// maou は既定で「無駄合い (futile) を skip」「chain マスは代表駒のみ」と reduction するが，
+/// KH は全合駒 drop / 全 piece-move interposition を生成し DML chain で defer する．
+/// 本 gate ON で reduction を無効化し KH と同一手集合を生成する (DML で idx/deferred 分割は一致)．
+/// default off = committed 挙動 (canonical mid_v3 18,539 維持)．process 内で 1 回だけ読む．
+pub(super) fn v4_kh_moves() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4_KHMOVES").is_ok())
+}
+
 /// `ArrayVec::try_push` のラッパー．
 /// デバッグビルドでは容量超過時にパニックし，リリースビルドでは無音で破棄する．
 #[inline(always)]
