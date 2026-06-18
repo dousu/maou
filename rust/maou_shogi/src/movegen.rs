@@ -361,7 +361,41 @@ fn is_legal(board: &mut Board, m: Move) -> bool {
 /// 内側の `is_in_check` でパニックが発生した場合，外側の `undo_move` も
 /// 実行されず盤面が不整合な状態になる．`Board` のメソッドは正規局面に
 /// 対してパニックしない設計のため，通常は問題にならない．
+/// `PDM_VERIFY` env: bitboard 版 is_pawn_drop_mate を do_move 版 (slow) と毎回突合し不一致で
+/// panic する検証 gate (process 内 1 回読み)．等価性検証後は off で bb 版のみ (do_move 削減)．
+fn pdm_verify_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("PDM_VERIFY").is_ok())
+}
+
+/// 打ち歩詰め判定 (歩打ち `pawn_drop` が詰む = 反則手か)．
+///
+/// **bitboard 版** (`Board::is_pawn_drop_mate_bb` = 検証済み `is_checkmate_after_bb` の再利用) で
+/// do_move 不要に判定する．歩打ちは単一直接接触王手なので必ず `Some(true/false)` を返す．
+/// 旧 do_move 版 (`is_pawn_drop_mate_slow`) は 39te do_moves の 45% を占めた最大ボトルネックだった．
+/// `PDM_VERIFY` env で両版を突合検証できる (等価性確認用)．
 pub(crate) fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
+    match board.is_pawn_drop_mate_bb(pawn_drop) {
+        Some(bb) => {
+            if pdm_verify_enabled() {
+                let slow = is_pawn_drop_mate_slow(board, pawn_drop);
+                assert_eq!(
+                    bb,
+                    slow,
+                    "uchifuzume bb≠slow: drop={} sfen={}",
+                    pawn_drop.to_usi(),
+                    board.sfen()
+                );
+            }
+            bb
+        }
+        // 歩打ちでは理論上起きない (開き/両王手) が，安全のため do_move 版で確定検証する．
+        None => is_pawn_drop_mate_slow(board, pawn_drop),
+    }
+}
+
+/// 打ち歩詰め判定の do_move/undo 版 (旧実装; bb 版の検証基準 + `None` フォールバック用)．
+pub(crate) fn is_pawn_drop_mate_slow(board: &mut Board, pawn_drop: Move) -> bool {
     pdm_bump();
     let captured = board.do_move(pawn_drop);
 

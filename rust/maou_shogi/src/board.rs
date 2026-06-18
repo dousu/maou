@@ -925,6 +925,50 @@ impl Board {
         None
     }
 
+    /// 歩打ち `pawn_drop` (手番側 = 攻め方が打つ) が打ち歩詰めかをビットボード演算のみで判定する
+    /// (do_move 不要)．歩打ちは**単一の直接接触王手**なので開き王手/両王手 (`is_checkmate_after_bb`
+    /// が `None` を返すケース) は生じず，常に `Some(true/false)` を返せる (= 検証済み 1 手詰判定の再利用)．
+    ///
+    /// 戻り値: `Some(true)` = 打ち歩詰め (詰む = 反則手), `Some(false)` = 詰まない (合法), `None` =
+    /// (理論上起きない) 開き/両王手で bitboard 確定不可 → 呼び出し側が do_move で検証する．
+    /// 玉がない (片玉) なら `Some(false)` (詰みようがない)．`board` は変更しない．
+    pub(crate) fn is_pawn_drop_mate_bb(&self, pawn_drop: Move) -> Option<bool> {
+        let attacker = self.turn;
+        let defender = attacker.opponent();
+        let king_sq = match self.king_square(defender) {
+            Some(k) => k,
+            None => return Some(false),
+        };
+        let all_occ = self.all_occupied();
+        let def_occ = self.occupied[defender.index()];
+        let king_bb = Bitboard::from_square(king_sq);
+        let king_step = attack::step_attacks(defender, PieceType::King, king_sq);
+        let mut ctx = Mate1plyCtx {
+            discoverers: self.compute_discoverers(attacker, king_sq),
+            occ_nk_pre: all_occ & !king_bb,
+            esc_sqs: [king_sq; 8],
+            esc_n: 0,
+            esc_info: [None; 8],
+        };
+        for esc in king_step & !def_occ {
+            ctx.esc_sqs[ctx.esc_n] = esc;
+            ctx.esc_n += 1;
+        }
+        self.is_checkmate_after_bb(
+            pawn_drop,
+            attacker,
+            defender,
+            king_sq,
+            king_bb,
+            king_step,
+            all_occ,
+            def_occ,
+            attacker.index(),
+            defender.index(),
+            &mut ctx,
+        )
+    }
+
     /// 指定した王手手を指した後に詰みになるかビットボード演算のみで判定する．
     ///
     /// 戻り値:
