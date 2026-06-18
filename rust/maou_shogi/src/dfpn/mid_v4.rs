@@ -219,16 +219,52 @@ fn drop_piece_order(pt: crate::types::PieceType) -> u64 {
     }
 }
 
-pub(super) fn kh_check_order_key(m: crate::moves::Move) -> u64 {
+pub(super) fn kh_check_order_key(
+    m: crate::moves::Move,
+    discoverers: crate::bitboard::Bitboard,
+    def_king: Option<crate::types::Square>,
+) -> u64 {
+    use crate::types::PieceType;
     if let Some(pt) = m.drop_piece_type() {
-        // 駒打ちは全盤上移動の後 (bit40 で group 分離)．
-        (1u64 << 40) | (drop_piece_order(pt) << 11) | (m.to_sq().raw_u8() as u64)
+        // group 2: 駒打ち王手．KH `generate_checks` の GenerateCheckDropMoves 呼出順
+        // (PAWN,LANCE,KNIGHT,SILVER,GOLD,BISHOP,ROOK) → 各 check_square 昇順．
+        // ⚠ evasion drops[] (KNIGHT,LANCE,..) とは Knight/Lance が逆順なので別 mapping．
+        let pmo = match pt {
+            PieceType::Pawn => 0u64,
+            PieceType::Lance => 1,
+            PieceType::Knight => 2,
+            PieceType::Silver => 3,
+            PieceType::Gold => 4,
+            PieceType::Bishop => 5,
+            PieceType::Rook => 6,
+            _ => 7,
+        };
+        (2u64 << 42) | (pmo << 7) | (m.to_sq().raw_u8() as u64)
     } else {
-        // 盤上移動: from 昇順 → 成(0)/不成(1) → to 昇順 (KH: 5g6f+ 5g7i+ 5g6f 5g7i)．
-        let from = m.from_sq().raw_u8() as u64;
-        let to = m.to_sq().raw_u8() as u64;
+        // 盤上移動王手．KH `generate_checks` (movegen.cpp:806-844):
+        //   ① 開き王手候補 from (= discoverers = blockers_for_king(them) & pieces(us)) を square 昇順で，
+        //      各 from は pin-line 外への移動 (純開き王手) → pin-line 上への移動 (直接王手) の順に生成．
+        //   ② 非候補 from (直接王手のみ) を square 昇順で生成．
+        // 旧 key は ①② を区別せず単純 from 昇順だったため開き王手が先頭に来ず KH と乖離していた．
+        let from = m.from_sq();
+        let to = m.to_sq();
         let pf = if m.is_promotion() { 0u64 } else { 1u64 };
-        (from << 20) | (pf << 19) | (to << 11)
+        let disc = discoverers.contains(from);
+        let group = if disc { 0u64 } else { 1u64 };
+        // 開き王手候補 from 内: pin-line 外 (sub 0) → pin-line 上 (sub 1)．
+        let sub = if disc {
+            match def_king {
+                Some(k) if crate::attack::line_through(k, from).contains(to) => 1u64,
+                _ => 0u64,
+            }
+        } else {
+            0u64
+        };
+        (group << 42)
+            | ((from.raw_u8() as u64) << 22)
+            | (sub << 21)
+            | (pf << 20)
+            | ((to.raw_u8() as u64) << 11)
     }
 }
 
@@ -284,19 +320,6 @@ pub(super) fn kh_evasion_order_key(board: &crate::board::Board, m: crate::moves:
             let go = kh_piece_gen_order(raw_pt);
             (1u64 << 40) | (go << 30) | (from << 20) | (pf << 19) | (to << 11)
         }
-    }
-}
-
-/// OR=王手順 / AND=evasion 順を返す per-move の KH 生成順 key (comparer の最終 tie-break 用)．
-pub(super) fn kh_order_key(
-    board: &crate::board::Board,
-    m: crate::moves::Move,
-    or_node: bool,
-) -> u64 {
-    if or_node {
-        kh_check_order_key(m)
-    } else {
-        kh_evasion_order_key(board, m)
     }
 }
 
@@ -911,7 +934,17 @@ impl DfPnSolver {
         // V4_KHORDER: 生成手を KH `generateMoves` 順へ並べ替える (これが KH のソート入力 = 同じ
         // スタート地点)．DML/results/idx すべてこの順で構築する．promo は成→不成の順 (KH 一致)．
         if khorder_enabled() {
-            moves.sort_by_key(|&m| kh_order_key(board, m, or_node));
+            if or_node {
+                // OR-node 王手順は KH `generate_checks` (開き王手候補 → 直接王手 → 駒打ち) に従う．
+                // discoverers (= blockers_for_king(them) & pieces(us)) は build 毎に 1 回算出して共有．
+                let def_king = board.king_square(attacker.opponent());
+                let discoverers = def_king
+                    .map(|k| board.compute_discoverers(attacker, k))
+                    .unwrap_or(crate::bitboard::Bitboard::EMPTY);
+                moves.sort_by_key(|&m| kh_check_order_key(m, discoverers, def_king));
+            } else {
+                moves.sort_by_key(|&m| kh_evasion_order_key(board, m));
+            }
         }
 
         // V4RAW: build 時点の raw movegen 順 (sort/DML 前) を ply 0-7 初出で dump (KH MovePicker 順と突合)．
