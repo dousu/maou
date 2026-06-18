@@ -18,6 +18,19 @@ use crate::types::{Color, PieceType, Square};
 use super::solver::DfPnSolver;
 use super::{push_move, MAX_MOVES};
 
+thread_local! {
+    /// is_legal_quick が実際に do_move した回数 (do_moves breakdown 用; solve 毎に reset)．
+    static LEGAL_QUICK_DM: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+/// is_legal_quick の do_move 回数を取得 (mid_v4 report 用)．
+pub(super) fn legal_quick_dm() -> u64 {
+    LEGAL_QUICK_DM.with(|c| c.get())
+}
+/// is_legal_quick の do_move カウンタを reset (solve 開始時)．
+pub(super) fn reset_legal_quick_dm() {
+    LEGAL_QUICK_DM.with(|c| c.set(0));
+}
+
 impl DfPnSolver {
     /// 玉方の王手回避手を生成する(合い効かずを除外)．
     ///
@@ -969,6 +982,7 @@ impl DfPnSolver {
             return true;
         }
         let us = board.turn;
+        LEGAL_QUICK_DM.with(|c| c.set(c.get() + 1));
         let captured = board.do_move(m);
         let in_check = board.is_in_check(us);
         board.undo_move(m, captured);

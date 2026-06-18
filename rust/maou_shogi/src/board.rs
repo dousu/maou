@@ -11,18 +11,27 @@ thread_local! {
     /// と同単位)．dfpn ソルバーの忠実度計測用: KH の do_move 数と直接突合する．SearchImpl 訪問数
     /// (`v3_nodes`) とは別単位なので混同しないこと．single-thread 前提の非 atomic Cell．
     static DO_MOVE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// mate_move_in_1ply の None ケース (開き王手/両王手) do_move 検証回数 (do_moves breakdown 用)．
+    static MATE1PLY_NONE_DM: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// `do_move` 累積カウンタを 0 にリセットする．
 #[inline]
 pub fn reset_do_move_count() {
     DO_MOVE_COUNT.with(|c| c.set(0));
+    MATE1PLY_NONE_DM.with(|c| c.set(0));
 }
 
 /// `do_move` 累積カウンタの現在値を返す．
 #[inline]
 pub fn do_move_count() -> u64 {
     DO_MOVE_COUNT.with(|c| c.get())
+}
+
+/// mate_move_in_1ply の None ケース do_move 回数を返す (do_moves breakdown 用)．
+#[inline]
+pub fn mate1ply_none_dm() -> u64 {
+    MATE1PLY_NONE_DM.with(|c| c.get())
 }
 
 /// 将棋盤の状態．
@@ -902,6 +911,7 @@ impl Board {
                 None => {
                     // 開き王手 / 両王手 / 非王手: ビットボード判定の前提外なので do_move +
                     // 合法手生成で確定検証する (正確だが低速; これらの手は稀)．
+                    MATE1PLY_NONE_DM.with(|c| c.set(c.get() + 1));
                     let captured = self.do_move(m);
                     let mated =
                         self.is_in_check(defender) && !crate::movegen::has_any_legal_move(self);

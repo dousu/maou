@@ -4,6 +4,23 @@ use crate::board::Board;
 use crate::moves::Move;
 use crate::types::{Color, PieceType, Square};
 
+thread_local! {
+    /// is_pawn_drop_mate (打ち歩詰め検証) が行った do_move 回数 (dfpn do_moves breakdown 用)．
+    static PDM_DM: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+/// is_pawn_drop_mate の do_move 回数を取得 (dfpn breakdown 用)．
+pub fn pawn_drop_mate_dm() -> u64 {
+    PDM_DM.with(|c| c.get())
+}
+/// is_pawn_drop_mate の do_move カウンタを reset．
+pub fn reset_pawn_drop_mate_dm() {
+    PDM_DM.with(|c| c.set(0));
+}
+#[inline]
+fn pdm_bump() {
+    PDM_DM.with(|c| c.set(c.get() + 1));
+}
+
 /// 合法手を生成する．
 ///
 /// 以下のルールを考慮:
@@ -345,6 +362,7 @@ fn is_legal(board: &mut Board, m: Move) -> bool {
 /// 実行されず盤面が不整合な状態になる．`Board` のメソッドは正規局面に
 /// 対してパニックしない設計のため，通常は問題にならない．
 pub(crate) fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
+    pdm_bump();
     let captured = board.do_move(pawn_drop);
 
     // 相手(手番交代後の現在手番)の合法手があるかチェック
@@ -363,6 +381,7 @@ pub(crate) fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
         for to in targets {
             let captured_raw = board.squares[to.index()].0;
             let m = Move::new_move(king_sq, to, false, captured_raw, PieceType::King as u8);
+            pdm_bump();
             let cap2 = board.do_move(m);
             let evades_check = !board.is_in_check(them);
             board.undo_move(m, cap2);
@@ -389,6 +408,7 @@ pub(crate) fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
                 let promote = must_promote(them, pt, to);
                 let captured_raw = board.squares[to.index()].0;
                 let m = Move::new_move(from, to, promote, captured_raw, pt as u8);
+                pdm_bump();
                 let cap2 = board.do_move(m);
                 let evades_check = !board.is_in_check(them);
                 board.undo_move(m, cap2);
@@ -402,6 +422,7 @@ pub(crate) fn is_pawn_drop_mate(board: &mut Board, pawn_drop: Move) -> bool {
             // 王手解消の構造が使えないため従来経路の疑似合法手走査で判定する．
             let pseudo_moves = generate_pseudo_legal_moves(board);
             for m in pseudo_moves {
+                pdm_bump();
                 let cap2 = board.do_move(m);
                 let evades_check = !board.is_in_check(them);
                 board.undo_move(m, cap2);

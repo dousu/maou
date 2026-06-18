@@ -394,6 +394,19 @@ thread_local! {
     static V4INC_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// V4INC: window 内 dump 行カウンタ (cap 用; window open 毎に reset)．
     static V4INC_CNT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// do_moves per-site breakdown (V4DMBREAK 報告用; solve 毎に reset)．
+    /// [0]=step_best_child(再帰) [1]=eliminate_double_count(DAG) [2]=look-ahead [3]=proof-hand(1手詰).
+    static DM_SITE: std::cell::Cell<[u64; 4]> = const { std::cell::Cell::new([0; 4]) };
+}
+
+/// do_moves per-site カウンタを 1 増やす (idx: 0=step 1=dag 2=lookahead 3=proofhand)．
+#[inline]
+fn dm_bump(idx: usize) {
+    DM_SITE.with(|c| {
+        let mut a = c.get();
+        a[idx] += 1;
+        c.set(a);
+    });
 }
 
 impl DfPnSolver {
@@ -409,6 +422,10 @@ impl DfPnSolver {
         V4SEL_DUMPED.with(|c| c.set(0));
         V4RAW_DUMPED.with(|c| c.set(0));
         V4TRACE_CNT.with(|c| c.set(0));
+        DM_SITE.with(|c| c.set([0; 4]));
+        super::node_movegen::reset_legal_quick_dm();
+        crate::movegen::reset_pawn_drop_mate_dm();
+        crate::board::reset_do_move_count();
         // KH VisitHistory path dominance (IsRepetitionOrInferiorAfter)．`V4_DOM` で opt-in (default OFF)．
         // 単位を揃えた計測で判明: KH (dominance 有) = 9,296 visits に対し，maou+dominance = 16,902
         // (1.82×) と KH から **遠ざかる** (DAG EliminateDoubleCount との二重カウント相互作用; fires
@@ -507,6 +524,25 @@ impl DfPnSolver {
             self.v4_dag_fires,
             self.v4_dom_fires
         );
+        if std::env::var("V4DMBREAK").is_ok() {
+            let dm = DM_SITE.with(|c| c.get());
+            let lq = super::node_movegen::legal_quick_dm();
+            let m1n = crate::board::mate1ply_none_dm();
+            let pdm = crate::movegen::pawn_drop_mate_dm();
+            let known: u64 = dm.iter().sum::<u64>() + lq + m1n + pdm;
+            eprintln!(
+                "[v4] do_move breakdown: step(再帰)={} dag(DAG)={} lookahead={} proofhand={} is_legal_quick={} mate1ply_None={} pawn_drop_mate(打歩詰検証)={} | known_sum={} other={}",
+                dm[0],
+                dm[1],
+                dm[2],
+                dm[3],
+                lq,
+                m1n,
+                pdm,
+                known,
+                search_do_moves.saturating_sub(known)
+            );
+        }
 
         if last.pn() == 0 {
             // STRICT PV replay (v4 版): proven 証明木を実際に replay し，OR は proven child を，
@@ -645,6 +681,7 @@ impl DfPnSolver {
         };
 
         let captured = board.do_move(best_move);
+        dm_bump(0); // step_best_child 再帰
         let child_pk = path_key_after(path_key, best_move, depth as usize);
         let child_result = match self.emplace_v4(
             tt,
@@ -1239,6 +1276,7 @@ impl DfPnSolver {
                 // 子局面 (do_move 済) が必要なのはここだけ．KH も CheckObviousFinalOrNode 内で
                 // DoMove/UndoMove する (= この do_move は KH と同単位; seeding 分のみ削減した)．
                 let captured = board.do_move(m);
+                dm_bump(2); // look-ahead (AND node の first-visit 子へ do_move)
                 if let Some(res) = self.check_obvious_final_or_node_v4(board) {
                     tt.set_result(&q, res, (ch_pos, child_hand));
                     r = res;
@@ -1329,6 +1367,7 @@ impl DfPnSolver {
             // BeforeHand(mate_move, ProofHandSet.Get(詰み局面))．
             let hand = if use_handset {
                 let cap = board.do_move(mate_move);
+                dm_bump(3); // 1手詰 proof-hand 計算 (handset 時のみ)
                 let proof_after = super::proof_hand::proof_hand_terminal_and(board);
                 board.undo_move(mate_move, cap);
                 super::proof_hand::before_hand(board, mate_move, proof_after)
@@ -1379,13 +1418,15 @@ impl DfPnSolver {
         let best_move = self.v4_stack[my].best_move();
         let current_kh = self.v4_stack[my].key_hand_pair();
         let or_node = self.v4_stack[my].is_or_node();
-        // best_move 後の子 (board_key, attacker_hand) を取得 (KH `BoardKeyHandPairAfter`)．
-        let captured = board.do_move(best_move);
+        // best_move 後の子 (board_key, attacker_hand) を **incremental に算出** (KH `BoardKeyHandPairAfter`
+        // = `{BoardKeyAfter, OrHandAfter}`, node.hpp:125 = do_move 不要)．従来は do_move+undo で取得し
+        // SearchImpl 入口毎に 1 do_move を浪費していた (39te で 1.91M do_moves = 全体の 12%)．
+        // `board_hash_after`==`position_key`(=board.board_hash) after do_move, `hand_after`==do_move 後の
+        // 攻め方持駒 で完全一致するため探索は不変 (do_moves のみ削減)．
         let child_kh = (
-            super::position_key(board),
-            board.hand[self.attacker.index()],
+            board.board_hash_after(best_move),
+            board.hand_after(best_move, self.attacker),
         );
-        board.undo_move(best_move, captured);
 
         let edge = match self.find_known_ancestor_v4(tt, current_kh, child_kh, or_node, depth, my) {
             Some(e) => e,
