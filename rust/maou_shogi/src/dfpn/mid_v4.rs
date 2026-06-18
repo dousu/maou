@@ -173,6 +173,55 @@ pub(super) fn v4hand_prefix() -> Option<String> {
         .clone()
 }
 
+/// `V4INC` env: 指定 sfen prefix のノードを起点に active-window を開き，window 内の SearchImpl
+/// ENTER / INC(does_have_old_child) / DEC(first_visit) / EXIT(clamp=min(inc,orig_inc)) を逐次 dump する．
+/// TCA `inc_flag` 累積収支が KH (`KHINC`) と分岐するノードを localize するための診断 (process 内 1 回読み)．
+fn v4inc_prefix() -> Option<String> {
+    static C: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    C.get_or_init(|| std::env::var("V4INC").ok().filter(|s| !s.is_empty()))
+        .clone()
+}
+
+#[inline]
+fn v4inc_active() -> bool {
+    V4INC_ACTIVE.with(|c| c.get())
+}
+
+/// window が未 active かつ board.sfen() が V4INC prefix 一致なら window を開く (このノードが opener)．
+fn v4inc_open_window(board: &Board) -> bool {
+    if let Some(p) = v4inc_prefix() {
+        if !v4inc_active() && board.sfen().starts_with(p.as_str()) {
+            V4INC_ACTIVE.with(|c| c.set(true));
+            V4INC_CNT.with(|c| c.set(0));
+            return true;
+        }
+    }
+    false
+}
+
+/// opener のみ window を閉じる (nested 呼び出しは false で素通り)．
+#[inline]
+fn v4inc_close_window(opened: bool) {
+    if opened {
+        V4INC_ACTIVE.with(|c| c.set(false));
+    }
+}
+
+/// window active 時のみ dump (暴走防止に 4000 行 cap)．
+#[inline]
+fn v4inc_log(s: &str) {
+    if v4inc_active() {
+        let n = V4INC_CNT.with(|c| {
+            let v = c.get();
+            c.set(v + 1);
+            v
+        });
+        if n < 4000 {
+            eprintln!("{}", s);
+        }
+    }
+}
+
 /// `V4_SMPROP` env: KH `FrontSumMask` の cross-expansion propagation を**有効化**する (process 内 1 回読み)．
 /// **default OFF**．理由: propagation 単体は default 探索順 (movegen 順 ≠ KH) では DAG (EliminateDoubleCount)
 /// の効果を打ち消し 11,286→18,470 と退行する (KHTRACE 突合で cnt=24 tie-break 乖離が真因と判明)．
@@ -330,6 +379,10 @@ thread_local! {
     static V4RAW_DUMPED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
     /// V4TRACE の chronological build カウンタ (KH `kh_trace_cnt` 相当; solve 毎に reset)．
     static V4TRACE_CNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// V4INC: inc_flag origin window が active か (opener が set/reset)．
+    static V4INC_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// V4INC: window 内 dump 行カウンタ (cap 用; window open 毎に reset)．
+    static V4INC_CNT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 impl DfPnSolver {
@@ -554,6 +607,17 @@ impl DfPnSolver {
         let best_move = self.v4_stack[my].best_move();
         let is_first = self.v4_stack[my].front_is_first_visit();
         let (cthpn, cthdn) = self.v4_stack[my].front_pn_dn_thresholds(thpn, thdn);
+        if v4inc_active() {
+            v4inc_log(&format!(
+                "V4INC STEP d={} best={} first={} inc={} cth=({},{})",
+                depth,
+                best_move.to_usi(),
+                is_first as i32,
+                *inc_flag,
+                cthpn,
+                cthdn
+            ));
+        }
         if v4thx_prefix()
             .map(|p| board.sfen().starts_with(p.as_str()))
             .unwrap_or(false)
@@ -581,12 +645,34 @@ impl DfPnSolver {
             child_sum_mask,
         ) {
             // 終局/budget/深さ上限: push されていない (Pop 不要)．
-            Err(terminal) => terminal,
+            // KH は terminal 子も Emplace し first_search なら inc_flag-- する (komoring_heights.cpp:477-484
+            // の Emplace→DEC は終局/exceed の goto CHILD_SEARCH_END 前に実行される)．maou は terminal を
+            // Err で返し push を省くが，**inc_flag 会計は Ok ブランチの DEC と対称に保つ**必要がある．
+            // これを欠くと terminal first-visit 子で inc_flag が減らず TCA threshold を過剰拡張し，KH が
+            // pop する OR node で次手を過剰展開する (39te cnt=7537 の真因; KHINC/V4INC per-step 突合で確定)．
+            Err(terminal) => {
+                if is_first && *inc_flag > 0 {
+                    *inc_flag -= 1;
+                    v4inc_log(&format!(
+                        "V4INC DEC d={} best={} -> inc={} (first_visit/terminal)",
+                        depth,
+                        best_move.to_usi(),
+                        *inc_flag
+                    ));
+                }
+                terminal
+            }
             Ok(()) => {
                 let cidx = self.v4_stack.len() - 1;
                 let r = if is_first {
                     if *inc_flag > 0 {
                         *inc_flag -= 1;
+                        v4inc_log(&format!(
+                            "V4INC DEC d={} best={} -> inc={} (first_visit)",
+                            depth,
+                            best_move.to_usi(),
+                            *inc_flag
+                        ));
                     }
                     // KH: 子 expansion の集約済 CurrentResult で exceed 判定 (flat seed でない)．
                     let cur = self.v4_stack[cidx].current_result(board, (depth + 1) as i32);
@@ -645,6 +731,19 @@ impl DfPnSolver {
         inc_flag: &mut u32,
     ) -> SearchResult {
         let my = self.v4_stack.len() - 1;
+        // V4INC: inc_flag origin window (opener が active 化; nested は素通り)．
+        let v4inc_opened = v4inc_open_window(board);
+        if v4inc_active() {
+            v4inc_log(&format!(
+                "V4INC ENTER d={} inc_in={} dhoc={} th=({},{}) sfen={}",
+                depth,
+                *inc_flag,
+                self.v4_stack[my].does_have_old_child() as i32,
+                thpn,
+                thdn,
+                board.sfen()
+            ));
+        }
         // V4TH: 受領 thpn/thdn dump (KH `KHTH` と同形式; threshold 乖離 hunting)．
         if let Some(prefix) = v4th_prefix() {
             let sfen = board.sfen();
@@ -674,10 +773,21 @@ impl DfPnSolver {
 
         let mut curr = self.v4_stack[my].current_result(board, depth as i32);
         if curr.is_final() {
+            if v4inc_active() {
+                v4inc_log(&format!(
+                    "V4INC EXIT-curfinal d={} inc={}",
+                    depth, *inc_flag
+                ));
+            }
+            v4inc_close_window(v4inc_opened);
             return curr; // 親 (step_best_child) が Pop する．
         }
         if self.v4_stack[my].does_have_old_child() {
             *inc_flag += 1;
+            v4inc_log(&format!(
+                "V4INC INC d={} -> inc={} (dhoc)",
+                depth, *inc_flag
+            ));
         }
         if *inc_flag > 0 {
             extend_search_threshold(curr, &mut thpn, &mut thdn);
@@ -747,7 +857,20 @@ impl DfPnSolver {
                 }
             }
         }
+        let pre_clamp = *inc_flag;
         *inc_flag = (*inc_flag).min(orig_inc);
+        if v4inc_active() {
+            v4inc_log(&format!(
+                "V4INC EXIT d={} pre={} orig={} -> inc={} curr=(pn{},dn{})",
+                depth,
+                pre_clamp,
+                orig_inc,
+                *inc_flag,
+                curr.pn(),
+                curr.dn()
+            ));
+        }
+        v4inc_close_window(v4inc_opened);
         curr
     }
 
