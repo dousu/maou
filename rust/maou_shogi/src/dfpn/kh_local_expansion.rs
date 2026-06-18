@@ -602,7 +602,12 @@ impl LocalExpansion {
             let hand = if use_handset {
                 let best_move = self.moves[self.idx[0] as usize];
                 if self.or_node {
-                    super::proof_hand::before_hand(board, best_move, front.hand())
+                    // OR win = 詰み proven．V4_FULLPROOFHAND 診断時は極小化を切り full hand 格納．
+                    if super::mid_v4::full_proof_hand_enabled() {
+                        attacker_hand
+                    } else {
+                        super::proof_hand::before_hand(board, best_move, front.hand())
+                    }
                 } else {
                     super::proof_hand::and_node_escape_disproof(
                         board,
@@ -677,6 +682,9 @@ impl LocalExpansion {
                         set.update(&cdh);
                     }
                     set.get(board)
+                } else if super::mid_v4::full_proof_hand_enabled() {
+                    // AND lose = 詰み proven．V4_FULLPROOFHAND 診断時は極小化を切り full hand 格納．
+                    attacker_hand
                 } else {
                     let mut set = super::proof_hand::ProofHandSet::new();
                     for &ir in &self.idx {

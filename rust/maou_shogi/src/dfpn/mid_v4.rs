@@ -120,6 +120,17 @@ pub(super) fn handset_enabled() -> bool {
     *C.get_or_init(|| std::env::var("V4_HANDSET").is_ok())
 }
 
+/// `V4_FULLPROOFHAND` 診断 gate (process 内 1 回読み)．proof (詰み) hand の HandSet 極小化のみを
+/// 無効化し full `attacker_hand` で格納する (disproof 側は handset のまま)．
+/// **目的**: cnt=10710 (39te) の検証 — maou は cnt=7587 の board を proof hand=空 で格納し cross-hand
+/// proof 再利用 (KH は {N1} で再利用せず再 Emplace)．本 gate で proof 極小化を切ると maou の cross-hand
+/// proof 再利用が抑止され KH 同様 re-Emplace へ反転するはず (= 乖離原因が maou の proof generalization
+/// であることの制御実験的検証)．通常探索では使わない (node 退行する; KH も proof 極小化はする)．
+pub(super) fn full_proof_hand_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4_FULLPROOFHAND").is_ok())
+}
+
 /// look-ahead 不詰判定を KH `DoesHaveMatePossibility` (blocker 無視 over-approx) に合わせる．
 /// **default ON** (`V4_NODHMP` で opt-out)．exact `!has_checks` だと KH が defer する局面 (例
 /// cnt=487 Kx7i: 白王手0 だが lance promote 候補で DHMP=true) を maou が即 disproof し探索経路が
