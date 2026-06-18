@@ -204,11 +204,13 @@ fn v4_nodag() -> bool {
 /// 注: 開き王手/直接王手の細分順は未反映 (直接王手のみの局面では from-square 順で一致)．
 fn drop_piece_order(pt: crate::types::PieceType) -> u64 {
     use crate::types::PieceType;
-    // 駒打ち順 (GenerateCheckDropMoves / GenerateDropMoves): PAWN,LANCE,KNIGHT,SILVER,GOLD,BISHOP,ROOK．
+    // KH/yaneuraou GenerateDropMoves の drops[] 順: PAWN 先頭 + KNIGHT,LANCE,SILVER,GOLD,BISHOP,ROOK．
+    // (KHSEED 実測 cnt=3129: 同マス 7e の tie で KH は N*7e を chain head に選ぶ = 桂が香より先)．
+    // 旧実装は LANCE=1<KNIGHT=2 で逆順だった (node_movegen DROP_ORDER_KH とも不整合)．
     match pt {
         PieceType::Pawn => 0,
-        PieceType::Lance => 1,
-        PieceType::Knight => 2,
+        PieceType::Knight => 1,
+        PieceType::Lance => 2,
         PieceType::Silver => 3,
         PieceType::Gold => 4,
         PieceType::Bishop => 5,
@@ -253,8 +255,21 @@ fn kh_piece_gen_order(raw_pt: u8) -> u64 {
 /// ③ 駒打ち (PAWN..ROOK 順 → to-square 昇順)．`board` は親 (受け方手番) 局面．
 pub(super) fn kh_evasion_order_key(board: &crate::board::Board, m: crate::moves::Move) -> u64 {
     if let Some(pt) = m.drop_piece_type() {
-        // group 2 (駒打ちは最後)．
-        (2u64 << 40) | (drop_piece_order(pt) << 11) | (m.to_sq().raw_u8() as u64)
+        // group 2 (駒打ちは最後)．KH `MovePicker` の evasion drop 順は **歩を全マス先に並べ，
+        // 続いて各 to_sq ごとに drops[] 順 (香→桂→銀→金→角→飛)** で生成する (yaneuraou
+        // movegen.cpp; KHSEED 実測: P*8c P*8d P*8e P*8f / L*8c G*8c R*8c / L*8d ...)．
+        // 旧 key は piece 主・square 従 (歩全→香全→…) で，同マス drop が連続せず DML の
+        // 同マス chain (IsSame to1==to2) が壊れていた (中合い G*8c が deferred されない)．
+        // → 歩優先 (bit39) → to_sq 主 (bits 11-) → 駒種 従 (低 bit) に修正し KH 順に一致させる．
+        let pawn_first = if pt == crate::types::PieceType::Pawn {
+            0u64
+        } else {
+            1u64
+        };
+        (2u64 << 40)
+            | (pawn_first << 39)
+            | ((m.to_sq().raw_u8() as u64) << 11)
+            | drop_piece_order(pt)
     } else {
         let from = m.from_sq().raw_u8() as u64;
         let to = m.to_sq().raw_u8() as u64;
