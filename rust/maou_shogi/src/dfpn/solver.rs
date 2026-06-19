@@ -2328,9 +2328,11 @@ impl DfPnSolver {
     pub(super) fn check_moves_into(&self, board: &mut Board, out: &mut Vec<Move>) {
         let hash = board.hash;
         if let Some(cached) = self.check_cache.get_slice(hash) {
+            mate_cand_bump_cache(false, true);
             out.extend_from_slice(cached);
             return;
         }
+        mate_cand_bump_cache(false, false);
         let moves = self.generate_check_moves(board);
         self.check_cache.insert(hash, &moves);
         out.extend_from_slice(moves.as_slice());
@@ -2348,12 +2350,14 @@ impl DfPnSolver {
         if let Some(cached) = self.check_cache.get_slice(hash) {
             // mate_move_in_1ply は board のみ触る (check_cache へ再挿入しない) ため
             // 借用中の slice は有効なまま．
+            mate_cand_bump_cache(true, true);
             let mm = board.mate_move_in_1ply(cached, turn);
             if mate_cand_enabled() {
                 record_mate_cand(board, cached, mm, turn);
             }
             return (mm, !cached.is_empty());
         }
+        mate_cand_bump_cache(true, false);
         let moves = self.generate_check_moves(board);
         self.check_cache.insert(hash, &moves);
         let mm = board.mate_move_in_1ply(moves.as_slice(), turn);
@@ -2387,6 +2391,27 @@ struct MateCandStats {
     mate_far_slider: u64,
     mate_far_nonslider: u64, // 距離>1 かつ非飛び駒 = 開き王手の疑い (要注目)
     mate_dist: [u64; 9],
+    // check_cache prepay 値の計測 (constructive で look-ahead generate を除いた際の generate 削減量推定)．
+    la_hit: u64,   // look-ahead の cache hit
+    la_miss: u64,  // look-ahead の cache miss (= generate 発生)
+    cmi_hit: u64,  // expansion (check_moves_into) の cache hit (= 事前生成の再利用)
+    cmi_miss: u64, // expansion の cache miss (= generate 発生)
+}
+
+/// check_cache hit/miss を計測する (MATE1PLY_CAND 時のみ; la=look-ahead か expansion か)．
+pub(super) fn mate_cand_bump_cache(la: bool, hit: bool) {
+    if !mate_cand_enabled() {
+        return;
+    }
+    MATE_CAND_STATS.with(|s| {
+        let mut s = s.borrow_mut();
+        match (la, hit) {
+            (true, true) => s.la_hit += 1,
+            (true, false) => s.la_miss += 1,
+            (false, true) => s.cmi_hit += 1,
+            (false, false) => s.cmi_miss += 1,
+        }
+    });
 }
 
 thread_local! {
@@ -2441,6 +2466,14 @@ pub(super) fn report_mate_cand_stats() {
             s.mate_far, s.mate_far_slider, s.mate_far_nonslider,
         );
         eprintln!("[mate_cand] mate_dist(チェビシェフ 0..8)={:?}", s.mate_dist);
+        let gen_now = s.la_miss + s.cmi_miss;
+        // constructive (look-ahead generate 除去) 後の generate ≈ expansion の miss のみ．
+        // look-ahead が prepay した分 (la_miss で生成 → 後で cmi_hit 再利用) のうち expansion
+        // されない分が純減．下限推定: la が prepay した cmi_hit は最大 la_miss．
+        eprintln!(
+            "[mate_cand] cache: LA(hit={} miss={}) EXP(hit={} miss={}) | generate計={} (LA駆動={} EXP駆動={})",
+            s.la_hit, s.la_miss, s.cmi_hit, s.cmi_miss, gen_now, s.la_miss, s.cmi_miss,
+        );
     });
 }
 
