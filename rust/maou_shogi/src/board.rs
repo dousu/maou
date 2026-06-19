@@ -1774,6 +1774,74 @@ impl Board {
         h ^ ZOBRIST.turn_hash()
     }
 
+    /// `hash_after` と `board_hash_after` を 1 回の走査でまとめて計算する
+    /// (戻り値 = `(full_hash, board_hash)`)．両者は盤上駒の XOR 項 (from/to/捕獲/成り) が
+    /// 完全に同一で，差は持ち駒項のみ (full のみ加算)．child loop では子ごとに full hash
+    /// (千日手判定) と position-only hash (TT key / dominance) の両方が必要なため，個別に
+    /// 呼ぶと squares 読み出し・駒種 decode・成り判定が二重に走る (39te で 20.2M children ×2)．
+    /// 本関数は盤上駒 delta を 1 度だけ算出して両 accumulator に適用する (結果は
+    /// `hash_after`/`board_hash_after` と bit 一致; XOR は可換なので順序非依存)．
+    #[inline]
+    pub fn hashes_after(&self, m: Move) -> (u64, u64) {
+        let mut hf = self.hash;
+        let mut hb = self.board_hash;
+        let ti = self.turn.index();
+        if m.is_drop() {
+            let pt = m.drop_piece_type().unwrap();
+            let to = m.to_sq();
+            let hi = pt.hand_index().unwrap();
+            let cnt = self.hand[ti][hi] as usize;
+            debug_assert!(cnt > 0);
+            hf ^= ZOBRIST.hand_hash(self.turn, hi, cnt);
+            if cnt > 1 {
+                hf ^= ZOBRIST.hand_hash(self.turn, hi, cnt - 1);
+            }
+            let bd = ZOBRIST.board_hash_raw(ti, pt as usize, to);
+            hf ^= bd;
+            hb ^= bd;
+        } else {
+            let from = m.from_sq();
+            let to = m.to_sq();
+            let moving = self.squares[from.index()];
+            debug_assert!(!moving.is_empty());
+            // Safety: moving が空でないことは debug_assert で検証済み
+            let pt_raw = unsafe { moving.piece_type_raw_unchecked() };
+            let bd_from = ZOBRIST.board_hash_raw(ti, pt_raw as usize, from);
+            hf ^= bd_from;
+            hb ^= bd_from;
+            let cap = self.squares[to.index()];
+            if !cap.is_empty() {
+                // Safety: cap が空でないことは検証済み
+                let cap_ci = unsafe { cap.color_index_unchecked() };
+                let cap_raw = unsafe { cap.piece_type_raw_unchecked() };
+                let bd_cap = ZOBRIST.board_hash_raw(cap_ci, cap_raw as usize, to);
+                hf ^= bd_cap;
+                hb ^= bd_cap;
+                let cap_hand_pt = cap.piece_type().unwrap().captured_to_hand();
+                if let Some(hi) = cap_hand_pt.hand_index() {
+                    let cnt = self.hand[ti][hi] as usize;
+                    if cnt > 0 {
+                        hf ^= ZOBRIST.hand_hash(self.turn, hi, cnt);
+                    }
+                    hf ^= ZOBRIST.hand_hash(self.turn, hi, cnt + 1);
+                }
+            }
+            let new_pt_raw = if m.is_promotion() {
+                PieceType::from_u8(pt_raw)
+                    .expect("Move contains invalid PieceType")
+                    .promoted()
+                    .expect("cannot promote this piece") as u8
+            } else {
+                pt_raw
+            };
+            let bd_to = ZOBRIST.board_hash_raw(ti, new_pt_raw as usize, to);
+            hf ^= bd_to;
+            hb ^= bd_to;
+        }
+        let t = ZOBRIST.turn_hash();
+        (hf ^ t, hb ^ t)
+    }
+
     /// `do_move(m)` 後の `color` 側持ち駒を，盤を変更せず incremental に返す
     /// (KH `Node::OrHandAfter` 相当)．`do_move` の hand 更新ロジックを忠実に再現する:
     /// 手番側 (`self.turn`) のみが駒打ちで -1 / 駒取りで +1 し，相手側の持ち駒は不変．

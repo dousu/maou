@@ -1294,8 +1294,7 @@ impl DfPnSolver {
             // と乖離し per-node time を浪費していた (= incremental child key の欠落)．do_move は子局面
             // が必須な look-ahead でのみ行う．**TT board_key は position-only** (`board_hash_after`;
             // KH BoardKey)．hand は entry に別管理し cross-hand を効かせる．千日手判定だけ full hash．
-            let ch_full = board.hash_after(m);
-            let ch_pos = board.board_hash_after(m);
+            let (ch_full, ch_pos) = board.hashes_after(m);
             let child_hand = board.hand_after(m, attacker);
             let child_pk = path_key_after(path_key, m, depth as usize);
             let q = tt.build_query(child_pk, ch_pos, child_hand, (depth + 1) as i32);
