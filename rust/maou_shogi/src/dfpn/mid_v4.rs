@@ -1393,6 +1393,9 @@ impl DfPnSolver {
             let child_hand = board.hand_after(m, attacker);
             let child_pk = path_key_after(path_key, m, depth as usize);
             let q = tt.build_query(child_pk, ch_pos, child_hand, (depth + 1) as i32);
+            // memory-bound な TT cluster fetch を投機 prefetch し，直後の dom_path/v3_path lookup と
+            // DRAM latency を重ねる (search-invariant な hint; look_up が skip されても無害)．
+            tt.prefetch(&q);
 
             // KH `IsRepetitionOrInferiorAfter` (node.hpp:160 + local_expansion.hpp:178): path 上に
             // 同一 board_key かつ攻め方持駒が child 以上 (= child が劣位) の祖先があれば反復として刈る．

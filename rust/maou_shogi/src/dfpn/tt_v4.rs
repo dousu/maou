@@ -341,6 +341,25 @@ impl TranspositionTable {
         }
     }
 
+    /// `ctx` の cluster 先頭 cache line を投機的に prefetch する (memory latency hiding)．
+    ///
+    /// TT は ~8M entry × ~72B = ~576MB と L3 を遥かに超え，`look_up` の cluster 先頭アクセスは
+    /// ほぼ DRAM miss (~100ns) になる (= tt_lookup phase が memory-bound な理由)．child loop では
+    /// `build_query` 直後・`look_up` 前に dom_path / v3_path の HashMap lookup が入るため，ここで
+    /// prefetch を発行すると DRAM fetch がそれらと重なり latency を一部隠せる．**純粋な hint で
+    /// 探索結果に影響しない** (search-invariant)．x86_64 以外では no-op (per-arch wheel ゆえ可搬)．
+    #[inline]
+    pub(super) fn prefetch(&self, ctx: &TtContext) {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            // start_idx は pointer_of で [0, len) に収まる (build_query が算出)．
+            let ptr = self.regular.entries.as_ptr().add(ctx.start_idx) as *const i8;
+            core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(ptr);
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        let _ = ctx;
+    }
+
     /// **置換表の読み出し** (KH `Query::LookUp`, ttquery.hpp:117)．
     /// cluster を走査し，一致/優等/劣等局面から pn/dn を合成して `SearchResult` を返す．
     /// エントリが無ければ `eval`(InitialPnDn) を seed として MakeFirstVisit する (遅延評価)．
