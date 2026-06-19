@@ -397,6 +397,31 @@ thread_local! {
     /// do_moves per-site breakdown (V4DMBREAK 報告用; solve 毎に reset)．
     /// [0]=step_best_child(再帰) [1]=eliminate_double_count(DAG) [2]=look-ahead [3]=proof-hand(1手詰).
     static DM_SITE: std::cell::Cell<[u64; 4]> = const { std::cell::Cell::new([0; 4]) };
+    /// V4PROF per-phase 累積時間(ns) / 呼び出し回数 (V4PROF 報告用; solve 毎に reset)．
+    /// idx: 0=movegen 1=tt_lookup 2=lookahead(check_obvious) 3=dag(EliminateDoubleCount) 4=dml_sort(build 残).
+    static V4PROF_NS: std::cell::Cell<[u64; 8]> = const { std::cell::Cell::new([0; 8]) };
+    static V4PROF_CNT: std::cell::Cell<[u64; 8]> = const { std::cell::Cell::new([0; 8]) };
+}
+
+/// `V4PROF` env: mid_v4 探索の per-phase 時間内訳を report する (process 内 1 回読み)．
+/// off 時は `then(Instant::now)` の bool 評価のみで実質ゼロコスト．
+#[inline]
+fn v4prof_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4PROF").is_ok())
+}
+#[inline]
+fn v4prof_add(idx: usize, ns: u64) {
+    V4PROF_NS.with(|c| {
+        let mut a = c.get();
+        a[idx] += ns;
+        c.set(a);
+    });
+    V4PROF_CNT.with(|c| {
+        let mut a = c.get();
+        a[idx] += 1;
+        c.set(a);
+    });
 }
 
 /// do_moves per-site カウンタを 1 増やす (idx: 0=step 1=dag 2=lookahead 3=proofhand)．
@@ -423,6 +448,8 @@ impl DfPnSolver {
         V4RAW_DUMPED.with(|c| c.set(0));
         V4TRACE_CNT.with(|c| c.set(0));
         DM_SITE.with(|c| c.set([0; 4]));
+        V4PROF_NS.with(|c| c.set([0; 8]));
+        V4PROF_CNT.with(|c| c.set([0; 8]));
         super::node_movegen::reset_legal_quick_dm();
         crate::movegen::reset_pawn_drop_mate_dm();
         crate::board::reset_do_move_count();
@@ -543,6 +570,42 @@ impl DfPnSolver {
                 search_do_moves.saturating_sub(known)
             );
         }
+        if v4prof_enabled() {
+            let wall = self.start_time.elapsed().as_nanos() as u64;
+            let ns = V4PROF_NS.with(|c| c.get());
+            let cnt = V4PROF_CNT.with(|c| c.get());
+            // idx: 0=movegen 1=tt_lookup 2=lookahead 3=dag 4=build_total (umbrella ⊃ 0,1,2 + build_other)．
+            let w = wall.max(1) as f64;
+            let row = |name: &str, t: u64, c: u64| {
+                let avg = if c > 0 { t / c } else { 0 };
+                eprintln!(
+                    "[v4] V4PROF  {:<32} {:>10.1}us cnt={:<9} avg={:>5}ns {:>5.1}%",
+                    name,
+                    t as f64 / 1000.0,
+                    c,
+                    avg,
+                    t as f64 / w * 100.0
+                );
+            };
+            // idx: 0=movegen 1=tt_lookup 2=lookahead 3=dag 4=build_total(umbrella)
+            //      5=dml_build 6=child_loop(⊃1,2) 7=from_parts(sort)．
+            let cl_other = ns[6].saturating_sub(ns[1] + ns[2]); // child-loop per-child overhead (seed/query/path)
+            let glue = wall.saturating_sub(ns[4] + ns[3]); // search/step machinery (do_move/setresult/recursion)
+            eprintln!(
+                "[v4] V4PROF search_wall={:.1}us (探索のみ; verify/PV 除く)",
+                wall as f64 / 1000.0
+            );
+            row("build_total(node 展開, umbrella)", ns[4], cnt[4]);
+            row("  movegen", ns[0], cnt[0]);
+            row("  dml_build", ns[5], cnt[5]);
+            row("  child_loop(⊃lookup,lookahead)", ns[6], cnt[6]);
+            row("    tt_lookup", ns[1], cnt[1]);
+            row("    lookahead(mate1ply)", ns[2], cnt[2]);
+            row("    cl_other(seed/query/pathcheck)", cl_other, 0);
+            row("  from_parts(sort/recalc)", ns[7], cnt[7]);
+            row("dag(EliminateDoubleCount)", ns[3], cnt[3]);
+            row("glue(do_move/setresult/recursion)", glue, 0);
+        }
 
         if last.pn() == 0 {
             // STRICT PV replay (v4 版): proven 証明木を実際に replay し，OR は proven child を，
@@ -615,15 +678,13 @@ impl DfPnSolver {
             tt.maybe_collect_garbage();
         }
         let attacker_hand = board.hand[self.attacker.index()];
-        let exp = match self.build_v4_expansion(
-            tt,
-            board,
-            len,
-            depth,
-            path_key,
-            first_search,
-            sum_mask,
-        ) {
+        let __bt = v4prof_enabled().then(std::time::Instant::now);
+        let built =
+            self.build_v4_expansion(tt, board, len, depth, path_key, first_search, sum_mask);
+        if let Some(t) = __bt {
+            v4prof_add(4, t.elapsed().as_nanos() as u64);
+        }
+        let exp = match built {
             Ok(e) => e,
             Err(terminal) => return Err(terminal),
         };
@@ -804,7 +865,11 @@ impl DfPnSolver {
         }
         // KH `EliminateDoubleCount` (komoring_heights.cpp:432)．
         if !v4_nodag() {
+            let __dag = v4prof_enabled().then(std::time::Instant::now);
             self.eliminate_double_count_v4(tt, board, my, depth);
+            if let Some(t) = __dag {
+                v4prof_add(3, t.elapsed().as_nanos() as u64);
+            }
         }
 
         // V4THX: SearchImpl per-iteration dump (KH KHTHX/KHTHXR と突合; inc_flag/threshold 乖離 hunting)．
@@ -1072,11 +1137,15 @@ impl DfPnSolver {
         let or_node = board.turn == attacker;
 
         let mut moves: Vec<crate::moves::Move> = Vec::new();
+        let __mg = v4prof_enabled().then(std::time::Instant::now);
         if or_node {
             self.check_moves_into(board, &mut moves);
         } else {
             let av = self.generate_defense_moves_inner(board, false);
             moves.extend_from_slice(av.as_slice());
+        }
+        if let Some(t) = __mg {
+            v4prof_add(0, t.elapsed().as_nanos() as u64);
         }
 
         if moves.is_empty() {
@@ -1137,6 +1206,7 @@ impl DfPnSolver {
         // 双方向 chain 化し，prev が未 final の手は idx から除外 (= 後回し) する．
         // is_delayable を KH 忠実化するため移動元駒種 (raw ID) を渡す (駒打ちは 0)．
         // `V4_KHORDER` 実験時のみ忠実版 (default は co-adapt 済の従来 DML を維持)．
+        let __dml_t = v4prof_enabled().then(std::time::Instant::now);
         let dml = if khorder_enabled() {
             let raw_pts: Vec<u8> = moves
                 .iter()
@@ -1182,7 +1252,11 @@ impl DfPnSolver {
         } else {
             DelayedMoveList::build(&moves, or_node)
         };
+        if let Some(t) = __dml_t {
+            v4prof_add(5, t.elapsed().as_nanos() as u64);
+        }
 
+        let __cl_t = v4prof_enabled().then(std::time::Instant::now);
         let defender_king = board.king_square(attacker.opponent());
         let n = moves.len();
         let mut evals: Vec<i32> = Vec::with_capacity(n);
@@ -1241,7 +1315,11 @@ impl DfPnSolver {
                 SearchResult::make_repetition(child_hand, len, 1, anc_ply as i32)
             } else {
                 let mut dhoc = false;
+                let __lu = v4prof_enabled().then(std::time::Instant::now);
                 let res = tt.look_up(&q, len.sub(1), &mut dhoc, || seed);
+                if let Some(t) = __lu {
+                    v4prof_add(1, t.elapsed().as_nanos() as u64);
+                }
                 does_have_old = does_have_old || dhoc;
                 res
             };
@@ -1277,7 +1355,12 @@ impl DfPnSolver {
                 // DoMove/UndoMove する (= この do_move は KH と同単位; seeding 分のみ削減した)．
                 let captured = board.do_move(m);
                 dm_bump(2); // look-ahead (AND node の first-visit 子へ do_move)
-                if let Some(res) = self.check_obvious_final_or_node_v4(board) {
+                let __la = v4prof_enabled().then(std::time::Instant::now);
+                let __obv = self.check_obvious_final_or_node_v4(board);
+                if let Some(t) = __la {
+                    v4prof_add(2, t.elapsed().as_nanos() as u64);
+                }
+                if let Some(res) = __obv {
                     tt.set_result(&q, res, (ch_pos, child_hand));
                     r = res;
                 }
@@ -1307,6 +1390,10 @@ impl DfPnSolver {
                 idx.push(i as u32);
             }
         }
+        if let Some(t) = __cl_t {
+            v4prof_add(6, t.elapsed().as_nanos() as u64);
+        }
+        let __fp_t = v4prof_enabled().then(std::time::Instant::now);
 
         // KH revival 用 next chain (delayed_move_list_.Next)．後回し手が final 化したら
         // update_best_child が dml_next を辿って idx へ復活させる．
@@ -1317,7 +1404,7 @@ impl DfPnSolver {
             }
         }
 
-        Ok(LocalExpansion::from_parts(
+        let __exp = LocalExpansion::from_parts(
             or_node,
             len,
             moves,
@@ -1329,7 +1416,11 @@ impl DfPnSolver {
             does_have_old,
             dml_next,
             1,
-        ))
+        );
+        if let Some(t) = __fp_t {
+            v4prof_add(7, t.elapsed().as_nanos() as u64);
+        }
+        Ok(__exp)
     }
 
     /// KH `detail::CheckObviousFinalOrNode` (local_expansion.hpp:47) の忠実移植．
