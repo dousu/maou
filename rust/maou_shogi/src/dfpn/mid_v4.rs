@@ -184,6 +184,14 @@ pub(super) fn v4hand_prefix() -> Option<String> {
         .clone()
 }
 
+/// `V4SEED` env: 指定 sfen prefix の親ノードで各子の look_up 結果 (TT/cross-hand) と look-ahead
+/// 前後を dump する診断．child loop の per-child hot path で参照するため，env::var ではなく
+/// OnceLock で 1 回読みして借用を返す (clone しない = 20.2M children/39te での lock+alloc を回避)．
+fn v4seed_prefix() -> &'static Option<String> {
+    static C: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    C.get_or_init(|| std::env::var("V4SEED").ok().filter(|s| !s.is_empty()))
+}
+
 /// `V4INC` env: 指定 sfen prefix のノードを起点に active-window を開き，window 内の SearchImpl
 /// ENTER / INC(does_have_old_child) / DEC(first_visit) / EXIT(clamp=min(inc,orig_inc)) を逐次 dump する．
 /// TCA `inc_flag` 累積収支が KH (`KHINC`) と分岐するノードを localize するための診断 (process 内 1 回読み)．
@@ -1342,9 +1350,10 @@ impl DfPnSolver {
             // 「詰む応手」を展開せず除外，「逃れる応手」を即 disproof し breadth を抑える．
             // [diag] V4SEED: 指定 sfen prefix の親ノードで各子の look_up 結果 (TT/cross-hand) と
             // look-ahead 前後を dump し，disproof の出所 (cross-hand TT vs fresh look-ahead) を特定する．
-            let seed_diag = std::env::var("V4SEED")
-                .ok()
-                .filter(|p| !p.is_empty())
+            // V4SEED は OnceLock で 1 回読み (per-child の env::var lock+alloc を回避)．未設定時は
+            // sfen() も呼ばず false (production hot path で実質ゼロコスト)．
+            let seed_diag = v4seed_prefix()
+                .as_ref()
                 .map(|p| board.sfen().starts_with(p.as_str()))
                 .unwrap_or(false);
             let pre_lu = (r.pn(), r.dn(), r.is_final(), r.is_first_visit());
@@ -1435,14 +1444,24 @@ impl DfPnSolver {
     fn check_obvious_final_or_node_v4(&self, board: &mut Board) -> Option<SearchResult> {
         let or_hand = board.hand[board.turn.index()];
         let use_handset = handset_enabled();
-        let (mm_opt, has_checks) = self.mate1ply_with_cached_checks(board);
         // KH `CheckObviousFinalOrNode` は不詰判定に `!DoesHaveMatePossibility` (blocker 無視の
         // over-approx) を使う．maou の exact `!has_checks` は blocker で塞がれた王手候補を即不詰断定
         // して KH より早く disproof し探索経路が乖離する (例: cnt=487 の Kx7i)．V4_DHMP で KH と一致．
-        let no_mate = if dhmp_enabled() {
-            !board.does_have_mate_possibility(board.turn)
+        //
+        // KH と同様に **安価な不詰判定を先に評価**し，詰みの可能性がある場合のみ高コストな 1 手詰
+        // スキャン (`mate1ply_with_cached_checks` = 王手生成 + 各王手の mate scan) を行う．
+        // `does_have_mate_possibility` が false のとき王手手段が無く scan も必ず None を返すため
+        // (no_mate 時の scan は無駄)，この遅延は探索不変 (search-invariant)．これにより不詰
+        // (disproof) 経路で 1 手詰スキャンを完全に省略できる．
+        let (no_mate, mm_opt) = if dhmp_enabled() {
+            if !board.does_have_mate_possibility(board.turn) {
+                (true, None)
+            } else {
+                (false, self.mate1ply_with_cached_checks(board).0)
+            }
         } else {
-            !has_checks
+            let (mm, has_checks) = self.mate1ply_with_cached_checks(board);
+            (!has_checks, mm)
         };
         if no_mate {
             // 攻め方に王手手段なし → 詰み不可能 → 不詰 (KH MakeFinal<false>, kDepthMaxMateLen)．
