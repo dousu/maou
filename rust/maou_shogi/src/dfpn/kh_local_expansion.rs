@@ -352,6 +352,30 @@ impl LocalExpansion {
         e
     }
 
+    /// 所有する 6 本の Vec を取り出して返す (node pop 時に buffer pool へ返却するため)．
+    /// `self` を消費する (残りのフィールドは drop される)．順序は `from_parts` の引数順に対応:
+    /// `(moves, move_evals, queries, results, idx, dml_next)`．
+    #[allow(clippy::type_complexity)]
+    pub(super) fn into_buffers(
+        self,
+    ) -> (
+        Vec<Move>,
+        Vec<i32>,
+        Vec<TtContext>,
+        Vec<SearchResult>,
+        Vec<u32>,
+        Vec<i32>,
+    ) {
+        (
+            self.moves,
+            self.move_evals,
+            self.queries,
+            self.results,
+            self.idx,
+            self.dml_next,
+        )
+    }
+
     // ---- comparer (KH MakeComparer: SearchResultComparer → 同点なら mp_.value) ----
     #[inline]
     fn compare_idx(&self, i: u32, j: u32) -> Ordering {

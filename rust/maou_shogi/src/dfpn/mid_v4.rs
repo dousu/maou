@@ -442,6 +442,86 @@ fn dm_bump(idx: usize) {
     });
 }
 
+/// `build_v4_expansion` が per-node に確保する 6 本の Vec を再利用する free-list pool．
+///
+/// `LocalExpansion` は moves / move_evals / queries / results / idx / dml_next の 6 Vec を所有する．
+/// 従来は node 毎に `Vec::new` / `Vec::with_capacity` で確保し，node pop (`v4_stack` truncate) で
+/// drop していた (39te = 3.1M nodes × 6 = ~18.6M 回のヒープ alloc/free)．本 pool は node pop 時に
+/// 容量保持したまま Vec を返却し，次の build で再取得することで alloc/free 回数を削減する．
+/// 内容は build 毎に上書き (取得時 clear) されるため **探索完全不変**．`clear` で solve 間にリセット．
+#[derive(Default)]
+pub(super) struct V4BufPool {
+    moves: Vec<Vec<crate::moves::Move>>,
+    evals: Vec<Vec<i32>>,
+    queries: Vec<Vec<super::tt_v4::TtContext>>,
+    results: Vec<Vec<SearchResult>>,
+    idx: Vec<Vec<u32>>,
+    dml: Vec<Vec<i32>>,
+}
+
+impl V4BufPool {
+    fn take_moves(&mut self) -> Vec<crate::moves::Move> {
+        let mut v = self.moves.pop().unwrap_or_default();
+        v.clear();
+        v
+    }
+    fn take_evals(&mut self) -> Vec<i32> {
+        let mut v = self.evals.pop().unwrap_or_default();
+        v.clear();
+        v
+    }
+    fn take_queries(&mut self) -> Vec<super::tt_v4::TtContext> {
+        let mut v = self.queries.pop().unwrap_or_default();
+        v.clear();
+        v
+    }
+    fn take_results(&mut self) -> Vec<SearchResult> {
+        let mut v = self.results.pop().unwrap_or_default();
+        v.clear();
+        v
+    }
+    fn take_idx(&mut self) -> Vec<u32> {
+        let mut v = self.idx.pop().unwrap_or_default();
+        v.clear();
+        v
+    }
+    fn take_dml(&mut self) -> Vec<i32> {
+        let mut v = self.dml.pop().unwrap_or_default();
+        v.clear();
+        v
+    }
+    /// `moves` のみ返却する (build 早期 Err = terminal node では他 5 本は未取得)．
+    fn release_moves(&mut self, v: Vec<crate::moves::Move>) {
+        self.moves.push(v);
+    }
+    /// node pop 時に 6 本まとめて返却する (容量保持; 次取得時に clear)．
+    #[allow(clippy::too_many_arguments)]
+    fn release(
+        &mut self,
+        moves: Vec<crate::moves::Move>,
+        evals: Vec<i32>,
+        queries: Vec<super::tt_v4::TtContext>,
+        results: Vec<SearchResult>,
+        idx: Vec<u32>,
+        dml: Vec<i32>,
+    ) {
+        self.moves.push(moves);
+        self.evals.push(evals);
+        self.queries.push(queries);
+        self.results.push(results);
+        self.idx.push(idx);
+        self.dml.push(dml);
+    }
+    fn clear(&mut self) {
+        self.moves.clear();
+        self.evals.clear();
+        self.queries.clear();
+        self.results.clear();
+        self.idx.clear();
+        self.dml.clear();
+    }
+}
+
 impl DfPnSolver {
     /// mid_v4 探索の root (KH `SearchEntry` 相当の IDS + 診断)．`V3_V4ENG=1` で起動する．
     pub(super) fn solve_via_v4(&mut self, board: &mut Board) -> TsumeResult {
@@ -449,6 +529,7 @@ impl DfPnSolver {
         self.v3_nodes = 0;
         self.v3_path.clear();
         self.v4_stack.clear();
+        self.v4_buf_pool.clear();
         self.v4_dag_fires = 0;
         self.v4_dom_path.clear();
         self.v4_dom_fires = 0;
@@ -819,7 +900,14 @@ impl DfPnSolver {
                         inc_flag,
                     )
                 };
-                self.v4_stack.truncate(cidx); // KH `CHILD_SEARCH_END: expansion_list_.Pop()`
+                // KH `CHILD_SEARCH_END: expansion_list_.Pop()`．truncate(cidx) は常に末尾 1 要素
+                // (index cidx == len-1) を除去する．pop した子 expansion の 6 Vec を pool へ返却し
+                // 次 build で再利用する (per-node アロケーション削減; 探索不変)．
+                if let Some(child_exp) = self.v4_stack.pop() {
+                    debug_assert_eq!(self.v4_stack.len(), cidx);
+                    let (bm, be, bq, br, bi, bd) = child_exp.into_buffers();
+                    self.v4_buf_pool.release(bm, be, bq, br, bi, bd);
+                }
                 r
             }
         };
@@ -1144,7 +1232,7 @@ impl DfPnSolver {
         let attacker = self.attacker;
         let or_node = board.turn == attacker;
 
-        let mut moves: Vec<crate::moves::Move> = Vec::new();
+        let mut moves = self.v4_buf_pool.take_moves();
         let __mg = v4prof_enabled().then(std::time::Instant::now);
         if or_node {
             self.check_moves_into(board, &mut moves);
@@ -1176,6 +1264,8 @@ impl DfPnSolver {
                 };
                 SearchResult::make_final(true, hand, ZERO_MATE_LEN, 1)
             };
+            // terminal node では child loop の 5 本は未取得．moves のみ pool へ返却する．
+            self.v4_buf_pool.release_moves(moves);
             return Err(r);
         }
 
@@ -1267,10 +1357,15 @@ impl DfPnSolver {
         let __cl_t = v4prof_enabled().then(std::time::Instant::now);
         let defender_king = board.king_square(attacker.opponent());
         let n = moves.len();
-        let mut evals: Vec<i32> = Vec::with_capacity(n);
-        let mut results: Vec<SearchResult> = Vec::with_capacity(n);
-        let mut queries = Vec::with_capacity(n);
-        let mut idx: Vec<u32> = Vec::with_capacity(n);
+        // pool から取得 (clear 済; 容量は前 node から保持)．n 分予約して最初の数 node 以降は realloc 無し．
+        let mut evals = self.v4_buf_pool.take_evals();
+        let mut results = self.v4_buf_pool.take_results();
+        let mut queries = self.v4_buf_pool.take_queries();
+        let mut idx = self.v4_buf_pool.take_idx();
+        evals.reserve(n);
+        results.reserve(n);
+        queries.reserve(n);
+        idx.reserve(n);
         let mut does_have_old = false;
         // KH ctor `sum_mask_{sum_mask}` (local_expansion.hpp:159): 親から渡された sum_mask を起点に，
         // 非 final 子のうち IsSumDeltaNode でない / δ が kForceSumPnDn 以上のものを max 集約へ落とす．
@@ -1405,7 +1500,8 @@ impl DfPnSolver {
 
         // KH revival 用 next chain (delayed_move_list_.Next)．後回し手が final 化したら
         // update_best_child が dml_next を辿って idx へ復活させる．
-        let mut dml_next = vec![-1i32; n];
+        let mut dml_next = self.v4_buf_pool.take_dml();
+        dml_next.resize(n, -1);
         for (i, slot) in dml_next.iter_mut().enumerate() {
             if let Some(nx) = dml.next(i) {
                 *slot = nx as i32;

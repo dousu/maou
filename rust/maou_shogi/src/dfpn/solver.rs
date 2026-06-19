@@ -518,6 +518,9 @@ pub struct DfPnSolver {
     /// mid_v4 EliminateDoubleCount 用の明示的 expansion stack (KH `expansion_list_`)．
     /// 各 search_impl_v4 frame が自 LocalExpansion を push/truncate し，祖先を辿れるようにする．
     pub(super) v4_stack: Vec<super::kh_local_expansion::LocalExpansion>,
+    /// mid_v4 build_v4_expansion の per-node Vec 再利用 pool (node pop で返却・再取得)．
+    /// ~18.6M 回/39te のヒープ alloc/free を削減する (探索不変; [`super::mid_v4::V4BufPool`])．
+    pub(super) v4_buf_pool: super::mid_v4::V4BufPool,
     /// mid_v4 EliminateDoubleCount 発火数 (診断用)．
     pub(super) v4_dag_fires: u64,
     /// mid_v4 VisitHistory path dominance (KH `IsRepetitionOrInferiorAfter`)．
@@ -1177,6 +1180,7 @@ impl DfPnSolver {
             v3_path: rustc_hash::FxHashMap::default(),
             v3_nodes: 0,
             v4_stack: Vec::new(),
+            v4_buf_pool: super::mid_v4::V4BufPool::default(),
             v4_dag_fires: 0,
             v4_dom_path: rustc_hash::FxHashMap::default(),
             v4_dom_fires: 0,
