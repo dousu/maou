@@ -2348,13 +2348,178 @@ impl DfPnSolver {
         if let Some(cached) = self.check_cache.get_slice(hash) {
             // mate_move_in_1ply は board のみ触る (check_cache へ再挿入しない) ため
             // 借用中の slice は有効なまま．
-            return (board.mate_move_in_1ply(cached, turn), !cached.is_empty());
+            let mm = board.mate_move_in_1ply(cached, turn);
+            if mate_cand_enabled() {
+                record_mate_cand(board, cached, mm, turn);
+            }
+            return (mm, !cached.is_empty());
         }
         let moves = self.generate_check_moves(board);
         self.check_cache.insert(hash, &moves);
-        (
-            board.mate_move_in_1ply(moves.as_slice(), turn),
-            !moves.is_empty(),
-        )
+        let mm = board.mate_move_in_1ply(moves.as_slice(), turn);
+        if mate_cand_enabled() {
+            record_mate_cand(board, moves.as_slice(), mm, turn);
+        }
+        (mm, !moves.is_empty())
     }
+}
+
+// ===== MATE1PLY_CAND 診断 =====================================================
+// look-ahead の 1 手詰検出について「候補手 (王手) の分布」と「実際に詰みになった手の幾何」を
+// 計測する (env `MATE1PLY_CAND` で gate; production path は不変)．目的: KH 風の king-centric
+// constructive mate1ply が **full scan と同じ Some/None を返せる (= node 不変)** か，候補をどこまで
+// 絞れるか (= 高速化余地) を経験的に解析する．非詰みは to_sq の玉チェビシェフ距離で分類する
+// (非遠方駒の王手は必ず玉隣接，遠方/開き王手のみ遠い)．
+
+#[derive(Default)]
+struct MateCandStats {
+    calls: u64,
+    n_mate: u64,
+    sum_checks: u64,
+    max_checks: u64,
+    sum_checks_king_adj: u64, // to_sq が玉チェビシェフ距離 ≤1 の王手数 (= 非遠方候補)
+    sum_checks_slider_far: u64, // 遠方 (距離>1) の飛び駒王手数
+    mate_drop: u64,
+    mate_move: u64,
+    mate_capture: u64,
+    mate_slider: u64,
+    mate_far: u64, // 詰み手の to_sq が玉から距離>1
+    mate_far_slider: u64,
+    mate_far_nonslider: u64, // 距離>1 かつ非飛び駒 = 開き王手の疑い (要注目)
+    mate_dist: [u64; 9],
+}
+
+thread_local! {
+    static MATE_CAND_STATS: std::cell::RefCell<MateCandStats> =
+        std::cell::RefCell::new(MateCandStats::default());
+}
+
+fn mate_cand_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("MATE1PLY_CAND").is_ok())
+}
+
+/// MATE1PLY_CAND 統計を reset する (solve 開始時)．
+pub(super) fn reset_mate_cand_stats() {
+    if mate_cand_enabled() {
+        MATE_CAND_STATS.with(|s| *s.borrow_mut() = MateCandStats::default());
+    }
+}
+
+/// MATE1PLY_CAND 統計を report する (solve 終了時; gate off なら no-op)．
+pub(super) fn report_mate_cand_stats() {
+    if !mate_cand_enabled() {
+        return;
+    }
+    MATE_CAND_STATS.with(|s| {
+        let s = s.borrow();
+        if s.calls == 0 {
+            return;
+        }
+        let f = s.calls as f64;
+        eprintln!(
+            "[mate_cand] calls={} mate={} ({:.2}%) | avg_checks={:.2} max_checks={} | per-call avg: king_adj(≤1)={:.2} slider_far(>1)={:.3}",
+            s.calls,
+            s.n_mate,
+            100.0 * s.n_mate as f64 / f,
+            s.sum_checks as f64 / f,
+            s.max_checks,
+            s.sum_checks_king_adj as f64 / f,
+            s.sum_checks_slider_far as f64 / f,
+        );
+        eprintln!(
+            "[mate_cand] 候補総数={} うち玉隣接(≤1)={} ({:.1}%) 遠方飛び駒(>1)={} ({:.2}%)",
+            s.sum_checks,
+            s.sum_checks_king_adj,
+            100.0 * s.sum_checks_king_adj as f64 / s.sum_checks.max(1) as f64,
+            s.sum_checks_slider_far,
+            100.0 * s.sum_checks_slider_far as f64 / s.sum_checks.max(1) as f64,
+        );
+        eprintln!(
+            "[mate_cand] mate move: drop={} move={} capture={} slider={} | far(dist>1)={} far_slider={} far_nonslider={}",
+            s.mate_drop, s.mate_move, s.mate_capture, s.mate_slider,
+            s.mate_far, s.mate_far_slider, s.mate_far_nonslider,
+        );
+        eprintln!("[mate_cand] mate_dist(チェビシェフ 0..8)={:?}", s.mate_dist);
+    });
+}
+
+/// 1 look-ahead の候補 (王手) 分布と詰み手の幾何を統計へ加算する (MATE1PLY_CAND 時のみ呼ぶ)．
+fn record_mate_cand(board: &Board, checks: &[Move], mm: Option<Move>, turn: Color) {
+    use crate::types::{PieceType, Square};
+    let king = match board.king_square(turn.opponent()) {
+        Some(k) => k,
+        None => return,
+    };
+    let kc = king.col() as i32;
+    let kr = king.row() as i32;
+    let cheby = |sq: Square| -> i32 {
+        (sq.col() as i32 - kc)
+            .abs()
+            .max((sq.row() as i32 - kr).abs())
+    };
+    let checker_pt = |m: Move| -> PieceType {
+        if m.is_drop() {
+            m.drop_piece_type().unwrap()
+        } else {
+            let raw = PieceType::from_u8(m.moving_piece_type_raw()).unwrap();
+            if m.is_promotion() {
+                raw.promoted().unwrap()
+            } else {
+                raw
+            }
+        }
+    };
+    let is_slider = |pt: PieceType| {
+        matches!(
+            pt,
+            PieceType::Lance
+                | PieceType::Bishop
+                | PieceType::Rook
+                | PieceType::Horse
+                | PieceType::Dragon
+        )
+    };
+    MATE_CAND_STATS.with(|s| {
+        let mut s = s.borrow_mut();
+        s.calls += 1;
+        s.sum_checks += checks.len() as u64;
+        if checks.len() as u64 > s.max_checks {
+            s.max_checks = checks.len() as u64;
+        }
+        for &c in checks {
+            let d = cheby(c.to_sq());
+            if d <= 1 {
+                s.sum_checks_king_adj += 1;
+            }
+            if d > 1 && is_slider(checker_pt(c)) {
+                s.sum_checks_slider_far += 1;
+            }
+        }
+        if let Some(m) = mm {
+            s.n_mate += 1;
+            let d = cheby(m.to_sq());
+            s.mate_dist[d.clamp(0, 8) as usize] += 1;
+            if m.is_drop() {
+                s.mate_drop += 1;
+            } else {
+                s.mate_move += 1;
+                if m.captured_piece_raw() != 0 {
+                    s.mate_capture += 1;
+                }
+            }
+            let sl = is_slider(checker_pt(m));
+            if sl {
+                s.mate_slider += 1;
+            }
+            if d > 1 {
+                s.mate_far += 1;
+                if sl {
+                    s.mate_far_slider += 1;
+                } else {
+                    s.mate_far_nonslider += 1;
+                }
+            }
+        }
+    });
 }

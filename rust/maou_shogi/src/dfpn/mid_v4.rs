@@ -542,6 +542,7 @@ impl DfPnSolver {
         super::node_movegen::reset_legal_quick_dm();
         crate::movegen::reset_pawn_drop_mate_dm();
         crate::board::reset_do_move_count();
+        super::solver::reset_mate_cand_stats();
         // KH VisitHistory path dominance (IsRepetitionOrInferiorAfter)．`V4_DOM` で opt-in (default OFF)．
         // 単位を揃えた計測で判明: KH (dominance 有) = 9,296 visits に対し，maou+dominance = 16,902
         // (1.82×) と KH から **遠ざかる** (DAG EliminateDoubleCount との二重カウント相互作用; fires
@@ -640,6 +641,7 @@ impl DfPnSolver {
             self.v4_dag_fires,
             self.v4_dom_fires
         );
+        super::solver::report_mate_cand_stats();
         if std::env::var("V4DMBREAK").is_ok() {
             let dm = DM_SITE.with(|c| c.get());
             let lq = super::node_movegen::legal_quick_dm();
