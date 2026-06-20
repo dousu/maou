@@ -46,6 +46,22 @@ fn effect_verify_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("EFFECT_VERIFY").is_ok())
 }
 
+/// 診断用: `EFFECT_SKIP_A=1` で移動駒自身の利き更新 (A) をスキップする (コスト分解用)．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn effect_skip_a() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var("EFFECT_SKIP_A").is_ok())
+}
+
+/// 診断用: `EFFECT_SKIP_B=1` で遠方利きの遮断/開放更新 (B) をスキップする (コスト分解用)．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn effect_skip_b() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var("EFFECT_SKIP_B").is_ok())
+}
+
 /// 将棋盤の状態．
 ///
 /// Mailbox (駒配列) + Bitboard のハイブリッド表現．
@@ -1750,15 +1766,20 @@ impl Board {
     #[cfg(feature = "effect_table")]
     #[inline]
     fn effect_on_put(&mut self, sq: Square, piece: Piece) {
-        let occ_before = self.all_occ;
-        let mut occ_after = occ_before;
-        occ_after.set(sq);
-        let sliders = self.effect_sliders_through(sq);
-        self.update_slider_effects(sliders, occ_before, occ_after);
-        // piece は非空 (put_piece の debug_assert 済) ゆえ color()/piece_type() は Some．
-        let color = piece.color().unwrap();
-        let pt = piece.piece_type().unwrap();
-        self.add_piece_effect(color, pt, sq, occ_after, true);
+        let occ_before = self.all_occ; // sq は空
+                                       // (B) sq が占有化 → sq を貫通していた遠方利きを sq で遮断する (-1)．
+        if !effect_skip_b() {
+            self.effect_update_blocking(sq, occ_before, false);
+        }
+        // (A) 置いた駒自身の利きを加算 (occ_after = sq を含む)．
+        if !effect_skip_a() {
+            let mut occ_after = occ_before;
+            occ_after.set(sq);
+            // piece は非空 (put_piece の debug_assert 済) ゆえ color()/piece_type() は Some．
+            let color = piece.color().unwrap();
+            let pt = piece.piece_type().unwrap();
+            self.add_piece_effect(color, pt, sq, occ_after, true);
+        }
     }
 
     /// `effect_table` feature 無効時の `effect_on_put` no-op 版 (完全にインライン消去される)．
@@ -1773,15 +1794,17 @@ impl Board {
     #[cfg(feature = "effect_table")]
     #[inline]
     fn effect_on_remove(&mut self, sq: Square, piece: Piece) {
-        let occ_before = self.all_occ;
-        let mut occ_after = occ_before;
-        occ_after.clear(sq);
-        // piece は非空 (remove_piece の debug_assert 済) ゆえ color()/piece_type() は Some．
-        let color = piece.color().unwrap();
-        let pt = piece.piece_type().unwrap();
-        self.add_piece_effect(color, pt, sq, occ_before, false);
-        let sliders = self.effect_sliders_through(sq);
-        self.update_slider_effects(sliders, occ_before, occ_after);
+        let occ_before = self.all_occ; // sq は占有
+                                       // (A) 除去する駒自身の利きを減算 (occ_before, sq を含む)．
+        if !effect_skip_a() {
+            let color = piece.color().unwrap();
+            let pt = piece.piece_type().unwrap();
+            self.add_piece_effect(color, pt, sq, occ_before, false);
+        }
+        // (B) sq が空化 → sq で遮断されていた遠方利きを sq の先へ開放する (+1)．
+        if !effect_skip_b() {
+            self.effect_update_blocking(sq, occ_before, true);
+        }
     }
 
     /// `effect_table` feature 無効時の `effect_on_remove` no-op 版 (完全にインライン消去される)．
@@ -1812,65 +1835,52 @@ impl Board {
         }
     }
 
-    /// `sq` を遠方利きで貫通している (= `sq` が射線上にある) slider 駒のビットボードを返す．
+    /// occ 変更マス `sq` を貫通する遠方利きの増減を `effect` に反映する (direction-aware)．
     ///
-    /// 飛・龍・角・馬・香 (両色) のうち現 `all_occ` で `sq` に利きが届くものを集める．
-    /// `sq` 自身の占有有無は結果に影響しない (利き生成は自分の射線を自駒で遮らない) ため，
-    /// `put_piece`/`remove_piece` のどちらの直前に呼んでも同じ集合を返す．`sq` の占有が
-    /// 変わると，これらの slider の `sq` より先の射線だけが遮断/開放される (近接側は不変)．
+    /// `sq` の 8 方向それぞれで最近接駒 1 つだけを調べ，それが「opposite(d) 方向へスライドして
+    /// `sq` に届く」slider なら，`sq` の先 (opposite(d) 方向) のセグメントだけを更新する
+    /// (各方向の最近接 slider は高々 1 枚)．`opening=true` (remove: `sq` が空化) は +1，
+    /// `false` (put: `sq` が占有化) は -1．`occ` は変更前の占有 (`sq` は射線の起点ゆえ各レイに
+    /// 含まれず，どちらのケースでも blocker 探索に使える)．
+    ///
+    /// PEXT を使わず RAY_MASKS + bit-scan のみで計算するため，影響 slider ごとに sliding 利きを
+    /// 再計算していた旧方式 (per do_move ~500ns) より per do_move コストを大幅に削減する．
     #[cfg(feature = "effect_table")]
     #[inline]
-    fn effect_sliders_through(&self, sq: Square) -> Bitboard {
-        let occ = self.all_occ;
-        let b = Color::Black.index();
-        let w = Color::White.index();
-        // 香 (色非対称): `sq` から相手方向に見える香が `sq` を攻撃している．
-        let mut bb = attack::lance_attacks(Color::White, sq, occ)
-            & self.piece_bb[b][PieceType::Lance as usize];
-        bb |= attack::lance_attacks(Color::Black, sq, occ)
-            & self.piece_bb[w][PieceType::Lance as usize];
-        // 角・馬 (両色, 斜め): 角利きは対称ゆえ色非依存．
-        let diag = self.piece_bb[b][PieceType::Bishop as usize]
-            | self.piece_bb[w][PieceType::Bishop as usize]
-            | self.piece_bb[b][PieceType::Horse as usize]
-            | self.piece_bb[w][PieceType::Horse as usize];
-        bb |= attack::bishop_attacks(sq, occ) & diag;
-        // 飛・龍 (両色, 縦横): 飛利きは対称ゆえ色非依存．
-        let orth = self.piece_bb[b][PieceType::Rook as usize]
-            | self.piece_bb[w][PieceType::Rook as usize]
-            | self.piece_bb[b][PieceType::Dragon as usize]
-            | self.piece_bb[w][PieceType::Dragon as usize];
-        bb |= attack::rook_attacks(sq, occ) & orth;
-        bb
-    }
-
-    /// `sliders` 集合の遠方利きが occ 変更で変化したマスだけを `effect` に反映する (XOR-diff)．
-    ///
-    /// 各 slider の `occ_before`/`occ_after` での利きを比較し，失ったマス (`before & !after`)
-    /// を -1，得たマス (`after & !before`) を +1 する．近接側 (`sq` より手前) は両者一致ゆえ
-    /// 書き込みが発生せず，`sq` より先の射線 (通常 1-3 マス) だけを更新する (full subtract/add
-    /// を避ける高速化)．Horse/Dragon のステップ部は occ 非依存ゆえ XOR で自然に相殺する．
-    #[cfg(feature = "effect_table")]
-    #[inline]
-    fn update_slider_effects(
-        &mut self,
-        sliders: Bitboard,
-        occ_before: Bitboard,
-        occ_after: Bitboard,
-    ) {
-        for s in sliders {
-            let piece = self.squares[s.index()];
-            // `s` は piece_bb 由来ゆえ必ず駒がある．
-            let color = piece.color().unwrap();
+    fn effect_update_blocking(&mut self, sq: Square, occ: Bitboard, opening: bool) {
+        for d in 0..8usize {
+            let Some(p_sq) = attack::ray_first_blocker(d, sq, occ) else {
+                continue;
+            };
+            let piece = self.squares[p_sq.index()];
+            // p_sq は occ 由来ゆえ必ず駒がある．
             let pt = piece.piece_type().unwrap();
-            let ci = color.index();
-            let before = attack::piece_attacks(color, pt, s, occ_before);
-            let after = attack::piece_attacks(color, pt, s, occ_after);
-            for t in before & !after {
-                self.effect[ci][t.index()] -= 1;
+            // d 方向の最近接駒が opposite(d) 方向へスライドして sq に届く slider か判定する．
+            let is_source = match pt {
+                PieceType::Rook | PieceType::Dragon => attack::dir_is_orthogonal(d),
+                PieceType::Bishop | PieceType::Horse => !attack::dir_is_orthogonal(d),
+                // Black 香は上(N), White 香は下(S)へスライド．sq に届くには香が sq の
+                // 反対側にいる (d=DOWN なら Black 香, d=UP なら White 香)．
+                PieceType::Lance => {
+                    (d == attack::DIR_DOWN && piece.color() == Some(Color::Black))
+                        || (d == attack::DIR_UP && piece.color() == Some(Color::White))
+                }
+                _ => false,
+            };
+            if !is_source {
+                continue;
             }
-            for t in after & !before {
-                self.effect[ci][t.index()] += 1;
+            let ci = piece.color().unwrap().index();
+            // sq の先 (opposite(d) 方向) のセグメント = 影響を受けるマス (sq は含まない)．
+            let segment = attack::ray_attack(attack::DIR_OPPOSITE[d], sq, occ);
+            if opening {
+                for t in segment {
+                    self.effect[ci][t.index()] += 1;
+                }
+            } else {
+                for t in segment {
+                    self.effect[ci][t.index()] -= 1;
+                }
             }
         }
     }

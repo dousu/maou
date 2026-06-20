@@ -186,6 +186,70 @@ fn ray_attack_negative(dir: usize, sq: Square, occupied: Bitboard) -> Bitboard {
     }
 }
 
+// ------------------------------------------------------------
+// incremental effect (利き) テーブル用の方向ヘルパ (effect_table feature)
+//
+// PEXT を使わず RAY_MASKS + bit-scan のみでスライド利きを 1 方向ずつ扱う．
+// do_move/undo_move あたりの利き更新を「各方向の最近接駒 1 つ」に縮約する土台．
+// ------------------------------------------------------------
+
+/// 各方向の反対方向 (N↔S, W↔E, NW↔SE, NE↔SW)．
+#[cfg(feature = "effect_table")]
+pub(crate) const DIR_OPPOSITE: [usize; 8] =
+    [DIR_S, DIR_N, DIR_E, DIR_W, DIR_SE, DIR_SW, DIR_NE, DIR_NW];
+
+/// 上方向 (N) のレイ方向インデックス (香の色判定用)．
+#[cfg(feature = "effect_table")]
+pub(crate) const DIR_UP: usize = DIR_N;
+/// 下方向 (S) のレイ方向インデックス (香の色判定用)．
+#[cfg(feature = "effect_table")]
+pub(crate) const DIR_DOWN: usize = DIR_S;
+
+/// 方向 `dir` が縦横 (飛・龍の軸) か．false なら斜め (角・馬の軸)．
+#[cfg(feature = "effect_table")]
+#[inline]
+pub(crate) fn dir_is_orthogonal(dir: usize) -> bool {
+    dir < DIR_NW
+}
+
+/// `dir` がマス番号増加方向 (lsb で最近接) か．false なら減少方向 (msb)．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn dir_is_positive(dir: usize) -> bool {
+    matches!(dir, DIR_S | DIR_E | DIR_NE | DIR_SE)
+}
+
+/// `sq` から `dir` 方向で最初に `occupied` にぶつかる駒のマス (なければ None)．
+#[cfg(feature = "effect_table")]
+#[inline]
+pub(crate) fn ray_first_blocker(dir: usize, sq: Square, occupied: Bitboard) -> Option<Square> {
+    let blockers = RAY_MASKS[dir][sq.index()] & occupied;
+    if dir_is_positive(dir) {
+        blockers.lsb()
+    } else {
+        blockers.msb()
+    }
+}
+
+/// `sq` から `dir` 方向のスライド利き (最初の駒まで, その駒を含む; 起点 `sq` は含まない)．
+///
+/// `RAY_MASKS` と bit-scan のみで計算する (PEXT 不使用)．
+#[cfg(feature = "effect_table")]
+#[inline]
+pub(crate) fn ray_attack(dir: usize, sq: Square, occupied: Bitboard) -> Bitboard {
+    let ray = RAY_MASKS[dir][sq.index()];
+    let blockers = ray & occupied;
+    let first = if dir_is_positive(dir) {
+        blockers.lsb()
+    } else {
+        blockers.msb()
+    };
+    match first {
+        Some(f) => ray ^ RAY_MASKS[dir][f.index()],
+        None => ray,
+    }
+}
+
 // ============================================================
 // PEXT ベースのスライド利きテーブル
 // ============================================================
