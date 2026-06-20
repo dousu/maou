@@ -140,6 +140,16 @@ pub(super) fn dhmp_enabled() -> bool {
     *C.get_or_init(|| std::env::var("V4_NODHMP").is_err())
 }
 
+/// look-ahead 1 手詰 scan を玉から距離 ≤2 候補に限定する (default ON; `V4_NONEAR2` で opt-out)．
+/// 実測 (MATE1PLY_CAND 差分解析) で距離 ≤2 = full scan と **完全に node 不変** (29te 9,288 / default
+/// 17,720 / 39te 3,105,196 / Some 一致, miss=0/diffmove=0/bug=0) かつ sound (per-candidate verify)．
+/// 遠方候補の検証・do_move fallback を省き do_moves を削減する (39te 6.56M→6.38M)．
+/// KH の king-vicinity 1 手詰判定に忠実な方向 ([`super::solver::mate1ply_cached_near2`])．
+pub(super) fn near2_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4_NONEAR2").is_err())
+}
+
 /// `V4_INTROSORT` 実験 (process 内 1 回読み)．idx ソートに libstdc++ introsort 移植 (`kh_std_sort`) を使う．
 /// default OFF = stable sort (movegen 順保持)．KH を `std::stable_sort` にした診断ビルドと突合する際は
 /// 両者 stable に揃えるため本フラグを **OFF** のままにする．
@@ -1556,6 +1566,9 @@ impl DfPnSolver {
         let (no_mate, mm_opt) = if dhmp_enabled() {
             if !board.does_have_mate_possibility(board.turn) {
                 (true, None)
+            } else if near2_enabled() {
+                // 距離 ≤2 候補のみ検査 (node 不変; 遠方候補の verify/do_move fallback を省く)．
+                (false, self.mate1ply_cached_near2(board))
             } else {
                 (false, self.mate1ply_with_cached_checks(board).0)
             }

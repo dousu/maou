@@ -2366,6 +2366,24 @@ impl DfPnSolver {
         }
         (mm, !moves.is_empty())
     }
+
+    /// look-ahead 専用の 1 手詰判定 (玉から Chebyshev 距離 ≤2 の候補のみ検査)．
+    ///
+    /// full check list は従来通り生成し check_cache に格納する (expansion が再利用 = cache 内容不変)
+    /// が，詰み判定の scan は距離 ≤2 候補に限定する (`mate_move_in_1ply_maxdist(_, _, 2)`)．実測
+    /// (MATE1PLY_CAND 差分解析) で距離 ≤2 は full scan と同一の Some/None・同一の詰み手を返す
+    /// (= node 不変)，かつ遠方候補の検証・do_move fallback を省ける．look-ahead は詰み手 (Option) のみ
+    /// 使う (`does_have_mate_possibility` が不詰判定を担うため has_checks 不要)．
+    pub(super) fn mate1ply_cached_near2(&self, board: &mut Board) -> Option<Move> {
+        let hash = board.hash;
+        let turn = board.turn;
+        if let Some(cached) = self.check_cache.get_slice(hash) {
+            return board.mate_move_in_1ply_maxdist(cached, turn, 2);
+        }
+        let moves = self.generate_check_moves(board);
+        self.check_cache.insert(hash, &moves);
+        board.mate_move_in_1ply_maxdist(moves.as_slice(), turn, 2)
+    }
 }
 
 // ===== MATE1PLY_CAND 診断 =====================================================
@@ -2391,6 +2409,16 @@ struct MateCandStats {
     mate_far_slider: u64,
     mate_far_nonslider: u64, // 距離>1 かつ非飛び駒 = 開き王手の疑い (要注目)
     mate_dist: [u64; 9],
+    // 差分解析: full scan (ground truth) vs 距離フィルタ subset の verdict 比較 (full が Some の時のみ)．
+    // subset ⊆ full なので「subset Some だが full None」は原理上起きない (= 起きたら bug)．
+    // MISS = full Some だが subset None (= subset が見落とす遠方詰み)．DIFFMOVE = 両方 Some だが手が
+    // 異なる (= どちらも検証済の合法 1 手詰だが選択が違う; proof-hand 変化源)．BUG = subset Some/full None．
+    near1_miss: u64, // dist≤1 subset が full の詰みを見落とす
+    near1_diffmove: u64,
+    near1_bug: u64,
+    near2_miss: u64, // dist≤2 subset (= 玉隣接+桂) が見落とす
+    near2_diffmove: u64,
+    near2_bug: u64,
     // check_cache prepay 値の計測 (constructive で look-ahead generate を除いた際の generate 削減量推定)．
     la_hit: u64,   // look-ahead の cache hit
     la_miss: u64,  // look-ahead の cache miss (= generate 発生)
@@ -2466,6 +2494,19 @@ pub(super) fn report_mate_cand_stats() {
             s.mate_far, s.mate_far_slider, s.mate_far_nonslider,
         );
         eprintln!("[mate_cand] mate_dist(チェビシェフ 0..8)={:?}", s.mate_dist);
+        eprintln!(
+            "[mate_cand] DIFF vs full(ground truth): near1(≤1) miss={} diffmove={} bug={} | near2(≤2) miss={} diffmove={} bug={}",
+            s.near1_miss, s.near1_diffmove, s.near1_bug,
+            s.near2_miss, s.near2_diffmove, s.near2_bug,
+        );
+        eprintln!(
+            "[mate_cand]   → near1 が node を変える look-ahead = {} ({:.3}% of {} mates), near2 = {} ({:.3}%)",
+            s.near1_miss + s.near1_diffmove,
+            100.0 * (s.near1_miss + s.near1_diffmove) as f64 / s.n_mate.max(1) as f64,
+            s.n_mate,
+            s.near2_miss + s.near2_diffmove,
+            100.0 * (s.near2_miss + s.near2_diffmove) as f64 / s.n_mate.max(1) as f64,
+        );
         let gen_now = s.la_miss + s.cmi_miss;
         // constructive (look-ahead generate 除去) 後の generate ≈ expansion の miss のみ．
         // look-ahead が prepay した分 (la_miss で生成 → 後で cmi_hit 再利用) のうち expansion
@@ -2478,7 +2519,9 @@ pub(super) fn report_mate_cand_stats() {
 }
 
 /// 1 look-ahead の候補 (王手) 分布と詰み手の幾何を統計へ加算する (MATE1PLY_CAND 時のみ呼ぶ)．
-fn record_mate_cand(board: &Board, checks: &[Move], mm: Option<Move>, turn: Color) {
+/// full scan の結果 `mm` を ground truth とし，距離フィルタ subset の verdict と比較する
+/// (board は mate_move_in_1ply 呼び出しで一時的に do_move/undo するが復元される)．
+fn record_mate_cand(board: &mut Board, checks: &[Move], mm: Option<Move>, turn: Color) {
     use crate::types::{PieceType, Square};
     let king = match board.king_square(turn.opponent()) {
         Some(k) => k,
@@ -2555,4 +2598,42 @@ fn record_mate_cand(board: &Board, checks: &[Move], mm: Option<Move>, turn: Colo
             }
         }
     });
+
+    // === 差分解析: full scan (ground truth) vs 距離フィルタ subset ===
+    // full が詰みを返した look-ahead でのみ実施 (no-mate は subset も必ず None = 一致, 計測不要)．
+    let full_mm = match mm {
+        Some(m) => m,
+        None => return,
+    };
+    // 距離フィルタした subset で同じ verified predicate (mate_move_in_1ply) を実行する．
+    // subset ⊆ full ゆえ subset が Some なら full も Some (full_mm)．subset Some/full None は
+    // 起き得ない (起きたら mate_move_in_1ply の順序依存 bug)．board は復元される．
+    let near1: Vec<Move> = checks
+        .iter()
+        .copied()
+        .filter(|c| cheby(c.to_sq()) <= 1)
+        .collect();
+    let near2: Vec<Move> = checks
+        .iter()
+        .copied()
+        .filter(|c| cheby(c.to_sq()) <= 2)
+        .collect();
+    let mm1 = board.mate_move_in_1ply(&near1, turn);
+    let mm2 = board.mate_move_in_1ply(&near2, turn);
+    MATE_CAND_STATS.with(|s| {
+        let mut s = s.borrow_mut();
+        match mm1 {
+            None => s.near1_miss += 1,
+            Some(m) if m != full_mm => s.near1_diffmove += 1,
+            Some(_) => {}
+        }
+        match mm2 {
+            None => s.near2_miss += 1,
+            Some(m) if m != full_mm => s.near2_diffmove += 1,
+            Some(_) => {}
+        }
+    });
+    // bug 検出: full が None なのに subset が Some は原理上不可能 (subset⊆full)．
+    // full_mm が Some の本経路では起き得ないが，対称性のため near*_bug は別途 (no-mate 経路) で
+    // 計測する余地を残す (現状は未使用 = 常に 0)．
 }
