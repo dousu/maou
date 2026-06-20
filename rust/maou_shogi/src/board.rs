@@ -62,6 +62,25 @@ fn effect_skip_b() -> bool {
     *F.get_or_init(|| std::env::var("EFFECT_SKIP_B").is_ok())
 }
 
+/// 駒 (color, pt) の遠方利き方向リスト (`long_dir` の bit 群; ステップ駒は空)．
+/// 飛/龍=縦横, 角/馬=斜め, 香=色依存の前方 1 方向．`long_dir` 維持・再構築・検証で共有する．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn piece_long_dirs(color: Color, pt: PieceType) -> &'static [usize] {
+    match pt {
+        PieceType::Rook | PieceType::Dragon => &attack::DIRS_ROOK,
+        PieceType::Bishop | PieceType::Horse => &attack::DIRS_BISHOP,
+        PieceType::Lance => {
+            if color == Color::Black {
+                std::slice::from_ref(&attack::DIR_UP)
+            } else {
+                std::slice::from_ref(&attack::DIR_DOWN)
+            }
+        }
+        _ => &[],
+    }
+}
+
 /// 将棋盤の状態．
 ///
 /// Mailbox (駒配列) + Bitboard のハイブリッド表現．
@@ -111,6 +130,15 @@ pub struct Board {
     /// `effect_table` feature (default 無効) でのみ保持・維持する (無効時はゼロコスト)．
     #[cfg(feature = "effect_table")]
     pub(crate) effect: [[u8; 81]; 2],
+    /// 各マスへの色別「遠方利き方向」mask (YaneuraOu `long_effect`/WordBoard 相当)．
+    ///
+    /// `long_dir[color][sq]` の bit `d` (= attack::DIR_*) が 1 ⇔ `color` の遠方駒 (飛/龍/角/馬/香) が
+    /// `sq` を「進行方向 `d` で」攻撃している (その駒は `sq` から `opposite(d)` 方向にあり，利きは `sq`
+    /// より先の `d` 方向へ伸びる)．各 (sq, 方向) を攻撃する遠方駒は高々 1 枚ゆえ bit は 0/1．
+    /// mate1ply の after-move 影利き (王が抜けた先への貫通) / 遮断を do_move せず理論計算するための土台．
+    /// `put_piece`/`remove_piece` で `effect` と同時に incremental 維持する．
+    #[cfg(feature = "effect_table")]
+    pub(crate) long_dir: [[u8; 81]; 2],
 }
 
 /// 1 手詰判定 (`mate_move_in_1ply`) の per-position 文脈．
@@ -167,6 +195,8 @@ impl Board {
             board_hash: 0,
             #[cfg(feature = "effect_table")]
             effect: [[0u8; 81]; 2],
+            #[cfg(feature = "effect_table")]
+            long_dir: [[0u8; 81]; 2],
         }
     }
 
@@ -1795,6 +1825,7 @@ impl Board {
             let color = piece.color().unwrap();
             let pt = piece.piece_type().unwrap();
             self.add_piece_effect(color, pt, sq, occ_after, true);
+            self.add_piece_long_dir(color, pt, sq, occ_after, true);
         }
     }
 
@@ -1816,6 +1847,7 @@ impl Board {
             let color = piece.color().unwrap();
             let pt = piece.piece_type().unwrap();
             self.add_piece_effect(color, pt, sq, occ_before, false);
+            self.add_piece_long_dir(color, pt, sq, occ_before, false);
         }
         // (B) sq が空化 → sq で遮断されていた遠方利きを sq の先へ開放する (+1)．
         if !effect_skip_b() {
@@ -1847,6 +1879,34 @@ impl Board {
                 *e += 1;
             } else {
                 *e -= 1;
+            }
+        }
+    }
+
+    /// 1 駒 (color, pt, sq) の**遠方利き方向**を `long_dir` に反映する内部ヘルパ．
+    ///
+    /// 飛/龍/角/馬/香 の各遠方方向 `dd` について `ray_attack(dd, sq, occ)` の各マス `t` の
+    /// `long_dir[ci][t]` bit `dd` を set (`add`) / clear (`!add`) する (ステップ部は long でない)．
+    /// 各 (マス, 方向) を攻撃する遠方駒は高々 1 枚ゆえ bit set/clear で過不足なし．
+    #[cfg(feature = "effect_table")]
+    #[inline]
+    fn add_piece_long_dir(
+        &mut self,
+        color: Color,
+        pt: PieceType,
+        sq: Square,
+        occ: Bitboard,
+        add: bool,
+    ) {
+        let ci = color.index();
+        for &dd in piece_long_dirs(color, pt) {
+            let bit = 1u8 << dd;
+            for t in attack::ray_attack(dd, sq, occ) {
+                if add {
+                    self.long_dir[ci][t.index()] |= bit;
+                } else {
+                    self.long_dir[ci][t.index()] &= !bit;
+                }
             }
         }
     }
@@ -1888,14 +1948,19 @@ impl Board {
             }
             let ci = piece.color().unwrap().index();
             // sq の先 (opposite(d) 方向) のセグメント = 影響を受けるマス (sq は含まない)．
-            let segment = attack::ray_attack(attack::DIR_OPPOSITE[d], sq, occ);
+            // P_d はこのセグメントを進行方向 opposite(d) で攻撃する ⇒ long_dir の bit も同方向．
+            let seg_dir = attack::DIR_OPPOSITE[d];
+            let bit = 1u8 << seg_dir;
+            let segment = attack::ray_attack(seg_dir, sq, occ);
             if opening {
                 for t in segment {
                     self.effect[ci][t.index()] += 1;
+                    self.long_dir[ci][t.index()] |= bit;
                 }
             } else {
                 for t in segment {
                     self.effect[ci][t.index()] -= 1;
+                    self.long_dir[ci][t.index()] &= !bit;
                 }
             }
         }
@@ -1905,6 +1970,7 @@ impl Board {
     #[cfg(feature = "effect_table")]
     pub(crate) fn rebuild_effect(&mut self) {
         self.effect = [[0u8; 81]; 2];
+        self.long_dir = [[0u8; 81]; 2];
         let occ = self.all_occ;
         for sq_idx in 0..81u8 {
             let piece = self.squares[sq_idx as usize];
@@ -1914,10 +1980,13 @@ impl Board {
             let color = piece.color().unwrap();
             let pt = piece.piece_type().unwrap();
             let ci = color.index();
-            let att = attack::piece_attacks(color, pt, Square(sq_idx), occ);
+            let sq = Square(sq_idx);
+            let att = attack::piece_attacks(color, pt, sq, occ);
             for t in att {
                 self.effect[ci][t.index()] += 1;
             }
+            // 遠方利き方向 (long_dir) もフルスキャンで再構築する．
+            self.add_piece_long_dir(color, pt, sq, occ, true);
         }
     }
 
@@ -1927,7 +1996,8 @@ impl Board {
     /// 設定すると `do_move`/`undo_move` 毎に本検査が走る (release でも有効)．
     #[cfg(feature = "effect_table")]
     pub(crate) fn verify_effect(&self) -> bool {
-        let mut expected = [[0u8; 81]; 2];
+        let mut exp_eff = [[0u8; 81]; 2];
+        let mut exp_dir = [[0u8; 81]; 2];
         let occ = self.all_occ;
         for sq_idx in 0..81u8 {
             let piece = self.squares[sq_idx as usize];
@@ -1937,12 +2007,19 @@ impl Board {
             let color = piece.color().unwrap();
             let pt = piece.piece_type().unwrap();
             let ci = color.index();
-            let att = attack::piece_attacks(color, pt, Square(sq_idx), occ);
+            let sq = Square(sq_idx);
+            let att = attack::piece_attacks(color, pt, sq, occ);
             for t in att {
-                expected[ci][t.index()] += 1;
+                exp_eff[ci][t.index()] += 1;
+            }
+            for &dd in piece_long_dirs(color, pt) {
+                let bit = 1u8 << dd;
+                for t in attack::ray_attack(dd, sq, occ) {
+                    exp_dir[ci][t.index()] |= bit;
+                }
             }
         }
-        expected == self.effect
+        exp_eff == self.effect && exp_dir == self.long_dir
     }
 
     /// 指定マスへの指定色の利き数を返す (incremental effect テーブル参照)．
