@@ -34,6 +34,18 @@ pub fn mate1ply_none_dm() -> u64 {
     MATE1PLY_NONE_DM.with(|c| c.get())
 }
 
+/// `EFFECT_VERIFY` 環境変数の有無を一度だけ読み込みキャッシュする．
+///
+/// 設定時は `do_move`/`undo_move` 毎に incremental 利き == フルスキャンを検査する
+/// (release テストでも有効)．`env::var` の per-call コスト (mutex/alloc) を避けるため
+/// `OnceLock` で 1 度だけ読む (default 時の overhead は relaxed bool load 1 回のみ)．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn effect_verify_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("EFFECT_VERIFY").is_ok())
+}
+
 /// 将棋盤の状態．
 ///
 /// Mailbox (駒配列) + Bitboard のハイブリッド表現．
@@ -73,6 +85,16 @@ pub struct Board {
     /// `hash` から持ち駒成分を除いたもの．position_key() を O(1) にするために
     /// インクリメンタルに維持する．盤上の駒配置と手番のみを反映する．
     pub(crate) board_hash: u64,
+    /// 各マスへの色別利き数 (YaneuraOu `board_effect` 相当)．
+    ///
+    /// `effect[color][sq]` = `color` の駒が `sq` を攻撃している枚数．
+    /// `put_piece`/`remove_piece` で incremental に更新する (遠方利きの遮断/開放を含む)．
+    /// `is_attacked_by(sq, c)` 等の局面 query を `effect[c][sq] > 0` の参照に置き換えるための土台．
+    /// dfpn は do_move より query が圧倒的多数ゆえ，利きをテーブル化すると per-op コストが下がる．
+    /// 不変条件 (incremental == フルスキャン) は `verify_effect` / `EFFECT_VERIFY` で検証する．
+    /// `effect_table` feature (default 無効) でのみ保持・維持する (無効時はゼロコスト)．
+    #[cfg(feature = "effect_table")]
+    pub(crate) effect: [[u8; 81]; 2],
 }
 
 /// 1 手詰判定 (`mate_move_in_1ply`) の per-position 文脈．
@@ -127,6 +149,8 @@ impl Board {
             ply: 1,
             hash: 0,
             board_hash: 0,
+            #[cfg(feature = "effect_table")]
+            effect: [[0u8; 81]; 2],
         }
     }
 
@@ -158,6 +182,10 @@ impl Board {
         // Zobrist hashを計算
         self.hash = self.compute_hash();
         self.board_hash = self.compute_board_hash();
+
+        // 利きテーブルをフルスキャンで再構築 (piece_bb を直接組み立てたため)．
+        #[cfg(feature = "effect_table")]
+        self.rebuild_effect();
 
         Ok(())
     }
@@ -1678,6 +1706,9 @@ impl Board {
         // Safety: piece が空でないことは debug_assert で検証済み
         let ci = unsafe { piece.color_index_unchecked() };
         let pt = unsafe { piece.piece_type_raw_unchecked() };
+        // 利きテーブル incremental 更新 (bb 変更前: occ_before を読むため; feature off 時は no-op)．
+        self.effect_on_put(sq, piece);
+        // --- 盤面を変更 ---
         self.squares[sq.index()] = piece;
         self.piece_bb[ci][pt as usize].set(sq);
         self.occupied[ci].set(sq);
@@ -1699,6 +1730,9 @@ impl Board {
         // Safety: piece が空でないことは debug_assert で検証済み
         let ci = unsafe { piece.color_index_unchecked() };
         let pt = unsafe { piece.piece_type_raw_unchecked() };
+        // 利きテーブル incremental 更新 (bb 変更前: occ_before を読むため; feature off 時は no-op)．
+        self.effect_on_remove(sq, piece);
+        // --- 盤面を変更 ---
         self.squares[sq.index()] = Piece::EMPTY;
         self.piece_bb[ci][pt as usize].clear(sq);
         self.occupied[ci].clear(sq);
@@ -1707,6 +1741,191 @@ impl Board {
         self.hash ^= z;
         self.board_hash ^= z;
         piece
+    }
+
+    /// `put_piece(sq, piece)` に伴う利きテーブルの incremental 更新 (bb 変更前に呼ぶ)．
+    ///
+    /// `sq` が空→占有になることで，`sq` を貫通していた遠方利きは `sq` より先で遮断される．
+    /// 置いた駒自身の利きも加算する．`effect_table` feature 無効時は no-op (ゼロコスト)．
+    #[cfg(feature = "effect_table")]
+    #[inline]
+    fn effect_on_put(&mut self, sq: Square, piece: Piece) {
+        let occ_before = self.all_occ;
+        let mut occ_after = occ_before;
+        occ_after.set(sq);
+        let sliders = self.effect_sliders_through(sq);
+        self.update_slider_effects(sliders, occ_before, occ_after);
+        // piece は非空 (put_piece の debug_assert 済) ゆえ color()/piece_type() は Some．
+        let color = piece.color().unwrap();
+        let pt = piece.piece_type().unwrap();
+        self.add_piece_effect(color, pt, sq, occ_after, true);
+    }
+
+    /// `effect_table` feature 無効時の `effect_on_put` no-op 版 (完全にインライン消去される)．
+    #[cfg(not(feature = "effect_table"))]
+    #[inline(always)]
+    fn effect_on_put(&mut self, _sq: Square, _piece: Piece) {}
+
+    /// `remove_piece(sq)` に伴う利きテーブルの incremental 更新 (bb 変更前に呼ぶ)．
+    ///
+    /// `sq` が占有→空になることで，`sq` で遮断されていた遠方利きが `sq` より先へ開放される．
+    /// 除去する駒自身の利きも減算する．`effect_table` feature 無効時は no-op (ゼロコスト)．
+    #[cfg(feature = "effect_table")]
+    #[inline]
+    fn effect_on_remove(&mut self, sq: Square, piece: Piece) {
+        let occ_before = self.all_occ;
+        let mut occ_after = occ_before;
+        occ_after.clear(sq);
+        // piece は非空 (remove_piece の debug_assert 済) ゆえ color()/piece_type() は Some．
+        let color = piece.color().unwrap();
+        let pt = piece.piece_type().unwrap();
+        self.add_piece_effect(color, pt, sq, occ_before, false);
+        let sliders = self.effect_sliders_through(sq);
+        self.update_slider_effects(sliders, occ_before, occ_after);
+    }
+
+    /// `effect_table` feature 無効時の `effect_on_remove` no-op 版 (完全にインライン消去される)．
+    #[cfg(not(feature = "effect_table"))]
+    #[inline(always)]
+    fn effect_on_remove(&mut self, _sq: Square, _piece: Piece) {}
+
+    /// 1 駒 (color, pt, sq) の利き (指定 `occ` で計算) を `effect` に ±1 する内部ヘルパ．
+    #[cfg(feature = "effect_table")]
+    #[inline]
+    fn add_piece_effect(
+        &mut self,
+        color: Color,
+        pt: PieceType,
+        sq: Square,
+        occ: Bitboard,
+        add: bool,
+    ) {
+        let ci = color.index();
+        let att = attack::piece_attacks(color, pt, sq, occ);
+        for t in att {
+            let e = &mut self.effect[ci][t.index()];
+            if add {
+                *e += 1;
+            } else {
+                *e -= 1;
+            }
+        }
+    }
+
+    /// `sq` を遠方利きで貫通している (= `sq` が射線上にある) slider 駒のビットボードを返す．
+    ///
+    /// 飛・龍・角・馬・香 (両色) のうち現 `all_occ` で `sq` に利きが届くものを集める．
+    /// `sq` 自身の占有有無は結果に影響しない (利き生成は自分の射線を自駒で遮らない) ため，
+    /// `put_piece`/`remove_piece` のどちらの直前に呼んでも同じ集合を返す．`sq` の占有が
+    /// 変わると，これらの slider の `sq` より先の射線だけが遮断/開放される (近接側は不変)．
+    #[cfg(feature = "effect_table")]
+    #[inline]
+    fn effect_sliders_through(&self, sq: Square) -> Bitboard {
+        let occ = self.all_occ;
+        let b = Color::Black.index();
+        let w = Color::White.index();
+        // 香 (色非対称): `sq` から相手方向に見える香が `sq` を攻撃している．
+        let mut bb = attack::lance_attacks(Color::White, sq, occ)
+            & self.piece_bb[b][PieceType::Lance as usize];
+        bb |= attack::lance_attacks(Color::Black, sq, occ)
+            & self.piece_bb[w][PieceType::Lance as usize];
+        // 角・馬 (両色, 斜め): 角利きは対称ゆえ色非依存．
+        let diag = self.piece_bb[b][PieceType::Bishop as usize]
+            | self.piece_bb[w][PieceType::Bishop as usize]
+            | self.piece_bb[b][PieceType::Horse as usize]
+            | self.piece_bb[w][PieceType::Horse as usize];
+        bb |= attack::bishop_attacks(sq, occ) & diag;
+        // 飛・龍 (両色, 縦横): 飛利きは対称ゆえ色非依存．
+        let orth = self.piece_bb[b][PieceType::Rook as usize]
+            | self.piece_bb[w][PieceType::Rook as usize]
+            | self.piece_bb[b][PieceType::Dragon as usize]
+            | self.piece_bb[w][PieceType::Dragon as usize];
+        bb |= attack::rook_attacks(sq, occ) & orth;
+        bb
+    }
+
+    /// `sliders` 集合の遠方利きが occ 変更で変化したマスだけを `effect` に反映する (XOR-diff)．
+    ///
+    /// 各 slider の `occ_before`/`occ_after` での利きを比較し，失ったマス (`before & !after`)
+    /// を -1，得たマス (`after & !before`) を +1 する．近接側 (`sq` より手前) は両者一致ゆえ
+    /// 書き込みが発生せず，`sq` より先の射線 (通常 1-3 マス) だけを更新する (full subtract/add
+    /// を避ける高速化)．Horse/Dragon のステップ部は occ 非依存ゆえ XOR で自然に相殺する．
+    #[cfg(feature = "effect_table")]
+    #[inline]
+    fn update_slider_effects(
+        &mut self,
+        sliders: Bitboard,
+        occ_before: Bitboard,
+        occ_after: Bitboard,
+    ) {
+        for s in sliders {
+            let piece = self.squares[s.index()];
+            // `s` は piece_bb 由来ゆえ必ず駒がある．
+            let color = piece.color().unwrap();
+            let pt = piece.piece_type().unwrap();
+            let ci = color.index();
+            let before = attack::piece_attacks(color, pt, s, occ_before);
+            let after = attack::piece_attacks(color, pt, s, occ_after);
+            for t in before & !after {
+                self.effect[ci][t.index()] -= 1;
+            }
+            for t in after & !before {
+                self.effect[ci][t.index()] += 1;
+            }
+        }
+    }
+
+    /// 利きテーブル全体をフルスキャンで再計算する (初期化/検証用)．
+    #[cfg(feature = "effect_table")]
+    pub(crate) fn rebuild_effect(&mut self) {
+        self.effect = [[0u8; 81]; 2];
+        let occ = self.all_occ;
+        for sq_idx in 0..81u8 {
+            let piece = self.squares[sq_idx as usize];
+            if piece.is_empty() {
+                continue;
+            }
+            let color = piece.color().unwrap();
+            let pt = piece.piece_type().unwrap();
+            let ci = color.index();
+            let att = attack::piece_attacks(color, pt, Square(sq_idx), occ);
+            for t in att {
+                self.effect[ci][t.index()] += 1;
+            }
+        }
+    }
+
+    /// incremental に維持している `effect` がフルスキャン再計算と一致するか検証する．
+    ///
+    /// 利きは詰み判定の土台ゆえ不整合 = 偽詰みの危険がある．`EFFECT_VERIFY` 環境変数を
+    /// 設定すると `do_move`/`undo_move` 毎に本検査が走る (release でも有効)．
+    #[cfg(feature = "effect_table")]
+    pub(crate) fn verify_effect(&self) -> bool {
+        let mut expected = [[0u8; 81]; 2];
+        let occ = self.all_occ;
+        for sq_idx in 0..81u8 {
+            let piece = self.squares[sq_idx as usize];
+            if piece.is_empty() {
+                continue;
+            }
+            let color = piece.color().unwrap();
+            let pt = piece.piece_type().unwrap();
+            let ci = color.index();
+            let att = attack::piece_attacks(color, pt, Square(sq_idx), occ);
+            for t in att {
+                expected[ci][t.index()] += 1;
+            }
+        }
+        expected == self.effect
+    }
+
+    /// 指定マスへの指定色の利き数を返す (incremental effect テーブル参照)．
+    ///
+    /// `> 0` であれば `is_attacked_by(sq, color)` と等価 (純粋な高速化用の参照)．
+    #[cfg(feature = "effect_table")]
+    #[inline]
+    pub fn effect_count(&self, color: Color, sq: Square) -> u8 {
+        self.effect[color.index()][sq.index()]
     }
 
     /// `do_move(m)` 後の zobrist hash を盤面を変異させずに計算する．
@@ -1976,6 +2195,14 @@ impl Board {
         self.turn = self.turn.opponent();
         self.ply += 1;
 
+        #[cfg(feature = "effect_table")]
+        if effect_verify_enabled() {
+            assert!(
+                self.verify_effect(),
+                "incremental effect desync after do_move {:?}",
+                m
+            );
+        }
         captured
     }
 
@@ -2049,6 +2276,15 @@ impl Board {
                     }
                 }
             }
+        }
+
+        #[cfg(feature = "effect_table")]
+        if effect_verify_enabled() {
+            assert!(
+                self.verify_effect(),
+                "incremental effect desync after undo_move {:?}",
+                m
+            );
         }
     }
 
@@ -2421,6 +2657,58 @@ mod tests {
         board.undo_move(m, captured);
         assert_eq!(board.sfen(), original_sfen);
         assert_eq!(board.hash, original_hash);
+    }
+
+    /// incremental に維持する利きテーブル (`effect`) が，全 do_move/undo_move 後に
+    /// フルスキャン再計算 (`verify_effect`) と一致することを多局面 DFS で検証する．
+    ///
+    /// 駒打ち・捕獲・成り・遠方利きの遮断/開放を網羅するため，遠方駒・成駒・持駒が
+    /// 豊富な 39te 局面を含める．utility の soundness 土台 (利き不整合 = 偽詰みの危険)．
+    #[cfg(feature = "effect_table")]
+    #[test]
+    fn test_effect_incremental_matches_fullscan() {
+        use crate::movegen::generate_legal_moves;
+
+        // 各局面で do/undo を再帰的に行い，各局面で incremental == フルスキャンを検証する DFS．
+        fn dfs(board: &mut Board, depth: u32, budget: &mut u32) {
+            if depth == 0 || *budget == 0 {
+                return;
+            }
+            let moves = generate_legal_moves(board);
+            for m in moves {
+                if *budget == 0 {
+                    break;
+                }
+                *budget -= 1;
+                let captured = board.do_move(m);
+                assert!(
+                    board.verify_effect(),
+                    "incremental effect != fullscan after do_move {m:?}"
+                );
+                dfs(board, depth - 1, budget);
+                board.undo_move(m, captured);
+                assert!(
+                    board.verify_effect(),
+                    "incremental effect != fullscan after undo_move {m:?}"
+                );
+            }
+        }
+
+        let sfens = [
+            HIRATE_SFEN,
+            "4k4/9/9/9/9/9/9/9/4K4 b R 1",
+            // 39te: 遠方駒・成駒・持駒が多く遮断/開放と駒打ちが頻発する局面．
+            "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1",
+        ];
+
+        for sfen in sfens {
+            let mut board = Board::empty();
+            board.set_sfen(sfen).unwrap();
+            // set_sfen 直後 (rebuild_effect) の整合性．
+            assert!(board.verify_effect(), "rebuild_effect mismatch for {sfen}");
+            let mut budget = 6000u32;
+            dfs(&mut board, 4, &mut budget);
+        }
     }
 
     #[test]

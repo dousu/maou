@@ -1,6 +1,6 @@
 [package]
 name = "maou_shogi"
-version = "2.42.0"
+version = "2.43.0"
 edition = "2021"
 description = "Shogi (Japanese chess) engine library for the maou project"
 
@@ -17,6 +17,10 @@ profile = []
 tt_diag = []
 verbose = []
 visit_diag = []
+# YaneuraOu 級 incremental effect (利き) テーブルを Board に保持・維持する (default 無効)．
+# do_move/undo_move 毎に利きを incremental 更新する土台 (Stage 1)．無効時は完全にゼロコスト．
+# 検証: EFFECT_VERIFY=1 + テスト test_effect_incremental_matches_fullscan．
+effect_table = []
 
 [dev-dependencies]
 serde = { version = "1.0", features = ["derive"] }
