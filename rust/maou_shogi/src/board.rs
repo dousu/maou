@@ -583,6 +583,22 @@ impl Board {
     /// 全81マスをスキャンする代わりに，駒種ごとのbitboard演算で高速化．
     #[inline]
     pub fn is_attacked_by(&self, sq: Square, attacker_color: Color) -> bool {
+        // Stage 2: incremental effect テーブルが有効なら参照で即答する (王を含む全駒の利き数 ⇒
+        // 逆スキャンと完全一致．`verify_effect`/`EFFECT_VERIFY`/テストで等価検証済ゆえ探索不変)．
+        #[cfg(feature = "effect_table")]
+        {
+            return self.effect[attacker_color.index()][sq.index()] > 0;
+        }
+        #[cfg(not(feature = "effect_table"))]
+        {
+            self.is_attacked_by_scan(sq, attacker_color)
+        }
+    }
+
+    /// 逆射スキャンによる利き判定 (effect テーブル非使用時の本体 / 検証の ground truth)．
+    #[cfg_attr(feature = "effect_table", allow(dead_code))]
+    #[inline]
+    pub(crate) fn is_attacked_by_scan(&self, sq: Square, attacker_color: Color) -> bool {
         let occ = self.all_occupied();
         let opp = attacker_color.index();
 

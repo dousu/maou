@@ -158,6 +158,7 @@ const REMAINING_INFINITE: u16 = 0x7FFF;
 ///
 /// KH `attackers_to(to)` は玉を含むため，玉が `to` に隣接していれば support を +1 する
 /// (compute_checkers_at は玉を除外するので，InitialPnDn を KH と一致させる補正)．
+#[cfg_attr(feature = "effect_table", allow(dead_code))]
 #[inline]
 pub(super) fn king_supports(board: &Board, to: Square, color: crate::types::Color) -> u32 {
     match board.king_square(color) {
@@ -185,12 +186,26 @@ pub(super) fn init_pn_dn_or_kh(
     let mut dn = PN_UNIT;
 
     let to = m.to_sq();
-    let att_bb = board.compute_checkers_at(to, attacker);
-    let def_bb = board.compute_checkers_at(to, attacker.opponent());
-    // KH `attackers_to(to)` は玉も含む (compute_checkers_at は玉を除外する) ので，
-    // KH InitialPnDn と一致させるため玉が `to` に隣接していれば support に +1 する．
-    let attack_support = att_bb.count() + king_supports(board, to, attacker);
-    let defense_support = def_bb.count() + king_supports(board, to, attacker.opponent());
+    // attack/defense support = `to` への玉込み利き数．
+    // effect テーブル有効時は `effect_count` (玉込みの全利き数) が
+    // `compute_checkers_at(玉除外).count() + king_supports(玉補正)` と完全一致するため，
+    // per-child の compute_checkers_at × 2 を参照に置換する (Stage 2; 探索不変)．
+    #[cfg(feature = "effect_table")]
+    let (attack_support, defense_support) = (
+        u32::from(board.effect_count(attacker, to)),
+        u32::from(board.effect_count(attacker.opponent(), to)),
+    );
+    #[cfg(not(feature = "effect_table"))]
+    let (attack_support, defense_support) = {
+        let att_bb = board.compute_checkers_at(to, attacker);
+        let def_bb = board.compute_checkers_at(to, attacker.opponent());
+        // KH `attackers_to(to)` は玉も含む (compute_checkers_at は玉を除外する) ので，
+        // KH InitialPnDn と一致させるため玉が `to` に隣接していれば support に +1 する．
+        (
+            att_bb.count() + king_supports(board, to, attacker),
+            def_bb.count() + king_supports(board, to, attacker.opponent()),
+        )
+    };
     let drop_bonus: u32 = if m.is_drop() { 1 } else { 0 };
 
     if defense_support >= 2 {
@@ -249,11 +264,22 @@ pub(super) fn init_pn_dn_and_kh(
     }
 
     let to = m.to_sq();
-    let att_bb = board.compute_checkers_at(to, attacker);
-    let def_bb = board.compute_checkers_at(to, defender);
-    // KH `attackers_to` は玉も含むので，玉が `to` 隣接なら support に +1 (KH InitialPnDn 一致)．
-    let attack_support = att_bb.count() + king_supports(board, to, attacker);
-    let defense_support = def_bb.count() + king_supports(board, to, defender);
+    // attack/defense support = `to` への玉込み利き数 (effect 有効時は参照に置換; Stage 2, 探索不変)．
+    #[cfg(feature = "effect_table")]
+    let (attack_support, defense_support) = (
+        u32::from(board.effect_count(attacker, to)),
+        u32::from(board.effect_count(defender, to)),
+    );
+    #[cfg(not(feature = "effect_table"))]
+    let (attack_support, defense_support) = {
+        let att_bb = board.compute_checkers_at(to, attacker);
+        let def_bb = board.compute_checkers_at(to, defender);
+        // KH `attackers_to` は玉も含むので，玉が `to` 隣接なら support に +1 (KH InitialPnDn 一致)．
+        (
+            att_bb.count() + king_supports(board, to, attacker),
+            def_bb.count() + king_supports(board, to, defender),
+        )
+    };
     let drop_bonus: u32 = if m.is_drop() { 1 } else { 0 };
 
     if attack_support < defense_support + drop_bonus {
