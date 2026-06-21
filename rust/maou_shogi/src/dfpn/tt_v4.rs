@@ -343,11 +343,14 @@ impl TranspositionTable {
 
     /// `ctx` の cluster 先頭 cache line を投機的に prefetch する (memory latency hiding)．
     ///
-    /// TT は ~8M entry × ~72B = ~576MB と L3 を遥かに超え，`look_up` の cluster 先頭アクセスは
-    /// ほぼ DRAM miss (~100ns) になる (= tt_lookup phase が memory-bound な理由)．child loop では
-    /// `build_query` 直後・`look_up` 前に dom_path / v3_path の HashMap lookup が入るため，ここで
-    /// prefetch を発行すると DRAM fetch がそれらと重なり latency を一部隠せる．**純粋な hint で
-    /// 探索結果に影響しない** (search-invariant)．x86_64 以外では no-op (per-arch wheel ゆえ可搬)．
+    /// TT は ~8M entry × 64B = ~512MB と L3 を遥かに超え，`look_up` の cluster 先頭アクセスは
+    /// ほぼ DRAM miss になる (= tt_lookup phase が memory-bound な理由)．[`super::ttentry::Entry`]
+    /// は `#[repr(C, align(64))]` で **ちょうど 1 cache line** に収めてあるため，この 1 line の
+    /// prefetch で cluster 先頭 entry 全体が載る (旧 72B は 2 line 跨ぎで prefetch が不完全だった;
+    /// 本整列で tt_lookup の per-op latency が ~100ns→~86ns に低下)．child loop では `build_query`
+    /// 直後・`look_up` 前に dom_path / v3_path の flat path 走査が入るため，prefetch を発行すると
+    /// DRAM fetch がそれらと重なり latency を一部隠せる．**純粋な hint で探索結果に影響しない**
+    /// (search-invariant)．x86_64 以外では no-op (per-arch wheel ゆえ可搬)．
     #[inline]
     pub(super) fn prefetch(&self, ctx: &TtContext) {
         #[cfg(target_arch = "x86_64")]

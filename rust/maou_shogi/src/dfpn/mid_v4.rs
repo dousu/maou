@@ -1018,9 +1018,7 @@ impl DfPnSolver {
         if self.param_v4_path_dominance {
             let attacker_hand = board.hand[self.attacker.index()];
             self.v4_dom_path
-                .entry(super::position_key(board))
-                .or_default()
-                .push((attacker_hand, depth));
+                .push(super::position_key(board), attacker_hand, depth);
         }
 
         while curr.pn() < thpn && curr.dn() < thdn {
@@ -1070,13 +1068,7 @@ impl DfPnSolver {
 
         self.v3_path.remove(&board.hash);
         if self.param_v4_path_dominance {
-            let pk = super::position_key(board);
-            if let Some(v) = self.v4_dom_path.get_mut(&pk) {
-                v.pop();
-                if v.is_empty() {
-                    self.v4_dom_path.remove(&pk);
-                }
-            }
+            self.v4_dom_path.pop(super::position_key(board));
         }
         let pre_clamp = *inc_flag;
         *inc_flag = (*inc_flag).min(orig_inc);
@@ -1129,9 +1121,7 @@ impl DfPnSolver {
         self.v3_path.insert(board.hash, 0);
         if self.param_v4_path_dominance {
             self.v4_dom_path
-                .entry(super::position_key(board))
-                .or_default()
-                .push((attacker_hand, 0));
+                .push(super::position_key(board), attacker_hand, 0);
         }
 
         while curr.pn() < thpn && curr.dn() < thdn {
@@ -1152,13 +1142,7 @@ impl DfPnSolver {
 
         self.v3_path.remove(&board.hash);
         if self.param_v4_path_dominance {
-            let pk = super::position_key(board);
-            if let Some(v) = self.v4_dom_path.get_mut(&pk) {
-                v.pop();
-                if v.is_empty() {
-                    self.v4_dom_path.remove(&pk);
-                }
-            }
+            self.v4_dom_path.pop(super::position_key(board));
         }
         curr
     }
@@ -1415,12 +1399,7 @@ impl DfPnSolver {
             // (`v3_path`) の持駒 superset 方向への一般化 (exact は hand 等値の特殊ケース)．KH 同様に
             // **TT LookUp より前に** 刈ることで高コストな劣位部分木の展開を未然に防ぐ (これが node 削減の本体)．
             let dom_depth = if self.param_v4_path_dominance {
-                self.v4_dom_path.get(&ch_pos).and_then(|anc| {
-                    anc.iter()
-                        .rev()
-                        .find(|(h, _)| super::hand_gte(h, &child_hand))
-                        .map(|&(_, d)| d)
-                })
+                self.v4_dom_path.find_dominator(ch_pos, &child_hand)
             } else {
                 None
             };

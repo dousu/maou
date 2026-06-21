@@ -21,12 +21,12 @@ const K_FINAL_AMOUNT_BONUS: SearchAmount = 1000;
 /// 0xFF を sentinel に使える．
 pub(super) const NULL_HAND: Hand = [0xFF; HAND_KINDS];
 
-/// 千日手の可能性 (KH `RepetitionState`, ttentry.hpp:575)．
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum RepetitionState {
-    None,
-    PossibleRepetition,
-}
+/// `min_depth_rep` の千日手フラグ bit (KH `RepetitionState::kPossibleRepetition`)．
+/// `min_depth` (∈ [0, kDepthMax=4000]) は 15bit に収まるため，最上位 bit を流用する
+/// (Entry を 64B = 1 cache line に収めるための pack; 探索意味論は不変)．
+const REP_BIT: u16 = 0x8000;
+/// `min_depth_rep` の下位 15bit (min_depth 本体)．
+const MIN_DEPTH_MASK: u16 = 0x7FFF;
 
 /// 持ち駒 `a` が `b` と等しいか優等か (全駒種で `a[i] >= b[i]`)．
 /// KH `hand_is_equal_or_superior(a, b)` の componentwise 版．
@@ -49,38 +49,43 @@ fn saturated_add(a: SearchAmount, b: SearchAmount) -> SearchAmount {
 }
 
 /// KH `tt::detail::Entry` (ttentry.hpp:155-)．
+///
+/// **64 バイト = 1 cache line** に収めるため `#[repr(C, align(64))]` でフィールドを整列する
+/// (旧 72B は cache-line を跨ぎ TT look_up が memory-bound な一因だった)．KH と同じく
+/// `proven_len_`/`disproven_len_` は 16bit (kDepthMax=4000 < 2^16)，`min_depth` (∈[0,4000]) は
+/// 15bit + 千日手フラグ 1bit を `min_depth_rep` に pack する．値域は全て保たれ探索は不変．
+#[repr(C, align(64))]
 #[derive(Clone, Copy)]
 pub(super) struct Entry {
-    hand: Hand,             // 現局面の持ち駒 (NULL_HAND = 空 slot)
-    amount: SearchAmount,   // 探索量
-    board_key: u64,         // 盤面ハッシュ値 (KH `Key`)
-    proven_len: MateLen,    // 詰み手数 (これ以上の len なら詰み)
-    disproven_len: MateLen, // 不詰手数 (これ以下の len なら不詰)
+    board_key: u64,        // 盤面ハッシュ値 (KH `Key`)
+    parent_board_key: u64, // 親局面 (DAG 二重カウント補正の LookUpParent 用)
     pn: PnDn,
     dn: PnDn,
-    min_depth: i16,        // この局面を格納した最も浅い深さ (TCA old-child 判定)
-    parent_board_key: u64, // 親局面 (DAG 二重カウント補正の LookUpParent 用)
+    sum_mask: BitSet64,   // δ を和で計上する子の集合
+    amount: SearchAmount, // 探索量
+    proven_len: u16,      // 詰み手数 +1 (len_plus_1; これ以上の len なら詰み)
+    disproven_len: u16,   // 不詰手数 +1 (len_plus_1; これ以下の len なら不詰)
+    min_depth_rep: u16,   // bit15=千日手フラグ / bits0..14=格納最浅深さ (TCA old-child 判定)
+    hand: Hand,           // 現局面の持ち駒 (NULL_HAND = 空 slot)
     parent_hand: Hand,
-    repetition_state: RepetitionState,
-    sum_mask: BitSet64, // δ を和で計上する子の集合
 }
 
 impl Entry {
     /// 空 slot (KH default 構築; `hand_ == kNullHand`)．
     pub(super) fn null() -> Self {
         Self {
-            hand: NULL_HAND,
-            amount: 1,
             board_key: 0,
-            proven_len: DEPTH_MAX_PLUS1_MATE_LEN,
-            disproven_len: MINUS1_MATE_LEN,
+            parent_board_key: 0,
             pn: 1,
             dn: 1,
-            min_depth: KDEPTH_MAX as i16,
-            parent_board_key: 0,
-            parent_hand: NULL_HAND,
-            repetition_state: RepetitionState::None,
             sum_mask: BitSet64::full(),
+            amount: 1,
+            proven_len: DEPTH_MAX_PLUS1_MATE_LEN.raw() as u16,
+            disproven_len: MINUS1_MATE_LEN.raw() as u16,
+            // KDEPTH_MAX(4000) < 0x7FFF．rep bit = 0 (RepetitionState::None)．
+            min_depth_rep: KDEPTH_MAX as u16,
+            hand: NULL_HAND,
+            parent_hand: NULL_HAND,
         }
     }
 
@@ -89,14 +94,14 @@ impl Entry {
         self.hand = hand;
         self.amount = 1;
         self.board_key = board_key;
-        self.proven_len = DEPTH_MAX_PLUS1_MATE_LEN; // まだ詰みは見つかっていない
-        self.disproven_len = MINUS1_MATE_LEN; // まだ不詰は見つかっていない
+        self.proven_len = DEPTH_MAX_PLUS1_MATE_LEN.raw() as u16; // まだ詰みは見つかっていない
+        self.disproven_len = MINUS1_MATE_LEN.raw() as u16; // まだ不詰は見つかっていない
         self.pn = 1;
         self.dn = 1;
-        self.min_depth = KDEPTH_MAX as i16;
+        // min_depth = KDEPTH_MAX, rep bit = 0 を同時に設定．
+        self.min_depth_rep = KDEPTH_MAX as u16;
         self.parent_board_key = 0;
         self.parent_hand = NULL_HAND;
-        self.repetition_state = RepetitionState::None;
         self.sum_mask = BitSet64::full();
     }
 
@@ -137,15 +142,25 @@ impl Entry {
     }
     #[inline]
     pub(super) fn proven_len(&self) -> MateLen {
-        self.proven_len
+        MateLen::from_raw_u16(self.proven_len)
     }
     #[inline]
     pub(super) fn disproven_len(&self) -> MateLen {
-        self.disproven_len
+        MateLen::from_raw_u16(self.disproven_len)
     }
     #[inline]
     pub(super) fn is_possible_repetition(&self) -> bool {
-        self.repetition_state == RepetitionState::PossibleRepetition
+        (self.min_depth_rep & REP_BIT) != 0
+    }
+    /// `min_depth_rep` から min_depth 本体 (下位 15bit) を i16 で取り出す．
+    #[inline]
+    fn raw_min_depth(&self) -> i16 {
+        (self.min_depth_rep & MIN_DEPTH_MASK) as i16
+    }
+    /// min_depth 本体を更新する (千日手フラグ bit は保つ)．`d` は [0, 4000]．
+    #[inline]
+    fn set_raw_min_depth(&mut self, d: i16) {
+        self.min_depth_rep = (self.min_depth_rep & REP_BIT) | (d as u16 & MIN_DEPTH_MASK);
     }
     /// 親候補 (DAG LookUpParent 用)．
     #[inline]
@@ -159,12 +174,12 @@ impl Entry {
     /// 格納された最も浅い深さ (テスト/診断用)．
     #[inline]
     pub(super) fn min_depth(&self) -> i16 {
-        self.min_depth
+        self.raw_min_depth()
     }
     /// 千日手フラグを立てる (KH `SetPossibleRepetition`)．
     #[inline]
     pub(super) fn set_possible_repetition(&mut self) {
-        self.repetition_state = RepetitionState::PossibleRepetition;
+        self.min_depth_rep |= REP_BIT;
     }
 
     /// 空 slot 化 (KH `SetNull`, ttentry.hpp:237)．GC で低 amount entry を間引く際に使う．
@@ -197,8 +212,8 @@ impl Entry {
         parent_hand: Hand,
     ) {
         let depth16 = depth as i16;
-        if depth16 < self.min_depth {
-            self.min_depth = depth16;
+        if depth16 < self.raw_min_depth() {
+            self.set_raw_min_depth(depth16);
         }
         self.pn = pn;
         self.dn = dn;
@@ -210,16 +225,16 @@ impl Entry {
 
     /// KH `UpdateProven(len, amount)` (ttentry.hpp:330)．proven_len を短い方へ更新．
     pub(super) fn update_proven(&mut self, len: MateLen, amount: SearchAmount) {
-        if len < self.proven_len {
-            self.proven_len = len;
+        if len.raw() < self.proven_len as u32 {
+            self.proven_len = len.raw() as u16;
         }
         self.amount = self.amount.max(saturated_add(amount, K_FINAL_AMOUNT_BONUS));
     }
 
     /// KH `UpdateDisproven(len, amount)` (ttentry.hpp:343)．disproven_len を長い方へ更新．
     pub(super) fn update_disproven(&mut self, len: MateLen, amount: SearchAmount) {
-        if len > self.disproven_len {
-            self.disproven_len = len;
+        if len.raw() > self.disproven_len as u32 {
+            self.disproven_len = len.raw() as u16;
         }
         self.amount = self.amount.max(saturated_add(amount, K_FINAL_AMOUNT_BONUS));
     }
@@ -263,16 +278,16 @@ impl Entry {
         dn: &mut PnDn,
         use_old_child: &mut bool,
     ) -> bool {
-        if len >= self.proven_len {
+        if len.raw() >= self.proven_len as u32 {
             *pn = 0;
             *dn = K_INFINITE_PN_DN;
-        } else if len <= self.disproven_len {
+        } else if len.raw() <= self.disproven_len as u32 {
             *pn = K_INFINITE_PN_DN;
             *dn = 0;
         } else {
-            let min_depth = self.min_depth;
+            let min_depth = self.raw_min_depth();
             if depth16 < min_depth {
-                self.min_depth = depth16; // KH: min_depth_.store(depth16)
+                self.set_raw_min_depth(depth16); // KH: min_depth_.store(depth16)
             }
             if *pn < self.pn || *dn < self.dn {
                 *pn = (*pn).max(self.pn);
@@ -294,13 +309,13 @@ impl Entry {
         dn: &mut PnDn,
         use_old_child: &mut bool,
     ) -> bool {
-        if len >= self.proven_len {
+        if len.raw() >= self.proven_len as u32 {
             // 優等局面は高々 proven_len_ 手詰み
             *pn = 0;
             *dn = K_INFINITE_PN_DN;
             return true;
         }
-        let min_depth = self.min_depth;
+        let min_depth = self.raw_min_depth();
         if min_depth <= depth16 && *dn < self.dn {
             *dn = self.dn;
             if min_depth < depth16 {
@@ -320,13 +335,13 @@ impl Entry {
         dn: &mut PnDn,
         use_old_child: &mut bool,
     ) -> bool {
-        if len <= self.disproven_len {
+        if len.raw() <= self.disproven_len as u32 {
             // 劣等局面は少なくとも disproven_len_ 手不詰
             *pn = K_INFINITE_PN_DN;
             *dn = 0;
             return true;
         }
-        let min_depth = self.min_depth;
+        let min_depth = self.raw_min_depth();
         if min_depth <= depth16 && *pn < self.pn {
             *pn = self.pn;
             if min_depth < depth16 {

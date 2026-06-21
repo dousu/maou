@@ -58,6 +58,14 @@ impl MateLen {
         self.len_plus_1
     }
 
+    /// 16bit の生値 `len_plus_1` から構築する (TT entry の u16 格納からの復元用)．
+    ///
+    /// `len_plus_1` は `[0, kDepthMax+2] = [0, 4002]` に収まる (KH も 16bit で格納する)．
+    #[inline]
+    pub(super) const fn from_raw_u16(len_plus_1: u16) -> Self {
+        Self::from_len_plus_1(len_plus_1 as u32)
+    }
+
     /// `self + rhs` 手 (KH `operator+`, mate_len.hpp:75)．
     #[inline]
     pub(super) const fn add(self, rhs: u32) -> Self {

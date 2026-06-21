@@ -511,8 +511,10 @@ pub struct DfPnSolver {
     /// Phase 32: mid_v3 (ground-up KH コア port, unit-2 scale) 専用の exact-match TT．
     /// key = board.hash (全局面 hash, 手番・持駒含む)．mid_v2 の TT baggage を排した clean store．
     pub(super) v3_tt: rustc_hash::FxHashMap<u64, super::mid_v3::V3Entry>,
-    /// mid_v3 探索パス上の board.hash → ply (千日手検出 + 参照祖先 ply 特定用)．
-    pub(super) v3_path: rustc_hash::FxHashMap<u64, u32>,
+    /// mid_v3/mid_v4 探索パス上の board.hash → ply (千日手検出 + 参照祖先 ply 特定用)．
+    /// KH `Node` の連続パス保持と同型の flat スタック ([`super::path_stack::PathStack`])．
+    /// 旧 `FxHashMap` の散在 DRAM アクセスを排して memory-bound を解消する (探索不変)．
+    pub(super) v3_path: super::path_stack::PathStack,
     /// mid_v3 探索ノード数 (= search_v3 呼び出し回数)．
     pub(super) v3_nodes: u64,
     /// mid_v4 EliminateDoubleCount 用の明示的 expansion stack (KH `expansion_list_`)．
@@ -527,7 +529,8 @@ pub struct DfPnSolver {
     /// position_key → 現探索 path 上の祖先 `(attacker_hand, depth)` のスタック．
     /// 子局面が同一 board_key かつ攻め方持駒が祖先以下 (= 劣位) なら反復として刈る．
     /// `board.hash` だけの exact 千日手 (`v3_path`) を持駒 superset 方向へ一般化する．
-    pub(super) v4_dom_path: rustc_hash::FxHashMap<u64, Vec<([u8; HAND_KINDS], u32)>>,
+    /// KH VisitHistory と同型の flat スタック ([`super::path_stack::DomPathStack`]; 旧 `FxHashMap`)．
+    pub(super) v4_dom_path: super::path_stack::DomPathStack,
     /// mid_v4 dominance pruning 発火数 (診断用)．
     pub(super) v4_dom_fires: u64,
     /// mid_v4 path dominance を有効化するか (`V4_DOM` env で opt-in; default off)．
@@ -1177,12 +1180,12 @@ impl DfPnSolver {
             param_tca_use_shallow_gate: false,
             diag_deferred_frames: 0,
             v3_tt: rustc_hash::FxHashMap::default(),
-            v3_path: rustc_hash::FxHashMap::default(),
+            v3_path: super::path_stack::PathStack::new(),
             v3_nodes: 0,
             v4_stack: Vec::new(),
             v4_buf_pool: super::mid_v4::V4BufPool::default(),
             v4_dag_fires: 0,
-            v4_dom_path: rustc_hash::FxHashMap::default(),
+            v4_dom_path: super::path_stack::DomPathStack::new(),
             v4_dom_fires: 0,
             param_v4_path_dominance: false,
             param_v3_local_exp: true,

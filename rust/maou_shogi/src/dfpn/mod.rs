@@ -39,6 +39,7 @@ mod mid_v3;
 mod mid_v4;
 mod node_movegen;
 mod path_key;
+mod path_stack;
 mod pns;
 mod proof_hand;
 mod repetition_memo;
