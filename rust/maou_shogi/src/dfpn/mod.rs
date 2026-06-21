@@ -71,6 +71,18 @@ pub(super) fn kh_parity_order() -> bool {
     *C.get_or_init(|| std::env::var("V3_KHPAR").is_ok() || std::env::var("V3_V4").is_ok())
 }
 
+/// V4_KHPARENT: DAG 二重カウント補正の `look_up_parent` (TT 親候補選択) を KH `LookUpParent`
+/// (`UpdateParentCandidate`, ttentry.hpp:412) へ忠実化する gate．
+/// maou は既定で「exact-hand 親が在ればそれを優先」する独自簡約をしているが，KH は exact 優先を
+/// **持たず** pn/dn 最大化 (cross-hand) のみで親候補を選ぶ．exact 優先は親鎖を KH と乖離させ
+/// `find_known_ancestor` の DAG merge 検出を取りこぼす (cnt=12039: ply5 child 5b5c の sum_mask
+/// reset 欠落 → sum_delta 過大 → threshold 過小 → 部分木を早期放棄して node 増)．本 gate ON で
+/// exact 優先を撤去し KH と同一の親候補 = 同一 DAG 検出にする．default off (default mid_v4 不変)．
+pub(super) fn kh_parent_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("V4_KHPARENT").is_ok())
+}
+
 /// V4_KHMOVES: AND node の合駒生成を KH `MovePicker` に忠実化する gate．
 /// maou は既定で「無駄合い (futile) を skip」「chain マスは代表駒のみ」と reduction するが，
 /// KH は全合駒 drop / 全 piece-move interposition を生成し DML chain で defer する．

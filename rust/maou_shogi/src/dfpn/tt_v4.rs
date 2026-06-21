@@ -315,9 +315,15 @@ impl TranspositionTable {
                 idx = 0;
             }
         }
-        if let Some((pbk, ph)) = exact_parent {
-            Some((pbk, ph, pn, dn))
-        } else if cross_hand == NULL_HAND {
+        // KH `LookUpParent` は exact-hand 優先を持たず pn/dn 最大化 (cross-hand) のみで親を選ぶ
+        // (`UpdateParentCandidate`)．`V4_KHPARENT` ON で exact 優先を撤去し KH 忠実にする
+        // (DAG merge 検出を KH と一致させ cnt=12039 の sum_mask reset 欠落を解消)．
+        if !super::kh_parent_enabled() {
+            if let Some((pbk, ph)) = exact_parent {
+                return Some((pbk, ph, pn, dn));
+            }
+        }
+        if cross_hand == NULL_HAND {
             None
         } else {
             Some((cross_bk, cross_hand, pn, dn))
