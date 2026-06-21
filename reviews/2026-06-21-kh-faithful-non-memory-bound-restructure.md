@@ -1,6 +1,7 @@
 ---
 title: "mid_v4 を KH 忠実な non-memory-bound 構造へシフト — per-node HashMap 撤廃 + TT cache-cluster 化"
-status: pending
+status: applied
+applied_in: a202cd6  # v2.48.0 (R1 flat path stack + R2 TT 64B cache-line)
 date: 2026-06-21
 branch: feat/tsume-solver
 base-sha: 0355910  # v2.47.0
@@ -63,3 +64,23 @@ TT 内に持ち, (c) TT は **cluster (1 cache-line 内 probe, cache-line 整列
 ## 6. 承認後のアクション
 
 着手は承認後．完了時に docs を更新し status: applied + SHA を記入する (docs 編集はユーザ; モデルは直接編集しない)．
+
+## 7. 適用結果 (2026-06-21, a202cd6 / v2.48.0)
+
+**実装完了・全 search-invariant** (canonical mid_v3 18,539 / 39te 3,105,196 nodes /
+6,384,324 do_moves / mate-65 byte 一致; 203 suite + 14 新 unit pass):
+- **R1**: `dfpn/path_stack.rs` (`PathStack` drop-in + `DomPathStack`)．`v3_path`/`v4_dom_path`
+  FxHashMap を flat 連続配列 + 逆順線形走査へ置換 (KH `ContainsInPath` 同型)．
+- **R2**: `ttentry::Entry` 72B→**64B = 1 cache line** (`#[repr(C, align(64))]`; proven/disproven_len
+  u16, min_depth 15bit + rep flag 1bit pack)．TT 576MB→512MB．
+
+**🎯 但し memory 構造は wall lever でないと実測確定 (重要; 当初動機を部分的に反証)**:
+- 同一 window min-of-N: quiet host = base 21.2s / **new 21.3s** / KH 14.1s．
+  **DRAM contention 下** (自作 streaming stressor ×3 を core 1-3 pin) = base 45.9s / **new 45.9s**．
+- 理由: search-invariant = memory **アクセス回数**不変 → layout (bytes/access, scatter) 変更では
+  latency 律速の wall は縮まらない (contention 下で new==base が決定的証拠)．
+- **R2 は小 micro-win** (V4PROF: tt_lookup 100→86ns/op, -14%, ~-2% wall)．**R1 は neutral**．
+- **真の gap = per-node compute** (maou node 少 3.11M<KH 3.88M だが 1.5×/node 遅):
+  mate1ply 23.6% (1207ns) / cl_other(seed/query) 26.6%．
+- → 旧 compass「真因 = memory 帯域律速 (lever)」を実験棄却．次 lever (ユーザ選択) =
+  **mate1ply の KH 忠実移植** (`Mate::mate_1ply` king-centric constructive; movegen 回避が ~6× 定数差)．
