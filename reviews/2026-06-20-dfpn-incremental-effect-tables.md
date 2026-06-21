@@ -197,3 +197,47 @@ KH は維持コストを**ほぼ mate1ply の高速化のみで償却**する (s
 - **検証**: canonical 18,539 不変 / mate-len soundness / EFFECT_VERIFY (count) + 新 WordBoard verify /
   同一 window で KH 比較．**期待 net**: mate1ply ~22% 削減 ≈ 維持 +5s ⇒ 全変換で初めて net 中立〜KH per-op 接近．
   payoff は境界線だが「全面変換でのみ償却される」(ユーザ指摘) ため full 実装で実測する．
+
+---
+
+## 10. Phase B 実測 = effect は maou dfpn で償却されない (棄却確定, 2026-06-20, v2.47.0)
+
+### 実装 (a76e1c9): KH 忠実 effect mate1ply (escape 判定)
+`is_checkmate_after_bb` の escape 安全判定を 3 経路に分離 (`escape_attacked_after` dispatcher):
+- `escape_attacked_after_escinfo`: 既存 EscInfo (occ_nk_pre 基準 per-position キャッシュ) = 既定/ground truth．
+- `escape_attacked_after_eff`: **KH 忠実版** = after-move 局面 `occ_no_king` 上で 8 方向を `RAY_MASKS`+bit-scan
+  (shadow/遮断/開放を occ_no_king が内包, PEXT 不要 = KH `effected_to` と同値を after-move occ で直接取得)．
+  `EFFECT_MATE1PLY=1` で駆動, `EFFECT_MATE1PLY_VERIFY=1` で両者突合 assert．attack.rs に `adjacent_dir`．
+
+### ✅ soundness (差分検証)
+39te bundle を `EFFECT_MATE1PLY=1 EFFECT_MATE1PLY_VERIFY=1` で実行 → **数百万 mate1ply 候補で eff==escinfo
+完全一致 (assert 発火無し), node 3,105,196/do_moves 6,384,324/Some(55) 不変**．feature off 非回帰．
+
+### ⚠⚠ 実測結論: mate1ply gap は閉じない = effect は maou dfpn で償却されない
+39te 同一 host window min-of-3 (本日高負荷):
+| 構成 | 39te 探索 (min) |
+|---|---|
+| KH | **18.7s** (軽負荷時 14.6s) |
+| maou OFF (effect 無) | **36.3s** |
+| maou ON 維持のみ (EscInfo mate1ply) | **49.7s** |
+| maou ON eff (KH 忠実 effect mate1ply) | **51.0s** |
+- **ON-eff ≈ ON-維持のみ (むしろ +1.3s)** = **KH 忠実 effect mate1ply は EscInfo より速くならず gap 不縮**．
+- 理由 (コード根拠+実測): maou EscInfo は `occ_nk_pre` 基準で **per-position キャッシュ** (同一局面の全王手候補で
+  償却)．eff は after-move `occ_no_king` を**候補毎に再計算しキャッシュ不可** → ≈EscInfo (やや遅)．維持テーブル
+  (pre-move) は mate1ply の after-move (王が抜けた影利き/from 開放) を忠実に出せず (pre-move は王在で王手無=
+  long_dir[king_sq]=0)，occ_no_king ray-walk が必須でそれは維持テーブルを使わない．
+
+### campaign 結論 (effect 棄却)
+**effect テーブルは maou の dfpn では net 償却されない (実測確定)**:
+1. 最大 query の **mate1ply は既に do_move-free + per-position キャッシュ**済 → KH 忠実 effect 化しても速くならない．
+2. **維持 +5s は純コスト** (do_move より query 多数でも，その query が既にキャッシュ最適化済ゆえ)．
+3. **OFF–KH gap (~1.5×軽/~1.9×重) は tt_lookup memory-bound (576MB DRAM) が一因** = query 計算でなくメモリ帯域
+   ⇒ effect (query 計算高速化) では埋まらない．
+- KH が effect で速いのは YaneuraOu の探索/評価が pre-move `attackers_to` を多用する別プロファイルゆえ; maou dfpn
+  (mate1ply=after-move 中心, EscInfo 既最適化) には転移しない．**ユーザ仮説「全面忠実化で償却」は実装+実測で反証**．
+
+### 成果物の扱い (全 feature `effect_table` gated, default OFF = 完全非回帰)
+Stage 1(v2.43)/direction-aware(v2.44)/Stage 2(v2.45)/Phase A WordBoard(v2.46)/Phase B(v2.47) は全て
+default ビルドに非影響 (探索不変・199 pass)．**残す価値**: 検証済み KH 忠実実装 + 決定的な負の実測 (do-not-redo)．
+**status**: §5 受け入れ基準 (wall 短縮) 未達ゆえ **approved のまま** (applied にしない; 実装は完了したが目的未達)．
+**次の lever**: OFF–KH gap の真因 = **memory-bound TT** へ (effect でなく cache/TT レイアウト)．
