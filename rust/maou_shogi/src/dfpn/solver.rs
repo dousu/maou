@@ -2387,6 +2387,149 @@ impl DfPnSolver {
         self.check_cache.insert(hash, &moves);
         board.mate_move_in_1ply_maxdist(moves.as_slice(), turn, 2)
     }
+
+    /// KH/YaneuraOu `Mate::mate_1ply` 忠実な look-ahead 1 手詰判定 (`MATE1PLY_KH` gate)．
+    ///
+    /// [`DfPnSolver::generate_mate_candidates_kh`] が敵玉隣接 geometry から KH と同一駒種順で
+    /// 1 手詰候補を構成し，検証済 [`Board::mate_move_in_1ply_maxdist`] でスキャンする．返り値 =
+    /// YaneuraOu `mate_1ply` が返す手．従来 `mate1ply_cached_near2` との違いは候補列挙のみ
+    /// (full movegen を回避; 探索経路は KH 寄りに変わる)．`check_cache` は更新しない
+    /// (node が展開される場合は expansion 側が必要時に full 生成する)．
+    ///
+    /// 逆王手局面 (攻め方自玉が王手 = YaneuraOu `ASSERT(!checkers)` 前提外) は従来 scan へ
+    /// fallback する．`MATE1PLY_KH_VERIFY` 時は健全性 (偽 1 手詰の無さ) と full scan との一致を照合．
+    pub(super) fn mate1ply_kh(&self, board: &mut Board) -> Option<Move> {
+        let turn = board.turn;
+        if board.king_square(turn).is_some() && board.is_in_check(turn) {
+            // 逆王手: king-geometry 列挙の前提外 → 従来の near2 scan で判定する．
+            return self.mate1ply_cached_near2(board);
+        }
+        let candidates = self.generate_mate_candidates_kh(board);
+        let kh = board.mate_move_in_1ply_maxdist(candidates.as_slice(), turn, u8::MAX);
+        if mate1ply_kh_verify() {
+            self.verify_mate1ply_kh(board, kh);
+        }
+        kh
+    }
+
+    /// `MATE1PLY_KH_VERIFY` 用: kh 列挙の健全性と従来 full scan との一致を照合し統計へ加算する．
+    /// (a) kh が返す手は必ず真の 1 手詰 (do_move 後に詰み) でなければならない (偽 1 手詰 = bug)．
+    /// (b) full scan (`mate1ply_with_cached_checks`, 全王手) との Some/None・手の一致を記録する
+    ///     (手の相違・kh miss は KH 忠実な構成差ゆえ許容; FALSE_MATE=0 のみ必須)．
+    fn verify_mate1ply_kh(&self, board: &mut Board, kh: Option<Move>) {
+        let turn = board.turn;
+        let defender = turn.opponent();
+        let full = self.mate1ply_with_cached_checks(board).0;
+        let mut false_pos = false;
+        if let Some(m) = kh {
+            let cap = board.do_move(m);
+            let real = board.is_in_check(defender) && !crate::movegen::has_any_legal_move(board);
+            board.undo_move(m, cap);
+            false_pos = !real;
+        }
+        record_mate1ply_kh(kh, full, false_pos);
+        if false_pos {
+            eprintln!(
+                "[mate1ply_kh] FALSE MATE kh={:?} sfen={}",
+                kh.map(|m| m.to_usi()),
+                board.sfen()
+            );
+        }
+        // kh_miss (full=Some, kh=None) を分類 dump する (最初の 40 件)．near2==full ゆえ
+        // miss は dist≤2 の near-king 詰み = (a) 列挙ギャップ (port bug) か (b) KH mate_1ply も
+        // 落とす pattern (玉移動開き王手 等) か を判別する手掛かり．
+        if kh.is_none() {
+            if let Some(fm) = full {
+                let n = KH_MISS_DUMP.with(|c| {
+                    let v = c.get();
+                    c.set(v + 1);
+                    v
+                });
+                if n < 40 {
+                    let kingd = board.king_square(defender).map(|k| {
+                        let to = fm.to_sq();
+                        (to.col() as i32 - k.col() as i32)
+                            .abs()
+                            .max((to.row() as i32 - k.row() as i32).abs())
+                    });
+                    let from_is_king =
+                        (!fm.is_drop()) && board.king_square(turn) == Some(fm.from_sq());
+                    eprintln!(
+                        "[mate1ply_kh] MISS full={} drop={} promo={} king_move={} to_king_dist={:?} sfen={}",
+                        fm.to_usi(),
+                        fm.is_drop(),
+                        fm.is_promotion(),
+                        from_is_king,
+                        kingd,
+                        board.sfen(),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// `MATE1PLY_KH`: look-ahead 1 手詰判定を YaneuraOu `mate_1ply` 忠実列挙へ切替える
+/// (default OFF; 計測・段階導入用)．[`DfPnSolver::mate1ply_kh`] を参照．
+pub(super) fn mate1ply_kh_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("MATE1PLY_KH").is_ok())
+}
+
+/// `MATE1PLY_KH_VERIFY`: kh 列挙の健全性 + full scan との一致を毎 look-ahead 照合する
+/// (default OFF; 重い)．`MATE1PLY_KH` と併用する．
+pub(super) fn mate1ply_kh_verify() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("MATE1PLY_KH_VERIFY").is_ok())
+}
+
+thread_local! {
+    /// [calls, kh_mate, diffmove, kh_miss, false_pos]．`MATE1PLY_KH_VERIFY` 時のみ加算．
+    static MATE1PLY_KH_STATS: std::cell::Cell<[u64; 5]> = const { std::cell::Cell::new([0; 5]) };
+    /// kh_miss dump の出力件数 (最初の数件のみ詳細を出す)．
+    static KH_MISS_DUMP: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// kh verify 1 件分を加算する．
+fn record_mate1ply_kh(kh: Option<Move>, full: Option<Move>, false_pos: bool) {
+    MATE1PLY_KH_STATS.with(|s| {
+        let mut v = s.get();
+        v[0] += 1;
+        if kh.is_some() {
+            v[1] += 1;
+        }
+        match (kh, full) {
+            (Some(a), Some(b)) if a != b => v[2] += 1,
+            (None, Some(_)) => v[3] += 1,
+            _ => {}
+        }
+        if false_pos {
+            v[4] += 1;
+        }
+        s.set(v);
+    });
+}
+
+/// kh verify 統計を reset する (solve 開始時)．
+pub(super) fn reset_mate1ply_kh_stats() {
+    MATE1PLY_KH_STATS.with(|s| s.set([0; 5]));
+}
+
+/// kh verify 統計を report する (solve 終了時; gate off なら no-op)．
+pub(super) fn report_mate1ply_kh_stats() {
+    if !mate1ply_kh_verify() {
+        return;
+    }
+    MATE1PLY_KH_STATS.with(|s| {
+        let v = s.get();
+        if v[0] == 0 {
+            return;
+        }
+        eprintln!(
+            "[mate1ply_kh] calls={} kh_mate={} | vs full: diffmove={} kh_miss(full=Some,kh=None)={} | FALSE_MATE(bug)={}",
+            v[0], v[1], v[2], v[3], v[4],
+        );
+    });
 }
 
 // ===== MATE1PLY_CAND 診断 =====================================================

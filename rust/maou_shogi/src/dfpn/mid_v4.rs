@@ -553,6 +553,7 @@ impl DfPnSolver {
         crate::movegen::reset_pawn_drop_mate_dm();
         crate::board::reset_do_move_count();
         super::solver::reset_mate_cand_stats();
+        super::solver::reset_mate1ply_kh_stats();
         // KH VisitHistory path dominance (IsRepetitionOrInferiorAfter)．`V4_DOM` で opt-in (default OFF)．
         // 単位を揃えた計測で判明: KH (dominance 有) = 9,296 visits に対し，maou+dominance = 16,902
         // (1.82×) と KH から **遠ざかる** (DAG EliminateDoubleCount との二重カウント相互作用; fires
@@ -652,6 +653,7 @@ impl DfPnSolver {
             self.v4_dom_fires
         );
         super::solver::report_mate_cand_stats();
+        super::solver::report_mate1ply_kh_stats();
         if std::env::var("V4DMBREAK").is_ok() {
             let dm = DM_SITE.with(|c| c.get());
             let lq = super::node_movegen::legal_quick_dm();
@@ -1545,6 +1547,9 @@ impl DfPnSolver {
         let (no_mate, mm_opt) = if dhmp_enabled() {
             if !board.does_have_mate_possibility(board.turn) {
                 (true, None)
+            } else if super::solver::mate1ply_kh_enabled() {
+                // KH/YaneuraOu mate_1ply 忠実列挙 (full movegen 回避; 探索経路は KH 寄りに変わる)．
+                (false, self.mate1ply_kh(board))
             } else if near2_enabled() {
                 // 距離 ≤2 候補のみ検査 (node 不変; 遠方候補の verify/do_move fallback を省く)．
                 (false, self.mate1ply_cached_near2(board))

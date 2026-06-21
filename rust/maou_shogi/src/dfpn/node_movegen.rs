@@ -959,6 +959,203 @@ impl DfPnSolver {
         }
     }
 
+    /// KH/YaneuraOu `Mate::mate_1ply` (`mate1ply_without_effect.cpp`, Bonanza6 流) 忠実移植の
+    /// **候補列挙部**．敵玉隣接 geometry から 1 手詰候補 (王手) を YaneuraOu と同一の駒種順
+    /// (打ち = 飛/香/角/金/銀/桂, 移動 = 龍/飛/馬/角/香 → 金/銀/桂/歩) で直接構成する
+    /// (full movegen 不要)．
+    ///
+    /// 列挙候補は [`Board::mate_move_in_1ply_maxdist`] (検証済 per-candidate mate 判定 + 開き
+    /// 王手 do_move fallback) でスキャンする ⇒ 返り値 = この順序での最初の 1 手詰 = YaneuraOu
+    /// `mate_1ply` が返す手 (探索経路は変わるが KH 忠実)．本列挙は YaneuraOu が `#if 0` で無効化
+    /// している遠方駒打ち詰み・両王手詰みを生成しない (KomoringHeights も同一構成)．
+    ///
+    /// **前提**: 攻め方が非王手 (`!checkers`)．逆王手局面 (攻め方自玉が王手) は呼び出し側
+    /// ([`super::solver::DfPnSolver::mate1ply_kh`]) が従来 scan へ fallback する (YaneuraOu の
+    /// `ASSERT(!checkers)` 前提に対応)．`board` は読むだけ (do_move しない)．
+    pub(super) fn generate_mate_candidates_kh(&self, board: &Board) -> ArrayVec<Move, MAX_MOVES> {
+        let mut out = ArrayVec::<Move, MAX_MOVES>::new();
+        let us = board.turn;
+        let them = us.opponent();
+        let king = match board.king_square(them) {
+            Some(k) => k,
+            None => return out,
+        };
+        let usi = us.index();
+        let all_occ = board.all_occupied();
+        let empty = !all_occ;
+        let our_occ = board.occupied[usi];
+        let bb_move = !our_occ;
+
+        // 攻め方自玉の pin (盤上移動が自玉の王手放置にならないよう除外する; 駒打ちは非王手
+        // 前提ゆえ自玉を晒さず常に合法)．
+        let our_king = board.king_square(us);
+        let our_pinned = match our_king {
+            Some(k) => board.compute_pinned(us, k),
+            None => Bitboard::EMPTY,
+        };
+
+        // 敵玉の逆利き = 「その駒を置く / 動かすと敵玉に王手になる」マス集合．
+        let k_neighbors = attack::step_attacks(us, PieceType::King, king);
+        let gold_chk = attack::step_attacks(them, PieceType::Gold, king);
+        let silver_chk = attack::step_attacks(them, PieceType::Silver, king);
+        let knight_chk = attack::step_attacks(them, PieceType::Knight, king);
+        let pawn_chk = attack::step_attacks(them, PieceType::Pawn, king);
+
+        let hand = board.hand[usi];
+        let in_hand = |pt: PieceType| hand[pt.hand_index().unwrap()] > 0;
+        let can_promo =
+            |from: Square, to: Square| to.is_promotion_zone(us) || from.is_promotion_zone(us);
+
+        // 盤上移動候補を push (自玉 pin 違反 = 自玉王手放置は除外; 駒種・取り駒は board から読む)．
+        let push_bm =
+            |out: &mut ArrayVec<Move, MAX_MOVES>, from: Square, to: Square, promote: bool| {
+                if let Some(ok) = our_king {
+                    if our_pinned.contains(from) && !attack::line_through(from, ok).contains(to) {
+                        return;
+                    }
+                }
+                let captured_raw = board.squares[to.index()].0;
+                let raw_pt = board.squares[from.index()].piece_type().unwrap() as u8;
+                super::push_move(out, Move::new_move(from, to, promote, captured_raw, raw_pt));
+            };
+
+        // 行き所のない駒の禁止段 (駒打ち)．
+        let last_rank = match us {
+            Color::Black => Bitboard::rank_mask(0),
+            Color::White => Bitboard::rank_mask(8),
+        };
+        let knight_forbidden = match us {
+            Color::Black => Bitboard::rank_mask(0) | Bitboard::rank_mask(1),
+            Color::White => Bitboard::rank_mask(7) | Bitboard::rank_mask(8),
+        };
+
+        // ===== 1. 駒打ち (YaneuraOu 順: 飛 → 香 → 角 → 金 → 銀 → 桂; 歩打ち = 打ち歩詰め反則ゆえ除外) =====
+        // 飛打ち: 敵玉の上下左右 (rook step ∩ 8 近傍) の空マス．
+        if in_hand(PieceType::Rook) {
+            for to in attack::rook_attacks(king, Bitboard::EMPTY) & k_neighbors & empty {
+                super::push_move(&mut out, Move::new_drop(to, PieceType::Rook));
+            }
+        }
+        // 香打ち: 敵玉の直下 (歩の逆利き) の空マス (最終段除く)．
+        if in_hand(PieceType::Lance) {
+            for to in pawn_chk & empty & !last_rank {
+                super::push_move(&mut out, Move::new_drop(to, PieceType::Lance));
+            }
+        }
+        // 角打ち: 敵玉の斜め 4 近傍の空マス．
+        if in_hand(PieceType::Bishop) {
+            for to in attack::bishop_attacks(king, Bitboard::EMPTY) & k_neighbors & empty {
+                super::push_move(&mut out, Move::new_drop(to, PieceType::Bishop));
+            }
+        }
+        // 金打ち: 敵玉の金の逆利きの空マス．
+        if in_hand(PieceType::Gold) {
+            for to in gold_chk & empty {
+                super::push_move(&mut out, Move::new_drop(to, PieceType::Gold));
+            }
+        }
+        // 銀打ち: 敵玉の銀の逆利きの空マス．
+        if in_hand(PieceType::Silver) {
+            for to in silver_chk & empty {
+                super::push_move(&mut out, Move::new_drop(to, PieceType::Silver));
+            }
+        }
+        // 桂打ち: 敵玉の桂の逆利きの空マス (最終 2 段除く)．
+        if in_hand(PieceType::Knight) {
+            for to in knight_chk & empty & !knight_forbidden {
+                super::push_move(&mut out, Move::new_drop(to, PieceType::Knight));
+            }
+        }
+
+        // ===== 2. 移動による王手 (YaneuraOu 順: 龍 → 飛 → 馬 → 角 → 香 → 金 → 銀 → 桂 → 歩) =====
+        // 龍: 敵玉 8 近傍への移動 (成り無し)．
+        for from in board.piece_bb[usi][PieceType::Dragon as usize] {
+            for to in attack::dragon_attacks(us, from, all_occ) & bb_move & k_neighbors {
+                push_bm(&mut out, from, to, false);
+            }
+        }
+        // 飛: 敵玉 8 近傍への移動 (敵陣絡みは成り)．
+        for from in board.piece_bb[usi][PieceType::Rook as usize] {
+            for to in attack::rook_attacks(from, all_occ) & bb_move & k_neighbors {
+                push_bm(&mut out, from, to, can_promo(from, to));
+            }
+        }
+        // 馬: 敵玉 8 近傍への移動 (成り無し)．
+        for from in board.piece_bb[usi][PieceType::Horse as usize] {
+            for to in attack::horse_attacks(us, from, all_occ) & bb_move & k_neighbors {
+                push_bm(&mut out, from, to, false);
+            }
+        }
+        // 角: 敵玉 8 近傍への移動 (敵陣絡みは成り)．
+        for from in board.piece_bb[usi][PieceType::Bishop as usize] {
+            for to in attack::bishop_attacks(from, all_occ) & bb_move & k_neighbors {
+                push_bm(&mut out, from, to, can_promo(from, to));
+            }
+        }
+        // 香: 玉の金の逆利き範囲への移動 (成り = 金を優先, 次に不成 = 串刺し)．
+        for from in board.piece_bb[usi][PieceType::Lance as usize] {
+            for to in attack::lance_attacks(us, from, all_occ) & bb_move & gold_chk {
+                if can_promo(from, to) {
+                    push_bm(&mut out, from, to, true);
+                }
+                if !movegen::must_promote(us, PieceType::Lance, to) {
+                    push_bm(&mut out, from, to, false);
+                }
+            }
+        }
+        // 金 (成金含む): 玉の金の逆利き範囲への移動 (成り無し)．
+        let golds = board.piece_bb[usi][PieceType::Gold as usize]
+            | board.piece_bb[usi][PieceType::ProPawn as usize]
+            | board.piece_bb[usi][PieceType::ProLance as usize]
+            | board.piece_bb[usi][PieceType::ProKnight as usize]
+            | board.piece_bb[usi][PieceType::ProSilver as usize];
+        for from in golds {
+            for to in attack::step_attacks(us, PieceType::Gold, from) & bb_move & gold_chk {
+                push_bm(&mut out, from, to, false);
+            }
+        }
+        // 銀: 玉 8 近傍への移動 (各 to で不成を優先, 次に成 = 金)．
+        for from in board.piece_bb[usi][PieceType::Silver as usize] {
+            for to in attack::step_attacks(us, PieceType::Silver, from) & bb_move & k_neighbors {
+                if silver_chk.contains(to) {
+                    push_bm(&mut out, from, to, false);
+                }
+                if gold_chk.contains(to) && can_promo(from, to) {
+                    push_bm(&mut out, from, to, true);
+                }
+            }
+        }
+        // 桂: 桂の利き先への移動 (各 to で不成を優先, 次に成 = 金)．
+        for from in board.piece_bb[usi][PieceType::Knight as usize] {
+            for to in attack::step_attacks(us, PieceType::Knight, from) & bb_move {
+                if knight_chk.contains(to) {
+                    push_bm(&mut out, from, to, false);
+                }
+                if gold_chk.contains(to) && can_promo(from, to) {
+                    push_bm(&mut out, from, to, true);
+                }
+            }
+        }
+        // 歩 不成 (玉直下への前進, 敵陣でない)．
+        for from in board.piece_bb[usi][PieceType::Pawn as usize] {
+            for to in attack::step_attacks(us, PieceType::Pawn, from) & bb_move & pawn_chk {
+                if !to.is_promotion_zone(us) {
+                    push_bm(&mut out, from, to, false);
+                }
+            }
+        }
+        // 歩 成り (と金で王手)．
+        for from in board.piece_bb[usi][PieceType::Pawn as usize] {
+            for to in attack::step_attacks(us, PieceType::Pawn, from) & bb_move & gold_chk {
+                if to.is_promotion_zone(us) {
+                    push_bm(&mut out, from, to, true);
+                }
+            }
+        }
+
+        out
+    }
+
     /// 指定マスに置いた駒が玉のマスに利いているか判定する．
     #[inline]
     pub(super) fn attacks_square(
