@@ -62,6 +62,22 @@ fn effect_skip_b() -> bool {
     *F.get_or_init(|| std::env::var("EFFECT_SKIP_B").is_ok())
 }
 
+/// `EFFECT_MATE1PLY=1` で mate1ply の escape 判定を effect-delta 版で駆動する (既定は EscInfo)．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn effect_mate1ply_enabled() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var("EFFECT_MATE1PLY").is_ok())
+}
+
+/// `EFFECT_MATE1PLY_VERIFY=1` で effect-delta escape 判定を EscInfo 版と全候補突合 assert する．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn effect_mate1ply_verify() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var("EFFECT_MATE1PLY_VERIFY").is_ok())
+}
+
 /// 駒 (color, pt) の遠方利き方向リスト (`long_dir` の bit 群; ステップ駒は空)．
 /// 飛/龍=縦横, 角/馬=斜め, 香=色依存の前方 1 方向．`long_dir` 維持・再構築・検証で共有する．
 #[cfg(feature = "effect_table")]
@@ -1193,53 +1209,24 @@ impl Board {
             if checker_attacks.contains(esc) {
                 continue; // 王手駒の利きに入っている → 逃げられない
             }
-            let info = match ctx.esc_info[slot] {
-                Some(i) => i,
-                None => {
-                    let i = self.compute_esc_info(esc, defender, att_idx, ctx.occ_nk_pre);
-                    ctx.esc_info[slot] = Some(i);
-                    i
-                }
-            };
-            if (info.steps & from_mask).is_not_empty() {
-                continue; // step 駒が利いている (占有非依存で正確)
-            }
-            let surv = info.sliders & from_mask;
-            let mut covered = false;
-            if surv.is_not_empty() {
-                if !info.qvis.contains(to_sq) {
-                    // to は esc へのどの ray 上にもない → 遮断は起き得ない
-                    covered = true;
-                } else {
-                    for s in surv {
-                        if !attack::between_bb(s, esc).contains(to_sq) {
-                            covered = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if covered {
-                continue;
-            }
-            // 既存利きなし (または全て to に遮られた)．残るは from 退去による開き利きのみで，
-            // それは from が esc から slider-visible のときしか起き得ない．
-            match from_opt {
-                Some(f) if info.qvis.contains(f) => {
-                    if !self.is_sq_attacked_after_move(
-                        esc,
-                        attacker,
-                        occ_no_king,
-                        att_idx,
-                        def_idx,
-                        from_opt,
-                        to_sq,
-                        false,
-                    ) {
-                        return Some(false); // 安全な逃げ場がある
-                    }
-                }
-                _ => return Some(false), // 安全な逃げ場がある
+            // esc が王手後に攻め方の利きを受けるか (false = 安全な逃げ場あり)．
+            let attacked = self.escape_attacked_after(
+                esc,
+                slot,
+                defender,
+                attacker,
+                att_idx,
+                def_idx,
+                king_sq,
+                from_opt,
+                to_sq,
+                from_mask,
+                occ_no_king,
+                all_occ,
+                ctx,
+            );
+            if !attacked {
+                return Some(false); // 安全な逃げ場がある
             }
         }
 
@@ -1332,6 +1319,219 @@ impl Board {
         }
 
         Some(true) // 詰み!
+    }
+
+    /// escape マス `esc` が王手手 (from→to) 適用後に攻め方の利きを受けるか (true=受ける=逃げ不可)．
+    ///
+    /// 既定は EscInfo 版 (per-position キャッシュ; canonical の本体)．`effect_table` feature 有効かつ
+    /// `EFFECT_MATE1PLY=1` のとき effect 版 (`occ_no_king` ray-walk) で駆動し，`EFFECT_MATE1PLY_VERIFY=1`
+    /// で両者を全候補突合 assert する (KH 忠実化の差分検証)．
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    fn escape_attacked_after(
+        &self,
+        esc: Square,
+        slot: usize,
+        defender: Color,
+        attacker: Color,
+        att_idx: usize,
+        def_idx: usize,
+        king_sq: Square,
+        from_opt: Option<Square>,
+        to_sq: Square,
+        from_mask: Bitboard,
+        occ_no_king: Bitboard,
+        all_occ: Bitboard,
+        ctx: &mut Mate1plyCtx,
+    ) -> bool {
+        #[cfg(feature = "effect_table")]
+        {
+            if effect_mate1ply_enabled() {
+                let eff = self.escape_attacked_after_eff(
+                    esc,
+                    attacker,
+                    att_idx,
+                    def_idx,
+                    king_sq,
+                    from_opt,
+                    to_sq,
+                    from_mask,
+                    occ_no_king,
+                );
+                if effect_mate1ply_verify() {
+                    let gt = self.escape_attacked_after_escinfo(
+                        esc,
+                        slot,
+                        defender,
+                        attacker,
+                        att_idx,
+                        def_idx,
+                        from_opt,
+                        to_sq,
+                        from_mask,
+                        occ_no_king,
+                        ctx,
+                    );
+                    assert_eq!(
+                        eff, gt,
+                        "escape eff != escinfo: esc={esc:?} from={from_opt:?} to={to_sq:?} king={king_sq:?}"
+                    );
+                }
+                return eff;
+            }
+        }
+        let _ = (king_sq, all_occ); // effect 版でのみ使う引数 (escinfo 経路では未使用)
+        self.escape_attacked_after_escinfo(
+            esc,
+            slot,
+            defender,
+            attacker,
+            att_idx,
+            def_idx,
+            from_opt,
+            to_sq,
+            from_mask,
+            occ_no_king,
+            ctx,
+        )
+    }
+
+    /// EscInfo (per-position キャッシュ + from/to 補正) に基づく escape 利き判定 (ground truth)．
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    fn escape_attacked_after_escinfo(
+        &self,
+        esc: Square,
+        slot: usize,
+        defender: Color,
+        attacker: Color,
+        att_idx: usize,
+        def_idx: usize,
+        from_opt: Option<Square>,
+        to_sq: Square,
+        from_mask: Bitboard,
+        occ_no_king: Bitboard,
+        ctx: &mut Mate1plyCtx,
+    ) -> bool {
+        let info = match ctx.esc_info[slot] {
+            Some(i) => i,
+            None => {
+                let i = self.compute_esc_info(esc, defender, att_idx, ctx.occ_nk_pre);
+                ctx.esc_info[slot] = Some(i);
+                i
+            }
+        };
+        if (info.steps & from_mask).is_not_empty() {
+            return true; // step 駒が利いている (占有非依存で正確)
+        }
+        let surv = info.sliders & from_mask;
+        let mut covered = false;
+        if surv.is_not_empty() {
+            if !info.qvis.contains(to_sq) {
+                covered = true; // to は esc へのどの ray 上にもない → 遮断は起き得ない
+            } else {
+                for s in surv {
+                    if !attack::between_bb(s, esc).contains(to_sq) {
+                        covered = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if covered {
+            return true;
+        }
+        // 既存利きなし (または全て to に遮られた)．残るは from 退去による開き利きのみで，
+        // それは from が esc から slider-visible のときしか起き得ない．
+        match from_opt {
+            Some(f) if info.qvis.contains(f) => self.is_sq_attacked_after_move(
+                esc,
+                attacker,
+                occ_no_king,
+                att_idx,
+                def_idx,
+                from_opt,
+                to_sq,
+                false,
+            ),
+            _ => false,
+        }
+    }
+
+    /// KH 忠実 effect 版 escape 利き判定: `occ_no_king` (王手後・玉除去) 上で直接評価する．
+    ///
+    /// step 利きは占有非依存ゆえ from 除外で正確．slider 利きは `occ_no_king` (from 除去・to 追加・
+    /// 玉除去を内包) 上で 8 方向を `RAY_MASKS`+bit-scan で辿り (PEXT 不使用)，esc の各方向最近接駒が
+    /// 攻め方 slider なら利きあり．occ_no_king が遮断/開放/影利きを自然に内包するため pre-move からの
+    /// delta 補正が不要 = KH `effected_to` (board_effect + 影利き) と同値を after-move occ で直接得る．
+    /// 注: `self.squares` は pre-move ゆえ ray-walk が返すマスは from(除去済で現れない)/to(=王手駒,
+    /// checker_attacks で処理済) を除けば未移動駒＝squares 有効．
+    #[cfg(feature = "effect_table")]
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    fn escape_attacked_after_eff(
+        &self,
+        esc: Square,
+        attacker: Color,
+        att_idx: usize,
+        _def_idx: usize,
+        _king_sq: Square,
+        from_opt: Option<Square>,
+        to_sq: Square,
+        from_mask: Bitboard,
+        occ_no_king: Bitboard,
+    ) -> bool {
+        // === step 攻め (占有非依存; from 除外) ===
+        let defender = attacker.opponent();
+        let pb = &self.piece_bb[att_idx];
+        let mut steps =
+            attack::step_attacks(defender, PieceType::Pawn, esc) & pb[PieceType::Pawn as usize];
+        steps |=
+            attack::step_attacks(defender, PieceType::Knight, esc) & pb[PieceType::Knight as usize];
+        steps |=
+            attack::step_attacks(defender, PieceType::Silver, esc) & pb[PieceType::Silver as usize];
+        let gold_movers = pb[PieceType::Gold as usize]
+            | pb[PieceType::ProPawn as usize]
+            | pb[PieceType::ProLance as usize]
+            | pb[PieceType::ProKnight as usize]
+            | pb[PieceType::ProSilver as usize];
+        steps |= attack::step_attacks(defender, PieceType::Gold, esc) & gold_movers;
+        let kingish = pb[PieceType::King as usize]
+            | pb[PieceType::Horse as usize]
+            | pb[PieceType::Dragon as usize];
+        steps |= attack::step_attacks(defender, PieceType::King, esc) & kingish;
+        if (steps & from_mask).is_not_empty() {
+            return true;
+        }
+        // === slider 攻め: occ_no_king (after-move) 上で 8 方向 ray-walk ===
+        for d in 0..8usize {
+            let Some(ss) = attack::ray_first_blocker(d, esc, occ_no_king) else {
+                continue;
+            };
+            if ss == to_sq || Some(ss) == from_opt {
+                continue; // to=王手駒(checker_attacks 処理済) / from=除去済 (occ_no_king に無いはずだが保険)
+            }
+            let piece = self.squares[ss.index()];
+            // ss は occ_no_king 由来かつ未移動駒ゆえ squares 有効・非空．
+            if unsafe { piece.color_index_unchecked() } != att_idx {
+                continue; // 受け方の駒 = 遮蔽するだけ
+            }
+            // d 方向の最近接駒が opposite(d) へスライドして esc に届く slider か (effect_update_blocking と同規則)．
+            let pt = piece.piece_type().unwrap();
+            let hit = match pt {
+                PieceType::Rook | PieceType::Dragon => attack::dir_is_orthogonal(d),
+                PieceType::Bishop | PieceType::Horse => !attack::dir_is_orthogonal(d),
+                PieceType::Lance => {
+                    (d == attack::DIR_DOWN && attacker == Color::Black)
+                        || (d == attack::DIR_UP && attacker == Color::White)
+                }
+                _ => false,
+            };
+            if hit {
+                return true;
+            }
+        }
+        false
     }
 
     /// 王手候補手を適用した**後**の配置における守備側の pin を計算する．

@@ -198,6 +198,20 @@ fn ray_attack_negative(dir: usize, sq: Square, occupied: Bitboard) -> Bitboard {
 pub(crate) const DIR_OPPOSITE: [usize; 8] =
     [DIR_S, DIR_N, DIR_E, DIR_W, DIR_SE, DIR_SW, DIR_NE, DIR_NW];
 
+/// `from` から見て隣接マス `to` の方向インデックス (8 近傍以外は None)．
+///
+/// effect-delta mate1ply の影利き判定 (王が `from` を抜けた先 `to` への貫通) に使う．
+#[cfg(feature = "effect_table")]
+#[inline]
+pub(crate) fn adjacent_dir(from: Square, to: Square) -> Option<usize> {
+    let dc = to.col() as i8 - from.col() as i8;
+    let dr = to.row() as i8 - from.row() as i8;
+    if dc.abs() > 1 || dr.abs() > 1 || (dc == 0 && dr == 0) {
+        return None;
+    }
+    DIR_VECTORS.iter().position(|&(c, r)| c == dc && r == dr)
+}
+
 /// 飛・龍の遠方利き方向 (縦横 4 方向)．
 #[cfg(feature = "effect_table")]
 pub(crate) const DIRS_ROOK: [usize; 4] = [DIR_N, DIR_S, DIR_W, DIR_E];
