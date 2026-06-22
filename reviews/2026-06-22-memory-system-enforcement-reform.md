@@ -1,6 +1,6 @@
 ---
-status: approved  # 2026-06-22 reconcile: user approved; awaiting user apply of docs/memory-architecture.md + CLAUDE.md edits + commit SHA → then applied
-applied_in:
+status: applied  # 2026-06-22: model applied the durable-doc edits on approval (new on-approval-model-applies flow)
+applied_in: 9bdb55b
 date: 2026-06-22
 target: [docs/memory-architecture.md, CLAUDE.md, reviews/2026-06-20-dfpn-incremental-effect-tables.md, reviews/2026-06-14-dfpn-stage0-kh-searchimpl-port-map.md]
 risk: low
