@@ -105,6 +105,11 @@ the criterion that ruled them out. Do not collapse to a conclusion.>
 Empty sections must be written as `_(none)_`, not omitted — absence is
 information.
 
+Do NOT re-emit stable reproduction state (SFENs, build/rebuild commands,
+env stacks). Write `repro: see compass §環境リファレンス` and note only what
+changed. **No-op fast path:** if git + code state is unchanged since the
+last worklog, write a 3-line pointer worklog, not a full snapshot.
+
 ## current.md shape
 
 Overwritten on every checkpoint. Target ~100-150 lines.
@@ -148,21 +153,34 @@ Overwritten on every checkpoint. Target ~100-150 lines.
 設計空間 (mutable↔immutable) × (常時ロード↔オンデマンド) の，これまで空いていた
 「mutable・常時ロード・campaign を貫く durable」セルを埋める．
 
-2 セクションのみ:
-- **North-star**: goal / target / active metric / 現状最良 / 残ギャップの性質．
-  毎 checkpoint で数値を更新するか "unchanged" を明記する（指標を失わないため）．
-- **Invariants**: 「破ると 1 セッション無駄になる」do-not-redo 結論．各項に Est.（出所）
-  を付け，evidence で覆ったら **delete/edit** する（append しない＝墓場を作らない）．
+**固定セクション（順序も固定）**．記録の発火力は *場所* で決まる（postmortem:
+既記録の教訓が 74% 再発したが，always-loaded な compass の項だけは再試行を能動抑止
+した）．ゆえに binding な do-not-redo は compass にのみ置き，achievement は置かない:
 
-不変則 2 種の寿命の違い: Invariants は *sticky だが evidence で上書き可*，
-North-star の値は *毎回更新される*．
+1. **🚫 VETOES** — user-set「絶対に覆さない」指示．`<directive> — (user, YYYY-MM-DD)`．
+   ~5 行上限．**resume が最初に逐語出力**．user veto は expire しない（evict 対象外）．
+2. **🚦 TRIPWIRES** — 動詞に束縛した発火ゲート（benign 結論前 / lever 提案前 /
+   KH 比掲示前 / STRICT-None 時）．各 1 行・**本数固定**（肥大したら散文同様 die する）．
+   resume が VETOES と並べて最初に逐語出力．
+3. **North-star** — goal / active metric / 現状最良 / 残ギャップ．毎 checkpoint で
+   数値を更新するか "unchanged" を明記する．
+4. **Invariants — Measured do-not-redo** — 各行末に evidence-scope タグ
+   `[single]`（単発測定＝組合せに非外挿）/ `[bundle]`（bundle 内で測定）．
+   「単独で棄却」を「組合せでも棄却」と誤読させない．evidence で覆ったら delete/edit．
+   `✅ 完了/達成` は achievement ＝ guardrail でない → worklog/current.md へ．
+5. **❌ REFUTED — do-not-re-derive** — append-once．`<idea> — killed by <信号> @ <SHA>`．
+   ~8 行上限・oldest evict．invariant を supersede=削除する際それが *refutation* なら
+   killing-signal をここへ移す（消さない＝再提案 loop を断つ）．
+6. **環境リファレンス** — stable な repro 一式（bin/build/SFEN/driver/env stack）を
+   **ここに 1 回だけ**．worklog はここを参照する（再出力しない）．
 
 肥大化対策（必須）:
-1. ハード上限 ~45 行 / 不変則 ~12 件．超えたら最も load-bearing でない項目を evict．
-2. スロット正当化: 「破ると 1 セッション無駄になる」もののみ．豆知識は worklog/MEMORY 行き．
+1. **HARD BYTE CAP ~9KB**（env-reference 込; knowledge 部 ~7KB + env ~2KB．line 上限
+   ~50 行とどちらか先に効く方）．line のみの上限は byte bloat を防げない（旧 compass は
+   ~45 行内のまま 12KB / ~324 B/行 に肥大した）．超えたら `✅ 完了` 行を worklog へ →
+   密パラグラフを one-liner へ → 最も load-bearing でない項目を evict（user veto は除外）．
+2. スロット正当化: 「破ると 1 セッション無駄になる」もののみ．豆知識は worklog 行き．
 3. curation は checkpoint の必須ステップ（§ "Steps" step 3.5）．
-4. supersede = 削除．覆れた不変則は消す．「覆れた事実」を残すのは将来また再追加されて
-   しまう場合のみ 1 行で．
 
 ## Review proposal shape
 
@@ -172,7 +190,7 @@ field.
 
 ```markdown
 ---
-status: pending          # pending | approved | applied
+status: pending          # pending | approved | applied | rejected
 applied_in:              # commit SHA, filled when status becomes applied
 date: YYYY-MM-DD
 target: [CLAUDE.md, docs/architecture.md]
@@ -210,14 +228,22 @@ How to undo: which files revert, what code breaks, what to redo.
 
 ```
 pending  → applied   (user approves during /checkpoint-context;
-                      user applies + commits;
+                      the MODEL applies the edit + commits;
                       model writes status: applied, applied_in: <sha>)
-pending  → deleted   (user rejects during /checkpoint-context)
+pending  → rejected  (user rejects; file RETAINED as do-not-redo
+                      provenance — set status: rejected with a reason)
+pending  → deleted   (rejected AND never substantive)
+approved → applied | rejected  (split-state, resolved next /checkpoint-context)
 ```
 
-`status: applied` is terminal — applied proposals are never modified.
-The intermediate value `approved` is permitted for the rare case where
-approval and apply are split in time; normal flow skips it.
+`status: applied` and `status: rejected` are terminal — never modified.
+`rejected` covers an architectural experiment that completed but was
+measured-rejected, or a findings doc with no doc to apply (retained for
+provenance, never re-promoted). The intermediate value `approved` is for
+when approval and apply are split in time; step 5 reconciles `approved`
+as well as `pending` so it cannot dangle. **On approval the model itself
+applies the durable-doc edit** (approval is the safeguard against silent
+edits) — it no longer waits for the user to hand-apply.
 
 ## Confirmed / Assumed / Unresolved
 
@@ -235,17 +261,22 @@ audited fact with model-authored prose.
 
 ## Token budget guidance
 
-| Source | Approx lines | Note |
-|---|---|---|
-| `CLAUDE.md` | ~300 | always loaded |
-| `scratchpad/current.md` | ~150 | always loaded |
-| `scratchpad/compass.md` | ~45 | always loaded |
-| one `worklog/*.md` snapshot | ~100-200 | one file only |
-| `git status / log -10 / rev-parse` | ~30 | always |
-| `ls reviews/` | ~20 names | open files on demand |
+Cap by **bytes**, not lines — a line cap lets dense multi-clause prose
+bloat invisibly (compass once hit 12KB / ~324 B/line while "within ~45 lines").
 
-Target: ≤ ~600 lines of file I/O for a typical resume. Above ~1,500
-you are over-loading history — stop and re-evaluate.
+| Source | Byte cap | Note |
+|---|---|---|
+| `CLAUDE.md` | — | always loaded |
+| `scratchpad/current.md` | ≤ ~6KB | always loaded |
+| `scratchpad/compass.md` | ≤ ~9KB | always loaded (env-reference 込) |
+| `~/.claude/.../memory/MEMORY.md` | ≤ ~2KB | always loaded; `feedback_*.md` index ONLY |
+| one `worklog/*.md` snapshot | — | one file only; no re-emitted repro |
+| `git status / log -10 / rev-parse` | — | always |
+| `ls reviews/` | — | open files on demand |
+
+Do NOT re-emit stable repro state in worklogs — it lives once in
+`compass.md` § 環境リファレンス (the 39te SFEN was once duplicated in 23/69
+worklogs). Above ~2× these caps you are over-loading history — prune.
 
 ## What was deliberately left out
 
@@ -257,8 +288,38 @@ you are over-loading history — stop and re-evaluate.
 | `pending/` vs `approved/` subdirs | Replaced by `status:` frontmatter; collapses the `git mv` + `Applied-in:` append into a single in-place edit driven by `/checkpoint-context` step 5. |
 | `scratchpad/todo.md`, `scratchpad/decisions.md` | Todos fold into `current.md`'s `## Todo` section. Small decisions live in the worklog; durable decisions live in `reviews/`. |
 
+## Dual-memory division of labor
+
+Two memory systems coexist: the **repo** system (this spec —
+compass + worklog + current + reviews) and the Claude Code **auto-memory**
+(`~/.claude/.../memory/`: `MEMORY.md` index + `feedback_*.md` +
+`project_*.md`). They MUST divide labor, not duplicate:
+
+- **Repo system OWNS the campaign narrative** end-to-end. It has the
+  discipline auto-memory lacks: byte cap, eviction, immutability,
+  single-writer, Confirmed/Assumed/Unresolved provenance.
+- **Auto-memory holds ONLY the `feedback_*.md`** — cross-session
+  process/preference rules (advisory, rarely overturned) that must fire
+  even when `/resume-context` is skipped (survive `/clear`). Do NOT author
+  new `project_*.md`; archive existing ones out of the always-loaded path.
+  `MEMORY.md` indexes only the `feedback_*.md`.
+
+**Decisive reason** campaign do-not-redo lives SOLELY in compass: auto-memory
+arrives as a `<system-reminder>` framed "background, may-be-outdated" — the
+*weakest* channel. Mirroring a binding conclusion there licenses the model
+to re-litigate it. compass Invariants/VETOES are binding; that is where
+do-not-redo belongs.
+
 ## Anti-patterns
 
+- Mirroring campaign do-not-redo into auto-memory (the weak, "may-be-outdated"
+  channel) instead of compass — licenses re-litigation.
+- "Record more" to fix recurring user corrections — the postmortem showed
+  74% of re-instructions recurred *despite* being recorded. Fix is
+  enforcement/load-order (compass VETOES/TRIPWIRES), not volume.
+- Promoting a single-measurement verdict to an Invariant without a
+  `[single]`/`[bundle]` scope tag — "rejected alone" gets misread as
+  "rejected in combination" and the always-loaded layer goes stale.
 - Loading multiple worklog files at resume time.
 - Treating `current.md` as immutable history (it is *current* state).
 - Treating worklog files as mutable (they are append-only by creation,

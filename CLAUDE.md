@@ -72,15 +72,18 @@ Full spec: [docs/memory-architecture.md](docs/memory-architecture.md).
 |---|---|---|
 | `reviews/YYYY-MM-DD-<title>.md` | Proposals + audit trail. `status:` in frontmatter. | yes |
 | `scratchpad/current.md` | Authoritative current state. | no (`.gitignore`d) |
-| `scratchpad/compass.md` | Curated campaign invariants + north-star metrics. Always loaded; prunable. | no (`.gitignore`d) |
+| `scratchpad/compass.md` | Always-loaded binding layer. Fixed sections: VETOES → TRIPWIRES → North-star → Invariants[scope] → REFUTED → 環境リファレンス. ≤ ~9KB. | no (`.gitignore`d) |
 | `worklog/YYYY-MM-DD-HHMMSS.md` | One file per checkpoint, JST, immutable. | no (`.gitignore`d) |
+| `~/.claude/.../memory/` (auto-memory) | `feedback_*.md` process rules ONLY (advisory). NOT campaign state; no new `project_*.md`. | n/a (per-machine) |
 | `.claude/commands/checkpoint-context.md` | The only writer. | yes |
 | `.claude/commands/resume-context.md` | Read-only resume. | yes |
 
 ### MUST rules
 
-- MUST NOT silently edit `CLAUDE.md` or `docs/architecture.md`. Draft a
-  `reviews/*.md` with `status: pending` and let the user apply.
+- MUST NOT edit `CLAUDE.md` / `docs/` without an **approved** `reviews/*.md`
+  proposal. Draft it `status: pending`; **on user approval in
+  `/checkpoint-context` step 5, the model applies the edit itself and
+  commits** (approval is the safeguard against *silent* edits).
 - MUST treat `worklog/*.md` as immutable. Each `/checkpoint-context`
   creates a **new** file — never edit a previous one.
 - MUST preserve failed attempts, reasoning, and uncertainty in every
@@ -96,7 +99,21 @@ Full spec: [docs/memory-architecture.md](docs/memory-architecture.md).
 - MUST curate `scratchpad/compass.md` at every `/checkpoint-context`:
   update North-star numbers (or write "unchanged"), add new do-not-redo
   conclusions, delete/edit overturned invariants, and evict when over the
-  size cap. Never append-only.
+  size cap (≤ ~9KB byte cap, env-reference 込). Never append-only.
+- MUST refuse `/checkpoint-context` on an uncommitted `src/`/`rust/` tree
+  (dirty-tree gate — commit + pre-commit + version bump first). Only an
+  explicit `--allow-dirty` overrides.
+- MUST keep campaign do-not-redo conclusions in `scratchpad/compass.md`
+  (binding) ONLY; MUST NOT mirror them into `~/.claude` auto-memory (a
+  "background, may-be-outdated" channel — mirroring licenses
+  re-litigation). Auto-memory holds only the `feedback_*.md` process rules;
+  MUST NOT author new `project_*.md`.
+- MUST file a `reviews/*.md` ONLY for committed durable-doc targets
+  (`CLAUDE.md` / `docs/`); `rust/`/`src/` algorithmic tuning + lever
+  rejections go to `worklog/` + `compass.md`, never `reviews/`.
+- MUST surface `compass.md` § 🚫 VETOES and § 🚦 TRIPWIRES FIRST and
+  verbatim (Confirmed-binding) at `/resume-context`, and commit every
+  `reviews/` `status:` transition immediately (audit trail).
 
 ## Code Exploration Policy (MUST)
 

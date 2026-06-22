@@ -19,6 +19,10 @@ lexicographically — JST `YYYY-MM-DD-HHMMSS` stamps sort chronologically).
 - **One worklog file.** Load only the selected snapshot. Do NOT walk
   through older snapshots.
 - **Classify every claim** as Confirmed / Assumed / Unresolved.
+  - `compass.md` § 🚫 VETOES and § 🚦 TRIPWIRES are **Confirmed-binding**
+    (treat like an applied review / a CLAUDE.md MUST), NOT Assumed. Print
+    them FIRST and verbatim (see step 5). They are the highest-leverage
+    re-instruction guard; do not flatten them in among measured notes.
 - **Review status matters:**
   - `status: applied` → canonical (treat like a CLAUDE.md rule).
   - `status: approved` → unusual intermediate; note it.
@@ -79,12 +83,18 @@ Assumed（SHA で staleness を判定）．
 ```
 ## Resume — <branch> @ <sha> (<n> dirty) — from <$WL>
 
+### 🚫 VETOES & 🚦 TRIPWIRES in force [verbatim from compass — Confirmed-binding]
+<print compass § 🚫 VETOES (≤5 lines) and § 🚦 TRIPWIRES (the fixed gates)
+line-for-line, unedited. This block is FIRST on purpose: a binding veto
+must not sit as "one dense line among twelve". Treat as non-negotiable.>
+
 ### Focus
 <one sentence reconstructed from current.md "Focus">
 
 ### Charter in force [from compass.md]
 - Active metric + current best + gap（値は 1 checkpoint stale の可能性）
-- Invariants（再実行禁止の guardrail を 1 行ずつ）
+- Measured do-not-redo（Invariants を 1 行ずつ; evidence-scope タグ [single]/[bundle] を保持．[single] は組合せに外挿しない）
+- REFUTED（再導出禁止の idea + killing-signal を 1 行ずつ）
 
 ### Next concrete step
 <verbatim from current.md, marked [from current.md] or [from $WL]>
