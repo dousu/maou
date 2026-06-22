@@ -1,9 +1,9 @@
 ---
 title: "mid_v3 完全廃止 + 39te bundle default 化 に伴う CLAUDE.md [SLOW] テーブル更新"
-status: pending
+status: applied
 date: 2026-06-22
 branch: feat/tsume-solver
-applied_in:
+applied_in: 07b011d
 ---
 
 ## Trigger
