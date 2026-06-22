@@ -170,7 +170,6 @@ cargo test --release -p maou_shogi -- <test_name> --nocapture --ignored
 | `test_counter_check_diagnostic` | - | 診断用ログ出力 |
 | `test_no_checkmate_counter_check_probe` | 10M nodes | ノード予算プローブ |
 
-
 dfpn テストは各々が大きな置換表 (TT) を alloc するため，**MUST `--test-threads=1`** で実行すること．
 default の並列実行は memory 制約 DevContainer (8GB) で OOM → `signal: 15 SIGTERM` となり，
 assertion failure でなくプロセス kill として現れる (コード回帰と誤認しやすい)．
