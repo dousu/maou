@@ -1,6 +1,6 @@
 ---
 title: "Stage 0 — KH SearchImpl 移植マップ + iter6 真乖離の局所化 (39te wholesale port)"
-status: approved
+status: rejected  # 2026-06-22 reconcile: findings doc with NO durable-doc apply target; conclusions already absorbed into compass + worklog. Retained as do-not-redo provenance. (terminal `rejected` status awaits formalization via reviews/2026-06-22-memory-system-enforcement-reform.md)
 date: 2026-06-14
 branch: feat/tsume-solver
 base-sha: ef49730  # v2.9.0

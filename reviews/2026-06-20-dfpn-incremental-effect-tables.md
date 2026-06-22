@@ -1,6 +1,6 @@
 ---
 title: "YaneuraOu 級 incremental effect (利き) テーブルを Board に導入 — dfpn query 律速の構造的根治"
-status: approved
+status: rejected  # 2026-06-22 reconcile: experiment completed but measured-REJECTED (effect tables net 非償却 +5s, §10); compass records ❌棄却確定/再実行禁止. Retained as do-not-redo provenance. (terminal `rejected` status awaits formalization via reviews/2026-06-22-memory-system-enforcement-reform.md)
 date: 2026-06-20
 branch: feat/tsume-solver
 base-sha: 5ccc9b7  # v2.42.0
