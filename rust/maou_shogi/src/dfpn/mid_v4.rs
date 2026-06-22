@@ -107,17 +107,16 @@ fn v4sel_enabled() -> bool {
     *C.get_or_init(|| std::env::var("V4SEL").is_ok())
 }
 
-/// `V4_KHORDER` 実験 (process 内 1 回読み)．完全同点手の tie-break を KH `generateMoves` 順にする．
+/// 完全同点手の tie-break を KH `generateMoves` 順にする．
+/// 39te bundle の default 化に伴い常時 ON (旧 `V4_KHORDER` gate を撤去)．
 pub(super) fn khorder_enabled() -> bool {
-    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("V4_KHORDER").is_ok())
+    true
 }
 
-/// `V4_HANDSET` 実験 (process 内 1 回読み)．proof/disproof hand を KH `HandSet` で極小化する
-/// (default OFF = full attacker_hand)．cross-hand TT 再利用が KH と一致し count 収束を狙う．
+/// proof/disproof hand を KH `HandSet` で極小化する (cross-hand TT 再利用が KH と一致)．
+/// 39te bundle の default 化に伴い常時 ON (旧 `V4_HANDSET` gate を撤去)．
 pub(super) fn handset_enabled() -> bool {
-    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("V4_HANDSET").is_ok())
+    true
 }
 
 /// `V4_FULLPROOFHAND` 診断 gate (process 内 1 回読み)．proof (詰み) hand の HandSet 極小化のみを
@@ -258,8 +257,9 @@ fn v4inc_log(s: &str) {
 /// (V4_KHORDER+V4_DOM+V4_SMPROP = 11,544, dominance が -45% に転じ KH と同符号; 単独は退行)．
 /// → 忠実 bundle は opt-in．default v4 (無印) は 11,286 を維持する ([[project_dfpn_incremental_unreachable_v2_9_0]])．
 fn v4_smprop() -> bool {
-    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("V4_SMPROP").is_ok())
+    // 39te bundle の default 化に伴い常時 ON (旧 `V4_SMPROP` gate を撤去)．
+    // V4_KHORDER + V4_DOM と co-adapt して初めて有益 (3 つ揃って bundle として焼き込む)．
+    true
 }
 
 /// `V4_NOSMRESET` env: build-time sum_mask reset を無効化 (Full のまま from_parts) して
@@ -533,7 +533,7 @@ impl V4BufPool {
 }
 
 impl DfPnSolver {
-    /// mid_v4 探索の root (KH `SearchEntry` 相当の IDS + 診断)．`V3_V4ENG=1` で起動する．
+    /// mid_v4 探索の root (KH `SearchEntry` 相当の IDS + 診断)．production `solve()` の唯一の engine．
     pub(super) fn solve_via_v4(&mut self, board: &mut Board) -> TsumeResult {
         self.attacker = board.turn;
         self.v3_nodes = 0;
@@ -554,12 +554,10 @@ impl DfPnSolver {
         crate::board::reset_do_move_count();
         super::solver::reset_mate_cand_stats();
         super::solver::reset_mate1ply_kh_stats();
-        // KH VisitHistory path dominance (IsRepetitionOrInferiorAfter)．`V4_DOM` で opt-in (default OFF)．
-        // 単位を揃えた計測で判明: KH (dominance 有) = 9,296 visits に対し，maou+dominance = 16,902
-        // (1.82×) と KH から **遠ざかる** (DAG EliminateDoubleCount との二重カウント相互作用; fires
-        // 97→167)．KH の dominance は node を減らすので，maou 実装は未だ非忠実 = reference から除外する．
-        // 39te では node を削る (13.4M→10.88M) ため opt-in で残す．忠実化 (DAG 相互作用の修正) は別課題．
-        self.param_v4_path_dominance = std::env::var("V4_DOM").is_ok();
+        // KH VisitHistory path dominance (IsRepetitionOrInferiorAfter)．39te bundle の default 化に
+        // 伴い常時 ON (旧 `V4_DOM` gate を撤去)．V4_KHORDER + V4_SMPROP と co-adapt して 39te の node を
+        // 削る (dominance が -45% に転じ KH と同符号)．DAG 相互作用の忠実化は別課題 (count parity 後の lever)．
+        self.param_v4_path_dominance = true;
         self.timed_out = false;
         self.start_time = std::time::Instant::now();
 

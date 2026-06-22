@@ -359,12 +359,6 @@ pub struct DfPnSolver {
     /// (stack 深さは V3_MAX_PLY=127 で bound されるため十分)．
     pub(super) mid_expansion_pool: Vec<super::local_expansion::MidLocalExpansion>,
 
-    /// `build_v3_le_expansion` の per-child eval scratch (pool 再利用と対で alloc 排除)．
-    pub(super) v3_evals_buf: Vec<i32>,
-
-    /// `build_v3_le_expansion` の per-child 中合い判定 scratch (V3_CHUAI 用)．
-    pub(super) v3_chuai_buf: Vec<bool>,
-
     /// melodic-cascading-otter (v0.69.0): DAG 検出用 parent_map．
     /// `child_full_hash → parent_full_hash`．mid() で子に再帰する直前に
     /// `or_insert` で挿入 (既存 entry は上書きしない)．find_known_ancestor で
@@ -508,14 +502,11 @@ pub struct DfPnSolver {
     pub(super) param_tca_use_shallow_gate: bool,
     /// Phase 21 診断: deferred penalty 発火フレーム数．
     pub(super) diag_deferred_frames: u64,
-    /// Phase 32: mid_v3 (ground-up KH コア port, unit-2 scale) 専用の exact-match TT．
-    /// key = board.hash (全局面 hash, 手番・持駒含む)．mid_v2 の TT baggage を排した clean store．
-    pub(super) v3_tt: rustc_hash::FxHashMap<u64, super::mid_v3::V3Entry>,
-    /// mid_v3/mid_v4 探索パス上の board.hash → ply (千日手検出 + 参照祖先 ply 特定用)．
+    /// mid_v4 探索パス上の board.hash → ply (千日手検出 + 参照祖先 ply 特定用)．
     /// KH `Node` の連続パス保持と同型の flat スタック ([`super::path_stack::PathStack`])．
     /// 旧 `FxHashMap` の散在 DRAM アクセスを排して memory-bound を解消する (探索不変)．
     pub(super) v3_path: super::path_stack::PathStack,
-    /// mid_v3 探索ノード数 (= search_v3 呼び出し回数)．
+    /// mid_v4 探索ノード数 (= emplace_v4 呼び出し回数; KH `KHEMP` builds と同単位)．
     pub(super) v3_nodes: u64,
     /// mid_v4 EliminateDoubleCount 用の明示的 expansion stack (KH `expansion_list_`)．
     /// 各 search_impl_v4 frame が自 LocalExpansion を push/truncate し，祖先を辿れるようにする．
@@ -536,69 +527,6 @@ pub struct DfPnSolver {
     /// mid_v4 path dominance を有効化するか (`V4_DOM` env で opt-in; default off)．
     /// 現状 maou 実装は KH と非忠実 (29te で node 増)．忠実化までは reference から除外する．
     pub(super) param_v4_path_dominance: bool,
-    /// Phase 33: mid_v3 で検証済 `MidLocalExpansion` (DML/sum_mask/comparer/deferred) を
-    /// per-node に駆動する (案②)．`false` = classic df-pn 集約 (sound 181K baseline)．
-    /// `true` = LocalExpansion refinement + clean TT + unit-2 + 非累積 extend + root IDS の合成．
-    pub(super) param_v3_local_exp: bool,
-    /// Phase 36: KH `CheckObviousFinalOrNode` 先読み (AND-child OR 局面で `mate_move_in_1ply` →
-    /// 詰めば absolute proof を v3_tt へ格納)．default `true`．`mate_move_in_1ply` の false
-    /// mate-1 バグ (ピン軸取り返し / 逆王手 drop / 開き王手) 根治後に default 化．
-    /// [[project_dfpn_domoff_none_mate1_bugs]]．
-    pub(super) param_v3_lookahead: bool,
-    /// Phase 33b: KH `RepetitionTable` 相当．LE path で repetition 依存の disproof を
-    /// path_key でキャッシュし (clean TT は absolute 結果のみ)，sound GHI + reuse を実現する．
-    pub(super) v3_rep_memo: super::repetition_memo::RepetitionMemo,
-    /// Phase 33b: LE path で IsInferior dominance (KH VisitHistory) を有効化するか．
-    /// RepetitionMemo + path_key で sound 化された前提で breadth を削る．
-    pub(super) param_v3_dominance: bool,
-    /// Phase 33b 診断: dominance 発火数 / RepetitionMemo insert / hit．
-    pub(super) v3_dom_fires: u64,
-    pub(super) v3_rep_inserts: u64,
-    pub(super) v3_rep_hits: u64,
-    /// V3_PROBE: 親ループ内 build-probe の回数 (KHEMP builds 突合用; 深掘り化した分は含まず)．
-    pub(super) v3_probes: u64,
-    /// V3_MASKKEEP (plan H3'②): node hash → 永続 sum_mask．EliminateDoubleCount 等で
-    /// default (all-ones) から変化した mask を frame exit で記録し，rebuild 時に復元する
-    /// (KH は TT UnknownData::sum_mask で同等を実現 = FrontSumMask 継承)．
-    pub(super) v3_dag_masks: rustc_hash::FxHashMap<u64, u64>,
-    /// Phase 33k: LE path で cycle-dependent disproof を path_key で RepetitionMemo にキャッシュするか
-    /// (KH RepetitionTable; dominance 無しの base でも有効)．clean TT は skip する taint 付き disproof を
-    /// path_key で再利用し，再降下の thrash を抑える．
-    /// V3_XHAND (KH ttentry LookUpSuperior/Inferior 移植): 非 taint unknown の
-    /// pn/dn を (pos_key, attacker hand) 別に保存し，child seed 時に
-    /// 「現 hand 優等 → dn=max(dn, entry.dn)」「劣等 → pn=max(pn, entry.pn)」の
-    /// bound 合成を行う (unknown 推定のみ変更 = final 判定に影響せず sound)．
-    /// 値 = (hand, pn, dn, min_depth)．bucket cap は V3_XH_CAP．
-    pub(super) v3_xh: rustc_hash::FxHashMap<u64, Vec<([u8; HAND_KINDS], u32, u32, u16)>>,
-    pub(super) param_v3_xhand: bool,
-    pub(super) v3_xh_hits: u64,
-    /// mid_v4 mode (V3_V4)．KH coherent dynamics bundle を programmatic に有効化する hook．
-    /// 将来の node-by-node KH divergence (search_v4 本体) はこの flag で gate する．
-    /// default false = canonical (mid_v3) を保護．
-    pub(super) param_v3_v4: bool,
-    pub(super) param_v3_rep_cache: bool,
-    /// Phase 33c: LE path で KH EliminateDoubleCount (DAG δ 二重計上除去) を有効化するか．
-    pub(super) param_v3_dag: bool,
-    /// Phase 33c 診断: double-count 補正の発火数．
-    pub(super) v3_dag_resets: u64,
-    /// Phase 33d: LE path の hand-aware proof/disproof reuse (KH proof_hand)．
-    /// pos_key (持駒抜き盤面) → [(proof_hand, len, best16)]．`hand >= proof_hand` の transposition は
-    /// 同じ証明を再利用できる (攻め方が多い駒で詰むなら少ない要求でも詰む)．absolute proof のみ格納．
-    pub(super) param_v3_proof_hand: bool,
-    pub(super) v3_proven: rustc_hash::FxHashMap<u64, Vec<([u8; HAND_KINDS], u16, u16)>>,
-    /// pos_key → [disproof_hand]．`disproof_hand >= hand` の transposition も不詰 (少ない駒で詰まないなら
-    /// 更に少なくても詰まない)．absolute disproof のみ格納 (repetition は RepetitionMemo)．
-    pub(super) v3_disproven: rustc_hash::FxHashMap<u64, Vec<[u8; HAND_KINDS]>>,
-    /// Phase 33d 診断: hand-aware reuse hit 数．
-    pub(super) v3_ph_hits: u64,
-    /// Phase 33g 診断: per-ply total/unique 訪問数 (KHPLY trace と比較用)．
-    pub(super) v3_ply_total: [u64; 64],
-    pub(super) v3_ply_unique: [u64; 64],
-    pub(super) v3_ply_seen: rustc_hash::FxHashSet<(u32, u64)>,
-    /// Phase 33k 診断: KHSEL per-ply first-visit dump で各 ply を 1 度だけ出力するためのフラグ．
-    pub(super) v3_sel_dumped: [u8; 8],
-    /// Phase 33n 診断: V3TRACE chronological per-expansion trace のカウンタ．
-    pub(super) v3_trace_cnt: u32,
     /// Phase 21 診断: deferred penalty 合計値．
     pub(super) diag_deferred_penalty_sum: u64,
     /// Phase 21 診断: has_old_child=true (is_shallow gate)．
@@ -1152,8 +1080,6 @@ impl DfPnSolver {
             mid_expansion_stack: Vec::new(),
             mid_frame_moves: Vec::new(),
             mid_expansion_pool: Vec::new(),
-            v3_evals_buf: Vec::new(),
-            v3_chuai_buf: Vec::new(),
             parent_map: rustc_hash::FxHashMap::default(),
             max_remaining_map: rustc_hash::FxHashMap::default(),
             param_threshold_epsilon: 2,
@@ -1179,7 +1105,6 @@ impl DfPnSolver {
             param_deferred_penalty_floor: false,
             param_tca_use_shallow_gate: false,
             diag_deferred_frames: 0,
-            v3_tt: rustc_hash::FxHashMap::default(),
             v3_path: super::path_stack::PathStack::new(),
             v3_nodes: 0,
             v4_stack: Vec::new(),
@@ -1188,33 +1113,6 @@ impl DfPnSolver {
             v4_dom_path: super::path_stack::DomPathStack::new(),
             v4_dom_fires: 0,
             param_v4_path_dominance: false,
-            param_v3_local_exp: true,
-            param_v3_lookahead: true,
-            // 1<<22 (64MB)．generation GC が occupancy ~30% を保つ (KH parity)．
-            // 旧 1<<16 は深い探索で飽和し contains/insert が全周走査になっていた．
-            v3_rep_memo: super::repetition_memo::RepetitionMemo::new(1 << 22),
-            param_v3_dominance: true,
-            v3_dom_fires: 0,
-            v3_rep_inserts: 0,
-            v3_rep_hits: 0,
-            v3_probes: 0,
-            v3_dag_masks: rustc_hash::FxHashMap::default(),
-            v3_xh: rustc_hash::FxHashMap::default(),
-            param_v3_xhand: false,
-            v3_xh_hits: 0,
-            param_v3_v4: false,
-            param_v3_rep_cache: false,
-            param_v3_dag: true,
-            v3_dag_resets: 0,
-            param_v3_proof_hand: false,
-            v3_proven: rustc_hash::FxHashMap::default(),
-            v3_disproven: rustc_hash::FxHashMap::default(),
-            v3_ph_hits: 0,
-            v3_ply_total: [0; 64],
-            v3_ply_unique: [0; 64],
-            v3_ply_seen: rustc_hash::FxHashSet::default(),
-            v3_sel_dumped: [0; 8],
-            v3_trace_cnt: 0,
             diag_deferred_penalty_sum: 0,
             diag_tca_shallow_fire: 0,
             diag_tca_shallow_would_fire: 0,
@@ -1755,49 +1653,6 @@ impl DfPnSolver {
         self
     }
 
-    /// Phase 33: mid_v3 で LocalExpansion refinement を駆動するか (案②)．
-    /// 詳細: [`DfPnSolver::param_v3_local_exp`]．
-    pub fn set_v3_local_exp(&mut self, on: bool) -> &mut Self {
-        self.param_v3_local_exp = on;
-        self
-    }
-
-    /// mid_v4 mode (KH coherent dynamics bundle) を有効化するか．
-    /// 詳細: [`DfPnSolver::param_v3_v4`]．env `V3_V4=1` と等価 (programmatic 版)．
-    pub fn set_v3_v4(&mut self, on: bool) -> &mut Self {
-        self.param_v3_v4 = on;
-        self
-    }
-
-    /// Phase 36: mid_v3 で KH `CheckObviousFinalOrNode` 先読みを有効化するか (default true)．
-    /// 詳細: [`DfPnSolver::param_v3_lookahead`]．
-    pub fn set_v3_lookahead(&mut self, on: bool) -> &mut Self {
-        self.param_v3_lookahead = on;
-        self
-    }
-
-    /// Phase 33b: LE path で KH IsInferior dominance + RepetitionMemo を有効化する．
-    /// 詳細: [`DfPnSolver::param_v3_dominance`]．**注意**: 29te では sound だが clean TT が
-    /// path 依存 dominance 結果を再利用できず逆に遅くなる (119K→776K) ことが実測済 (gated, default off)．
-    pub fn set_v3_dominance(&mut self, on: bool) -> &mut Self {
-        self.param_v3_dominance = on;
-        self
-    }
-
-    /// Phase 33c: LE path で KH EliminateDoubleCount (DAG δ 二重計上除去) を有効化する．
-    /// 詳細: [`DfPnSolver::param_v3_dag`]．
-    pub fn set_v3_dag(&mut self, on: bool) -> &mut Self {
-        self.param_v3_dag = on;
-        self
-    }
-
-    /// Phase 33d: LE path で hand-aware proof/disproof reuse (KH proof_hand) を有効化する．
-    /// 詳細: [`DfPnSolver::param_v3_proof_hand`]．
-    pub fn set_v3_proof_hand(&mut self, on: bool) -> &mut Self {
-        self.param_v3_proof_hand = on;
-        self
-    }
-
     /// Phase 26b: 集約 disproof を remaining scope で store する (root cause fix)．
     /// 詳細: [`DfPnSolver::param_scope_disproof`]．
     pub fn set_scope_disproof(&mut self, on: bool) -> &mut Self {
@@ -2285,11 +2140,12 @@ impl DfPnSolver {
     /// Phase 2: PNS がアリーナ上限に達した場合，残りの予算で
     ///          IDS-dfpn (MID) にフォールバックする．
     pub fn solve(&mut self, board: &mut Board) -> TsumeResult {
-        // v2.1.0: production は mid_v3 を使用する (v1 mid / legacy PNS は廃止方針)．
-        // mid_v3 は max_nodes / timeout を honor し TsumeResult::{Checkmate, NoCheckmate, Unknown}
+        // production は mid_v4 (KH 忠実 SearchImpl port) を使用する．mid_v3 / v1 mid / legacy PNS は廃止．
+        // mid_v4 は max_nodes / timeout を honor し TsumeResult::{Checkmate, NoCheckmate, Unknown}
         // を返す．未解決 (budget/timeout) は Unknown (false NoMate を出さない)．
-        // 注意: find_shortest は mid_v3 では未対応 (IDS は threshold 成長で canonical mate を返す)．
-        self.solve_via_v3(board)
+        // 旧 V3_V4ENG 分岐は撤去し，39te bundle (KHORDER/DOM/SMPROP/HANDSET/KHMOVES/MATE1PLY_KH/
+        // KHPARENT) を default に焼き込んだ (gate 関数が定数 true を返す)．
+        self.solve_via_v4(board)
     }
 
     /// `param_refutable_depth = 0` は適応的 depth を意味する sentinel．
@@ -2472,8 +2328,9 @@ impl DfPnSolver {
 /// `MATE1PLY_KH`: look-ahead 1 手詰判定を YaneuraOu `mate_1ply` 忠実列挙へ切替える
 /// (default OFF; 計測・段階導入用)．[`DfPnSolver::mate1ply_kh`] を参照．
 pub(super) fn mate1ply_kh_enabled() -> bool {
-    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("MATE1PLY_KH").is_ok())
+    // 39te bundle の default 化に伴い常時 ON (旧 `MATE1PLY_KH` gate を撤去)．
+    // look-ahead 1 手詰判定を YaneuraOu `mate_1ply` 忠実列挙にする．
+    true
 }
 
 /// `MATE1PLY_KH_VERIFY`: kh 列挙の健全性 + full scan との一致を毎 look-ahead 照合する

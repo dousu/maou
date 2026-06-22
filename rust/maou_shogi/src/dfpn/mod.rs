@@ -35,14 +35,12 @@ mod entry;
 mod kh_local_expansion;
 mod local_expansion;
 mod mate_len;
-mod mid_v3;
 mod mid_v4;
 mod node_movegen;
 mod path_key;
 mod path_stack;
 mod pns;
 mod proof_hand;
-mod repetition_memo;
 mod search_result;
 mod solver;
 #[cfg(test)]
@@ -60,15 +58,11 @@ pub use solver::{DfPnSolver, TsumeResult};
 /// 合法手上限に合わせる．
 const MAX_MOVES: usize = 593;
 
-/// V3_KHPAR: KH/yaneuraou parity の手生成順 (王手 = 盤上移動→駒打ち raw 順,
-/// AND 合駒 drop = 歩→桂→香→… 順) を有効化する experiment gate．
-/// default off = committed 挙動 (29te 18,539 canonical を維持)．
-/// 39te campaign では V3_KHPAR=1 V3_CHUAI=1 で計測する (worklog 参照)．
-/// process 内で 1 回だけ読む (hot path の env::var 回避)．
+/// KH/yaneuraou parity の手生成順 (王手 = 盤上移動→駒打ち raw 順, AND 合駒 drop = 歩→桂→香→… 順)．
+/// 39te bundle は tie-break を `V4_KHORDER` (常時 ON) で KH 順にするため，本 raw 生成順 parity は
+/// 使わない．旧 V3_KHPAR/V3_V4 gate は mid_v3 廃止に伴い撤去 (常に false = committed 生成順)．
 pub(super) fn kh_parity_order() -> bool {
-    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    // V3_V4 (mid_v4 coherent mode) でも有効化する (coherent bundle の一部)．
-    *C.get_or_init(|| std::env::var("V3_KHPAR").is_ok() || std::env::var("V3_V4").is_ok())
+    false
 }
 
 /// V4_KHPARENT: DAG 二重カウント補正の `look_up_parent` (TT 親候補選択) を KH `LookUpParent`
@@ -79,8 +73,9 @@ pub(super) fn kh_parity_order() -> bool {
 /// reset 欠落 → sum_delta 過大 → threshold 過小 → 部分木を早期放棄して node 増)．本 gate ON で
 /// exact 優先を撤去し KH と同一の親候補 = 同一 DAG 検出にする．default off (default mid_v4 不変)．
 pub(super) fn kh_parent_enabled() -> bool {
-    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("V4_KHPARENT").is_ok())
+    // 39te bundle の default 化に伴い常時 ON (旧 `V4_KHPARENT` gate を撤去)．
+    // exact-hand 親優先を撤去し KH `LookUpParent` と同一の親候補 = 同一 DAG merge 検出にする．
+    true
 }
 
 /// V4_KHMOVES: AND node の合駒生成を KH `MovePicker` に忠実化する gate．
@@ -89,8 +84,9 @@ pub(super) fn kh_parent_enabled() -> bool {
 /// 本 gate ON で reduction を無効化し KH と同一手集合を生成する (DML で idx/deferred 分割は一致)．
 /// default off = committed 挙動 (canonical mid_v3 18,539 維持)．process 内で 1 回だけ読む．
 pub(super) fn v4_kh_moves() -> bool {
-    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("V4_KHMOVES").is_ok())
+    // 39te bundle の default 化に伴い常時 ON (旧 `V4_KHMOVES` gate を撤去)．
+    // AND node の合駒 reduction を無効化し KH `MovePicker` と同一手集合を生成する (DML で defer 分割は一致)．
+    true
 }
 
 /// `ArrayVec::try_push` のラッパー．

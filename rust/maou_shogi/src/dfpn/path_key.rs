@@ -1,9 +1,8 @@
 //! KH `path_keys.hpp` 相当の経路ハッシュ (path key)．
 //!
 //! 探索経路を表す Zobrist ハッシュ．各手の寄与を**深さ (ply) ごとに変える**ことで，手順が前後して
-//! 同じ局面に至る経路同士でハッシュが衝突しないようにする (KH のコメント参照)．千日手 (sennichite)
-//! を全探索で order-independent に検出・再利用するための [`super::repetition_memo::RepetitionMemo`]
-//! のキーに使う．
+//! 同じ局面に至る経路同士でハッシュが衝突しないようにする (KH のコメント参照)．mid_v4 の
+//! repetition 検出 (KH `RepetitionTable`; [`super::tt_v4`]) のキーに使う．
 //!
 //! `path_key_after` は XOR 差分なので逆写像も同じ関数 (KH `PathKeyBefore` == `PathKeyAfter`)．
 
