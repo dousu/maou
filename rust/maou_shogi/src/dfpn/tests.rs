@@ -8,7 +8,7 @@ use super::solver::*;
 use super::*;
 use crate::attack;
 use crate::movegen;
-use crate::types::PieceType;
+use crate::types::{PieceType, Square};
 
 // === hand_gte / hand_gte_forward_chain のユニットテスト ===
 
