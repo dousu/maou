@@ -518,8 +518,8 @@ impl DfPnSolver {
         super::node_movegen::reset_legal_quick_dm();
         crate::movegen::reset_pawn_drop_mate_dm();
         crate::board::reset_do_move_count();
-        super::solver::reset_mate_cand_stats();
-        super::solver::reset_mate1ply_stats();
+        super::mate1ply::reset_mate_cand_stats();
+        super::mate1ply::reset_mate1ply_stats();
         // path dominance (劣位局面の刈り込み)．常時 ON．
         self.param_path_dominance = true;
         self.timed_out = false;
@@ -612,8 +612,8 @@ impl DfPnSolver {
             self.dag_fires,
             self.dom_fires
         );
-        super::solver::report_mate_cand_stats();
-        super::solver::report_mate1ply_stats();
+        super::mate1ply::report_mate_cand_stats();
+        super::mate1ply::report_mate1ply_stats();
         if std::env::var("DMBREAK").is_ok() {
             let dm = DM_SITE.with(|c| c.get());
             let lq = super::node_movegen::legal_quick_dm();
@@ -1524,7 +1524,7 @@ impl DfPnSolver {
         let (no_mate, mm_opt) = if dhmp_enabled() {
             if !board.does_have_mate_possibility(board.turn) {
                 (true, None)
-            } else if super::solver::mate1ply_enabled() {
+            } else if super::mate1ply::mate1ply_enabled() {
                 // mate_1ply 忠実列挙 (full movegen 回避)．
                 (false, self.mate1ply(board))
             } else if near2_enabled() {

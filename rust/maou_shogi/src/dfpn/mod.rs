@@ -32,6 +32,7 @@ mod check_cache;
 mod delayed_move_list;
 mod heuristics;
 mod local_expansion;
+mod mate1ply;
 mod mate_len;
 mod mid;
 mod node_movegen;
