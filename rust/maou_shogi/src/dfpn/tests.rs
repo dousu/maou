@@ -3,7 +3,7 @@
 // 変数が実際に使用されるため警告は出ない．
 #![allow(unused_variables, unused_assignments)]
 
-use super::pns::*;
+use super::api::*;
 use super::solver::*;
 use super::*;
 use crate::attack;

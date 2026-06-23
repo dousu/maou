@@ -4,13 +4,20 @@
 use rustc_hash::FxHashMap;
 use std::time::{Duration, Instant};
 
-use crate::bitboard::Bitboard;
 use crate::board::Board;
 use crate::moves::Move;
 use crate::types::Color;
 
-use super::entry::PNS_MAX_ARENA_NODES;
 use super::{CheckCache, DISPROOF_THRESHOLD_ADAPTIVE};
+
+/// アリーナの**デフォルト**最大ノード数(メモリ上限)．
+///
+/// 1ノード ≈ 80〜120 bytes(children Vec 含む)．
+/// 5M ノードで約 400〜600 MB を使用する．
+///
+/// `DfPnSolver::param_pns_arena_max` で実行時に変更可能．
+/// この定数はデフォルト値および初期 `Vec::with_capacity` の上限として使用する．
+const PNS_MAX_ARENA_NODES: usize = 5_000_000;
 
 /// path 配列の容量．depth の最大値(41) + マージン．
 pub(super) const PATH_CAPACITY: usize = 48;
@@ -70,11 +77,6 @@ pub struct DfPnSolver {
     /// デフォルトは 0(無効)．超長手数問題で OOM を防ぐ場合に設定する．
     /// 推奨値: 探索ノード数の 1/5〜1/2 程度(例: 100M ノードなら 20M〜50M)．
     pub(super) tt_gc_threshold: usize,
-    /// 直前の `generate_defense_moves` で計算されたチェーンマスのビットボード．
-    ///
-    /// `mid()` 内で合駒がチェーンマスへのドロップかどうかを判定するために使用．
-    /// 各 `mid()` 呼び出しで更新され，飛び駒の王手がない場合は空．
-    pub(super) chain_bb_cache: Bitboard,
     /// 王手生成キャッシュ(E2 最適化)．
     pub(super) check_cache: CheckCache,
     /// サマリキャッシュの disproof ヒット回数 (tt_diag 診断用)．現在は未使用．
@@ -481,9 +483,6 @@ pub struct DfPnSolver {
     /// PNS 初期フェーズ専用の refutable call limit (デフォルト 500)．
     /// MID では param_refutable_call_limit (=10,000) を使用する．
     pub(super) param_pns_refutable_call_limit: u32,
-    /// 境界層 PNS 責任転嫁の残り呼出予算 (現在は未使用)．
-    #[allow(dead_code)]
-    pub(super) a6_boundary_pns_calls_remaining: u32,
     /// ノード制限到達時点の WorkingTT pn/dn 分布スナップショット (分析用)．
     ///
     /// max_nodes に達した最初の mid() 呼び出しで `collect_working_pn_dn_dist()` を
@@ -527,7 +526,6 @@ impl DfPnSolver {
             find_shortest: true,
             param_refine_iter_cap: 0,
             pv_nodes_per_child: 1024,
-            chain_bb_cache: Bitboard::EMPTY,
             check_cache: CheckCache::new(),
             #[cfg(feature = "tt_diag")]
             diag_pc_summary_disproof_hits: 0,
@@ -633,7 +631,6 @@ impl DfPnSolver {
             param_refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
             param_refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
             param_pns_refutable_call_limit: 500,
-            a6_boundary_pns_calls_remaining: 0,
             pn_dn_snapshot: None,
             pn_dn_per_depth: Vec::new(),
             preserve_proven_tt: false,

@@ -45,7 +45,6 @@ impl DfPnSolver {
         board: &mut Board,
         early_exit: bool,
     ) -> ArrayVec<Move, MAX_MOVES> {
-        self.chain_bb_cache = Bitboard::EMPTY;
         let defender = board.turn;
         let attacker = defender.opponent();
 
@@ -137,7 +136,6 @@ impl DfPnSolver {
                 let (futile, chain) = self.compute_futile_and_chain_squares(
                     board, &between, king_sq, checker_sq, defender, attacker,
                 );
-                self.chain_bb_cache = chain;
                 // 間のマスへの合い駒
                 self.generate_interpositions(
                     board, &mut moves, &between, &futile, &chain, king_sq, defender, all_occ,

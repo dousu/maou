@@ -1,4 +1,4 @@
-//! 手生成，PNS (Proof Number Search)，PV 復元，公開 API．
+//! 詰将棋ソルバーの公開 API (`solve_tsume*` 便利関数)．
 
 use crate::board::Board;
 

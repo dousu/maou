@@ -29,15 +29,14 @@ macro_rules! verbose_eprintln {
     };
 }
 
+mod api;
 mod delayed_move_list;
-mod entry;
 mod local_expansion;
 mod mate_len;
 mod mid;
 mod node_movegen;
 mod path_key;
 mod path_stack;
-mod pns;
 mod proof_hand;
 mod search_result;
 mod solver;
@@ -46,7 +45,7 @@ mod tests;
 mod tt;
 mod ttentry;
 
-pub use pns::{solve_tsume, solve_tsume_and_collect_pn_dn_dist, solve_tsume_with_timeout};
+pub use api::{solve_tsume, solve_tsume_and_collect_pn_dn_dist, solve_tsume_with_timeout};
 pub use solver::{DfPnSolver, TsumeResult};
 
 /// 王手手/応手の最大数．
