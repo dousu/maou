@@ -1,10 +1,10 @@
-//! KH `path_keys.hpp` 相当の経路ハッシュ (path key)．
+//! 探索経路を表す経路ハッシュ (path key)．
 //!
 //! 探索経路を表す Zobrist ハッシュ．各手の寄与を**深さ (ply) ごとに変える**ことで，手順が前後して
-//! 同じ局面に至る経路同士でハッシュが衝突しないようにする (KH のコメント参照)．mid_v4 の
-//! repetition 検出 (KH `RepetitionTable`; [`super::tt_v4`]) のキーに使う．
+//! 同じ局面に至る経路同士でハッシュが衝突しないようにする．mid の
+//! repetition 検出 ([`super::tt`]) のキーに使う．
 //!
-//! `path_key_after` は XOR 差分なので逆写像も同じ関数 (KH `PathKeyBefore` == `PathKeyAfter`)．
+//! `path_key_after` は XOR 差分なので逆写像も同じ関数 (before/after が同一)．
 
 use std::sync::LazyLock;
 
@@ -27,7 +27,7 @@ struct PathKeyTables {
     dropped_pr: [[u64; MAX_PLY]; HAND_KINDS],
 }
 
-/// splitmix64 PRNG (KH `PathKeyInit` の seed 334334 相当に固定 seed)．
+/// splitmix64 PRNG (固定 seed 334334)．
 #[inline]
 fn splitmix64(state: &mut u64) -> u64 {
     *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -64,7 +64,7 @@ static TABLES: LazyLock<PathKeyTables> = LazyLock::new(|| {
 
 /// 現在の `path_key` と手 `m` (深さ `ply` で指す) から 1 手後の path key を返す．
 ///
-/// KH `PathKeyAfter` (path_keys.hpp:66-81) の鏡像．XOR 差分なので
+/// XOR 差分なので
 /// `path_key_after(path_key_after(k, m, ply), m, ply) == k` (逆写像も同関数)．
 #[inline]
 pub(super) fn path_key_after(path_key: u64, m: Move, ply: usize) -> u64 {
@@ -101,7 +101,7 @@ mod tests {
 
     #[test]
     fn xor_roundtrip_is_identity() {
-        // KH: PathKeyBefore == PathKeyAfter．2 回適用で元に戻る．
+        // before == after なので 2 回適用で元に戻る．
         let (_b, m) = first_move("lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1");
         let k0 = 0x1234_5678_9ABC_DEF0u64;
         let k1 = path_key_after(k0, m, 3);

@@ -1,6 +1,4 @@
-//! Tier 3 (twinkling-hatching-duckling, v0.65.0): 合駒遅延展開．
-//!
-//! KomoringHeights `delayed_move_list.hpp` (v1.1.0) の Rust 移植．
+//! 合駒遅延展開．
 //!
 //! ## 設計
 //!
@@ -25,7 +23,7 @@
 //! ## 使い方
 //!
 //! ```ignore
-//! let dml = DelayedMoveList::build(&moves, /*or_node=*/false);
+//! let dml = DelayedMoveList::build_with_types(&moves, /*or_node=*/false, &[], false);
 //! for (i, m) in moves.iter().enumerate() {
 //!     // prev チェイン上に未解決手があればスキップ
 //!     if dml.has_unresolved_prev(i, |j| !child_is_final[j]) {
@@ -38,7 +36,7 @@
 use crate::moves::Move;
 use crate::types::PieceType;
 
-/// 1 ノードあたりの最大同マス chain 数 (KH と同じ)．
+/// 1 ノードあたりの最大同マス chain 数．
 const MAX_DELAY_HEADS: usize = 10;
 
 /// 指し手の遅延展開を管理する per-node 構造体．
@@ -52,19 +50,9 @@ pub(super) struct DelayedMoveList {
 }
 
 impl DelayedMoveList {
-    /// 与えられた `moves` から double-linked chain を構築する．
-    ///
-    /// `or_node = true` なら攻方視点 (OR ノード)，`false` なら受方視点 (AND ノード)．
-    /// AND ノードでは全 drop が遅延対象，OR ノードでは drop は対象外
-    /// (`IsDelayable` の意味論)．成/不成ペア (同 from, 同 to の駒移動) は
-    /// 両ノードで対象とする．
-    pub(super) fn build(moves: &[Move], or_node: bool) -> Self {
-        Self::build_with_types(moves, or_node, &[], false)
-    }
-
     /// `raw_pts[i]` = `moves[i]` の移動元駒種 raw ID (1=歩..14=龍; 駒打ちは 0)．`us_black` は
-    /// 手番側が先手か (enemy_field/香の段判定用)．`raw_pts` が空なら従来の粗い fallback (dummy 歩)．
-    /// KH `IsDelayable` の忠実版 (盤上移動は歩/角/飛, 及び香の敵陣 2/8 段昇り のみ遅延対象)．
+    /// 手番側が先手か (enemy_field/香の段判定用)．`raw_pts` が空なら粗い fallback (dummy 歩) に委ねる．
+    /// 盤上移動は歩/角/飛, 及び香の敵陣 2/8 段昇り のみ遅延対象とする．
     pub(super) fn build_with_types(
         moves: &[Move],
         or_node: bool,
@@ -74,10 +62,10 @@ impl DelayedMoveList {
         Self::build_inner(moves, or_node, raw_pts, us_black, &[])
     }
 
-    /// `build_with_types` + KH `IsSame` の中合い対称性 (delayed_move_list.hpp:152-156)．
+    /// `build_with_types` に中合い対称性の判定を加えた版．
     /// `interp_chain[i]` = `moves[i]` が「攻方支援なし & 逆王手でない drop」なら true
     /// (呼出側で Board から算出)．この条件を満たす 2 つの drop は **別 to_sq でも同一 chain**
-    /// とみなし後回しにする (KH 忠実版; 「逆王手でない中合いはだいたい無意味」)．
+    /// とみなし後回しにする (逆王手でない中合いは無意味なことが多いため)．
     pub(super) fn build_with_types_interp(
         moves: &[Move],
         or_node: bool,
@@ -113,8 +101,8 @@ impl DelayedMoveList {
             let mut linked = false;
             for j in 0..heads_len {
                 let (head_move, head_idx) = heads[j];
-                // KH IsSame: 同 to_sq (同マス合駒/成不成ペア) または「支援なし & 非逆王手」の
-                // 別マス中合いペア (interp_chain 両 true)．
+                // 同 to_sq (同マス合駒/成不成ペア) または「支援なし & 非逆王手」の
+                // 別マス中合いペア (interp_chain 両 true) なら同等とみなす．
                 let same = is_same(head_move, m)
                     || (interp_chain
                         .get(head_idx as usize)
@@ -153,7 +141,7 @@ impl DelayedMoveList {
 
     /// `i_raw` の直後に展開すべき手の index．無ければ `None`．
     #[inline(always)]
-    #[allow(dead_code)] // 将来の Next() walking 用に保持
+    #[allow(dead_code)] // 将来の next chain walking 用に保持
     pub(super) fn next(&self, i_raw: usize) -> Option<usize> {
         let n = self.next[i_raw];
         if n == 0 {
@@ -188,8 +176,8 @@ impl DelayedMoveList {
 ///
 /// 成/不成ペアの判定は `is_same` で from/to が同じ非 drop 手を検出することで実現．
 /// `is_delayable` 自身は粗いフィルタとしてこのような手の候補を pre-screen する．
-/// KH `IsDelayable` 忠実版 (移動元駒種 `raw_pt` を使う)．`raw_pt=None`/0 (駒打ち以外で
-/// 不明) のときは従来の粗い fallback (`is_delayable`) に委ねる．
+/// 移動元駒種 `raw_pt` を使って遅延対象を絞る．`raw_pt=None`/0 (駒打ち以外で
+/// 不明) のときは粗い fallback (`is_delayable`) に委ねる．
 #[inline]
 fn is_delayable_typed(m: Move, or_node: bool, raw_pt: Option<u8>, us_black: bool) -> bool {
     if m.is_drop() {
@@ -203,7 +191,7 @@ fn is_delayable_typed(m: Move, or_node: bool, raw_pt: Option<u8>, us_black: bool
     };
     let to = m.to_sq();
     let from = m.from_sq();
-    // KH: enemy_field(us).test(from) || enemy_field(us).test(to)．
+    // from か to のいずれかが手番側の敵陣に含まれるか．
     let in_enemy = if us_black {
         from.row() <= 2 || to.row() <= 2
     } else {
@@ -235,7 +223,7 @@ fn is_delayable(m: Move, or_node: bool) -> bool {
         // 成/不成ペアは move 単独からは判定できないので IsSame に委ねる．
         // この段階では一律 true を返してペア候補に含め，IsSame で
         // 「同 from + 同 to の他の手」が存在しなければ chain に入らない (head のみ)．
-        // ただし from/to が enemy field 関連かつ歩/角/飛/香 (KH と同じ駒種制約)
+        // ただし from/to が enemy field 関連かつ歩/角/飛/香
         // の場合のみ true とすることで無関係な手のオーバーヘッドを削減．
         let to = m.to_sq();
         let from = m.from_sq();
@@ -264,10 +252,10 @@ fn is_delayable(m: Move, or_node: bool) -> bool {
 /// - 両非 drop: 同 from + 同 to なら同等 (成/不成ペア)．
 /// - drop と非 drop の混合: 同等でない．
 ///
-/// **注意**: KH では更に「support_cnt==0 で no-check のドロップは別 to でも同等」
-/// という条件がある (delayed_move_list.hpp:152-156)．これは 攻方支援なし & 王手に
-/// ならない中合の対称性検出で，[`DelayedMoveList::build_with_types_interp`] に
-/// `interp_chain` flag (呼出側で Board から算出) として実装済 (V4_KHMOVES gate)．
+/// **注意**: 更に「support_cnt==0 で no-check のドロップは別 to でも同等」という
+/// 対称性 (攻方支援なし & 王手にならない中合) があり，これは
+/// [`DelayedMoveList::build_with_types_interp`] に `interp_chain` flag
+/// (呼出側で Board から算出) として実装している．
 /// 本 `is_same` 自体は Board を持たないため同マス/成不成のみ判定する．
 #[inline]
 fn is_same(m1: Move, m2: Move) -> bool {
@@ -283,7 +271,7 @@ fn is_same(m1: Move, m2: Move) -> bool {
 /// `pt_of_move`: 駒打ちなら drop_piece_type，それ以外は None．
 /// 非 drop の駒種は Board がないと判定不能のため，is_delayable の
 /// 非 drop 経路では「from/to が enemy field 周辺の歩/角/飛/香」相当の
-/// 粗いフィルタを適用するに留める．本格的な駒種判定は Phase 2 で改善．
+/// 粗いフィルタを適用するに留める．
 #[inline]
 fn pt_of_move(m: Move) -> Option<PieceType> {
     if m.is_drop() {
@@ -323,7 +311,7 @@ mod tests {
         let m_n = Move::new_drop(sq, PieceType::Knight);
         let moves = vec![m_p, m_l, m_n];
 
-        let dml = DelayedMoveList::build(&moves, /*or_node=*/ false);
+        let dml = DelayedMoveList::build_with_types(&moves, /*or_node=*/ false, &[], false);
         // index 0 が head (prev=None), 1,2 は prev あり
         assert_eq!(dml.prev(0), None);
         assert_eq!(dml.prev(1), Some(0));
@@ -344,7 +332,7 @@ mod tests {
         let m_la = Move::new_drop(sq_a, PieceType::Lance);
         let moves = vec![m_pa, m_pb, m_la];
 
-        let dml = DelayedMoveList::build(&moves, /*or_node=*/ false);
+        let dml = DelayedMoveList::build_with_types(&moves, /*or_node=*/ false, &[], false);
         // index 0 と 1 はそれぞれ head (異なる sq)
         assert_eq!(dml.prev(0), None);
         assert_eq!(dml.prev(1), None);
@@ -360,7 +348,7 @@ mod tests {
         let m_l = Move::new_drop(sq, PieceType::Lance);
         let moves = vec![m_p, m_l];
 
-        let dml = DelayedMoveList::build(&moves, /*or_node=*/ true);
+        let dml = DelayedMoveList::build_with_types(&moves, /*or_node=*/ true, &[], false);
         // OR ノードの drop は遅延対象外なので chain なし
         assert_eq!(dml.prev(0), None);
         assert_eq!(dml.prev(1), None);
@@ -375,7 +363,7 @@ mod tests {
             Move::new_drop(sq, PieceType::Lance),
             Move::new_drop(sq, PieceType::Knight),
         ];
-        let dml = DelayedMoveList::build(&moves, /*or_node=*/ false);
+        let dml = DelayedMoveList::build_with_types(&moves, /*or_node=*/ false, &[], false);
 
         // index 0: prev なし → 常に false
         assert!(!dml.has_unresolved_prev(0, |_| true));

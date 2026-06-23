@@ -1,12 +1,9 @@
 //! dfpn OR/AND ノードの手生成・合法手ヘルパ群．
 //!
-//! mid_v4（現行エンジン）と legacy PNS 探索（pns.rs, 廃止予定）の両方が依存する
-//! **恒久的** な movegen ヘルパ．pns.rs から切り出した（v2.0.x, mid/pns 廃止方針）．
-//! ここには探索ロジックを置かない（手生成・合法性判定のみ）．
+//! 探索ロジックから独立した movegen ヘルパ．
+//! ここには探索ロジックを置かない (手生成・合法性判定のみ)．
 
 use arrayvec::ArrayVec;
-#[cfg(feature = "profile")]
-use std::time::Instant;
 
 use crate::attack;
 use crate::bitboard::Bitboard;
@@ -22,7 +19,7 @@ thread_local! {
     /// is_legal_quick が実際に do_move した回数 (do_moves breakdown 用; solve 毎に reset)．
     static LEGAL_QUICK_DM: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
-/// is_legal_quick の do_move 回数を取得 (mid_v4 report 用)．
+/// is_legal_quick の do_move 回数を取得 (report 用)．
 pub(super) fn legal_quick_dm() -> u64 {
     LEGAL_QUICK_DM.with(|c| c.get())
 }
@@ -40,18 +37,9 @@ impl DfPnSolver {
     /// 3. 合い駒(飛び駒の王手の場合，間のマスへ移動または打つ)
     ///
     /// 合い効かず(futile interposition)もフィルタする．
-    pub(super) fn generate_defense_moves(
-        &mut self,
-        board: &mut Board,
-    ) -> ArrayVec<Move, MAX_MOVES> {
-        self.generate_defense_moves_inner(board, false)
-    }
-
-    /// 王手回避手の内部実装．
     ///
     /// `early_exit == true` の場合，最初の合法手が見つかった時点で即座にリターンする．
-    /// `has_any_defense` と `generate_defense_moves` の両方がこの関数を共有し，
-    /// ロジックの重複を排除する．
+    /// `has_any_defense` もこの関数を共有し，ロジックの重複を排除する．
     pub(super) fn generate_defense_moves_inner(
         &mut self,
         board: &mut Board,
@@ -418,19 +406,15 @@ impl DfPnSolver {
         board: &mut Board,
         moves: &mut ArrayVec<Move, MAX_MOVES>,
         between: &Bitboard,
-        futile: &Bitboard,
-        chain: &Bitboard,
+        _futile: &Bitboard,
+        _chain: &Bitboard,
         king_sq: Square,
         defender: Color,
         all_occ: Bitboard,
         _our_occ: Bitboard,
         pinned: Bitboard,
     ) {
-        let king_step = attack::step_attacks(defender.opponent(), PieceType::King, king_sq);
         let attacker = defender.opponent();
-        // futile | chain = 駒移動の無駄合いフィルタ対象
-        let futile_or_chain = *futile | *chain;
-
         let d = defender.index();
 
         for to in *between {
@@ -476,22 +460,8 @@ impl DfPnSolver {
                 let piece = board.squares[from.index()];
                 let pt = piece.piece_type().unwrap();
 
-                // 駒移動による合い駒の無駄合いフィルタ:
-                // futile/chain マスへの移動でも，以下の場合は無駄合いではない:
-                // (a) 移動後の駒にひもがついている(from を除いた守備側の利き)
-                // (b) 移動元が玉の隣接マスで，空いた後に攻め方から利かれず
-                //     玉の逃げ道が新たに生まれる
-                // V4_KHMOVES (faithful): KH MovePicker は無駄合い piece-move も生成するため filter を無効化．
-                if !super::v4_kh_moves() && futile_or_chain.contains(to) {
-                    let has_support =
-                        board.is_attacked_by_excluding(to, defender, true, Some(from));
-                    let opens_escape = king_step.contains(from)
-                        && !board.is_attacked_by_excluding(from, attacker, false, None);
-                    if !has_support && !opens_escape {
-                        continue;
-                    }
-                }
-
+                // 駒移動による合い駒は無駄合いフィルタを適用せず全て生成する
+                // (無駄合いの除外は駒打ちの futile/chain 分類でのみ行う)．
                 let captured_raw = board.squares[to.index()].0;
                 let in_promo_zone =
                     to.is_promotion_zone(defender) || from.is_promotion_zone(defender);
@@ -510,41 +480,12 @@ impl DfPnSolver {
             }
 
             // --- 駒打ちによる合い駒 ---
-            // NOTE (2026-06-11, 棄却): KH parity の full-drop 生成 (futile/chain マスでも
-            // 全駒生成し DML chain に委ねる) を試したが 39te @3M deep frontier +21% 退行
-            // (p13 77,791→94,355) かつ標的の 29te iter2 G*7g pn 乖離も不変で revert．
-            // deferred 数 (mp-idx) 由来の penalty 差仮説は当該乖離の真因ではない．
-            // V4_KHMOVES (faithful): KH MovePicker は全合駒 drop を生成し DML chain で defer するため，
-            // futile skip / chain 代表駒 reduction を無効化し全駒種を生成する (idx/deferred 分割は DML 一致)．
-            if !super::v4_kh_moves() {
-                if futile.contains(to) {
-                    // 完全無駄合い: スキップ
-                    continue;
-                }
-                if chain.contains(to) {
-                    // chain マス: 3カテゴリの代表駒のみ生成
-                    self.generate_chain_drops(board, moves, to, defender);
-                    continue;
-                }
-            }
             {
-                // 通常マス (および V4_KHMOVES faithful path): 全駒種を生成する．
-                // KH/yaneuraou parity (V3_KHPAR): 生成順は 歩→桂→香→銀→金→角→飛
-                // (yaneuraou movegen.cpp GenerateDropMoves: PAWN 先行 + drops[] が
-                // KNIGHT,LANCE,SILVER,GOLD,BISHOP,ROOK 順)．同 to_sq drop は DML で
-                // chain 化され先頭が chain head になるため，この順が KH の chain head
-                // 選択 (歩可能なら歩，二歩なら桂) を再現する (39te 実測: N*6b)．
-                // default は旧来の弱い駒から順 (歩→香→桂→…)．
+                // 間のマスへ全駒種の合駒 drop を生成する．
+                // 生成順は 歩→香→桂→銀→金→角→飛 (弱い駒から順)．
+                // 同 to_sq の複数 drop は後段で連結され先頭が代表になるため，
+                // この順序は代表駒の選択 (歩可能なら歩，二歩なら次の駒) を決める．
                 // 生成集合は不変で順序のみ = 合法性に影響なし．
-                const DROP_ORDER_KH: [(usize, PieceType); 7] = [
-                    (0, PieceType::Pawn),
-                    (2, PieceType::Knight),
-                    (1, PieceType::Lance),
-                    (3, PieceType::Silver),
-                    (4, PieceType::Gold),
-                    (5, PieceType::Bishop),
-                    (6, PieceType::Rook),
-                ];
                 const DROP_ORDER_LEGACY: [(usize, PieceType); 7] = [
                     (0, PieceType::Pawn),
                     (1, PieceType::Lance),
@@ -554,11 +495,7 @@ impl DfPnSolver {
                     (5, PieceType::Bishop),
                     (6, PieceType::Rook),
                 ];
-                let drop_order: &[(usize, PieceType); 7] = if super::kh_parity_order() {
-                    &DROP_ORDER_KH
-                } else {
-                    &DROP_ORDER_LEGACY
-                };
+                let drop_order: &[(usize, PieceType); 7] = &DROP_ORDER_LEGACY;
                 for &(hand_idx, pt) in drop_order.iter() {
                     if board.hand[defender.index()][hand_idx] == 0 {
                         continue;
@@ -579,106 +516,6 @@ impl DfPnSolver {
                     }
                     push_move(moves, m);
                 }
-            }
-        }
-    }
-
-    /// チェーンマスへの代表駒ドロップを生成する．
-    ///
-    /// 3カテゴリの代表駒を試す:
-    /// 1. 前方利き系: 歩→香→銀→金→飛(最弱の合法駒1つ)
-    /// 2. 斜め利き系: 角
-    /// 3. 跳躍系: 桂
-    pub(super) fn generate_chain_drops(
-        &self,
-        board: &mut Board,
-        moves: &mut ArrayVec<Move, MAX_MOVES>,
-        to: Square,
-        defender: Color,
-    ) {
-        let di = defender.index();
-
-        // カテゴリ1: 前方利き系(歩,香,銀,金,飛) — 最弱の合法駒1つ
-        const FORWARD_PIECES: [(usize, PieceType); 5] = [
-            (0, PieceType::Pawn),   // hand_idx=0
-            (1, PieceType::Lance),  // hand_idx=1
-            (3, PieceType::Silver), // hand_idx=3
-            (4, PieceType::Gold),   // hand_idx=4
-            (6, PieceType::Rook),   // hand_idx=6
-        ];
-        // 3 カテゴリの代表を一旦集めてから push する (DML chain head = 最初に push された手なので，
-        // KH parity 実験 V3_KH_INT 時に並べ替えできるように)．
-        let mut cat1: Option<Move> = None;
-        let mut cat1_is_pawn = false;
-        for &(hand_idx, pt) in &FORWARD_PIECES {
-            if board.hand[di][hand_idx] == 0 {
-                continue;
-            }
-            if movegen::must_promote(defender, pt, to) {
-                continue;
-            }
-            if pt == PieceType::Pawn {
-                let our_pawns = board.piece_bb[di][PieceType::Pawn as usize];
-                let col = to.col();
-                if (our_pawns & Bitboard::file_mask(col)).is_not_empty() {
-                    continue; // 二歩
-                }
-                let m = Move::new_drop(to, pt);
-                if movegen::is_pawn_drop_mate(board, m) {
-                    continue; // 打ち歩詰め
-                }
-                cat1 = Some(m);
-                cat1_is_pawn = true;
-            } else {
-                cat1 = Some(Move::new_drop(to, pt));
-            }
-            break; // カテゴリ内最弱で代表
-        }
-
-        // カテゴリ2: 角
-        let bishop_idx = 5; // HAND_PIECES[5] = Bishop
-        let cat2: Option<Move> = if board.hand[di][bishop_idx] > 0
-            && !movegen::must_promote(defender, PieceType::Bishop, to)
-        {
-            Some(Move::new_drop(to, PieceType::Bishop))
-        } else {
-            None
-        };
-
-        // カテゴリ3: 桂
-        let knight_idx = 2; // HAND_PIECES[2] = Knight
-        let cat3: Option<Move> = if board.hand[di][knight_idx] > 0
-            && !movegen::must_promote(defender, PieceType::Knight, to)
-        {
-            Some(Move::new_drop(to, PieceType::Knight))
-        } else {
-            None
-        };
-
-        // KH parity: 歩が打てない (二歩等) chain マスでは，DML chain head を桂にする．
-        // KH は同状況で N*6c を代表に選び (maou 既定は cat1 の香 L*6c)，これに揃えると 39te の
-        // deep frontier が 4-6% 縮む (p9 -5.2% / p11 -6.0% / p13 -4.2%; 29te は 18,539 で不変)．
-        // 健全性: DML chain は全合い駒を保持し head 順のみ変える (defer された手は head 確定後に
-        // activate される) ため集合は不変＝合法性に影響なし．[[guidance pivot: 中合い代表 lever]]
-        if !cat1_is_pawn && cat3.is_some() {
-            // 桂を先頭に: knight, cat1(香等), bishop
-            push_move(moves, cat3.unwrap());
-            if let Some(m) = cat1 {
-                push_move(moves, m);
-            }
-            if let Some(m) = cat2 {
-                push_move(moves, m);
-            }
-        } else {
-            // 既定順: cat1, bishop, knight
-            if let Some(m) = cat1 {
-                push_move(moves, m);
-            }
-            if let Some(m) = cat2 {
-                push_move(moves, m);
-            }
-            if let Some(m) = cat3 {
-                push_move(moves, m);
             }
         }
     }
@@ -741,7 +578,7 @@ impl DfPnSolver {
         let all_occ = board.all_occupied();
         let empty = !all_occ;
 
-        // 自玉露出の fast path 用 (v2.8.0): 王手中でなく，動かす駒が pin されておらず
+        // 自玉露出の fast path 用: 王手中でなく，動かす駒が pin されておらず
         // 玉自身でもない盤上移動は自玉を王手に晒し得ない (取りでも取られた駒のマスを
         // 自駒が塞ぐため開き露出は起きない) → per-move の do/undo 検証を省略できる．
         let own_king_sq = board.king_square(us);
@@ -755,7 +592,7 @@ impl DfPnSolver {
 
         let mut moves = ArrayVec::<Move, MAX_MOVES>::new();
 
-        // --- 1. 盤上の駒の移動 (KH/yaneuraou parity: 盤上移動を駒打ちより先に生成) ---
+        // --- 1. 盤上の駒の移動 (盤上移動を駒打ちより先に生成) ---
         // 直接王手: 移動先から玉に利きがある手
         // 開き王手: 駒が移動することで背後のスライド駒から玉に利きが通る手
 
@@ -764,11 +601,11 @@ impl DfPnSolver {
         // そこから移動すると開き王手になりうる
         let discoverers = board.compute_discoverers(us, king_sq);
 
-        // 逆利き (王手元マス) bitboard の駒種別 lazy cache (NPS 軸 v2.8.0)．
+        // 逆利き (王手元マス) bitboard の駒種別 lazy cache．
         // rev_check(pt) = {to | piece_attacks(us, pt, to, all_occ).contains(king_sq)}
         // stepper は白黒の利きが点対称なので them 側 step，slider は対称性で king 起点
-        // (駒打ち生成と同一の逆利き idiom)．従来は per-target で attacks_square
-        // (利きテーブル参照) を呼んでおり movegen が KH 比 12-16× 遅い主因だった．
+        // (駒打ち生成と同一の逆利き idiom)．per-target で利きテーブルを参照する
+        // 素朴実装よりマス毎の利き計算を削減する．
         let mut rev_cache: [Option<Bitboard>; 15] = [None; 15];
         let mut rev_check = |pt: PieceType| -> Bitboard {
             let i = pt as usize;
@@ -860,7 +697,7 @@ impl DfPnSolver {
         }
 
         // --- 2. 駒打ち: ターゲットマスのみに打つ ---
-        // yaneuraou generate_checks の駒打ち順 = P,L,N,S,G,B,R (movegen.cpp:853-866)．
+        // 駒打ち順 = P,L,N,S,G,B,R．
         let mut drops = ArrayVec::<Move, MAX_MOVES>::new();
         for (hand_idx, &pt) in PieceType::HAND_PIECES.iter().enumerate() {
             if board.hand[us.index()][hand_idx] == 0 {
@@ -916,63 +753,49 @@ impl DfPnSolver {
             }
         }
 
-        if super::kh_parity_order() {
-            // KH/yaneuraou parity (V3_KHPAR): 生成順をそのまま返す
-            // (盤上移動 from マス昇順 → 駒打ち P,L,N,S,G,B,R)．独自 sort なし —
-            // LE 構築側の comparer が pn/dn → δ → move_brief_eval で並べ，
-            // 完全同点の安定順がこの生成順 = KH MovePicker (yaneuraou
-            // generate_checks) の tie order と一致する．
-            for m in drops {
-                push_move(&mut moves, m);
-            }
-            moves
-        } else {
-            // 旧挙動 (default): 駒打ち → 盤上移動 の生成順に，
-            // 成+取 > 成 > 取 > その他のカテゴリ + 玉とのチェビシェフ距離の
-            // 独自 sort を適用する．近接王手を優先し，詰みに至る手を早期発見する．
-            // カテゴリ(0-3) * 16 + 距離 で単一キーにエンコードする．
-            let mut out = ArrayVec::<Move, MAX_MOVES>::new();
-            for m in drops {
-                push_move(&mut out, m);
-            }
-            for m in moves {
-                push_move(&mut out, m);
-            }
-            let king_col = king_sq.col() as i8;
-            let king_row = king_sq.row() as i8;
-            out.sort_unstable_by_key(|m| {
-                let promo = m.is_promotion();
-                let capture = m.captured_piece_raw() > 0;
-                let category: u8 = match (promo, capture) {
-                    (true, true) => 0,
-                    (true, false) => 1,
-                    (false, true) => 2,
-                    (false, false) => 3,
-                };
-                let to = m.to_sq();
-                let dc = (to.col() as i8 - king_col).unsigned_abs();
-                let dr = (to.row() as i8 - king_row).unsigned_abs();
-                let dist = dc.max(dr); // チェビシェフ距離(0-8)
-                (category as u16) * 16 + dist as u16
-            });
-            out
+        // 駒打ち → 盤上移動 の生成順に，
+        // 成+取 > 成 > 取 > その他のカテゴリ + 玉とのチェビシェフ距離の
+        // sort を適用する．近接王手を優先し，詰みに至る手を早期発見する．
+        // カテゴリ(0-3) * 16 + 距離 で単一キーにエンコードする．
+        let mut out = ArrayVec::<Move, MAX_MOVES>::new();
+        for m in drops {
+            push_move(&mut out, m);
         }
+        for m in moves {
+            push_move(&mut out, m);
+        }
+        let king_col = king_sq.col() as i8;
+        let king_row = king_sq.row() as i8;
+        out.sort_unstable_by_key(|m| {
+            let promo = m.is_promotion();
+            let capture = m.captured_piece_raw() > 0;
+            let category: u8 = match (promo, capture) {
+                (true, true) => 0,
+                (true, false) => 1,
+                (false, true) => 2,
+                (false, false) => 3,
+            };
+            let to = m.to_sq();
+            let dc = (to.col() as i8 - king_col).unsigned_abs();
+            let dr = (to.row() as i8 - king_row).unsigned_abs();
+            let dist = dc.max(dr); // チェビシェフ距離(0-8)
+            (category as u16) * 16 + dist as u16
+        });
+        out
     }
 
-    /// KH/YaneuraOu `Mate::mate_1ply` (`mate1ply_without_effect.cpp`, Bonanza6 流) 忠実移植の
-    /// **候補列挙部**．敵玉隣接 geometry から 1 手詰候補 (王手) を YaneuraOu と同一の駒種順
-    /// (打ち = 飛/香/角/金/銀/桂, 移動 = 龍/飛/馬/角/香 → 金/銀/桂/歩) で直接構成する
-    /// (full movegen 不要)．
+    /// 1 手詰判定の **候補列挙部**．敵玉隣接 geometry から 1 手詰候補 (王手) を
+    /// 駒種順 (打ち = 飛/香/角/金/銀/桂, 移動 = 龍/飛/馬/角/香 → 金/銀/桂/歩) で
+    /// 直接構成する (full movegen 不要)．
     ///
-    /// 列挙候補は [`Board::mate_move_in_1ply_maxdist`] (検証済 per-candidate mate 判定 + 開き
-    /// 王手 do_move fallback) でスキャンする ⇒ 返り値 = この順序での最初の 1 手詰 = YaneuraOu
-    /// `mate_1ply` が返す手 (探索経路は変わるが KH 忠実)．本列挙は YaneuraOu が `#if 0` で無効化
-    /// している遠方駒打ち詰み・両王手詰みを生成しない (KomoringHeights も同一構成)．
+    /// 列挙候補は [`Board::mate_move_in_1ply_maxdist`] (per-candidate mate 判定 + 開き
+    /// 王手の do_move fallback) でスキャンする ⇒ 返り値 = この順序での最初の 1 手詰．
+    /// 本列挙は遠方駒打ち詰み・両王手詰みを生成しない (隣接 geometry のみを対象とする)．
     ///
     /// **前提**: 攻め方が非王手 (`!checkers`)．逆王手局面 (攻め方自玉が王手) は呼び出し側
-    /// ([`super::solver::DfPnSolver::mate1ply_kh`]) が従来 scan へ fallback する (YaneuraOu の
-    /// `ASSERT(!checkers)` 前提に対応)．`board` は読むだけ (do_move しない)．
-    pub(super) fn generate_mate_candidates_kh(&self, board: &Board) -> ArrayVec<Move, MAX_MOVES> {
+    /// ([`super::solver::DfPnSolver::mate1ply`]) が full scan へ fallback する．
+    /// `board` は読むだけ (do_move しない)．
+    pub(super) fn generate_mate_candidates(&self, board: &Board) -> ArrayVec<Move, MAX_MOVES> {
         let mut out = ArrayVec::<Move, MAX_MOVES>::new();
         let us = board.turn;
         let them = us.opponent();
@@ -1029,7 +852,7 @@ impl DfPnSolver {
             Color::White => Bitboard::rank_mask(7) | Bitboard::rank_mask(8),
         };
 
-        // ===== 1. 駒打ち (YaneuraOu 順: 飛 → 香 → 角 → 金 → 銀 → 桂; 歩打ち = 打ち歩詰め反則ゆえ除外) =====
+        // ===== 1. 駒打ち (順: 飛 → 香 → 角 → 金 → 銀 → 桂; 歩打ち = 打ち歩詰め反則ゆえ除外) =====
         // 飛打ち: 敵玉の上下左右 (rook step ∩ 8 近傍) の空マス．
         if in_hand(PieceType::Rook) {
             for to in attack::rook_attacks(king, Bitboard::EMPTY) & k_neighbors & empty {
@@ -1067,7 +890,7 @@ impl DfPnSolver {
             }
         }
 
-        // ===== 2. 移動による王手 (YaneuraOu 順: 龍 → 飛 → 馬 → 角 → 香 → 金 → 銀 → 桂 → 歩) =====
+        // ===== 2. 移動による王手 (順: 龍 → 飛 → 馬 → 角 → 香 → 金 → 銀 → 桂 → 歩) =====
         // 龍: 敵玉 8 近傍への移動 (成り無し)．
         for from in board.piece_bb[usi][PieceType::Dragon as usize] {
             for to in attack::dragon_attacks(us, from, all_occ) & bb_move & k_neighbors {
@@ -1154,19 +977,6 @@ impl DfPnSolver {
         }
 
         out
-    }
-
-    /// 指定マスに置いた駒が玉のマスに利いているか判定する．
-    #[inline]
-    pub(super) fn attacks_square(
-        &self,
-        color: Color,
-        pt: PieceType,
-        from: Square,
-        occ: Bitboard,
-        target: Square,
-    ) -> bool {
-        attack::piece_attacks(color, pt, from, occ).contains(target)
     }
 
     /// 開き王手の元になりうる自駒を計算する．

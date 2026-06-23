@@ -1,8 +1,5 @@
 //! 手生成，PNS (Proof Number Search)，PV 復元，公開 API．
 
-#[cfg(feature = "profile")]
-use std::time::Instant;
-
 use crate::board::Board;
 
 use super::solver::{DfPnSolver, TsumeResult};

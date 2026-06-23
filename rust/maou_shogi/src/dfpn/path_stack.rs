@@ -1,28 +1,24 @@
-//! KH `Node` の path 保持 (`ContainsInPath` / VisitHistory) 相当の **flat な探索パス スタック**．
+//! 探索パス上の祖先局面を保持する **flat な探索パス スタック**．
 //!
-//! mid_v3 / mid_v4 は探索パス上の祖先局面を，従来 `FxHashMap` (`v3_path` 千日手 / `v4_dom_path`
-//! path dominance) で保持していた．HashMap は bucket が確保領域全体に散在するため，毎ノードの
-//! insert/remove/get が **散在 DRAM アクセス**となり (V4PROF `cl_other` pathcheck)，探索が
-//! メモリ帯域律速になる主因の一つだった (host 負荷で 2.3× 振れる; KH は安定)．
+//! 探索パス上の祖先局面 (千日手検出用の `path_depths` / path dominance 用の `dom_path`) を
+//! 連続配列で保持する．`FxHashMap` で持つと bucket が確保領域全体に散在し，毎ノードの
+//! insert/remove/get が散在 DRAM アクセスとなって探索がメモリ帯域律速になりやすい．
 //!
-//! KH/YaneuraOu は探索パスを **連続配列**で持ち，`Node::ContainsInPath` のように線形走査して
-//! 祖先一致を調べる (`mid_v4` の `contains_in_path_v4` = `v4_stack` の線形走査と同型)．パス長は
-//! 高々探索深さ (39te で ~55) と小さく，連続配列の逆順走査は L1/L2 に収まり予測可能で
-//! **memory-bound でない**．本モジュールはこの flat 構造を提供し，HashMap を置換する．
+//! ここでは探索パスを連続配列で持ち，線形走査で祖先一致を調べる．パス長は高々探索深さ
+//! (数十手程度) と小さく，連続配列の逆順走査は L1/L2 に収まり予測可能で memory-bound に
+//! ならない．
 //!
-//! ## 探索不変性 (bit-identical)
+//! ## 探索不変性
 //! - 探索 DFS は append/exit が厳密に LIFO (search 関数の入口で push・出口で pop)．
 //! - 探索パス上で同一キーは高々 1 回しか現れない (再出現は千日手として検出され do_move しない)．
-//! → 逆順線形走査が返す祖先は HashMap が返すものと完全一致するため，置換は探索結果を変えない
-//!   (canonical mid_v3 18,539 / 39te node 不変で検証)．
+//! → 逆順線形走査が返す祖先は HashMap が返すものと完全一致するため，置換は探索結果を変えない．
 
 use super::search_result::Hand;
 
-/// 千日手検出用の flat パス スタック (旧 `v3_path: FxHashMap<u64, u32>` の drop-in 置換)．
+/// 千日手検出用の flat パス スタック．
 ///
 /// `board.hash` (全局面 hash, 手番・持駒込) をキーに，パス上の祖先 ply を保持する．
-/// メソッド名/シグネチャは `FxHashMap` 互換 (insert/remove/get/clear) で，呼び出し側を
-/// 変更せずに差し替えられる．
+/// メソッド名/シグネチャは `FxHashMap` 互換 (insert/remove/get/clear)．
 pub(super) struct PathStack {
     /// (full board hash, ply) を push 順に保持．
     entries: Vec<(u64, u32)>,
@@ -35,13 +31,13 @@ impl PathStack {
         }
     }
 
-    /// solve ごとにパスを空にする (`FxHashMap::clear` 相当)．
+    /// solve ごとにパスを空にする．
     #[inline]
     pub(super) fn clear(&mut self) {
         self.entries.clear();
     }
 
-    /// パス入口で祖先 (hash, ply) を push する (`FxHashMap::insert` 相当)．
+    /// パス入口で祖先 (hash, ply) を push する．
     ///
     /// パス上で同一 hash は高々 1 回なので上書きは発生しない (単純 push)．
     #[inline]
@@ -49,10 +45,10 @@ impl PathStack {
         self.entries.push((hash, ply));
     }
 
-    /// パス出口で祖先を取り除く (`FxHashMap::remove` 相当)．
+    /// パス出口で祖先を取り除く．
     ///
     /// LIFO 規律により対象は通常末尾だが，`rposition` で末尾側の一致を取り除くことで
-    /// HashMap と完全に同じ「そのキーのエントリを 1 つ消す」意味論を保つ．
+    /// 「そのキーのエントリを 1 つ消す」意味論を保つ．
     #[inline]
     pub(super) fn remove(&mut self, hash: &u64) {
         if let Some(pos) = self.entries.iter().rposition(|&(h, _)| h == *hash) {
@@ -60,9 +56,9 @@ impl PathStack {
         }
     }
 
-    /// パス上に同一 hash の祖先があればその ply を返す (`FxHashMap::get` 相当)．
+    /// パス上に同一 hash の祖先があればその ply を返す．
     ///
-    /// 逆順走査で最も新しい (= 最も深い) 祖先を返す (パス上一意なので結果は HashMap と同一)．
+    /// 逆順走査で最も新しい (= 最も深い) 祖先を返す (パス上一意なので結果は一意)．
     #[inline]
     pub(super) fn get(&self, hash: &u64) -> Option<&u32> {
         self.entries
@@ -73,11 +69,10 @@ impl PathStack {
     }
 }
 
-/// path dominance 用の flat パス スタック (旧 `v4_dom_path: FxHashMap<u64, Vec<(Hand, u32)>>`)．
+/// path dominance 用の flat パス スタック．
 ///
 /// `position_key` (盤面のみ hash) をキーに，パス上の祖先 (攻め方持駒, ply) を保持する．
-/// 子局面が同一 board_key かつ攻め方持駒が祖先以下 (= 劣位) なら反復として刈る
-/// (KH `IsRepetitionOrInferiorAfter`)．
+/// 子局面が同一 board_key かつ攻め方持駒が祖先以下 (= 劣位) なら反復として刈る．
 pub(super) struct DomPathStack {
     /// (position_key, attacker_hand, ply) を push 順に保持．
     entries: Vec<(u64, Hand, u32)>,
@@ -101,8 +96,7 @@ impl DomPathStack {
         self.entries.push((pos, hand, ply));
     }
 
-    /// パス出口で当該 position_key の最も新しい祖先を取り除く
-    /// (旧 `get_mut(&pk).pop()` + 空なら `remove(&pk)` と同一意味論)．
+    /// パス出口で当該 position_key の最も新しい祖先を取り除く．
     #[inline]
     pub(super) fn pop(&mut self, pos: u64) {
         if let Some(idx) = self.entries.iter().rposition(|&(p, _, _)| p == pos) {
@@ -111,10 +105,9 @@ impl DomPathStack {
     }
 
     /// 子局面 `(pos, child_hand)` を劣位とする祖先 (同一 board_key かつ攻め方持駒が child 以上)
-    /// があればその ply を返す (旧 `get(&pos).iter().rev().find(hand_gte(h, child))`)．
+    /// があればその ply を返す．
     ///
-    /// 逆順走査で `pos` 一致かつ `hand_gte(ancestor_hand, child_hand)` の最初の祖先を返す
-    /// (HashMap が per-key Vec を逆順走査するのと同一順序・同一結果)．
+    /// 逆順走査で `pos` 一致かつ `hand_gte(ancestor_hand, child_hand)` の最初の祖先を返す．
     #[inline]
     pub(super) fn find_dominator(&self, pos: u64, child_hand: &Hand) -> Option<u32> {
         self.entries
@@ -149,7 +142,7 @@ mod tests {
         // 逆順走査は最も新しい (深い) 祖先を返す (パス上一意前提だが順序保証を確認)．
         let mut s = PathStack::new();
         s.insert(0x10, 2);
-        s.insert(0x10, 8); // 仮に重複が起きても HashMap 上書きと同じく新しい方
+        s.insert(0x10, 8); // 仮に重複が起きても新しい方を返す
         assert_eq!(s.get(&0x10), Some(&8));
     }
 

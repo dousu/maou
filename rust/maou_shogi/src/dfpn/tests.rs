@@ -42,140 +42,7 @@ fn test_hand_gte_different_pieces() {
     assert!(!hand_gte(&a, &b));
 }
 
-/// forward_chain: 歩 ≤ 香 ≤ 飛 のチェーン代替．
-#[test]
-fn test_forward_chain_pawn_to_lance() {
-    // 香1 >= 歩1 (香は歩の上位互換)
-    let a = [0, 1, 0, 0, 0, 0, 0]; // 香1
-    let b = [1, 0, 0, 0, 0, 0, 0]; // 歩1
-    assert!(hand_gte_forward_chain(&a, &b));
-}
-
-#[test]
-fn test_forward_chain_pawn_to_rook() {
-    // 飛1 >= 歩1 (飛は歩の上位互換)
-    let a = [0, 0, 0, 0, 0, 0, 1]; // 飛1
-    let b = [1, 0, 0, 0, 0, 0, 0]; // 歩1
-    assert!(hand_gte_forward_chain(&a, &b));
-}
-
-#[test]
-fn test_forward_chain_lance_to_rook() {
-    // 飛1 >= 香1 (飛は香の上位互換)
-    let a = [0, 0, 0, 0, 0, 0, 1]; // 飛1
-    let b = [0, 1, 0, 0, 0, 0, 0]; // 香1
-    assert!(hand_gte_forward_chain(&a, &b));
-}
-
-/// forward_chain: 逆方向は不成立(歩は香の代替にならない)．
-#[test]
-fn test_forward_chain_no_reverse() {
-    // 歩1 < 香1 (歩は香の代替にならない)
-    let a = [1, 0, 0, 0, 0, 0, 0]; // 歩1
-    let b = [0, 1, 0, 0, 0, 0, 0]; // 香1
-    assert!(!hand_gte_forward_chain(&a, &b));
-
-    // 香1 < 飛1
-    let a = [0, 1, 0, 0, 0, 0, 0]; // 香1
-    let b = [0, 0, 0, 0, 0, 0, 1]; // 飛1
-    assert!(!hand_gte_forward_chain(&a, &b));
-
-    // 歩1 < 飛1
-    let a = [1, 0, 0, 0, 0, 0, 0]; // 歩1
-    let b = [0, 0, 0, 0, 0, 0, 1]; // 飛1
-    assert!(!hand_gte_forward_chain(&a, &b));
-}
-
-/// forward_chain: カスケード(歩不足 → 香で補填 → 香不足 → 飛で補填)．
-#[test]
-fn test_forward_chain_cascade() {
-    // 歩1+香1 を 飛2 で代替
-    let a = [0, 0, 0, 0, 0, 0, 2]; // 飛2
-    let b = [1, 1, 0, 0, 0, 0, 0]; // 歩1+香1
-    assert!(hand_gte_forward_chain(&a, &b));
-
-    // 歩2 を 香1+飛1 で代替(香が歩1つ分を吸収，飛が残り1つを吸収)
-    let a = [0, 1, 0, 0, 0, 0, 1]; // 香1+飛1
-    let b = [2, 0, 0, 0, 0, 0, 0]; // 歩2
-    assert!(hand_gte_forward_chain(&a, &b));
-
-    // 歩2+香1 を 飛1 では不足(飛1で代替できるのは1つだけ)
-    let a = [0, 0, 0, 0, 0, 0, 1]; // 飛1
-    let b = [2, 1, 0, 0, 0, 0, 0]; // 歩2+香1
-    assert!(!hand_gte_forward_chain(&a, &b));
-}
-
-/// forward_chain: 非チェーン駒(桂・銀・金・角)は代替不可．
-#[test]
-fn test_forward_chain_non_chain_pieces() {
-    // 桂が足りなければ false
-    let a = [1, 1, 0, 0, 0, 0, 1]; // 歩1+香1+飛1
-    let b = [0, 0, 1, 0, 0, 0, 0]; // 桂1
-    assert!(!hand_gte_forward_chain(&a, &b));
-
-    // 角が足りなければ false
-    let a = [0, 0, 0, 0, 0, 0, 2]; // 飛2
-    let b = [0, 0, 0, 0, 0, 1, 0]; // 角1
-    assert!(!hand_gte_forward_chain(&a, &b));
-}
-
-/// forward_chain: 複合ケース(チェーン + 非チェーン駒)．
-#[test]
-fn test_forward_chain_mixed() {
-    // 香1+金1 >= 歩1+金1
-    let a = [0, 1, 0, 0, 1, 0, 0]; // 香1+金1
-    let b = [1, 0, 0, 0, 1, 0, 0]; // 歩1+金1
-    assert!(hand_gte_forward_chain(&a, &b));
-
-    // 飛1+桂1 >= 歩1+桂1
-    let a = [0, 0, 1, 0, 0, 0, 1]; // 桂1+飛1
-    let b = [1, 0, 1, 0, 0, 0, 0]; // 歩1+桂1
-    assert!(hand_gte_forward_chain(&a, &b));
-
-    // 飛1+金0 < 歩1+金1 (金が不足)
-    let a = [0, 0, 0, 0, 0, 0, 1]; // 飛1
-    let b = [1, 0, 0, 0, 1, 0, 0]; // 歩1+金1
-    assert!(!hand_gte_forward_chain(&a, &b));
-}
-
-/// forward_chain: 同一 hand なら常に true (hand_gte の fast path)．
-#[test]
-fn test_forward_chain_identity() {
-    let h = [3, 2, 1, 1, 2, 1, 1];
-    assert!(hand_gte_forward_chain(&h, &h));
-}
-
-/// forward_chain: 空の hand(何も必要としない)なら常に true．
-#[test]
-fn test_forward_chain_empty_requirement() {
-    let a = [0, 0, 0, 0, 0, 0, 0];
-    let b = [0, 0, 0, 0, 0, 0, 0];
-    assert!(hand_gte_forward_chain(&a, &b));
-
-    let a = [1, 1, 1, 1, 1, 1, 1];
-    assert!(hand_gte_forward_chain(&a, &b));
-}
-
-/// forward_chain: 実際のチェーン合駒シナリオ(L*6g → N*6g)．
-///
-/// L*6g の proof で attacker hand に lance が必要な局面の TT エントリを，
-/// N*6g の探索(attacker hand に knight がある)で再利用できるか．
-#[test]
-fn test_forward_chain_real_scenario() {
-    // L*6g 後の proof entry: 攻め方が香を獲得
-    let stored = [0, 1, 0, 0, 0, 0, 0]; // 香1(Rx6g で獲得)
-                                        // N*6g 後の current hand: 攻め方が桂を獲得
-    let current = [0, 0, 1, 0, 0, 0, 0]; // 桂1(Rx6g で獲得)
-                                         // 桂は香の上位互換ではない → 再利用不可
-    assert!(!hand_gte_forward_chain(&current, &stored));
-
-    // 逆に: stored が歩1, current が香1 → 再利用可能
-    let stored_pawn = [1, 0, 0, 0, 0, 0, 0];
-    let current_lance = [0, 1, 0, 0, 0, 0, 0];
-    assert!(hand_gte_forward_chain(&current_lance, &stored_pawn));
-}
-
-/// 詰将棋画像のテストケース: 小阪昇作，9手詰
+/// 9手詰のテストケース．
 ///
 /// 局面: 後手玉1四，先手角2四・3四，後手銀3一・後手香3二
 /// 先手持ち駒: 飛，歩
@@ -189,7 +56,7 @@ fn test_tsume_9te() {
     board.set_sfen(sfen).unwrap();
 
     let mut solver = DfPnSolver::new(15, 1_048_576, 32767);
-    let result = solver.solve_via_v4(&mut board);
+    let result = solver.solve_impl(&mut board);
 
     match &result {
         TsumeResult::Checkmate { moves, .. } => {
@@ -226,7 +93,7 @@ fn test_tsume_1te() {
     board.set_sfen(sfen).unwrap();
 
     let mut solver = DfPnSolver::new(3, 100_000, 32767);
-    let result = solver.solve_via_v4(&mut board);
+    let result = solver.solve_impl(&mut board);
 
     match &result {
         TsumeResult::Checkmate { moves, .. } => {
@@ -276,7 +143,7 @@ fn test_no_checkmate() {
     board.set_sfen(sfen).unwrap();
 
     let mut solver = DfPnSolver::new(5, 100_000, 32767);
-    let result = solver.solve_via_v4(&mut board);
+    let result = solver.solve_impl(&mut board);
 
     match &result {
         TsumeResult::NoCheckmate { .. } => {}
@@ -366,7 +233,7 @@ fn test_timeout() {
 
     let mut solver = DfPnSolver::with_timeout(31, u64::MAX, 32767, 0);
     // timeout=0 なので即タイムアウト(ただし最初の1024ノードは走る)
-    let result = solver.solve_via_v4(&mut board);
+    let result = solver.solve_impl(&mut board);
 
     // NoCheckmate か Unknown のどちらか(歩1枚では詰まない)
     match &result {
@@ -449,7 +316,7 @@ fn test_tsume_3_ryu_2a_not_checkmate() {
 
     // 先手番(攻め方)から探索して詰みがないことを検証
     let mut solver = DfPnSolver::new(15, 100_000, 32767);
-    let result = solver.solve_via_v4(&mut board);
+    let result = solver.solve_impl(&mut board);
     assert!(
         !matches!(result, TsumeResult::Checkmate { .. }),
         "P*2c 後の局面は詰みではないはず: {:?}",
@@ -473,13 +340,11 @@ fn test_tsume_4() {
     match &result {
         TsumeResult::Checkmate { moves, .. } => {
             let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-            // mid_v4 (39te bundle default) は最短保証なしで sound な詰みを返す (proof-tree mate
-            // length は engine 依存; 現状 13 手)．ここでは PV replay で真の詰みであることを検証する．
-            // TODO(最短手数 strict 化): 本来の最短は 9 手 (PNS Best-First) / 11 手 (MID fallback)．
-            //   最終 2 手は玉の逃げ方で分岐:
-            //     [1一玉 2二桂成 "1b1a 3d2b+"] / [1一玉 2二龍 "1b1a 4b2b"] /
-            //     [1三玉 2二龍 "1b1c 4b2b"]   / [2三玉 2二龍 "1b2c 4b2b"]．
-            //   将来 find_shortest を mid_v4 で honor したら，この最短手数・終手パターンを正解に戻す．
+            // 探索は最短保証なしで sound な詰みを返す (proof-tree の詰み手数は探索順依存)．
+            // ここでは PV replay で真の詰みであることを検証する．
+            // 本来の最短は 9 手．最終 2 手は玉の逃げ方で分岐:
+            //   [1一玉 2二桂成 "1b1a 3d2b+"] / [1一玉 2二龍 "1b1a 4b2b"] /
+            //   [1三玉 2二龍 "1b1c 4b2b"]   / [2三玉 2二龍 "1b2c 4b2b"]．
             assert!(
                 usi_moves.len() % 2 == 1,
                 "tsume must have odd number of moves, got {}",
@@ -650,7 +515,7 @@ fn test_defense_moves_subset_39te_pv() {
                 .collect();
 
             let defense_moves: BTreeSet<String> = solver
-                .generate_defense_moves(&mut board)
+                .generate_defense_moves_inner(&mut board, false)
                 .iter()
                 .map(|m| m.to_usi())
                 .collect();
@@ -716,7 +581,7 @@ fn test_defense_moves_completeness() {
         }
 
         let defense_moves: BTreeSet<String> = solver
-            .generate_defense_moves(&mut board)
+            .generate_defense_moves_inner(&mut board, false)
             .iter()
             .map(|m| m.to_usi())
             .collect();
@@ -756,7 +621,7 @@ fn test_tsume_5() {
     board.set_sfen(sfen).unwrap();
 
     let mut solver = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
-    let result = solver.solve_via_v4(&mut board);
+    let result = solver.solve_impl(&mut board);
 
     match &result {
         TsumeResult::Checkmate {
@@ -794,20 +659,20 @@ fn test_tsume_5() {
     }
 }
 
-/// `does_have_mate_possibility` (KH `DoesHaveMatePossibility` 移植) の回帰テスト．
+/// `does_have_mate_possibility` (詰み可能性の over-approximation) の回帰テスト．
 ///
 /// over-approximation の soundness は「実王手があれば必ず true」(false negative 不可)．加えて
-/// KH と一致すべき代表局面を固定する: post-Kx7i (白の実王手 0 だが香の成り王手候補で KH DHMP=true)．
-/// これを取りこぼすと look-ahead が KH より早く disproof し探索経路が乖離する (cnt=487 の真因)．
+/// 代表局面を固定する: 白の実王手 0 だが香の成り王手候補で true になるべき局面．
+/// これを取りこぼすと look-ahead が早すぎる disproof を起こし探索経路が乖離する．
 #[test]
 fn test_does_have_mate_possibility() {
     // (sfen, expected, label)．
     let cases = [
-        // post-Kx7i: 白王手0 だが 8f の香が file8 で 9i 段(敵陣)へ進めば成って金王手候補 → KH DHMP=true．
+        // 白王手0 だが 8f の香が file8 で 9i 段(敵陣)へ進めば成って金王手候補 → DHMP=true．
         (
             "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/NP1S5/2G2+p3/L1K6 w 2RB3GSPn4p 9",
             true,
-            "post-Kx7i (KH DHMP=true; 香 promote 候補)",
+            "実王手0だが香 promote 候補 (DHMP=true)",
         ),
         // 29te root: 白に実王手あり → 自明に true．
         (
@@ -820,7 +685,7 @@ fn test_does_have_mate_possibility() {
         let mut b = Board::new();
         b.set_sfen(sfen).unwrap();
         let s = DfPnSolver::with_timeout(31, 1_000, 32767, 5);
-        let checks = s.generate_check_moves_cached(&mut b);
+        let checks = s.generate_check_moves(&mut b);
         let dhmp = b.does_have_mate_possibility(b.turn);
         // soundness: 実王手があれば DHMP は必ず true．
         if !checks.is_empty() {
@@ -836,9 +701,8 @@ fn test_does_have_mate_possibility() {
 
 /// `mate_move_in_1ply` の false mate-1 回帰テスト．
 ///
-/// `is_checkmate_after_bb` / `generate_check_moves` には以下 3 つの false mate-1 バグがあり，
-/// mid_v3 の look-ahead (`CheckObviousFinalOrNode`) が多数の局面で `mate_move_in_1ply` を
-/// 呼ぶため偽の証明を TT に汚染し，dom-off で STRICT VERIFY None を生んでいた．
+/// `is_checkmate_after_bb` / `generate_check_moves` には以下の false mate-1 バグがあり，
+/// look-ahead が多数の局面で `mate_move_in_1ply` を呼ぶため偽の証明を TT に汚染しうる．
 /// 各局面で「攻め方は真の 1 手詰を持たない」ことを `generate_legal_moves` で確認する．
 ///
 /// 1. **ピン軸上の取り返し** (`can_capture_checker_bb`): 香で縦ピンされた金が同じ筋に
@@ -868,7 +732,7 @@ fn test_mate_move_in_1ply_no_false_mate() {
         ),
         // 4. pinner 自身の移動による pin 解除: 移動前は +R(1e) が金(1f) を file 1 に
         //    縦ピンしているが，王手 1e2f で pinner が動くと金は unpin され 1f2f (横) で
-        //    王手駒を取り返せる．移動前 pin の流用は偽 1 手詰 (39te 偽証明 @17.9M の真因)．
+        //    王手駒を取り返せる．移動前 pin の流用は偽 1 手詰になる．
         (
             "4+N4/9/6pS1/9/8+R/6+B1g/1R2S3k/3p3N1/9 b NPb3g2sn4l15p 17",
             "pin released by moving pinner (1e2f)",
@@ -878,7 +742,7 @@ fn test_mate_move_in_1ply_no_false_mate() {
         let mut b = Board::new();
         b.set_sfen(sfen).unwrap();
         let s = DfPnSolver::with_timeout(31, 1_000, 32767, 5);
-        let checks = s.generate_check_moves_cached(&mut b);
+        let checks = s.generate_check_moves(&mut b);
         // 真の 1 手詰の有無を generate_legal_moves で確定する (ground truth)．
         let mut real_mate1 = false;
         for &c in checks.iter() {
@@ -906,9 +770,9 @@ fn test_mate_move_in_1ply_no_false_mate() {
 
 /// 逆王手 (counter-check) 詰将棋の回帰テスト．攻め方 (先手) 自身が後手龍に王手されている
 /// 局面で，王手を解消しつつ詰ます mate-7．逆王手 drop filter (`generate_check_moves`) と
-/// mate_move_in_1ply の counter-check 健全性を守る．[[project_dfpn_domoff_none_mate1_bugs]]．
+/// mate_move_in_1ply の counter-check 健全性を守る．
 #[test]
-fn test_v4_counter_check_example() {
+fn test_counter_check_example() {
     let sfen = "7l1/5n1k1/7+RP/6sK1/7L1/9/9/9/9 w r2b4g3s3n2l17p 2";
     let mut b = Board::new();
     b.set_sfen(sfen).unwrap();
@@ -918,7 +782,7 @@ fn test_v4_counter_check_example() {
         "テスト前提: 攻め方が王手されている逆王手局面のはず"
     );
     let mut s = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
-    match s.solve_via_v4(&mut b) {
+    match s.solve_impl(&mut b) {
         TsumeResult::Checkmate { moves, .. } => {
             // 終局面が真の詰みか検証 (false mate 検出)．
             let mut chk = Board::new();
@@ -943,28 +807,28 @@ fn test_v4_counter_check_example() {
     }
 }
 
-/// mid_v4 (KH 忠実 SearchImpl port, 39te bundle default) の correctness + 29te canonical 検証．
+/// 探索本体の correctness + 29te canonical 検証．
 ///
-/// **[SLOW]** 29te を解く．canonical: mate-29 / 真の詰み (in_check && legal==0) / bundle node 数 9,288．
+/// **[SLOW]** 29te を解く．canonical: mate-29 / 真の詰み (in_check && legal==0) / node 数 9,288．
 #[test]
 #[ignore]
-fn test_v4_29te() {
+fn test_29te() {
     // 1 手詰 correctness．
     {
         let mut b = Board::empty();
         b.set_sfen("8k/9/7G1/9/9/9/9/9/9 b G 1").unwrap();
         let mut s = DfPnSolver::with_timeout(3, 1_000_000, 32767, 30);
-        match s.solve_via_v4(&mut b) {
+        match s.solve_impl(&mut b) {
             TsumeResult::Checkmate {
                 moves,
                 nodes_searched,
             } => eprintln!(
-                "[v3] 1te: {} moves ({}), {} nodes",
+                "[dfpn] 1te: {} moves ({}), {} nodes",
                 moves.len(),
                 moves.first().map(|m| m.to_usi()).unwrap_or_default(),
                 nodes_searched
             ),
-            other => eprintln!("[v3] 1te FAIL: {other:?}"),
+            other => eprintln!("[dfpn] 1te FAIL: {other:?}"),
         }
     }
     // 3 手詰 correctness．
@@ -972,36 +836,36 @@ fn test_v4_29te() {
         let mut b = Board::empty();
         b.set_sfen("8k/9/6R2/9/9/9/9/9/9 b G 1").unwrap();
         let mut s = DfPnSolver::with_timeout(7, 1_000_000, 32767, 30);
-        match s.solve_via_v4(&mut b) {
+        match s.solve_impl(&mut b) {
             TsumeResult::Checkmate {
                 moves,
                 nodes_searched,
             } => {
                 let u: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 eprintln!(
-                    "[v3] 3te: {} moves {:?}, {} nodes",
+                    "[dfpn] 3te: {} moves {:?}, {} nodes",
                     moves.len(),
                     u,
                     nodes_searched
                 );
             }
-            other => eprintln!("[v3] 3te FAIL: {other:?}"),
+            other => eprintln!("[dfpn] 3te FAIL: {other:?}"),
         }
     }
-    // 29te 計測 (budget 制限つき; v3 初版なので爆発時は budget で止める)．
+    // 29te 計測 (budget 制限つき; 爆発時は budget で止める)．
     {
         let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
         let mut b = Board::new();
         b.set_sfen(sfen).unwrap();
         let mut s = DfPnSolver::with_timeout(31, 5_000_000, 32767, 120);
-        match s.solve_via_v4(&mut b) {
+        match s.solve_impl(&mut b) {
             TsumeResult::Checkmate {
                 moves,
                 nodes_searched,
             } => {
                 let usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
                 eprintln!(
-                    "[v4] 29te: {} moves, {} nodes | PV {:?}",
+                    "[dfpn] 29te: {} moves, {} nodes | PV {:?}",
                     moves.len(),
                     nodes_searched,
                     usi
@@ -1014,12 +878,9 @@ fn test_v4_29te() {
                 }
                 let final_legal = movegen::generate_legal_moves(&mut chk).len();
                 let in_check = chk.is_in_check(chk.turn());
-                eprintln!("[v3] 29te final: in_check={in_check}, legal_moves={final_legal} (詰み=in_check&&legal==0)");
-                // Phase 36: look-ahead (CheckObviousFinalOrNode) + dominance を default 化．
-                // mate_move_in_1ply の false mate-1 3 バグ (ピン軸取り返し/逆王手 drop/開き王手)
-                // 根治後，dom-on look-ahead で canonical mate-29 を 18,531 nodes (< KH 19,270) で
-                // sound に解く ([[project_dfpn_domoff_none_mate1_bugs]])．
-                // soundness ガード: 真の詰み (in_check && legal==0) + canonical mate-29 + KH parity．
+                eprintln!("[dfpn] 29te final: in_check={in_check}, legal_moves={final_legal} (詰み=in_check&&legal==0)");
+                // look-ahead + dominance により canonical mate-29 を sound に解く．
+                // soundness ガード: 真の詰み (in_check && legal==0) + canonical mate-29 + node 数固定．
                 assert!(
                     in_check && final_legal == 0,
                     "LE path PV 終局面は真の詰みであるべき (false mate 検出)"
@@ -1032,32 +893,32 @@ fn test_v4_29te() {
                 );
                 assert_eq!(
                     nodes_searched, 9_288,
-                    "29te bundle default の探索ノード数が canonical (9,288) から乖離: {nodes_searched}"
+                    "29te の探索ノード数が canonical (9,288) から乖離: {nodes_searched}"
                 );
             }
             other => panic!(
-                "[v4] 29te NON-SOLVE: {other:?}, {} nodes",
-                s.v3_nodes
+                "[dfpn] 29te NON-SOLVE: {other:?}, {} nodes",
+                s.nodes
             ),
         }
     }
 }
 
-/// 39te bundle (mid_v4 default) の baseline 計測 + 回帰固定 (**[SLOW]**)．
-/// 39te bundle を default に焼き込んだので，env gate 無し (production `solve_via_v4`) で KH 相当の
-/// 探索になる．canonical: nodes(builds)=4,272,957 / Checkmate(Some) / 真の詰み (in_check && legal==0)．
+/// 39te の baseline 計測 + 回帰固定 (**[SLOW]**)．
+/// production `solve_impl` で探索する．
+/// canonical: nodes=4,272,957 / Checkmate(Some) / 真の詰み (in_check && legal==0)．
 /// SFEN/BUDGET/SECS env で局面・予算を上書き可 (上書き時は厳密 node assert を skip)．
 #[test]
 #[ignore]
-fn test_v4_39te_measure() {
-    // SFEN で任意局面に差し替え可能 (偽証明調査等の計測用)．
+fn test_39te_measure() {
+    // SFEN で任意局面に差し替え可能 (計測用)．
     let sfen_env = std::env::var("SFEN").ok();
     let sfen: &str = sfen_env
         .as_deref()
         .unwrap_or("9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1");
     let mut b = Board::new();
     b.set_sfen(sfen).unwrap();
-    // 計測専用: budget/timeout を env で上書き可能に (lever 比較用)．default は 39te が解ける予算．
+    // 計測専用: budget/timeout を env で上書き可能に．default は 39te が解ける予算．
     let budget: u64 = std::env::var("BUDGET")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -1068,7 +929,7 @@ fn test_v4_39te_measure() {
         .unwrap_or(600);
     let mut s = DfPnSolver::with_timeout(47, budget, 32767, secs);
     let t0 = std::time::Instant::now();
-    let result = s.solve_via_v4(&mut b);
+    let result = s.solve_impl(&mut b);
     let elapsed = t0.elapsed();
     match result {
         TsumeResult::Checkmate {
@@ -1077,7 +938,7 @@ fn test_v4_39te_measure() {
         } => {
             let usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
             eprintln!(
-                "[v4] 39te SOLVE: {} moves, {} nodes, {:.1}s | PV {:?}",
+                "[dfpn] 39te SOLVE: {} moves, {} nodes, {:.1}s | PV {:?}",
                 moves.len(),
                 nodes_searched,
                 elapsed.as_secs_f64(),
@@ -1091,24 +952,24 @@ fn test_v4_39te_measure() {
             let final_legal = movegen::generate_legal_moves(&mut chk).len();
             let in_check = chk.is_in_check(chk.turn());
             eprintln!(
-                "[v4] 39te final: in_check={in_check}, legal_moves={final_legal} (詰み=in_check&&legal==0)"
+                "[dfpn] 39te final: in_check={in_check}, legal_moves={final_legal} (詰み=in_check&&legal==0)"
             );
             // soundness ガード (SOUNDNESS-HALT): PV 終局面は真の詰みであるべき．
             assert!(
                 in_check && final_legal == 0,
                 "39te PV 終局面は真の詰みであるべき (false mate 検出): in_check={in_check} legal={final_legal}"
             );
-            // default sfen のときのみ canonical node 数を固定 (bundle default 化の回帰ガード)．
+            // default sfen のときのみ canonical node 数を固定 (回帰ガード)．
             if sfen_env.is_none() {
                 assert_eq!(
                     nodes_searched, 4_272_957,
-                    "39te bundle default の探索ノード数が canonical (4,272,957) から乖離"
+                    "39te の探索ノード数が canonical (4,272,957) から乖離"
                 );
             }
         }
         other => panic!(
-            "[v4] 39te NON-SOLVE: {other:?}, {} nodes, {:.1}s",
-            s.v3_nodes,
+            "[dfpn] 39te NON-SOLVE: {other:?}, {} nodes, {:.1}s",
+            s.nodes,
             elapsed.as_secs_f64()
         ),
     }
@@ -1127,7 +988,7 @@ fn test_tsume_1te_gote() {
     board.set_sfen(sfen).unwrap();
 
     let mut solver = DfPnSolver::new(3, 100_000, 32767);
-    let result = solver.solve_via_v4(&mut board);
+    let result = solver.solve_impl(&mut board);
 
     match &result {
         TsumeResult::Checkmate { moves, .. } => {
@@ -1246,7 +1107,7 @@ fn test_uchifuzume_promoted_rook_fails() {
 
     // 龍の局面からは詰まないことを検証
     let mut solver = DfPnSolver::new(31, 2_000_000, 32767);
-    let result = solver.solve_via_v4(&mut board);
+    let result = solver.solve_impl(&mut board);
     assert!(
         !matches!(result, TsumeResult::Checkmate { .. }),
         "4a2a+ (promoted rook) should NOT lead to checkmate due to uchifuzume, got: {:?}",
@@ -1292,7 +1153,7 @@ fn test_counter_check_move_generation_unit() {
     board.set_sfen(sfen).expect("valid SFEN");
 
     let mut solver = DfPnSolver::new(31, 1, 32767);
-    let moves = solver.generate_defense_moves(&mut board);
+    let moves = solver.generate_defense_moves_inner(&mut board, false);
 
     // 3d2c = 後手銀 3四→2三 (竜を取り，先手玉2四への逆王手)
     let has_counter_check = moves.iter().any(|m| m.to_usi() == "3d2c");
@@ -1313,9 +1174,6 @@ fn test_counter_check_move_generation_unit() {
 /// 4三飛→2三飛成は王手だが，後手3四銀→2三銀の逆王手(2四の先手玉に対する王手)
 /// により攻め方は次の王手ができず不詰になる．他の王手(4二飛成等)も後手が
 /// 逆王手や玉の逃げで対処できるため不詰．
-///
-/// v0.53.2 で attacker_in_check dn 引き下げ，v0.53.3 で INTERPOSE_DN_BIAS 拡大により
-/// 441K ノードで解決 (旧: 30M ノード超過)．
 #[test]
 fn test_no_checkmate_counter_check() {
     let sfen = "7l1/5n1k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s3n2l17p 1";
@@ -1348,13 +1206,11 @@ fn test_checkmate_with_counter_check_avoidance() {
         TsumeResult::Checkmate { moves, .. } => {
             let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
             // 逆王手回避 (3四玉で銀を取りつつ王手回避) から詰む sound な PV が返ることを検証する．
-            // mid_v4 (39te bundle default) は最短保証なし (proof-tree mate length は engine 依存; 現状
-            // 9 手 "2d3d R*2d 2e2d 2b3a 4c3c+ 3a4a R*3a 4a5b S*6c") ゆえ，厳密 PV ではなく PV replay
-            // で真の詰みであることを確認する．
-            // TODO(最短手数 strict 化): 本来の最短は 5 手 (複数解; 合駒駒種は探索順依存):
+            // 探索は最短保証なし (proof-tree の詰み手数は探索順依存) ゆえ，厳密 PV ではなく
+            // PV replay で真の詰みであることを確認する．
+            // 本来の最短は 5 手 (複数解; 合駒駒種は探索順依存):
             //   "2d3d 2b3a S*4b 3a3b 4c3c+" / "2d3d {R|P|N}*2c 2e2c+ 2b1a 1c1b+" /
             //   "2d3d L*2c 2e2c+ 2b3a L*3b" / "2d3d P*2d 4c3c+ 2b1a S*1b"．
-            //   将来 find_shortest を mid_v4 で honor したら，この mate-5 群を正解に戻す．
             assert!(
                 usi_moves.len() % 2 == 1,
                 "tsume must have odd number of moves, got {}: {usi_moves:?}",
@@ -1466,7 +1322,7 @@ fn test_gold_interposition_is_legal_defense() {
 
     // 後手番: 回避手を生成
     let mut solver = DfPnSolver::default_solver();
-    let defenses = solver.generate_defense_moves(&mut board);
+    let defenses = solver.generate_defense_moves_inner(&mut board, false);
     let usi_defenses: Vec<String> = defenses.iter().map(|m| m.to_usi()).collect();
 
     // 金の移動合い 2a2b(2一金→2二) が含まれること
@@ -1553,7 +1409,7 @@ fn test_tsume_39te_ply22_ids_depth_diagnosis() {
     }
 
     // generate_defense_moves
-    let defenses = solver.generate_defense_moves(&mut final_board);
+    let defenses = solver.generate_defense_moves_inner(&mut final_board, false);
     verbose_eprintln!("generate_defense_moves: {} moves", defenses.len());
     for d in &defenses {
         verbose_eprintln!("  {}", d.to_usi());
@@ -1621,7 +1477,7 @@ fn test_futile_check_rook_rank_not_futile_when_king_can_escape() {
     );
 
     // generate_defense_moves: 合駒(駒打ち)が含まれること
-    let defenses = solver.generate_defense_moves(&mut board);
+    let defenses = solver.generate_defense_moves_inner(&mut board, false);
     let has_drop = defenses.iter().any(|m| m.is_drop());
     assert!(
         has_drop,
@@ -1685,7 +1541,7 @@ fn test_futile_check_rook_rank_futile_when_king_trapped() {
 
 /// TT 保護のリグレッションテスト: find_shortest モード有効時の PV 検証．
 ///
-/// complete_or_proofs 中の mid() が転置により証明済み TT エントリを
+/// complete_or_proofs 中の探索が転置により証明済み TT エントリを
 /// 上書きしていたバグの回帰テスト．find_shortest=true(デフォルト)で
 /// PV が最長抵抗を正しく反映することを確認する．
 #[test]
@@ -1732,7 +1588,7 @@ fn test_no_checkmate_gote() {
     board.set_sfen(sfen).unwrap();
 
     let mut solver = DfPnSolver::new(5, 100_000, 32767);
-    let result = solver.solve_via_v4(&mut board);
+    let result = solver.solve_impl(&mut board);
 
     match &result {
         TsumeResult::NoCheckmate { .. } => {}
@@ -1784,7 +1640,7 @@ fn test_chuai_defense_includes_pawn_drop() {
 
     // AND ノード: 後手の回避手を生成
     let mut solver = DfPnSolver::default_solver();
-    let defenses = solver.generate_defense_moves(&mut board);
+    let defenses = solver.generate_defense_moves_inner(&mut board, false);
     let usi_defenses: Vec<String> = defenses.iter().map(|m| m.to_usi()).collect();
 
     // 全合法手と比較
@@ -1902,7 +1758,7 @@ fn test_tsume_39te_pv_trace() {
         let moves = if is_or {
             solver.generate_check_moves(&mut board)
         } else {
-            solver.generate_defense_moves(&mut board)
+            solver.generate_defense_moves_inner(&mut board, false)
         };
 
         // ドロップ手のカウント
@@ -1939,7 +1795,7 @@ fn test_tsume_39te_pv_trace() {
     }
 
     // 最終局面が詰みかチェック
-    let final_defenses = solver.generate_defense_moves(&mut board);
+    let final_defenses = solver.generate_defense_moves_inner(&mut board, false);
     verbose_eprintln!("\n最終局面(39手目後)の回避手数: {}", final_defenses.len());
     if final_defenses.is_empty() {
         verbose_eprintln!("→ 詰み!");
@@ -1947,174 +1803,6 @@ fn test_tsume_39te_pv_trace() {
         let sample: Vec<String> = final_defenses.iter().take(10).map(|m| m.to_usi()).collect();
         verbose_eprintln!("→ 回避手あり: [{}]", sample.join(", "));
     }
-}
-
-// ========================================================================
-// 施策 X (v0.24.53): ProvenEntry proof_tag 拡張の単体テスト
-// ========================================================================
-
-/// `ProvenEntry::new_tagged_proof` の round-trip 検証．
-/// 各 tag と tag_depth の組合せで `proof_tag()` / `tag_depth()` が
-/// 正しい値を返すことを確認する．
-#[test]
-fn test_proven_entry_tagged_proof_round_trip() {
-    use super::entry::{
-        ProvenEntry, PROOF_TAG_ABSOLUTE, PROOF_TAG_DEPTH_LIMITED, PROOF_TAG_FILTER_DEPENDENT,
-        PROOF_TAG_INVALID, PROOF_TAG_PROVISIONAL,
-    };
-    let hand = [1u8, 0, 0, 0, 0, 0, 0];
-    let best_move = 0x1234u16;
-
-    // ABSOLUTE (既存 new_proof と等価)
-    let e = ProvenEntry::new_tagged_proof(hand, best_move, 15, PROOF_TAG_ABSOLUTE, 0);
-    assert!(e.is_proof());
-    assert_eq!(e.proof_tag(), PROOF_TAG_ABSOLUTE);
-    assert_eq!(e.tag_depth(), 0);
-    assert_eq!(e.mate_distance(), Some(15));
-    assert_eq!(e.best_move, best_move);
-    assert_eq!(e.hand, hand);
-
-    // FILTER_DEPENDENT with depth=17
-    let e = ProvenEntry::new_tagged_proof(hand, best_move, 7, PROOF_TAG_FILTER_DEPENDENT, 17);
-    assert!(e.is_proof());
-    assert_eq!(e.proof_tag(), PROOF_TAG_FILTER_DEPENDENT);
-    assert_eq!(e.tag_depth(), 17);
-    assert_eq!(e.mate_distance(), Some(7));
-
-    // PROVISIONAL with depth=25
-    let e = ProvenEntry::new_tagged_proof(hand, best_move, 5, PROOF_TAG_PROVISIONAL, 25);
-    assert_eq!(e.proof_tag(), PROOF_TAG_PROVISIONAL);
-    assert_eq!(e.tag_depth(), 25);
-
-    // DEPTH_LIMITED
-    let e = ProvenEntry::new_tagged_proof(hand, best_move, 3, PROOF_TAG_DEPTH_LIMITED, 7);
-    assert_eq!(e.proof_tag(), PROOF_TAG_DEPTH_LIMITED);
-    assert_eq!(e.tag_depth(), 7);
-
-    // tag_depth overflow (>63) → clamped to 63
-    let e = ProvenEntry::new_tagged_proof(hand, best_move, 11, PROOF_TAG_FILTER_DEPENDENT, 100);
-    assert_eq!(e.tag_depth(), 63);
-
-    // INVALID tag
-    let e = ProvenEntry::new_tagged_proof(hand, best_move, 1, PROOF_TAG_INVALID, 0);
-    assert_eq!(e.proof_tag(), PROOF_TAG_INVALID);
-}
-
-/// `ProvenEntry::new_proof` は `new_tagged_proof(.., ABSOLUTE, 0)` に委譲する
-/// ため backward compat を保証する．
-#[test]
-fn test_proven_entry_new_proof_defaults_to_absolute() {
-    use super::entry::{ProvenEntry, PROOF_TAG_ABSOLUTE};
-    let hand = [0u8, 0, 0, 0, 0, 0, 1];
-    let e = ProvenEntry::new_proof(hand, 0x5678, 13);
-    assert!(e.is_proof());
-    assert_eq!(e.proof_tag(), PROOF_TAG_ABSOLUTE);
-    assert_eq!(e.tag_depth(), 0);
-    assert_eq!(e.mate_distance(), Some(13));
-}
-
-/// disproof エントリは `proof_tag()` で ABSOLUTE，`tag_depth()` で 0 を
-/// 返す (backward compat + 明示的な zero 返却)．
-#[test]
-fn test_proven_entry_disproof_tag_accessors() {
-    use super::entry::{ProvenEntry, PROOF_TAG_ABSOLUTE};
-    let hand = [0u8; 7];
-    let e = ProvenEntry::new_disproof(hand, 25);
-    assert!(!e.is_proof());
-    assert_eq!(e.disproof_depth(), 25);
-    // disproof entry は tag 非対応: accessor は ABSOLUTE/0 を返す
-    assert_eq!(e.proof_tag(), PROOF_TAG_ABSOLUTE);
-    assert_eq!(e.tag_depth(), 0);
-}
-
-/// `ProvenEntry::amount` (eviction priority) が tag に応じて変化することを
-/// 確認する．ABSOLUTE proof > non-ABSOLUTE proof > disproof の順序．
-#[test]
-fn test_proven_entry_amount_tag_priority() {
-    use super::entry::{
-        ProvenEntry, PROOF_TAG_ABSOLUTE, PROOF_TAG_FILTER_DEPENDENT, PROOF_TAG_PROVISIONAL,
-    };
-    let hand = [0u8; 7];
-
-    // ABSOLUTE proof without distance: 64
-    let abs = ProvenEntry::new_tagged_proof(hand, 0, 0, PROOF_TAG_ABSOLUTE, 0);
-    assert_eq!(abs.amount(), 64);
-
-    // FILTER_DEPENDENT proof without distance: 48
-    let filt = ProvenEntry::new_tagged_proof(hand, 0, 0, PROOF_TAG_FILTER_DEPENDENT, 0);
-    assert_eq!(filt.amount(), 48);
-
-    // PROVISIONAL proof without distance: 48
-    let prov = ProvenEntry::new_tagged_proof(hand, 0, 0, PROOF_TAG_PROVISIONAL, 0);
-    assert_eq!(prov.amount(), 48);
-
-    // confirmed disproof: 32
-    let disp = ProvenEntry::new_disproof(hand, 10);
-    assert_eq!(disp.amount(), 32);
-
-    // ABSOLUTE proof with distance 15: 0x80 | 15 = 143
-    let abs_d = ProvenEntry::new_tagged_proof(hand, 0, 15, PROOF_TAG_ABSOLUTE, 0);
-    assert_eq!(abs_d.amount(), 0x80 | 15);
-
-    // 順序性: ABSOLUTE+distance > ABSOLUTE > non-ABSOLUTE > disproof
-    assert!(abs_d.amount() > abs.amount());
-    assert!(abs.amount() > filt.amount());
-    assert!(filt.amount() > disp.amount());
-}
-
-/// `clear_proven_disproofs_below` が non-ABSOLUTE proof を
-/// 選択的に除去することを検証する (施策 X の統合動作)．
-#[test]
-fn test_clear_proven_disproofs_below_includes_tagged_proofs() {
-    use super::entry::{PROOF_TAG_FILTER_DEPENDENT, PROOF_TAG_PROVISIONAL};
-    use super::tt::TranspositionTable;
-    let mut tt = TranspositionTable::new();
-
-    let hand = [1u8, 0, 0, 0, 0, 0, 0];
-    let pk = 0xDEADBEEF_12345678u64;
-
-    // ABSOLUTE proof at tag_depth=0 (should never be removed)
-    tt.store_with_best_move_and_distance(pk, hand, 0, u32::MAX, 0x7FFF, pk as u32, 0x100, 15);
-
-    // 3 pos_keys with different tags for diversity
-    // 同一 pk + 同一 hand は cluster 内で上書きされるため，異なる pk を使う
-    let pk_filter = 0x1111_1111_1111_1111u64;
-    let pk_prov = 0x2222_2222_2222_2222u64;
-
-    // FILTER_DEPENDENT at depth=5
-    tt.store_tagged_proof_for_test(pk_filter, hand, 0x200, 10, PROOF_TAG_FILTER_DEPENDENT, 5);
-
-    // PROVISIONAL at depth=15
-    tt.store_tagged_proof_for_test(pk_prov, hand, 0x300, 8, PROOF_TAG_PROVISIONAL, 15);
-
-    // clear at min_depth=10: FILTER_DEPENDENT (depth=5 < 10) should be removed
-    // PROVISIONAL (depth=15 >= 10) should be kept
-    // ABSOLUTE is never affected
-    tt.clear_proven_disproofs_below(10);
-
-    // ABSOLUTE proof remains
-    let (pn, _, _) = tt.look_up(pk, &hand, 0x7FFF, false);
-    assert_eq!(pn, 0, "ABSOLUTE proof should be preserved");
-
-    // FILTER_DEPENDENT removed
-    let (pn, _, _) = tt.look_up(pk_filter, &hand, 0x7FFF, false);
-    assert_ne!(
-        pn, 0,
-        "FILTER_DEPENDENT proof at depth<10 should be removed"
-    );
-
-    // PROVISIONAL preserved
-    let (pn, _, _) = tt.look_up(pk_prov, &hand, 0x7FFF, false);
-    assert_eq!(pn, 0, "PROVISIONAL proof at depth>=10 should be preserved");
-
-    // Second clear at higher min_depth: PROVISIONAL (depth=15) also removed
-    tt.clear_proven_disproofs_below(20);
-    let (pn, _, _) = tt.look_up(pk_prov, &hand, 0x7FFF, false);
-    assert_ne!(pn, 0, "PROVISIONAL proof at depth<20 should be removed");
-
-    // ABSOLUTE still preserved
-    let (pn, _, _) = tt.look_up(pk, &hand, 0x7FFF, false);
-    assert_eq!(pn, 0, "ABSOLUTE proof must never be removed");
 }
 
 /// counter_check 不詭め局面の移動木診断．
@@ -2153,7 +1841,7 @@ fn test_counter_check_diagnostic() {
                 let cap1 = board.do_move(*chk);
                 writeln!(out, "  SFEN: {}", board.sfen()).unwrap();
 
-                let defenses = solver.generate_defense_moves(&mut board);
+                let defenses = solver.generate_defense_moves_inner(&mut board, false);
                 let drop_cnt = defenses.iter().filter(|m| m.is_drop()).count();
                 writeln!(
                     out,
@@ -2266,9 +1954,7 @@ fn test_no_checkmate_counter_check_probe() {
     eprintln!("Still not solved at 10M");
 }
 
-/// Phase 25 補助: mate15 サブ局面 (ply24 prefix 後) の SFEN を印字する．
-/// KH ground truth で「canonical Mate(15) vs chain-drop inflated Mate(21)」を
-/// 確定するため．
+/// 診断補助: mate15 サブ局面 (ply24 prefix 後) の SFEN を印字する．
 #[test]
 #[ignore]
 fn test_print_mate15_subposition_sfen() {
@@ -2287,20 +1973,11 @@ fn test_print_mate15_subposition_sfen() {
     eprintln!("MATE15_SUBPOS_SFEN={}", board.sfen());
 }
 
-// ======================================================================
-// retain_proofs_only() fix (v0.55.27)
-// ======================================================================
-
-// ======================================================================
-// Step 2: 1d1e 全ペア ProvenTT ヒット診断 (v0.55.35)
-// ======================================================================
-
-/// **[SLOW]** primitive micro-bench (KH 主動作比較用, 2026-06-11)．
+/// **[SLOW]** primitive micro-bench．
 ///
 /// 39te root に PV プレフィックスを適用した同一局面群 (OR/AND 混在) で
-/// 王手生成 / 応手生成 / do+undo / 1 手詰判定 の ns/op を計測する．
-/// KH 側は同じ `position sfen <root> moves <prefix>` を適用した primbench
-/// (計測ビルド) と突合し，per-node コスト差 (~8.5×) を primitive 単位に分解する．
+/// 王手生成 / 応手生成 / do+undo / 1 手詰判定 の ns/op を計測し，
+/// per-node コストを primitive 単位に分解する．
 /// 実行: `cargo test --release -p maou_shogi -- bench_primitives --ignored --nocapture`
 #[test]
 #[ignore]
@@ -2335,8 +2012,8 @@ fn bench_primitives() {
                 acc / n as u64
             );
 
-            // 1 手詰 (checks 前提)．KH mate_1ply は self-contained のため
-            // gen+mate 合算も併記する (構造差の可視化)．
+            // 1 手詰 (checks 前提)．gen+mate 合算も併記する
+            // (王手生成と 1 手詰判定の合算コストの可視化)．
             let checks = solver.generate_check_moves(&mut b);
             let turn = b.turn;
             let t = std::time::Instant::now();

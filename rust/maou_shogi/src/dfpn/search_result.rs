@@ -1,78 +1,60 @@
-//! KH `SearchResult` の忠実移植 (`search_result.hpp`)．
+//! 探索結果の値型．
 //!
-//! mid_v4 (KH verbatim 再現) の探索結果値型．LocalExpansion / TT / 探索ループが
-//! やり取りする中核データ．maou 旧 `MidSearchResult` (local_expansion.rs) は簡略版で
-//! KH と乖離していた (len を MateLen でなく u16 mate_distance で別管理，amount/proof-hand
-//! 欠落)．本型は KH と byte 単位で一致させる．
+//! LocalExpansion / TT / 探索ループがやり取りする中核データ．探索結果を pn/dn,
+//! len (MateLen), amount, proof-hand などとともに 1 つの値型に保持する．
 //!
-//! ## KH 型 (typedefs.hpp / types.h)
-//! - `PnDn = std::uint64_t` (maou 旧 LE の u32 とは別; **忠実性のため 64bit を採用**)．
-//! - `SearchAmount = std::uint32_t`，`Depth = std::int32_t`．
-//! - `Hand` は maou primitive (`[u8; HAND_KINDS]`) を再利用する．
+//! ## 型
+//! - `PnDn = u64`: 証明数・反証数．
+//! - `SearchAmount = u32`，`Depth = i32`．
+//! - `Hand` は持ち駒表現 (`[u8; HAND_KINDS]`) を再利用する．
 
 use super::mate_len::MateLen;
 use crate::types::HAND_KINDS;
 
-/// KH `PnDn` (typedefs.hpp:194)．証明数・反証数．
+/// 証明数・反証数．
 pub(super) type PnDn = u64;
-/// KH `SearchAmount` (typedefs.hpp:233)．探索量 (GC 優先度・tie-break 用)．
+/// 探索量 (GC 優先度・tie-break 用)．
 pub(super) type SearchAmount = u32;
-/// KH `Depth` (types.h:347)．探索深さ (千日手 rep_start に使用)．
+/// 探索深さ (千日手 rep_start に使用)．
 pub(super) type Depth = i32;
-/// 攻め方持ち駒．maou 表現 (`[u8; HAND_KINDS]`) を再利用する．
+/// 攻め方持ち駒 (`[u8; HAND_KINDS]`)．
 pub(super) type Hand = [u8; HAND_KINDS];
 
-/// KH `kInfinitePnDn = numeric_limits<PnDn>::max()/2 - 1` (typedefs.hpp:196)．
+/// pn/dn の上限値．`u64::MAX / 2 - 1`．和をとっても溢れない余地を残す．
 pub(super) const K_INFINITE_PN_DN: PnDn = u64::MAX / 2 - 1;
-/// KH `kPnDnUnit = 2` (typedefs.hpp:198)．pn/dn の最小単位 (df-pn+)．
-pub(super) const K_PN_DN_UNIT: PnDn = 2;
 
-/// 和が `kInfinitePnDn` を超えないよう clamp する (KH `ClampPnDn`)．
+/// 和が `K_INFINITE_PN_DN` を超えないよう clamp する．
 #[inline]
 pub(super) fn clamp_pn_dn(v: PnDn) -> PnDn {
     v.min(K_INFINITE_PN_DN)
 }
-/// 2 値の大きい方を `kInfinitePnDn` で clamp (KH `ClampPnDn(a, b)` 相当)．
-#[inline]
-pub(super) fn clamp_pn_dn_max(a: PnDn, b: PnDn) -> PnDn {
-    a.max(b).min(K_INFINITE_PN_DN)
-}
 
-/// KH `BitSet64` の最小移植 (δ を和で計上する子の集合 = sum_mask)．
+/// 64bit のビット集合 (δ を和で計上する子の集合 = sum_mask)．
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(super) struct BitSet64(pub u64);
 
 impl BitSet64 {
-    /// 全 bit 立つ (KH `BitSet64::Full()`; 既定で全子を sum 集計)．
+    /// 全 bit を立てる (既定で全子を sum 集計)．
     #[inline]
     pub(super) const fn full() -> Self {
         BitSet64(u64::MAX)
     }
-    /// `i` bit が立っているか (KH `operator[]` / `Test`)．
+    /// `i` bit が立っているか．
     #[inline]
     pub(super) const fn test(self, i: usize) -> bool {
         (self.0 >> i) & 1 == 1
     }
-    /// `i` bit を落とす (KH `Reset`)．
+    /// `i` bit を落とす．
     #[inline]
     pub(super) fn reset(&mut self, i: usize) {
         self.0 &= !(1u64 << i);
     }
 }
 
-/// 探索状態 (KH `NodeState`)．
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum NodeState {
-    Proven,
-    Disproven,
-    Repetition,
-    Unknown,
-}
-
-/// KH `SearchResult` (search_result.hpp:43)．
+/// 探索結果値型．
 ///
-/// Unknown と Final を union で共有する KH の領域節約はせず，両データを保持し pn/dn を
-/// discriminant とする (`IsFinal() = pn==0 || dn==0`)．意味論は KH と同一．
+/// Unknown と Final を union で共有せず両データを保持し，pn/dn を discriminant とする
+/// (`is_final() = pn==0 || dn==0`)．
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SearchResult {
     pn: PnDn,
@@ -88,11 +70,11 @@ pub(super) struct SearchResult {
 }
 
 impl SearchResult {
-    /// Unknown (初回) (KH `MakeFirstVisit`, :52)．sum_mask=Full, is_first_visit=true．
+    /// Unknown (初回)．sum_mask=Full, is_first_visit=true．
     pub(super) fn make_first_visit(pn: PnDn, dn: PnDn, len: MateLen, amount: SearchAmount) -> Self {
         Self::new_unknown_inner(pn, dn, len, amount, BitSet64::full(), true)
     }
-    /// Unknown (2 回目以降) (KH `MakeUnknown`, :64)．
+    /// Unknown (2 回目以降)．
     pub(super) fn make_unknown(
         pn: PnDn,
         dn: PnDn,
@@ -102,7 +84,7 @@ impl SearchResult {
     ) -> Self {
         Self::new_unknown_inner(pn, dn, len, amount, sum_mask, false)
     }
-    /// Final (詰み proven=true / 不詰 proven=false) (KH `MakeFinal<kIsProven>`, :77)．
+    /// Final (詰み proven=true / 不詰 proven=false)．
     pub(super) fn make_final(proven: bool, hand: Hand, len: MateLen, amount: SearchAmount) -> Self {
         let (pn, dn) = if proven {
             (0, K_INFINITE_PN_DN)
@@ -118,7 +100,7 @@ impl SearchResult {
             hand,
         )
     }
-    /// 千日手 (KH `MakeRepetition`, :91)．pn=INF, dn=0, rep_start を保持．
+    /// 千日手．pn=INF, dn=0, rep_start を保持．
     pub(super) fn make_repetition(
         hand: Hand,
         len: MateLen,
@@ -177,7 +159,7 @@ impl SearchResult {
     pub(super) fn dn(self) -> PnDn {
         self.dn
     }
-    /// φ値 (OR=pn, AND=dn) (KH `Phi`, :113)．
+    /// φ値 (OR=pn, AND=dn)．
     #[inline]
     pub(super) fn phi(self, or_node: bool) -> PnDn {
         if or_node {
@@ -186,7 +168,7 @@ impl SearchResult {
             self.dn
         }
     }
-    /// δ値 (OR=dn, AND=pn) (KH `Delta`, :115)．
+    /// δ値 (OR=dn, AND=pn)．
     #[inline]
     pub(super) fn delta(self, or_node: bool) -> PnDn {
         if or_node {
@@ -195,7 +177,7 @@ impl SearchResult {
             self.pn
         }
     }
-    /// 結論が出ているか (KH `IsFinal`, :117)．
+    /// 結論が出ているか (pn==0 または dn==0)．
     #[inline]
     pub(super) fn is_final(self) -> bool {
         self.pn == 0 || self.dn == 0
@@ -208,50 +190,36 @@ impl SearchResult {
     pub(super) fn amount(self) -> SearchAmount {
         self.amount
     }
-    /// UnknownData: sum_mask (`!IsFinal` のとき有効)．
+    /// UnknownData: sum_mask (`!is_final()` のとき有効)．
     #[inline]
     pub(super) fn sum_mask(self) -> BitSet64 {
         self.sum_mask
     }
-    /// UnknownData: is_first_visit (`!IsFinal` のとき有効)．
+    /// UnknownData: is_first_visit (`!is_final()` のとき有効)．
     #[inline]
     pub(super) fn is_first_visit(self) -> bool {
         self.is_first_visit
     }
-    /// FinalData: hand (`IsFinal` のとき有効)．
+    /// FinalData: hand (`is_final()` のとき有効)．
     #[inline]
     pub(super) fn hand(self) -> Hand {
         self.hand
     }
-    /// FinalData: repetition_start (`IsFinal` のとき有効)．
+    /// FinalData: repetition_start (`is_final()` のとき有効)．
     #[inline]
     pub(super) fn repetition_start(self) -> Depth {
         self.repetition_start
     }
-    /// 千日手結果か (dn==0 かつ rep_start が有効値) (KH `FinalData::IsRepetition` 相当)．
-    /// KH では rep_start != kDepthMax を千日手とみなす (MakeFinal は kDepthMax を入れる)．
+    /// 千日手結果か (dn==0 かつ rep_start が有効値)．
+    /// rep_start != KDEPTH_MAX を千日手とみなす (make_final は KDEPTH_MAX を入れる)．
     #[inline]
     pub(super) fn is_repetition(self) -> bool {
         self.dn == 0 && self.repetition_start != super::mate_len::KDEPTH_MAX as Depth
     }
-    /// ノード状態 (KH `GetNodeState`, :128)．
-    pub(super) fn node_state(self) -> NodeState {
-        if self.pn == 0 {
-            NodeState::Proven
-        } else if self.dn == 0 {
-            if self.is_repetition() {
-                NodeState::Repetition
-            } else {
-                NodeState::Disproven
-            }
-        } else {
-            NodeState::Unknown
-        }
-    }
 }
 
-/// KH `ExtendSearchThreshold` (TCA, search_result.hpp:173)．
-/// **非累積** max(th, val+1)．`IsFinal` なら更新しない．
+/// 閾値拡張 (TCA)．
+/// **非累積** max(th, val+1)．`is_final()` なら更新しない．
 #[inline]
 pub(super) fn extend_search_threshold(result: SearchResult, thpn: &mut PnDn, thdn: &mut PnDn) {
     if !result.is_final() {
@@ -264,9 +232,9 @@ pub(super) fn extend_search_threshold(result: SearchResult, thpn: &mut PnDn, thd
     }
 }
 
-/// KH `SearchResultComparer` (search_result.hpp:258) の (狭義) 半順序．
-/// φ → δ → (proven の Len) → (disproven の rep_start) → amount．最終 tie は mp_.value
-/// (move eval) で破るが，それは LocalExpansion 側で行う (KH `MakeComparer`)．
+/// 探索結果比較の (狭義) 半順序．
+/// φ → δ → (proven の Len) → (disproven の rep_start) → amount．最終 tie は
+/// move eval で破るが，それは LocalExpansion 側で行う．
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Ordering3 {
     Less,
@@ -274,7 +242,7 @@ pub(super) enum Ordering3 {
     Equivalent,
 }
 
-/// KH `SearchResultComparer::operator()` (search_result.hpp:258)．
+/// 探索結果の比較関数．
 pub(super) fn compare_results(or_node: bool, lhs: SearchResult, rhs: SearchResult) -> Ordering3 {
     // 1. φ値 昇順
     if lhs.phi(or_node) < rhs.phi(or_node) {
@@ -309,7 +277,7 @@ pub(super) fn compare_results(or_node: bool, lhs: SearchResult, rhs: SearchResul
         let l = lhs.repetition_start();
         let r = rhs.repetition_start();
         if l != r {
-            // KH: !or_node ^ (l < r) なら Less
+            // !or_node ^ (l < r) なら Less
             if (!or_node) ^ (l < r) {
                 return Ordering3::Less;
             } else {
@@ -341,13 +309,11 @@ mod tests {
         assert!(p.is_final());
         assert_eq!(p.pn(), 0);
         assert_eq!(p.dn(), K_INFINITE_PN_DN);
-        assert_eq!(p.node_state(), NodeState::Proven);
 
         let d = SearchResult::make_final(false, h0(), MateLen::from_len(5), 1);
         assert!(d.is_final());
         assert_eq!(d.dn(), 0);
-        assert_eq!(d.node_state(), NodeState::Disproven);
-        assert!(!d.is_repetition()); // rep_start = kDepthMax => not repetition
+        assert!(!d.is_repetition()); // rep_start = KDEPTH_MAX => not repetition
     }
 
     #[test]
@@ -356,7 +322,6 @@ mod tests {
         assert!(r.is_final());
         assert_eq!(r.dn(), 0);
         assert!(r.is_repetition());
-        assert_eq!(r.node_state(), NodeState::Repetition);
         assert_eq!(r.repetition_start(), 3);
     }
 
@@ -366,7 +331,6 @@ mod tests {
         assert!(!u.is_final());
         assert!(u.is_first_visit());
         assert_eq!(u.sum_mask(), BitSet64::full());
-        assert_eq!(u.node_state(), NodeState::Unknown);
 
         let mut m = BitSet64::full();
         m.reset(3);

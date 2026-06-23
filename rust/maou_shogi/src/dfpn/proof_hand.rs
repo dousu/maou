@@ -1,16 +1,11 @@
-//! KH (Komori df-pn) 流の極小証明駒 (minimal proof hand) 計算．
-//!
-//! 参照: `.tmp_diag/kh/hands.hpp` (`HandSet` / `AddIfHandGivesOtherEvasions` /
-//! `RemoveIfHandGivesOtherChecks` / `BeforeHand`)．
+//! 極小証明駒 (minimal proof hand) 計算．
 //!
 //! # なぜ必要か
 //!
-//! `mid_v2` は proven 局面を**実際の攻め方持ち駒**のまま TT に store する．TT lookup は
-//! hand-dominance (`hand_gte_forward_chain`) で集約するが，store された持ち駒が極小でない
-//! ため集約が弱く proof tree が膨れる (29te で KH 比 9×)．KH は AND ノードで全子の証明駒の
-//! **要素 max**を取り，離れ王手の合駒要件を `AddIfHandGivesOtherEvasions` で補正することで
-//! **極小証明駒**を構成する．本 module はその計算を maou の `[u8; HAND_KINDS]` 表現で忠実に
-//! 再現する．
+//! proven 局面を実際の攻め方持ち駒のまま TT に store すると，TT lookup の
+//! hand-dominance (`hand_gte_forward_chain`) 集約が弱く proof tree が膨れる．AND ノードで
+//! 全子の証明駒の**要素 max**を取り，離れ王手の合駒要件を補正することで**極小証明駒**を
+//! 構成する．本 module はその計算を `[u8; HAND_KINDS]` 表現で行う．
 //!
 //! # soundness の要諦
 //!
@@ -59,7 +54,7 @@ fn captured_hand_index(raw_pt: u8) -> Option<usize> {
     }
 }
 
-/// KH `BeforeHand` (hands.hpp:57)．`move` 後の攻め方持駒が `after_hand` のとき，移動前の持駒を返す．
+/// `move` 後の攻め方持駒が `after_hand` のとき，移動前の持駒を返す．
 ///
 /// - 駒打ち: 打った駒を打つ前は持っていた → `after_hand` にその駒種を 1 枚加える (上限 clamp)．
 /// - 駒取り: 取った駒は取る前は持っていなかった → `after_hand` からその駒種を 1 枚引く (あれば)．
@@ -88,7 +83,7 @@ pub(super) fn before_hand(
     h
 }
 
-/// KH `GetWinResult` の AND-node 逃れ (disproven) の駒打ち補正 (local_expansion.hpp:651-663)．
+/// AND-node 逃れ (disproven) の駒打ち補正．
 ///
 /// AND ノードが best_move (受け方の手) で詰みを逃れるとき，その手が駒打ちなら，攻め方の反証駒が
 /// その駒種を独占していると受け方が打てなくなる．攻め方の枚数を「総枚数-1」へ抑え受け方に 1 枚残す．
@@ -111,7 +106,7 @@ pub(super) fn and_node_escape_disproof(
     dh
 }
 
-/// 要素ごとの max (KH `HandSet::Update`, ProofHand 用)．
+/// 要素ごとの max (ProofHand 集約用)．
 #[inline]
 pub(super) fn hand_max(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> [u8; HAND_KINDS] {
     let mut r = *a;
@@ -121,7 +116,7 @@ pub(super) fn hand_max(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> [u8; HAND_
     r
 }
 
-/// 要素ごとの min (KH `HandSet::Update`, DisproofHand 用 — Stage 5)．
+/// 要素ごとの min (DisproofHand 集約用)．
 #[inline]
 pub(super) fn hand_min(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> [u8; HAND_KINDS] {
     let mut r = *a;
@@ -131,24 +126,9 @@ pub(super) fn hand_min(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> [u8; HAND_
     r
 }
 
-/// 証明駒を攻め方の実際の持ち駒で clip する防御 guard (= legacy `mid` solver.rs:5274)．
-///
-/// 攻め方持ち駒を超える証明駒は決して再利用できず無意味なため，要素 min で抑える．
-/// `add_if_hand_gives_other_evasions` は `board.hand[them]` (= 攻め方持ち駒) のみを加えるので
-/// 本来 clip は no-op になるはずだが，多段集約での過大値・将来の改変に対する保険として適用する．
-#[inline]
-pub(super) fn hand_clip(ph: &[u8; HAND_KINDS], att: &[u8; HAND_KINDS]) -> [u8; HAND_KINDS] {
-    let mut r = *ph;
-    for k in 0..HAND_KINDS {
-        r[k] = r[k].min(att[k]);
-    }
-    r
-}
-
 /// 手番側 (`us`) が合駒で歩を打てる合法マスの集合．
 ///
-/// movegen の駒打ち生成 (movegen.rs:176-192) と同一規則: 空マス かつ 二歩でない筋 かつ
-/// 行き所のない段でない．
+/// 駒打ち生成と同一規則: 空マス かつ 二歩でない筋 かつ 行き所のない段でない．
 #[inline]
 fn legal_pawn_drop_mask(board: &Board, us: Color) -> Bitboard {
     let empty = !board.all_occupied();
@@ -160,13 +140,13 @@ fn legal_pawn_drop_mask(board: &Board, us: Color) -> Bitboard {
     empty & !our_pawns.occupied_files() & !forbidden
 }
 
-/// KH `AddIfHandGivesOtherEvasions` (hands.hpp:193)．証明駒の soundness keystone．
+/// 証明駒の soundness keystone．
 ///
 /// AND ノード (防御側手番) で詰みが確定したとき，子局面の証明駒を集約した `ph` に対し，
 /// **単一かつ離れ王手**なら「攻め方が独占する合駒駒」を証明駒へ記録する．
 ///
 /// - `us` = `board.turn` = 防御側 (詰む側)．`them` = 攻め方．
-/// - 王手駒が 1 枚でない (両王手・無王手) → 何もしない (KH `pop_count() != 1`)．
+/// - 王手駒が 1 枚でない (両王手・無王手) → 何もしない．
 /// - 玉と王手駒の間が空 (接触王手) → 合駒不能 → 何もしない．
 /// - 離れ王手: 防御が持っていない各駒種 `pr` について `ph[pr] = 攻め方の pr 枚数`．
 ///   (攻め方が pr を独占 ⇒ 防御は pr で合駒できない，という情報を証明駒に付与する．)
@@ -209,16 +189,16 @@ pub(super) fn add_if_hand_gives_other_evasions(
 
 /// 終端 (防御側 0 手 = 即詰) AND ノードの証明駒．
 ///
-/// KH `HandSet{ProofHandTag}.Get(matedPos)` の子なし版 = `add_if(matedPos, 空)`．
+/// 子なし版 = `add_if_hand_gives_other_evasions(board, 空)`．
 /// 接触王手なら `[0; 7]`，離れ王手なら攻め方が独占する合駒駒を記録する．
 #[inline]
 pub(super) fn proof_hand_terminal_and(board: &Board) -> [u8; HAND_KINDS] {
     add_if_hand_gives_other_evasions(board, [0; HAND_KINDS])
 }
 
-/// KH `HandSet{ProofHandTag}` 相当の証明駒集約器 (AND ノード用)．
+/// 証明駒集約器 (AND ノード用)．
 ///
-/// `update` で各子の証明駒を要素 max し，`get` で `AddIfHandGivesOtherEvasions` 補正を施す．
+/// `update` で各子の証明駒を要素 max し，`get` で `add_if_hand_gives_other_evasions` 補正を施す．
 pub(super) struct ProofHandSet {
     val: [u8; HAND_KINDS],
 }
@@ -231,24 +211,24 @@ impl ProofHandSet {
         }
     }
 
-    /// 子局面の証明駒を要素 max で取り込む (KH `HandSet::Update` ProofHand)．
+    /// 子局面の証明駒を要素 max で取り込む．
     #[inline]
     pub(super) fn update(&mut self, child: &[u8; HAND_KINDS]) {
         self.val = hand_max(&self.val, child);
     }
 
-    /// 現局面 (AND, 防御側手番) の証明駒を取得する (KH `HandSet::Get` ProofHand)．
+    /// 現局面 (AND, 防御側手番) の証明駒を取得する．
     #[inline]
     pub(super) fn get(&self, board: &Board) -> [u8; HAND_KINDS] {
         add_if_hand_gives_other_evasions(board, self.val)
     }
 }
 
-// ===================== 反証駒 (disproof hand) — KH DisproofHand 側 =====================
+// ===================== 反証駒 (disproof hand) =====================
 
 /// 攻め方 (`us`) が駒種 `pr` を打って防御側玉 (`king_sq`) に王手できるマス集合．
 ///
-/// `compute_checkers_at` (board.rs:154) の逆利きロジックを忠実に鏡像化する．王手の完全性
+/// 王手判定の逆利きロジックを鏡像化する．王手の完全性
 /// (= 王手できるマスを取りこぼさない) が反証駒 soundness の要諦 (取りこぼすと false-NoMate)．
 /// `defender` は玉の色 (= `us.opponent()`)，方向性のある駒 (歩/桂/香) の利き反転に使う．
 #[inline]
@@ -266,7 +246,7 @@ fn drop_check_squares(board: &Board, pr: PieceType, king_sq: Square, defender: C
     }
 }
 
-/// KH `RemoveIfHandGivesOtherChecks` (hands.hpp:137)．反証駒の soundness keystone．
+/// 反証駒の soundness keystone．
 ///
 /// OR ノード (攻め側手番) で不詰が判明したとき，子局面の反証駒を集約した `dh` から，
 /// 「攻め方が今持っていないが，持てば新たな王手 (駒打ち) ができてしまう駒種」を**除く**．
@@ -310,17 +290,17 @@ pub(super) fn remove_if_hand_gives_other_checks(
 
 /// 終端 (攻め側に王手手なし = 不詰) OR ノードの反証駒．
 ///
-/// KH `HandSet{DisproofHandTag}.Get` の子なし版 = `remove_if(max, board)`．攻め方が打って
+/// 子なし版 = `remove_if_hand_gives_other_checks(board, max)`．攻め方が打って
 /// 王手できる駒種を最大集合から除いた残り (= 「これらの駒を持っていても王手すらできない」)．
 #[inline]
 pub(super) fn disproof_hand_terminal_or(board: &Board) -> [u8; HAND_KINDS] {
     remove_if_hand_gives_other_checks(board, PieceType::MAX_HAND_COUNT)
 }
 
-/// KH `HandSet{DisproofHandTag}` 相当の反証駒集約器 (OR ノード用)．
+/// 反証駒集約器 (OR ノード用)．
 ///
 /// init は各駒種最大枚数．`update` で各子の反証駒を要素 min し，`get` で
-/// `RemoveIfHandGivesOtherChecks` 補正を施す．
+/// `remove_if_hand_gives_other_checks` 補正を施す．
 pub(super) struct DisproofHandSet {
     val: [u8; HAND_KINDS],
 }
@@ -333,13 +313,13 @@ impl DisproofHandSet {
         }
     }
 
-    /// 子局面の反証駒を要素 min で取り込む (KH `HandSet::Update` DisproofHand)．
+    /// 子局面の反証駒を要素 min で取り込む．
     #[inline]
     pub(super) fn update(&mut self, child: &[u8; HAND_KINDS]) {
         self.val = hand_min(&self.val, child);
     }
 
-    /// 現局面 (OR, 攻め側手番) の反証駒を取得する (KH `HandSet::Get` DisproofHand)．
+    /// 現局面 (OR, 攻め側手番) の反証駒を取得する．
     #[inline]
     pub(super) fn get(&self, board: &Board) -> [u8; HAND_KINDS] {
         remove_if_hand_gives_other_checks(board, self.val)
@@ -377,9 +357,6 @@ mod tests {
         let b = [1, 5, 0, 0, 4, 0, 1];
         assert_eq!(hand_max(&a, &b), [2, 5, 1, 0, 4, 0, 1]);
         assert_eq!(hand_min(&a, &b), [1, 0, 0, 0, 3, 0, 0]);
-        // clip: 証明駒 a を持ち駒 cap で抑える
-        let cap = [1, 1, 1, 1, 1, 0, 0];
-        assert_eq!(hand_clip(&a, &cap), [1, 0, 1, 0, 1, 0, 0]);
     }
 
     #[test]
