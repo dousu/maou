@@ -39,6 +39,7 @@ mod node_movegen;
 mod path_key;
 mod path_stack;
 mod proof_hand;
+mod pv;
 mod search_result;
 mod solver;
 #[cfg(test)]
