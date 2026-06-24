@@ -44,7 +44,7 @@ const MAX_DELAY_HEADS: usize = 10;
 /// 配列を pos_idx で添字化．`prev[i]` および `next[i]` はそれぞれ
 /// 「直前/直後に展開すべき手の index + 1」を表し，`0` は無し．
 /// (`i+1` 形式で記憶することで `Option<usize>` の分岐コストを削減．)
-pub(super) struct DelayedMoveList {
+pub(crate) struct DelayedMoveList {
     prev: Vec<u32>,
     next: Vec<u32>,
 }
@@ -53,7 +53,7 @@ impl DelayedMoveList {
     /// `raw_pts[i]` = `moves[i]` の移動元駒種 raw ID (1=歩..14=龍; 駒打ちは 0)．`us_black` は
     /// 手番側が先手か (enemy_field/香の段判定用)．`raw_pts` が空なら粗い fallback (dummy 歩) に委ねる．
     /// 盤上移動は歩/角/飛, 及び香の敵陣 2/8 段昇り のみ遅延対象とする．
-    pub(super) fn build_with_types(
+    pub(crate) fn build_with_types(
         moves: &[Move],
         or_node: bool,
         raw_pts: &[u8],
@@ -66,7 +66,7 @@ impl DelayedMoveList {
     /// `interp_chain[i]` = `moves[i]` が「攻方支援なし & 逆王手でない drop」なら true
     /// (呼出側で Board から算出)．この条件を満たす 2 つの drop は **別 to_sq でも同一 chain**
     /// とみなし後回しにする (逆王手でない中合いは無意味なことが多いため)．
-    pub(super) fn build_with_types_interp(
+    pub(crate) fn build_with_types_interp(
         moves: &[Move],
         or_node: bool,
         raw_pts: &[u8],
@@ -130,7 +130,7 @@ impl DelayedMoveList {
 
     /// `i_raw` の直前に展開すべき手の index ．無ければ `None`．
     #[inline(always)]
-    pub(super) fn prev(&self, i_raw: usize) -> Option<usize> {
+    pub(crate) fn prev(&self, i_raw: usize) -> Option<usize> {
         let p = self.prev[i_raw];
         if p == 0 {
             None
@@ -142,7 +142,7 @@ impl DelayedMoveList {
     /// `i_raw` の直後に展開すべき手の index．無ければ `None`．
     #[inline(always)]
     #[allow(dead_code)] // 将来の next chain walking 用に保持
-    pub(super) fn next(&self, i_raw: usize) -> Option<usize> {
+    pub(crate) fn next(&self, i_raw: usize) -> Option<usize> {
         let n = self.next[i_raw];
         if n == 0 {
             None
@@ -153,7 +153,7 @@ impl DelayedMoveList {
 
     /// `i_raw` の prev chain に未解決の手があるか．
     /// `is_resolved(j)` が `true` なら j は解決済み (final)．
-    pub(super) fn has_unresolved_prev<F: Fn(usize) -> bool>(
+    pub(crate) fn has_unresolved_prev<F: Fn(usize) -> bool>(
         &self,
         i_raw: usize,
         is_resolved: F,

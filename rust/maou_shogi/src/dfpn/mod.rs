@@ -28,14 +28,11 @@ macro_rules! verbose_eprintln {
 }
 
 mod api;
-mod check_cache;
-mod delayed_move_list;
 mod heuristics;
 mod local_expansion;
-mod mate1ply;
 mod mate_len;
 mod mid;
-mod node_movegen;
+mod movegen;
 mod path_key;
 mod path_stack;
 mod proof_hand;
@@ -51,7 +48,7 @@ pub use solver::{DfPnSolver, TsumeResult};
 
 // heuristics / check_cache / proof_hand へ移設した item を root に再エクスポートし，
 // sibling module から従来どおり `super::<name>` で参照できるようにする．
-use check_cache::CheckCache;
+use movegen::check_cache::CheckCache;
 use heuristics::{init_pn_dn_and, init_pn_dn_or, move_brief_eval};
 use proof_hand::hand_gte;
 

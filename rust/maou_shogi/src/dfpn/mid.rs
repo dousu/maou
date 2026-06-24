@@ -25,7 +25,7 @@
 //! - **EliminateDoubleCount (DAG)**: ancestor 展開を再帰 stack で walk する．
 //! - STRICT PV replay / 無意味中合いの cross-square DML．
 
-use super::delayed_move_list::DelayedMoveList;
+use super::movegen::delayed_move_list::DelayedMoveList;
 use super::local_expansion::{BranchRootEdge, LocalExpansion, K_ANCESTOR_SEARCH_THRESHOLD};
 use super::mate_len::{MateLen, DEPTH_MAX_MATE_LEN, ZERO_MATE_LEN};
 use super::path_key::path_key_after;
@@ -515,11 +515,11 @@ impl DfPnSolver {
         DM_SITE.with(|c| c.set([0; 4]));
         PROF_NS.with(|c| c.set([0; 12]));
         PROF_CNT.with(|c| c.set([0; 12]));
-        super::node_movegen::reset_legal_quick_dm();
+        super::movegen::reset_legal_quick_dm();
         crate::movegen::reset_pawn_drop_mate_dm();
         crate::board::reset_do_move_count();
-        super::mate1ply::reset_mate_cand_stats();
-        super::mate1ply::reset_mate1ply_stats();
+        super::movegen::mate1ply::reset_mate_cand_stats();
+        super::movegen::mate1ply::reset_mate1ply_stats();
         // path dominance (劣位局面の刈り込み)．常時 ON．
         self.param_path_dominance = true;
         self.timed_out = false;
@@ -612,11 +612,11 @@ impl DfPnSolver {
             self.dag_fires,
             self.dom_fires
         );
-        super::mate1ply::report_mate_cand_stats();
-        super::mate1ply::report_mate1ply_stats();
+        super::movegen::mate1ply::report_mate_cand_stats();
+        super::movegen::mate1ply::report_mate1ply_stats();
         if std::env::var("DMBREAK").is_ok() {
             let dm = DM_SITE.with(|c| c.get());
-            let lq = super::node_movegen::legal_quick_dm();
+            let lq = super::movegen::legal_quick_dm();
             let m1n = crate::board::mate1ply_none_dm();
             let pdm = crate::movegen::pawn_drop_mate_dm();
             let known: u64 = dm.iter().sum::<u64>() + lq + m1n + pdm;
@@ -1524,7 +1524,7 @@ impl DfPnSolver {
         let (no_mate, mm_opt) = if dhmp_enabled() {
             if !board.does_have_mate_possibility(board.turn) {
                 (true, None)
-            } else if super::mate1ply::mate1ply_enabled() {
+            } else if super::movegen::mate1ply::mate1ply_enabled() {
                 // mate_1ply 忠実列挙 (full movegen 回避)．
                 (false, self.mate1ply(board))
             } else if near2_enabled() {

@@ -3,6 +3,10 @@
 //! 探索ロジックから独立した movegen ヘルパ．
 //! ここには探索ロジックを置かない (手生成・合法性判定のみ)．
 
+pub(crate) mod check_cache;
+pub(crate) mod delayed_move_list;
+pub(crate) mod mate1ply;
+
 use arrayvec::ArrayVec;
 
 use crate::attack;

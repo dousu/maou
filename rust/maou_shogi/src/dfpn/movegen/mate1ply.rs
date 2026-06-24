@@ -7,7 +7,7 @@ use crate::board::Board;
 use crate::moves::Move;
 use crate::types::Color;
 
-use super::solver::DfPnSolver;
+use crate::dfpn::solver::DfPnSolver;
 
 impl DfPnSolver {
 
@@ -16,7 +16,7 @@ impl DfPnSolver {
     /// `generate_check_moves_cached` の ArrayVec<_, 593> 値返し (2.4KB 級
     /// stack copy) を避け，cache hit 時は cache 内 slice から，miss 時は
     /// 生成結果から直接 extend する．生成内容・順序は従来と同一．
-    pub(super) fn check_moves_into(&self, board: &mut Board, out: &mut Vec<Move>) {
+    pub(crate) fn check_moves_into(&self, board: &mut Board, out: &mut Vec<Move>) {
         let hash = board.hash;
         if let Some(cached) = self.check_cache.get_slice(hash) {
             mate_cand_bump_cache(false, true);
@@ -35,7 +35,7 @@ impl DfPnSolver {
     /// (全コピー × 2) になるため，hit 時は cache 内 slice を直接
     /// `mate_move_in_1ply` へ渡す．生成内容・順序は従来と同一 (semantics 不変)．
     /// 返り値: (1 手詰の手, 王手手段の有無)．
-    pub(super) fn mate1ply_with_cached_checks(&self, board: &mut Board) -> (Option<Move>, bool) {
+    pub(crate) fn mate1ply_with_cached_checks(&self, board: &mut Board) -> (Option<Move>, bool) {
         let hash = board.hash;
         let turn = board.turn;
         if let Some(cached) = self.check_cache.get_slice(hash) {
@@ -65,7 +65,7 @@ impl DfPnSolver {
     /// は full scan と同一の Some/None・同一の詰み手を返す (= node 不変)，かつ遠方候補の検証・
     /// do_move fallback を省ける．look-ahead は詰み手 (Option) のみ使う
     /// (`does_have_mate_possibility` が不詰判定を担うため has_checks 不要)．
-    pub(super) fn mate1ply_cached_near2(&self, board: &mut Board) -> Option<Move> {
+    pub(crate) fn mate1ply_cached_near2(&self, board: &mut Board) -> Option<Move> {
         let hash = board.hash;
         let turn = board.turn;
         if let Some(cached) = self.check_cache.get_slice(hash) {
@@ -85,7 +85,7 @@ impl DfPnSolver {
     ///
     /// 逆王手局面 (攻め方自玉が王手 = king-geometry 列挙の前提外) は従来 scan へ
     /// fallback する．`MATE1PLY_VERIFY` 時は健全性 (偽 1 手詰の無さ) と full scan との一致を照合．
-    pub(super) fn mate1ply(&self, board: &mut Board) -> Option<Move> {
+    pub(crate) fn mate1ply(&self, board: &mut Board) -> Option<Move> {
         let turn = board.turn;
         if board.king_square(turn).is_some() && board.is_in_check(turn) {
             // 逆王手: king-geometry 列挙の前提外 → 従来の near2 scan で判定する．
@@ -157,14 +157,14 @@ impl DfPnSolver {
 }
 
 /// look-ahead 1 手詰判定で king-geometry 候補列挙を使うか．[`DfPnSolver::mate1ply`] を参照．
-pub(super) fn mate1ply_enabled() -> bool {
+pub(crate) fn mate1ply_enabled() -> bool {
     // 常時 ON．look-ahead 1 手詰判定を king-geometry 候補列挙にする．
     true
 }
 
 /// `MATE1PLY_VERIFY`: 候補列挙の健全性 + full scan との一致を毎 look-ahead 照合する
 /// (default OFF; 重い)．
-pub(super) fn mate1ply_verify() -> bool {
+pub(crate) fn mate1ply_verify() -> bool {
     static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *C.get_or_init(|| std::env::var("MATE1PLY_VERIFY").is_ok())
 }
@@ -197,12 +197,12 @@ fn record_mate1ply(kh: Option<Move>, full: Option<Move>, false_pos: bool) {
 }
 
 /// kh verify 統計を reset する (solve 開始時)．
-pub(super) fn reset_mate1ply_stats() {
+pub(crate) fn reset_mate1ply_stats() {
     MATE1PLY_STATS.with(|s| s.set([0; 5]));
 }
 
 /// kh verify 統計を report する (solve 終了時; gate off なら no-op)．
-pub(super) fn report_mate1ply_stats() {
+pub(crate) fn report_mate1ply_stats() {
     if !mate1ply_verify() {
         return;
     }
@@ -259,7 +259,7 @@ struct MateCandStats {
 }
 
 /// check_cache hit/miss を計測する (MATE1PLY_CAND 時のみ; la=look-ahead か expansion か)．
-pub(super) fn mate_cand_bump_cache(la: bool, hit: bool) {
+pub(crate) fn mate_cand_bump_cache(la: bool, hit: bool) {
     if !mate_cand_enabled() {
         return;
     }
@@ -285,14 +285,14 @@ fn mate_cand_enabled() -> bool {
 }
 
 /// MATE1PLY_CAND 統計を reset する (solve 開始時)．
-pub(super) fn reset_mate_cand_stats() {
+pub(crate) fn reset_mate_cand_stats() {
     if mate_cand_enabled() {
         MATE_CAND_STATS.with(|s| *s.borrow_mut() = MateCandStats::default());
     }
 }
 
 /// MATE1PLY_CAND 統計を report する (solve 終了時; gate off なら no-op)．
-pub(super) fn report_mate_cand_stats() {
+pub(crate) fn report_mate_cand_stats() {
     if !mate_cand_enabled() {
         return;
     }

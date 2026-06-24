@@ -7,7 +7,7 @@ use arrayvec::ArrayVec;
 
 use crate::moves::Move;
 
-use super::MAX_MOVES;
+use crate::dfpn::MAX_MOVES;
 
 /// 王手生成キャッシュのサイズ(2^13 = 8192 エントリ，direct-mapped)．
 const CHECK_CACHE_SIZE: usize = 8192;
@@ -40,12 +40,12 @@ impl Default for CheckCacheEntry {
 /// 内部可変性(UnsafeCell)を使用して `&self` でアクセス可能にする．
 /// これにより `generate_check_moves_cached` を `&self` で呼び出せ，
 /// mid() のスタックフレーム最適化を阻害しない．
-pub(super) struct CheckCache {
+pub(crate) struct CheckCache {
     table: std::cell::UnsafeCell<Vec<CheckCacheEntry>>,
 }
 
 impl CheckCache {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut table = Vec::with_capacity(CHECK_CACHE_SIZE);
         for _ in 0..CHECK_CACHE_SIZE {
             table.push(CheckCacheEntry::default());
@@ -60,7 +60,7 @@ impl CheckCache {
     /// 返り値の slice は次の `insert` まで有効．呼び出し側は借用中に本 cache へ
     /// 再挿入しうる処理 (`generate_check_moves_cached` 等) を呼ばないこと．
     #[inline(always)]
-    pub(super) fn get_slice(&self, hash: u64) -> Option<&[Move]> {
+    pub(crate) fn get_slice(&self, hash: u64) -> Option<&[Move]> {
         let table = unsafe { &*self.table.get() };
         let idx = (hash as usize) & (CHECK_CACHE_SIZE - 1);
         let entry = &table[idx];
@@ -73,7 +73,7 @@ impl CheckCache {
 
     /// 王手リストをキャッシュに格納する．
     #[inline(always)]
-    pub(super) fn insert(&self, hash: u64, moves: &ArrayVec<Move, MAX_MOVES>) {
+    pub(crate) fn insert(&self, hash: u64, moves: &ArrayVec<Move, MAX_MOVES>) {
         if moves.len() <= CHECK_CACHE_CAPACITY {
             let table = unsafe { &mut *self.table.get() };
             let idx = (hash as usize) & (CHECK_CACHE_SIZE - 1);
