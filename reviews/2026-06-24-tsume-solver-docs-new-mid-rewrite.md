@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 1636885
 date: 2026-06-24
 target:
   - docs/design/tsume-solver/index.md
