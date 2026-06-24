@@ -1,185 +1,69 @@
 # 手順改善・PV 復元
 
-## 9. 手順改善
+## 9. 手順改善 (move ordering)
 
-### 9.1 TT Best Move 動的手順改善
+最有望子の選択は φ/δ の集約値で決まるが (§[search 2.4](search-architecture.md))，値が同点の
+子の間では手の良し悪しで順序を決める．これにより詰みやすい/反証しやすい手を先に深掘りできる．
 
-TT エントリに保存された最善手(§6.5)を利用し，手順の先頭にスワップする．
+### 9.1 探索結果の比較順序
 
-**実装:** solver.rs (Dynamic Move Ordering)
+**実装:** `compare_results` (`search_result.rs`)．子は次の辞書式順序でソートされる (best = 先頭):
 
-`look_up_best_move(pos_key, hand)` で TT から Move16 を取得し，
-手リストの先頭に配置する．
+1. **φ 昇順** — 手番側の目標に近い子を優先．
+2. **δ 昇順** — 同点なら相手の負けに近い子を優先．
+3. **len** — proven (pn=0) の同点時: OR は**短い詰み**，AND は**長い詰み (最長抵抗)** を優先．
+4. **repetition_start** — 千日手起点 ([loop-ghi §7.1](loop-ghi.md))．
+5. **amount** — 探索量．
+6. **move eval tie-break** — 上記が全て同点の最終 tie は手の評価で破る (`LocalExpansion` 側)．
 
-### 9.2 Killer Move (OR ノード専用)
+### 9.2 手の静的評価 (`move_brief_eval`)
 
-同一 ply の別の局面で証明に寄与した手を記録し，優先的に探索する．
+**実装:** `move_brief_eval` / `king_supports` (`heuristics.rs`)．tie-break に用いる i32 キー
+(小さいほど優先) を，盤情報から安価に計算する:
 
-**実装:** solver.rs (`killer_table`, `record_killer`, `get_killers`)
+- 成れるのに成らない手にペナルティ (成り王手・成り応手を優先)．
+- 駒価値を反映 (価値の高い駒を動かす手を優先)．
+- 玉との位置関係を反映 (玉に迫る手を優先)．
 
-- **テーブル**: `killer_table: Vec<[u16; 2]>` — 各 ply に2スロット
-- **記録タイミング**: OR ノードの証明達成時および閾値超過時
-- **適用**: TT Best Move の直後に配置
-
-**手順優先度:** TT Best Move > Killer Move (2スロット/ply) > 静的手順(DFPN-E)
-
-AND ノードでは全子ノードの探索が必要(WPN/SNDA 計算のため)なので適用しない．
-
-### 9.3 捨て駒ブースト
-
-OR ノードで全王手が「支えなし」の捨て駒である場合に pn を加算して
-探索優先度を下げる．人間が直感的に「不詰」と見切るのと同様のヒューリスティック．
-
-**実装:** `sacrifice_check_boost` (mod.rs (`sacrifice_check_boost`))
-
-- 各王手の `to_sq` に攻め方の他の駒が利いているか確認(移動元を除外)
-- 全王手が捨て駒なら `boost = 2` を返す(pn に加算)
-- 支えがある王手が1つでもあれば 0
+エッジコスト ([heuristics §5.2](initial-heuristics.md)) を pn から分離する
+`decouple_edge_cost` モードでも，この tie-break は同じ順序を維持する (難易度推定と手順選好の
+分離)．旧版にあった Killer move・捨て駒ブースト・TT Best Move 動的手順改善は統一 mid では
+廃止された (記録は [legacy/](legacy/README.md))．
 
 ---
 
-## 9-b. PV 復元(Principal Variation Extraction)
+## 9-b. PV 復元 (Principal Variation Extraction)
 
-Df-Pn は探索木を明示的に保持しないため，詰みを証明した後に
-**TT のエントリを辿って PV(最善手順)を復元する**必要がある．
-PV 復元は 3 つのフェーズで構成される．
+df-pn は探索木を明示的に保持しないため，詰み証明後に **TT を辿って PV (最善手順) を復元**する．
+統一 mid は 2 段構成: **`verify_proof` (健全性検証付き replay) → `build_pv` (手順構築)**
+(`search/pv.rs`)．旧版の 3-phase 構成 (complete_or_proofs / extract_pv_recursive / 検証) は
+この 2 段に整理された．
 
-#### 全体フロー
+### 9-b.1 verify_proof (STRICT replay)
 
-```
-┌─────────────────────────────────────────────────┐
-│           Df-Pn 探索 (mid / PNS)                │
-│   root の pn=0 (詰み証明完了)                    │
-└─────────────┬───────────────────────────────────┘
-              │
-              ▼
-┌─────────────────────────────────────────────────┐
-│  Phase 1: complete_or_proofs                    │
-│  PV 上の OR ノードで未証明の子を追加証明         │
-│  (最短手順を保証するため)                        │
-└─────────────┬───────────────────────────────────┘
-              │ ×2 回反復(収束まで)
-              ▼
-┌─────────────────────────────────────────────────┐
-│  Phase 2: extract_pv_recursive                  │
-│  TT を再帰的に辿って PV を構築                   │
-│  OR: 最短の子を選択，AND: 最長の子を選択         │
-└─────────────┬───────────────────────────────────┘
-              │
-              ▼
-┌─────────────────────────────────────────────────┐
-│  Phase 3: PV 検証                               │
-│  手数が奇数(攻め方の手で始まり終わる)か確認      │
-└─────────────────────────────────────────────────┘
-```
+証明木を再帰的に辿り直し，**PV 上の全応手が実際に詰むこと**を検証する (偽の証明を弾く)．
 
-#### Phase 1: 未証明子の追加証明 (`complete_or_proofs`)
+- **OR ノード** (攻め方): まず `mate1ply` を試し ([heuristics §5.3](initial-heuristics.md))，
+  無ければ王手を列挙して各子を再帰検証する．1 つでも詰む王手があれば proven．
+- **AND ノード** (守備方): 全合法応手を列挙し，**全てが詰みに至る**ことを要求する (最長抵抗)．
+- **memo** (`HashMap<u64, Option<u16>>`): 局面ごとに検証済み手数を記録し再検証を避ける．
+- 予算 (既定 80M ノード) 内で詰み手数 `Option<u16>` を返す．None = 未完/不健全．
 
-Df-Pn の OR ノードは **1 つの子ノードが証明されると探索を打ち切る**．
-しかし最短手順を保証するには，PV 上の全 OR ノードで **全ての王手の証明状態**
-を知る必要がある(より短い手順が存在する可能性がある)．
+この STRICT 検証は，canonical テストの健全性ゲート (偽証明 = 即停止) の基盤である．
 
-```
-  OR(ply=0, pn=0)  ←  1つの王手で pn=0 になったが，他の王手は未探索
-  ├── 王手A: pn=0 (証明済み, 手順長=29)
-  ├── 王手B: pn=16 (未証明 ← これを追加証明する)
-  └── 王手C: pn=16 (未証明 ← これも追加証明する)
-```
+### 9-b.2 build_pv (手順構築)
 
-`complete_pv_or_nodes` は PV に沿って盤面を進め，各 OR ノードで
-未証明の王手に対して `mid()` を呼び出し追加証明を試みる:
+`verify_proof` が残した手数 memo を辿り，手順を構築する:
 
-```
-for (i, pv_move) in pv:
-    if OR ノード (i % 2 == 0):
-        for 全王手 m:
-            if TT で未証明 (pn > 0, dn > 0):
-                mid(m の局面, pv_nodes_per_child ノードまで)
-    盤面を pv_move で進める
-```
+- **OR ノード**: 詰みが証明された子のうち**最短**手数の手を選ぶ (最善の攻め)．
+- **AND ノード**: 詰みに至る応手のうち**最長**手数の手を選ぶ (最善の受け = 最長抵抗)．
+- これにより「最善応手に対する最短詰み手順」が得られる．
 
-この追加証明により，より短い手順が発見される可能性がある．
-Phase 1 は最大 2 回反復し，PV が変化しなくなれば早期終了する．
+### 9-b.3 find_shortest と CheckmateNoPv
 
-#### Phase 2: PV 再帰構築 (`extract_pv_recursive`)
-
-TT のエントリを辿り，OR ノードでは最短，AND ノードでは最長の
-子を選択して PV を構築する．
-
-```mermaid
-graph TD
-    A["OR(root)<br>pn=0"] -->|"S*7i"| B["AND(ply=1)<br>全子のpn=0?"]
-    A -->|"他の王手"| X1["pn≠0: スキップ"]
-
-    B -->|"8h9g"| C["OR(ply=2)<br>pn=0"]
-    B -->|"他の応手"| D["OR(ply=2)<br>pn=0"]
-
-    C -->|"最短PVを選択"| E["...sub_pv(len=27)"]
-    D -->|"最短PVを選択"| F["...sub_pv(len=25)"]
-
-    B -->|"最長を選択"| C
-
-    style A fill:#f9f,stroke:#333
-    style B fill:#bbf,stroke:#333
-    style C fill:#f9f,stroke:#333
-    style D fill:#f9f,stroke:#333
-```
-
-**OR ノード(攻め方手番):**
-
-```
-1. 全王手を生成
-2. 各王手 m について:
-   a. 盤面を m で進める
-   b. TT look_up で child_pn を取得
-   c. child_pn == 0 (子が証明済み) なら:
-      - 再帰的に sub_pv = extract_pv(AND, ply+1)
-      - total_len = 1 + sub_pv.len()
-      - total_len が奇数 かつ 現在の best_pv より短いなら更新
-3. best_pv の先頭に m を追加して返す
-```
-
-**AND ノード(玉方手番):**
-
-```
-1. 全応手を生成
-2. 各応手 m について:
-   a. 盤面を m で進める
-   b. TT look_up で child_pn を取得
-   c. child_pn == 0 (子も証明済み = 玉方の応手が全て詰み) なら:
-      - 再帰的に sub_pv = extract_pv(OR, ply+1)
-      - total_len = 1 + sub_pv.len()
-      - 現在の worst_pv (最長) より長いなら更新
-3. worst_pv の先頭に m を追加して返す
-```
-
-**OR で最短，AND で最長を選ぶ理由:**
-- OR(攻め方): 最短で詰む手を選ぶ(最善攻め)
-- AND(玉方): 最長で粘る手を選ぶ(最善受け = 最長抵抗)
-- これにより「最善応手に対する最短詰み手順」が得られる
-
-#### PV 復元と Dual TT の関係
-
-PV 復元は proof エントリ(pn=0)のチェーンに依存する:
-
-```
-  TT look_up → ProvenTT で proof 発見 → child_pn=0 → 再帰続行
-                                                        ↓
-  TT look_up → proof 未発見 → child_pn≠0 → PV ここで終了(切断)
-```
-
-**ProvenTT の proof 保護が重要な理由:**
-
-ProvenTT で foreign proof が evict されると，PV チェーンの中間ノードの
-proof が失われ，PV が途中で切断される．`replace_weakest_proven` は
-foreign proof を evict しない設計(§6.6)により PV チェーンを保護する．
-
-#### 打ち切り条件
-
-| 条件 | 理由 | 影響 |
-|------|------|------|
-| `ply >= depth * 2` | スタックオーバーフロー防止 | 深い PV が切断される |
-| ループ検出(フルハッシュ) | 無限再帰防止 | 千日手含みの PV が切断される |
-| `visits > max_visits` | 計算量制限 | 分岐の多い AND ノードで打ち切り |
-| `node_pn != 0` (OR) | 子が未証明 | PV がこのノードで終了 |
-| PV 長が偶数 (OR) | 玉方の手で終わる PV は無効 | その子をスキップ |
+`find_shortest` (既定 true) は PV 上の OR ノードで未証明の王手を追加証明し，より短い手順が
+あれば採用する (`complete_or_proofs` 相当)．これは 1 子あたり `pv_nodes_per_child` (既定 1024)
+ノードの予算を使う．長手数 (17 手以上) の問題でこの予算が尽きると，詰みは証明済みでも PV を
+返せず `TsumeResult::CheckmateNoPv` となる ([index §2](index.md))．`pv_nodes_per_child` を
+増やすと改善する．`find_shortest=false` では最初に見つかった手順をそのまま返す
+(最短保証なし; ノード数は削減)．

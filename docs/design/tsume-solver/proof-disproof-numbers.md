@@ -1,186 +1,89 @@
-# 証明数・反証数の計算
+# 証明数・反証数の集約
 
-### 4.1 WPN: Weak Proof Number スケールドサム式 (v0.29.0+)
+本節は子の φ/δ を親へ集約する規則と，DAG (転置) による**二重計数**を抑える機構を扱う．
+旧版にあった WPN / CD-WPN / VPN / SNDA は統一 mid のコードには存在しない (二重計数除去は
+δ-sum の `sum_mask` + DAG 検出 + cross-hand 集約が担う)．論文手法との関係は §4.4 で述べる．
 
-**出典:** Ueda, Hashimoto, Hashimoto & Iida, "Weak Proof-Number Search" (CG 2008)
+### 4.1 φ/δ 集約と δ-sum (sum_mask)
 
-証明数/反証数の**二重計数問題**(double-counting problem)に対処する手法．
-DAG 構造の探索木において，共有ノードが複数の親から重複してカウントされ
-pn/dn が過大評価される問題を緩和する．
+**出典:** φ/δ 集約と sum_mask による二重計数除去は KomoringHeights で実装されている手法に基づく．
 
-#### 式の変遷
-
-| バージョン | AND pn | OR dn |
-|-----------|--------|-------|
-| 標準 df-pn | `sum(child_pn)` | `sum(child_dn)` |
-| WPN 原論文 | `max(child_pn) + (count-1)` | (未適用) |
-| v0.29.0 スケールドサム | `max + (sum-max) >> γ` | `sum` |
-| **v0.31.0 対称適用** | `max + (sum-max) >> γ` | `max + (sum-max) >> γ` |
-
-#### スケールドサム式 (v0.29.0〜)
+親ノードの値は子の集約で決まる ([search-architecture.md §2.2](search-architecture.md)):
 
 ```
-AND pn = max(child_pn) + (sum(child_pn) - max(child_pn)) >> WPN_GAMMA_SHIFT
-OR  dn = max(child_dn) + (sum(child_dn) - max(child_dn)) >> WPN_GAMMA_SHIFT
+φ(n) = min over children of δ(child)        // 最有望子 (best child)
+δ(n) = Σ over sum_mask children of δ(child)  +  max over non-mask children of δ(child)
 ```
 
-- `WPN_GAMMA_SHIFT = 6` → 非最大子の寄与を 1/64 に減衰
-- crossover 点: `max = PN_UNIT × 2^6 = 1024`
-  - max < crossover: 旧 `max + (count-1)*PN_UNIT` より保守的
-  - max > crossover: 旧式より積極的
+**実装:** `current_result` / `recalc_delta` (`search/expansion.rs`)．δ の総和は `sum_mask`
+ビット集合で「sum で足す子」と「max で 1 回だけ数える子」を区別する:
 
-旧式 `max + (count-1)` は非最大子の実際の値を伝播しない問題があった．
-スケールドサムは実際の子の値を使いつつ，SNDA と協調して DAG 重複を割り引く
-中間的近似である．
-
-```
-例: 子が 3 つ (pn = 3, 5, 2)
-
-  標準 sum:   3+5+2 = 10
-  旧 WPN:     max(5) + (3-1)*PN_UNIT = 5+32 = 37
-  スケールドサム (γ=6):
-              max(5) + (3+2)>>6 = 5+0 = 5  (非最大子が小さい場合)
-              max(100) + (80+50)>>6 = 100+2 = 102  (非最大子が大きい場合)
+```rust
+for child in children_except_best:
+    if sum_mask.test(child):
+        sum_delta_except_best += δ(child)      // 独立な子: 加算
+    else:
+        max_delta_except_best  = max(.., δ(child))  // DAG 合流する子: max のみ
 ```
 
-#### OR dn WPN の有効化条件 (v0.31.0)
+- 標準 df-pn は AND ノードの pn (= δ) を子の単純 sum とするが，DAG では複数の親を持つ子が
+  各親から重複加算され δ が過大評価される．`sum_mask` を落とした子は max 集約となり 1 回だけ
+  数えられるため，過大評価が抑えられる．
+- `sum_mask` は親→子へ伝播する (`front_sum_mask`)．子へ渡す δ 閾値の計算
+  ([threshold §3.1](threshold-control.md)) もこの sum/max 区別を反映する．
 
-以前の試験 (v0.29.0 以前) では OR dn WPN により `test_no_checkmate_counter_check`
-が失敗した (2M ノード予算超過)．これは初期 dn が全ノードで `PN_UNIT` (bucket 4 固定)
-だったため，WPN による削減が予算配分を過度に絞った結果である．
+### 4.2 EliminateDoubleCount (DAG 検出)
 
-v0.30.0 で `heuristic_dn_from_pn` を導入し初期 dn を bucket 4〜10 に拡張した
-ことで OR dn WPN が安定して動作するようになった (§5.1 参照)．
+**出典:** DAG 合流による二重計数の除去 (EliminateDoubleCount) は KomoringHeights で実装されて
+いる手法に基づく．
 
-**実装:** solver.rs (OR ノード collect), pns.rs (OR ノード伝播)
+どの子の `sum_mask` を落とすかは **DAG 合流の検出**で決める．`search_impl` 入口で毎回
+`eliminate_double_count` を実行する (`no_dag()` env でのみ無効化; 既定で有効):
 
-### 4.2 CD-WPN: Chain-Drop Weak Proof Number
+**実装:** `eliminate_double_count` (`search/mod.rs`)．
 
-**出典:** maou 独自手法
+1. 各子の TT エントリが持つ親局面キー (`parent_board_key`) を参照する．
+2. その親が**現在の探索パス上の先祖**と一致する子 = 別経路から本部分木へ合流する転置 (DAG)．
+3. 該当子の `sum_mask` ビットを落とす → δ 集約で sum でなく max 扱いになる (二重計数除去)．
 
-チェーン合駒(§8)に特化した WPN の変種．
-チェーン合駒では同一マスへの異なる駒種の drop が子ノードとなるが，
-これらは同一マスへの合駒として意味的にグループ化できる．
+発火回数は診断カウンタ `dag_fires` で計測する (root 終了時の `[dfpn] … dag=` 行)．
 
-#### 式の変遷
+> **note:** `Params::use_dag_correction` (既定 off) は，これとは別の **path-aware な追加 DAG
+> 補正** (runtime `parent_map` で child の最初の親を記録し path 一致を判定する実験的機構) を
+> 指す opt-in flag であり，本節の常時有効な `eliminate_double_count` とは異なる．
 
-| バージョン | AND pn |
-|-----------|--------|
-| 初期 | `max(child_pn) + (grouped_count - 1) * PN_UNIT` |
-| **v0.35.0 スケールドサム** | `max(rep) + (sum(rep) - max(rep)) >> γ` |
+### 4.3 cross-hand 集約 (持ち駒越境)
 
-#### スケールドサム式 (v0.35.0〜)
+**出典:** 親エントリの cross-hand 参照 (`look_up_parent`) と証明駒・反証駒の活用は
+KomoringHeights で実装されている手法に基づく．持ち駒優越の基礎は Nagai 2002．
 
-CD-WPN はドロップを `to_sq` でグループ化し，グループ代表値を用いてスケールドサムを適用する:
+TT は局面キー (盤面のみ，持ち駒は除く) でクラスタ化され，同一盤面の異なる持ち駒エントリを
+保持する ([transposition-table.md §6.1](transposition-table.md))．集約・参照では持ち駒の
+支配関係 (`hand_gte` / `hand_gte_forward_chain`) を使って越境的に証明/反証を再利用する:
 
-```
-group_rep[sq] = min(child_pn of drops to sq)   // cross-deduce で最初の証明がグループを代表
-CD-WPN pn = max(group_rep) + (sum(group_rep) - max(group_rep)) >> WPN_GAMMA_SHIFT
-```
+- **`look_up_parent`** (`tt/mod.rs`): 子の集約に必要な親エントリを，厳密一致 hand があれば
+  それを，無ければ `apply_delta_hand` で上位/下位 hand から境界を合成して返す
+  (cross-hand 推論)．
+- **証明駒・反証駒** (`proof_hand.rs`): 詰み (proven) 時はその局面を詰ます**極小の攻め方持ち駒**
+  (`ProofHandSet`: 子の証明駒の要素 max + 打ち駒補正)，不詰 (disproven) 時は詰まない**極大の
+  攻め方持ち駒** (`DisproofHandSet`: 子の反証駒の要素 min + 補正) を計算して TT へ格納する．
+  これにより hand-dominance の集約が強まり，異なる持ち駒の局面間で結果が広く再利用される．
 
-- 旧式 `max + (grouped_count - 1) * PN_UNIT` は非最大グループの pn 変化を伝播しない問題があった
-- スケールドサムは WPN (§4.1) と同じ原理で実際のグループ代表値を使いつつ DAG 二重カウントを割り引く
-- グループ代表値 = `min(cpn)`: cross-deduce により同一マスのドロップは一括証明されるため，
-  最も小さい cpn が「このマスを詰めるコスト」を代表する
+### 4.4 論文手法との関係
 
-**実装:** solver.rs (AND ノード collect)
+旧版は二重計数・過大/過小評価に WPN (Ueda 2008) / SNDA (Kishimoto 2010) / VPN (Saito 2006) の
+近似式を用いていた．統一 mid はこれらを採用せず，**δ-sum の sum_mask による sum/max 切替
+(§4.1) + DAG 合流の直接検出 (§4.2) + cross-hand 集約 (§4.3)** で二重計数を扱う:
 
-- `chain_king_sq` が `Some` の場合(チェーン AND ノード)に CD-WPN を適用
-- `chain_king_sq` が `None` の場合は標準 WPN スケールドサムを使用
-- 実装: `cd_sq_min_pn[sq]` でマスごとの min(cpn) を追跡し，`drop_squares_seen` ビット列でグループを走査
+- WPN/SNDA は「兄弟が同一 source を共有する」「max + 減衰和」といった近似で重複を割り引くが，
+  孫以下の深い合流や持ち駒違いの転置を正確には扱えない．
+- 本実装は TT の `parent_board_key` で合流を直接判定し，持ち駒は支配関係で越境集約するため，
+  近似パラメータ (γ shift 等) のチューニングを必要としない．
 
-### 4.3 VPN: Virtual Proof Number (Saito et al. 2006)
+WPN/CD-WPN/SNDA を用いた旧版の分布チューニング (KL/σ 指標，γ スイープ) は
+[legacy/pn-dn-distribution.md](legacy/pn-dn-distribution.md) に保全されている (将来 mid で
+再検討しうる方法論)．
 
-**出典:** Saito et al. 2006
-
-AND ノードの pn 計算で証明済み子(cpn=0)を除外する．
-証明済み子は pn=0 で sum に影響しないが，子選択ループからのスキップにより
-SNDA ペア収集と子選択の効率化に寄与する．
-
-**実装:** solver.rs (AND ノード collect)
-
-AND ノードの子収集ループで `cpn == 0` の子を `continue` で除外．
-
-### 4.4 SNDA: Source Node Detection Algorithm (Kishimoto 2010)
-
-**出典:** Kishimoto, "Dealing with Infinite Loops, Underestimation, and Overestimation" (AAAI 2010)
-
-DAG(転置)による pn/dn の**過大評価**を検出・修正する．
-同一のリーフノードが複数の子を通じて重複カウントされる場合，
-source ハッシュに基づくグループ化で重複分を控除する．
-
-```
-  Without SNDA (overcounting):     With SNDA (corrected):
-
-      OR (dn = 3+5 = 8)               OR (dn = max(3,5) = 5)
-     / \                              / \
-   AND  AND                         AND  AND
-   dn=3 dn=5                       dn=3 dn=5
-     \  /                            \  /
-      \/                              \/
-     LEAF  <-- same source           LEAF  <-- grouped by source
-     dn=?                           deduction = (3+5) - max(3,5) = 3
-                                    corrected dn = 8 - 3 = 5
-```
-
-**実装:** mod.rs (`snda_deduction`), solver.rs (OR/AND collect)
-
-TT エントリに `source` フィールドを追加
-(v0.24.0 で u64→u32 に圧縮，上位 32 bit 切り捨て．衝突確率は 2⁻³² で実用上十分)．
-`(source, value)` ペアをソートし，同一 source グループで:
-
-```
-deduction = sum(group) - max(group)
-```
-
-- OR ノード: `(source, dn)` ペアで dn を補正
-- AND ノード: `(source, pn)` ペアで pn を補正
-
-#### WPN との適用順序 (現行: WPN→SNDA→floor)
-
-SNDA は WPN スケールドサムの**後**に適用する:
-
-```
-1. WPN:  current = max(c) + (sum - max(c)) >> γ
-2. SNDA: current = snda_dedup(pairs, current)   ← WPN 圧縮後に適用
-3. floor: current = max(current, max(c))         ← 過剰控除防止
-```
-
-計測 (50M nodes, §3.15) で deduction の **96.9% が floor に吸収** され
-事実上 no-op だが，floor による `max(c)` への収束が不詭め検出効率に貢献する．
-
-```
-適用例: OR dn で [A:300, A:500, B:200] (sum=1000, max=500)
-  WPN = 500 + (500+200)>>6 = 500 + 10 = 510
-  SNDA: pairs={(A,300),(A,500)} → deduction=300 → result=210
-  floor: max(210, 500) = 500   ← max(c) に収束
-```
-
-**Kishimoto 2010 正規実装 (SNDA→WPN) を採用しない理由:**
-
-正規実装は WPN **前**に SNDA を適用する:
-```
-1. SNDA: effective_sum = sum - snda_deduction(pairs)
-2. WPN:  current = max(c) + (effective_sum - max(c)) >> γ   (floor 不要)
-```
-
-v0.44.0 で試験したところ，`test_no_checkmate_counter_check` が 2M→20M+ ノードに回帰．
-原因: TT ミス子 (source=0) の heuristic dn が raw sum に加算されたまま残り，
-WPN 前 effective_sum が max_cdn より遥かに大きくなって OR dn が膨張する (詳細 §3.17)．
-WPN→SNDA→floor の floor は `heuristic_dn_from_pn` の均一 dn=4S を補償する暫定機能を持つ．
-
-**SNDA の適用範囲の限界:**
-SNDA は直接の兄弟ノードが同一 source を持つ場合のみ補正する．
-孫以下の深い DAG 合流 (異なる source ハッシュを持つ子が共通の孫を持つ場合)
-は補正できない．この深い合流に対しては WPN が第一の対策となる．
-
-CD-WPN パス (chain aigoma AND ノード) への SNDA は未適用 —
-cross-deduction が同一マスドロップの DAG 重複を別途処理するため．
-
-**出典との差異:**
-- 論文は親ポインタ追跡による共通祖先検出を提案するが，
-  maou_shogi では source ハッシュ(リーフ位置キー)によるグループ化で近似
-- 積極的 max 集約方式を採用: グループ内で最大値のみを残す
-  (保守的方式 v0.11.0 → 積極的方式 v0.15.0 に移行)
-
----
+**出典 (prior art):** Ueda et al., "Weak Proof-Number Search" (CG 2008);
+Kishimoto, "Dealing with Infinite Loops, …" (AAAI 2010, SNDA); Saito et al., "Virtual Proof
+Number" (2006)．

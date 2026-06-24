@@ -1,5 +1,10 @@
 # 既知の課題とベンチマーク
 
+> [!WARNING]
+> **legacy 文書** — 旧二エンジン期 (PNS + IDS-dfpn + Dual TT + warmup) の計測ログ．
+> 現行統一 `mid` の設計ではない．位置づけは [README.md](README.md)，現行設計は
+> [`../index.md`](../index.md) を参照．節番号・機構名・版数は旧 docs 基準．
+
 ### 10.1 29手詰め問題
 
 ```

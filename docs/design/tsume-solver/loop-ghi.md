@@ -1,42 +1,66 @@
 # ループ・GHI 対策
 
-### 7.1 経路依存フラグ付き GHI 対策 (Kishimoto & Müller 2004/2005)
+詰将棋の探索木は転置 (DAG) と千日手 (循環) を含むため，同一局面が異なる経路で異なる結果を
+持ちうる (GHI 問題)．本節は循環検出・経路依存反証の健全な扱い・dominance 枝刈りを扱う．
 
-**出典:** Kishimoto & Müller, "A solution to the GHI problem for depth-first proof-number search" (IS 175.4, 2005)
+### 7.1 GHI と千日手 (Kishimoto & Müller 2004/2005)
 
-GHI (Graph History Interaction) は，同一局面が異なる探索経路で
-異なる結果を持つ問題．千日手のような繰り返し検出は経路に依存するため，
-ある経路で得た反証が別の経路では無効になりうる．
+**出典:** Kishimoto & Müller, "A solution to the GHI problem for depth-first proof-number search"
+(Information Sciences 175.4, 2005)
 
-KomoringHeights は dual TT (base/twin) で経路依存/非依存の不詰を区別する．
+GHI (Graph History Interaction): 千日手のような繰り返し判定は**経路に依存する**ため，ある経路で
+得た反証が別の経路では無効になりうる．これを無視して反証を局面キーで TT に書くと，別経路で
+過剰適用して偽の不詰 (false NoMate) を生む．
 
-**実装:** solver.rs (`path: FxHashSet`，ループ検出，GHI 伝播)
+**実装:** 探索パス上の局面検出と `repetition` 結果の伝播 (`search/expansion.rs`,
+`search_result.rs`)．
 
-maou_shogi では dual TT の代わりに経路依存フラグ方式を採用:
+- 探索パス上の局面深さは `path_depths` で保持し，子が path 上の先祖を指す場合に循環と判定する．
+- 循環を含む結果は `SearchResult::make_repetition(.., repetition_start)` で表現し，
+  `repetition_start < depth` のとき (= 自分より浅い循環) のみ親へ伝播する (GHI soundness)．
+- 千日手由来の結果は局面キーの通常エントリとして確定させず，循環の起点情報を保つ．
+- 循環子の検出 (`does_have_old_child`) は TCA の inc_flag も駆動する
+  ([threshold-control.md §3.2](threshold-control.md))．
 
-1. **ループ検出**: `path: FxHashSet<u64>` で現在の探索パス上の全ノードハッシュを保持．
-   子ノードが path 上に存在すれば循環と判定し，即座に `(INF, 0)` を返す
-2. **経路依存反証**: ループ検出に由来する反証を `path_dependent = true` で TT に保存
-3. **IDS 間清掃**: `clear_working()` で WorkingTT 全クリア(経路依存反証を含む)し，
-   `clear_proven_disproofs()` で ProvenTT の confirmed disproof を除去．
-   異なる深さの探索で自動的に再評価
-4. **Remaining 免除**: 経路依存エントリは remaining チェックをバイパス
-   (`e.remaining >= remaining || e.path_dependent`)
+### 7.2 経路依存反証の scope 化 (horizon disproof)
 
-**出典との差異:**
-- 論文の dual TT 方式ほど完全ではないが，経路依存の反証が TT を
-  永続的に汚染する問題を軽減する実用的な妥協案
+**実装:** `Params::scope_disproof` (既定 **true**), `Params::repetition` (既定 false)．
 
-### 7.2 NM Remaining 伝播
+深さ上限 (horizon) 到達による仮反証 (`look_up_pn_dn` で `remaining == 0` → `(INF, 0)`) が
+伝播して集約反証 (curr.dn==0) を生んだ場合，それを**絶対的な確定反証として TT に書くと
+soundness バグ**になる (より深く探索すれば詰む局面を「不詰」と固定してしまう)．
 
-深さ制限に由来する不詰(NM: Non-Mate)の深さ情報を正確に伝播する．
+- `scope_disproof=true`: 集約反証を **remaining scope 付き**で格納する．`e.remaining() >= remaining`
+  を満たす lookup でのみ反証として有効になり，より深い ply (= remaining 大) の transposition
+  では再探索される．これで horizon 反証による false NoMate を健全に根治する．
+- `scope_disproof=false`: horizon 反証を確定化し TT を汚染する (soundness バグ; 既定で使わない)．
+- `repetition=true` (opt-in): 反証が循環依存である場合のみ scope 限定し，それ以外は確定
+  (`REMAINING_INFINITE`) で格納する精緻化．soundness-critical のため既定 false (baseline 不変)．
 
-**実装:** mod.rs (`propagate_nm_remaining`)
+旧版の depth-limited disproof 格納閾値や refutable disproof エントリは，この scope 化に統合・
+代替された (記録は [legacy/](legacy/README.md))．
 
-```
-nm_remaining = min(child_remaining + 1, current_remaining)
-```
+### 7.3 visit-history dominance (maou 独自)
 
-- 子の NM が `REMAINING_INFINITE` なら親も `REMAINING_INFINITE`
-- 有限 remaining の NM は深い IDS 反復で再評価される
-- `REMAINING_INFINITE = u16::MAX`: 深さ非依存の真の証明/反証
+**実装:** `Params::use_visit_history_dominance` (既定 **true**), `dom_path` (`path_stack.rs`)．
+
+子展開時に `(child_pos_key, child_hand)` が現在の探索パス上の先祖に**持ち駒支配されている**
+場合 (同一 `board_key` で `hand_gte_forward_chain(ancestor_hand, child_hand)` 成立) を，
+循環と同様の**経路依存不詰**として枝刈りする．
+
+- **健全性の根拠:** 攻め方が同じ盤面を「より少ない (または等価以下の) 持ち駒」で再訪している
+  なら，過去のより有利な状態でも詰められなかった事実から，現在も詰められないと健全に推論できる．
+- chain 合駒で持ち駒の多様性が指数爆発する局面の枝刈りに効く
+  ([aigoma-optimization.md](aigoma-optimization.md))．
+- 経路依存反証として扱われるため永続 TT エントリを汚染しない (§7.2 と整合)．発火回数は
+  診断カウンタ `dom_fires` で計測する．
+
+> **note:** `Params::path_dominance` (既定 off) は mid path の別形式の dominance を試す opt-in で
+> あり，現状ノード増のため既定では除外する (visit-history dominance とは別機構)．
+
+### 7.4 len-aware による不詰深さの扱い
+
+旧版は深さ制限由来の不詰 (NM) の深さを `nm_remaining` で個別伝播していたが，統一 mid は
+TT エントリの `proven_len` / `disproven_len` (len-aware, [TT §6.3](transposition-table.md)) と
+§7.2 の scope 化で扱う．`REMAINING_INFINITE` (深さ非依存の確定結果) と scope 付き (深さ依存の
+仮結果) を区別し，深い反復で自動的に再評価する．

@@ -1,5 +1,10 @@
 # pn/dn 分布の対数正規化プロジェクト
 
+> [!WARNING]
+> **legacy 文書** — 旧二エンジン期の pn/dn 分布チューニング記録 (WPN/CD-WPN/SNDA 前提)．
+> 現行統一 `mid` の設計ではない．位置づけは [README.md](README.md)，現行設計は
+> [`../index.md`](../index.md) を参照．節番号・機構名・版数は旧 docs 基準．
+
 df-pn+ の探索品質を高めるために，WorkingTT に蓄積される pn/dn 値の分布を
 バケット空間で対数正規分布に近づける取り組みのドキュメント．
 
