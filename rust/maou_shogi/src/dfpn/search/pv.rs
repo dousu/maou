@@ -6,10 +6,10 @@
 
 use crate::board::Board;
 
-use super::mate_len::DEPTH_MAX_MATE_LEN;
-use super::search_result::K_INFINITE_PN_DN;
-use super::solver::DfPnSolver;
-use super::tt::TranspositionTable;
+use crate::dfpn::mate_len::DEPTH_MAX_MATE_LEN;
+use crate::dfpn::search_result::K_INFINITE_PN_DN;
+use crate::dfpn::solver::DfPnSolver;
+use crate::dfpn::tt::TranspositionTable;
 
 impl DfPnSolver {
     /// STRICT PV replay．
@@ -63,7 +63,7 @@ impl DfPnSolver {
                 let mut cands: Vec<(crate::moves::Move, u16)> = Vec::new();
                 for &m in &moves {
                     let cap = board.do_move(m);
-                    let ch_pos = super::position_key(board);
+                    let ch_pos = crate::dfpn::position_key(board);
                     let child_hand = board.hand[attacker.index()];
                     let q = tt.build_query(0, ch_pos, child_hand, 0);
                     let mut dhoc = false;
@@ -168,7 +168,7 @@ impl DfPnSolver {
                         let proven_len = if dist.is_none() {
                             let q = tt.build_query(
                                 0,
-                                super::position_key(&b),
+                                crate::dfpn::position_key(&b),
                                 b.hand[attacker.index()],
                                 0,
                             );

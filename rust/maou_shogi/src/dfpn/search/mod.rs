@@ -1,7 +1,7 @@
 //! mid: df-pn (Nagai) ベースの反復深化探索エンジン (探索本体 + 子展開の配線)．
 //!
 //! component を結線して探索を構成する:
-//! - [`super::local_expansion::LocalExpansion`] (resort 後の δ 再計算込の δ/閾値/選択)
+//! - [`expansion::LocalExpansion`] (resort 後の δ 再計算込の δ/閾値/選択)
 //! - [`super::tt::TranspositionTable`] (len-aware + cross-hand 置換表)
 //! - [`super::mate_len::MateLen`] threading (全ノードへ len-1 を伝播)
 //!
@@ -25,8 +25,11 @@
 //! - **EliminateDoubleCount (DAG)**: ancestor 展開を再帰 stack で walk する．
 //! - STRICT PV replay / 無意味中合いの cross-square DML．
 
+pub(crate) mod expansion;
+mod pv;
+
 use super::movegen::delayed_move_list::DelayedMoveList;
-use super::local_expansion::{BranchRootEdge, LocalExpansion, K_ANCESTOR_SEARCH_THRESHOLD};
+use expansion::{BranchRootEdge, LocalExpansion, K_ANCESTOR_SEARCH_THRESHOLD};
 use super::mate_len::{MateLen, DEPTH_MAX_MATE_LEN, ZERO_MATE_LEN};
 use super::path_key::path_key_after;
 use super::search_result::{

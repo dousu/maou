@@ -285,10 +285,10 @@ pub struct DfPnSolver {
     pub(super) nodes: u64,
     /// mid double-count elimination 用の明示的 expansion stack．
     /// 各 search_impl frame が自 LocalExpansion を push/truncate し，祖先を辿れるようにする．
-    pub(super) expansion_stack: Vec<super::local_expansion::LocalExpansion>,
+    pub(super) expansion_stack: Vec<super::search::expansion::LocalExpansion>,
     /// mid build_expansion の per-node Vec 再利用 pool (node pop で返却・再取得)．
-    /// ヒープ alloc/free を削減する (探索不変; [`super::mid::BufPool`])．
-    pub(super) expansion_buf_pool: super::mid::BufPool,
+    /// ヒープ alloc/free を削減する (探索不変; [`super::search::BufPool`])．
+    pub(super) expansion_buf_pool: super::search::BufPool,
     /// mid double-count elimination 発火数 (診断用)．
     pub(super) dag_fires: u64,
     /// mid 探索 path 上の hand-dominance 反復検出．
@@ -577,7 +577,7 @@ impl DfPnSolver {
             path_depths: super::path_stack::PathStack::new(),
             nodes: 0,
             expansion_stack: Vec::new(),
-            expansion_buf_pool: super::mid::BufPool::default(),
+            expansion_buf_pool: super::search::BufPool::default(),
             dag_fires: 0,
             dom_path: super::path_stack::DomPathStack::new(),
             dom_fires: 0,

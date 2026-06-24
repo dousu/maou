@@ -9,12 +9,12 @@
 //! - 構築 (movegen/TT LookUp/DML 配線/1 手詰) と win/lose result (proof/disproof hand) は
 //!   movegen/TT 依存側で接続する．
 
-use super::mate_len::{MateLen, MINUS1_MATE_LEN};
-use super::search_result::{
+use crate::dfpn::mate_len::{MateLen, MINUS1_MATE_LEN};
+use crate::dfpn::search_result::{
     clamp_pn_dn, compare_results, BitSet64, Depth, Hand, Ordering3, PnDn, SearchAmount,
     SearchResult, K_INFINITE_PN_DN,
 };
-use super::tt::TtContext;
+use crate::dfpn::tt::TtContext;
 use crate::board::Board;
 use crate::moves::Move;
 use std::cmp::Ordering;
@@ -223,7 +223,7 @@ fn std_sort<F: Fn(u32, u32) -> bool>(v: &mut [u32], lt: &F) {
 
 /// `HAND` 計装: 指定 sfen prefix のノードの final hand (proof/disproof) を dump (診断専用)．
 fn dump_hand(board: &Board, proven: bool, hand: &[u8; crate::types::HAND_KINDS]) {
-    if let Some(prefix) = super::mid::hand_prefix() {
+    if let Some(prefix) = super::hand_prefix() {
         let sfen = board.sfen();
         if sfen.starts_with(prefix.as_str()) {
             let kind = if proven { "proof" } else { "disproof" };
@@ -239,7 +239,7 @@ fn dump_hand(board: &Board, proven: bool, hand: &[u8; crate::types::HAND_KINDS])
 /// `HAND` 計装の子内訳版: 指定 sfen prefix のノードで集約前の各子 (move + 子 hand) を dump．
 /// proof/disproof hand 再帰の駒種差 (R vs G) がどの子由来かを特定するため．
 fn dump_hand_child(board: &Board, m: Move, hand: &[u8; crate::types::HAND_KINDS]) {
-    if let Some(prefix) = super::mid::hand_prefix() {
+    if let Some(prefix) = super::hand_prefix() {
         if board.sfen().starts_with(prefix.as_str()) {
             eprintln!(
                 "HAND   child {} P{} L{} N{} S{} G{} B{} R{}",
@@ -268,7 +268,7 @@ pub(super) struct BranchRootEdge {
 }
 
 /// 探索ノード展開の core．
-pub(super) struct LocalExpansion {
+pub(crate) struct LocalExpansion {
     or_node: bool,
     len: MateLen,
     /// 合法手．δ math では不使用 (best move と deferred 数のみ)．
@@ -387,7 +387,7 @@ impl LocalExpansion {
     /// idx 全体を comparer で sort する．
     fn sort_idx(&mut self) {
         let mut idx = std::mem::take(&mut self.idx);
-        if super::mid::introsort_enabled() {
+        if super::introsort_enabled() {
             // introsort で sort する．
             // >16 子ノードの完全同点 tie の置換が introsort 固有の並べ替えになる
             // (stable sort では movegen 順を保つため別の順序になる)．
@@ -589,7 +589,7 @@ impl LocalExpansion {
             board.turn.opponent()
         };
         let attacker_hand = board.hand[attacker.index()];
-        let use_handset = super::mid::handset_enabled();
+        let use_handset = super::handset_enabled();
         if self.get_phi() == 0 {
             // 手番 win: OR=詰み proven / AND=逃れ disproven．
             // 「最も良い手」は excluded に関係なく idx[0]．
@@ -603,13 +603,13 @@ impl LocalExpansion {
                 let best_move = self.moves[self.idx[0] as usize];
                 if self.or_node {
                     // OR win = 詰み proven．full proof hand 診断時は極小化を切り full hand 格納．
-                    if super::mid::full_proof_hand_enabled() {
+                    if super::full_proof_hand_enabled() {
                         attacker_hand
                     } else {
-                        super::proof_hand::before_hand(board, best_move, front.hand())
+                        crate::dfpn::proof_hand::before_hand(board, best_move, front.hand())
                     }
                 } else {
-                    super::proof_hand::and_node_escape_disproof(
+                    crate::dfpn::proof_hand::and_node_escape_disproof(
                         board,
                         best_move,
                         front.hand(),
@@ -674,19 +674,19 @@ impl LocalExpansion {
             // AND=ProofHandSet(子の証明駒 max)+add_if．
             let hand = if use_handset {
                 if self.or_node {
-                    let mut set = super::proof_hand::DisproofHandSet::new();
+                    let mut set = crate::dfpn::proof_hand::DisproofHandSet::new();
                     for &ir in &self.idx {
                         let r = self.results[ir as usize];
                         let cm = self.moves[ir as usize];
-                        let cdh = super::proof_hand::before_hand(board, cm, r.hand());
+                        let cdh = crate::dfpn::proof_hand::before_hand(board, cm, r.hand());
                         set.update(&cdh);
                     }
                     set.get(board)
-                } else if super::mid::full_proof_hand_enabled() {
+                } else if super::full_proof_hand_enabled() {
                     // AND lose = 詰み proven．full proof hand 診断時は極小化を切り full hand 格納．
                     attacker_hand
                 } else {
-                    let mut set = super::proof_hand::ProofHandSet::new();
+                    let mut set = crate::dfpn::proof_hand::ProofHandSet::new();
                     for &ir in &self.idx {
                         let ch = self.results[ir as usize].hand();
                         dump_hand_child(board, self.moves[ir as usize], &ch);

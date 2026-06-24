@@ -29,14 +29,12 @@ macro_rules! verbose_eprintln {
 
 mod api;
 mod heuristics;
-mod local_expansion;
 mod mate_len;
-mod mid;
+mod search;
 mod movegen;
 mod path_key;
 mod path_stack;
 mod proof_hand;
-mod pv;
 mod search_result;
 mod solver;
 #[cfg(test)]
