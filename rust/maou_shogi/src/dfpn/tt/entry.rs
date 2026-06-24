@@ -114,6 +114,15 @@ impl Entry {
     pub(super) fn is_for_hand(&self, board_key: u64, hand: Hand) -> bool {
         self.board_key == board_key && self.hand == hand
     }
+    /// 証明済 (proven) または反証済 (disproven) の確定結果を保持するか．
+    /// 確定エントリは **証明木そのもの** であり，探索後の PV 復元 (STRICT VERIFY) が辿る経路．
+    /// GC で消すと偽証明 (STRICT None) になるため，eviction から保護する判定に使う．
+    /// null slot は sentinel のままなので false．
+    #[inline]
+    pub(super) fn is_final(&self) -> bool {
+        self.proven_len != DEPTH_MAX_PLUS1_MATE_LEN.raw() as u16
+            || self.disproven_len != MINUS1_MATE_LEN.raw() as u16
+    }
     #[inline]
     pub(super) fn amount(&self) -> SearchAmount {
         self.amount

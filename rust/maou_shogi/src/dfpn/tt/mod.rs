@@ -110,6 +110,13 @@ impl RegularTable {
             if e.is_null() {
                 continue;
             }
+            // 証明済/反証済 (final) エントリは GC で消さない (amount cut もしない)．
+            // これらは証明木 = 探索後の PV 復元 (STRICT VERIFY) が辿る経路であり，小さい TT で
+            // eviction が走っても偽証明 (STRICT None) を出さないための健全性保護．
+            // (default size では gc 自体が発火しないため挙動不変; 小 TT でのみ効く．)
+            if e.is_final() {
+                continue;
+            }
             if e.amount() <= amount_threshold {
                 e.set_null();
             } else if should_cut {
