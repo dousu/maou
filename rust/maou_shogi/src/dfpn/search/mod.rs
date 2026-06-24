@@ -28,6 +28,7 @@
 pub(crate) mod expansion;
 mod pv;
 
+use super::heuristics::{check_order_key, evasion_order_key};
 use super::movegen::delayed_move_list::DelayedMoveList;
 use expansion::{BranchRootEdge, LocalExpansion, K_ANCESTOR_SEARCH_THRESHOLD};
 use super::mate_len::{MateLen, DEPTH_MAX_MATE_LEN, ZERO_MATE_LEN};
@@ -250,125 +251,6 @@ fn no_dag() -> bool {
     *C.get_or_init(|| std::env::var("NODAG").is_ok())
 }
 
-/// 王手生成の生成順を再現する sort key．square index は (file-1)*9+(rank-1) なので raw square で
-/// 昇順比較できる．順序: ① 盤上移動 (from-square 昇順 → to-square 昇順 → 不成→成)，② 駒打ち
-/// (PAWN,LANCE,KNIGHT,SILVER,GOLD,BISHOP,ROOK 順 → to-square 昇順)．
-/// 注: 開き王手/直接王手の細分順は未反映 (直接王手のみの局面では from-square 順で一致)．
-fn drop_piece_order(pt: crate::types::PieceType) -> u64 {
-    use crate::types::PieceType;
-    // 駒打ちの drops[] 順: PAWN 先頭 + KNIGHT,LANCE,SILVER,GOLD,BISHOP,ROOK (桂が香より先)．
-    match pt {
-        PieceType::Pawn => 0,
-        PieceType::Knight => 1,
-        PieceType::Lance => 2,
-        PieceType::Silver => 3,
-        PieceType::Gold => 4,
-        PieceType::Bishop => 5,
-        PieceType::Rook => 6,
-        _ => 7,
-    }
-}
-
-pub(super) fn check_order_key(
-    m: crate::moves::Move,
-    discoverers: crate::bitboard::Bitboard,
-    def_king: Option<crate::types::Square>,
-) -> u64 {
-    use crate::types::PieceType;
-    if let Some(pt) = m.drop_piece_type() {
-        // group 2: 駒打ち王手．駒打ち王手の生成順
-        // (PAWN,LANCE,KNIGHT,SILVER,GOLD,BISHOP,ROOK) → 各 check_square 昇順．
-        // ⚠ evasion drops[] (KNIGHT,LANCE,..) とは Knight/Lance が逆順なので別 mapping．
-        let pmo = match pt {
-            PieceType::Pawn => 0u64,
-            PieceType::Lance => 1,
-            PieceType::Knight => 2,
-            PieceType::Silver => 3,
-            PieceType::Gold => 4,
-            PieceType::Bishop => 5,
-            PieceType::Rook => 6,
-            _ => 7,
-        };
-        (2u64 << 42) | (pmo << 7) | (m.to_sq().raw_u8() as u64)
-    } else {
-        // 盤上移動王手．王手生成順:
-        //   ① 開き王手候補 from (= discoverers = blockers_for_king(them) & pieces(us)) を square 昇順で，
-        //      各 from は pin-line 外への移動 (純開き王手) → pin-line 上への移動 (直接王手) の順に生成．
-        //   ② 非候補 from (直接王手のみ) を square 昇順で生成．
-        let from = m.from_sq();
-        let to = m.to_sq();
-        let pf = if m.is_promotion() { 0u64 } else { 1u64 };
-        let disc = discoverers.contains(from);
-        let group = if disc { 0u64 } else { 1u64 };
-        // 開き王手候補 from 内: pin-line 外 (sub 0) → pin-line 上 (sub 1)．
-        let sub = if disc {
-            match def_king {
-                Some(k) if crate::attack::line_through(k, from).contains(to) => 1u64,
-                _ => 0u64,
-            }
-        } else {
-            0u64
-        };
-        (group << 42)
-            | ((from.raw_u8() as u64) << 22)
-            | (sub << 21)
-            | (pf << 20)
-            | ((to.raw_u8() as u64) << 11)
-    }
-}
-
-/// 盤上移動の駒種を駒種別生成順へ写像する (Evasion 非玉手の group 番号)．
-/// PAWN→0, LANCE→1, KNIGHT→2, SILVER→3, BISHOP→4, ROOK→5, GOLD/成駒(金移動)→6, HORSE→7, DRAGON→8．
-fn piece_gen_order(raw_pt: u8) -> u64 {
-    match raw_pt {
-        1 => 0,                // Pawn
-        2 => 1,                // Lance
-        3 => 2,                // Knight
-        4 => 3,                // Silver
-        5 => 4,                // Bishop
-        6 => 5,                // Rook
-        7 => 6,                // Gold
-        9 | 10 | 11 | 12 => 6, // と金/成香/成桂/成銀 (金の動き)
-        13 => 7,               // Horse
-        14 => 8,               // Dragon
-        _ => 9,
-    }
-}
-
-/// 王手回避手の生成順を再現する key．
-/// ① 玉移動 (to-square 昇順) → ② 非玉の盤上移動 (駒種 group 順 → from-square 昇順 → 不成/成) →
-/// ③ 駒打ち (PAWN..ROOK 順 → to-square 昇順)．`board` は親 (受け方手番) 局面．
-pub(super) fn evasion_order_key(board: &crate::board::Board, m: crate::moves::Move) -> u64 {
-    if let Some(pt) = m.drop_piece_type() {
-        // group 2 (駒打ちは最後)．evasion drop 順は **歩を全マス先に並べ，続いて各 to_sq ごとに
-        // drops[] 順 (香→桂→銀→金→角→飛)** で生成する (例: P*8c P*8d P*8e P*8f / L*8c G*8c R*8c
-        // / L*8d ...)．歩優先 (bit39) → to_sq 主 (bits 11-) → 駒種 従 (低 bit) とすることで同マス
-        // drop が連続し，DML の同マス chain (to1==to2) が成立する (中合い G*8c が deferred される)．
-        let pawn_first = if pt == crate::types::PieceType::Pawn {
-            0u64
-        } else {
-            1u64
-        };
-        (2u64 << 40)
-            | (pawn_first << 39)
-            | ((m.to_sq().raw_u8() as u64) << 11)
-            | drop_piece_order(pt)
-    } else {
-        let from = m.from_sq().raw_u8() as u64;
-        let to = m.to_sq().raw_u8() as u64;
-        let pf = if m.is_promotion() { 0u64 } else { 1u64 };
-        let own_king = board.king_square(board.turn);
-        if own_king == Some(m.from_sq()) {
-            // group 0: 玉移動 (to-square 昇順)．
-            to << 11
-        } else {
-            // group 1: 非玉の盤上移動 (駒種 group → from 昇順 → 成/不成 → to 昇順)．
-            let raw_pt = board.piece_at(m.from_sq()) & 0x0F;
-            let go = piece_gen_order(raw_pt);
-            (1u64 << 40) | (go << 30) | (from << 20) | (pf << 19) | (to << 11)
-        }
-    }
-}
 
 thread_local! {
     /// ply 0-7 の dump 済 bitmask (solve 毎に reset)．
