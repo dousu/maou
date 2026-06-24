@@ -524,7 +524,7 @@ impl DfPnSolver {
         super::movegen::mate1ply::reset_mate_cand_stats();
         super::movegen::mate1ply::reset_mate1ply_stats();
         // path dominance (劣位局面の刈り込み)．常時 ON．
-        self.param_path_dominance = true;
+        self.params.path_dominance = true;
         self.timed_out = false;
         self.start_time = std::time::Instant::now();
 
@@ -980,7 +980,7 @@ impl DfPnSolver {
         }
 
         self.path_depths.insert(board.hash, depth);
-        if self.param_path_dominance {
+        if self.params.path_dominance {
             let attacker_hand = board.hand[self.attacker.index()];
             self.dom_path
                 .push(super::position_key(board), attacker_hand, depth);
@@ -1032,7 +1032,7 @@ impl DfPnSolver {
         }
 
         self.path_depths.remove(&board.hash);
-        if self.param_path_dominance {
+        if self.params.path_dominance {
             self.dom_path.pop(super::position_key(board));
         }
         let pre_clamp = *inc_flag;
@@ -1084,7 +1084,7 @@ impl DfPnSolver {
 
         // 子探索中 root を path に積む (子が repetition/inferior 判定で参照)．
         self.path_depths.insert(board.hash, 0);
-        if self.param_path_dominance {
+        if self.params.path_dominance {
             self.dom_path
                 .push(super::position_key(board), attacker_hand, 0);
         }
@@ -1106,7 +1106,7 @@ impl DfPnSolver {
         }
 
         self.path_depths.remove(&board.hash);
-        if self.param_path_dominance {
+        if self.params.path_dominance {
             self.dom_path.pop(super::position_key(board));
         }
         curr
@@ -1369,7 +1369,7 @@ impl DfPnSolver {
             // [PROF idx10=pathcheck] cl_other 内訳: dominance find_dominator + 千日手 path_depths.get
             // (両方 path stack の O(depth) 逆順走査)．path_depths.get は dom miss 時のみ評価で探索不変．
             let __pc_t = prof_enabled().then(std::time::Instant::now);
-            let dom_depth = if self.param_path_dominance {
+            let dom_depth = if self.params.path_dominance {
                 self.dom_path.find_dominator(ch_pos, &child_hand)
             } else {
                 None
