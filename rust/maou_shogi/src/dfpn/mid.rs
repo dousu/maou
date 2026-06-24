@@ -590,7 +590,7 @@ impl DfPnSolver {
                 }
                 // 末尾: root の結果を TT へ格納し expansion を pop する．
                 let root_q = tt.build_query(0, super::position_key(board), attacker_hand, 0);
-                tt.set_result(&root_q, result, (0u64, super::ttentry::NULL_HAND));
+                tt.set_result(&root_q, result, (0u64, super::tt::entry::NULL_HAND));
                 self.expansion_stack.clear();
                 result
             }

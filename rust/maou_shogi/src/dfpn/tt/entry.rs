@@ -6,15 +6,15 @@
 //! single-thread 前提のため atomic / lock は不要で，`min_depth` 等は plain field とする
 //! (single-thread では値の意味論は同一)．
 
-use super::mate_len::{MateLen, DEPTH_MAX_PLUS1_MATE_LEN, KDEPTH_MAX, MINUS1_MATE_LEN};
-use super::search_result::{BitSet64, Depth, Hand, PnDn, SearchAmount, K_INFINITE_PN_DN};
+use crate::dfpn::mate_len::{MateLen, DEPTH_MAX_PLUS1_MATE_LEN, KDEPTH_MAX, MINUS1_MATE_LEN};
+use crate::dfpn::search_result::{BitSet64, Depth, Hand, PnDn, SearchAmount, K_INFINITE_PN_DN};
 use crate::types::HAND_KINDS;
 
 /// final 化時に amount へ足す優先度ボーナス．
 const K_FINAL_AMOUNT_BONUS: SearchAmount = 1000;
 
 /// 無効持ち駒 (空 slot 判定に使う sentinel)．hand は各駒 ≤ 18 なので 0xFF を sentinel に使える．
-pub(super) const NULL_HAND: Hand = [0xFF; HAND_KINDS];
+pub(crate) const NULL_HAND: Hand = [0xFF; HAND_KINDS];
 
 /// `min_depth_rep` の千日手フラグ bit．
 /// `min_depth` (∈ [0, KDEPTH_MAX=4000]) は 15bit に収まるため，最上位 bit を流用する

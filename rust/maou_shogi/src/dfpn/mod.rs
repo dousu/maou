@@ -45,7 +45,6 @@ mod solver;
 #[cfg(test)]
 mod tests;
 mod tt;
-mod ttentry;
 
 pub use api::{solve_tsume, solve_tsume_and_collect_pn_dn_dist, solve_tsume_with_timeout};
 pub use solver::{DfPnSolver, TsumeResult};

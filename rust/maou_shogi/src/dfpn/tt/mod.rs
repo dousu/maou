@@ -1,6 +1,6 @@
 //! 置換表本体 (RegularTable + Query + RepetitionTable)．
 //!
-//! [`super::ttentry::Entry`] (len-aware/cross-hand) を循環配列で管理し，cluster を走査して
+//! [`entry::Entry`] (len-aware/cross-hand) を循環配列で管理し，cluster を走査して
 //! 複数 entry 横断で pn/dn を合成する．
 //!
 //! ## single-thread 適応 (並列化は対象外)
@@ -8,9 +8,11 @@
 //!   形を採る (借用検査との相性のため)．
 //! - thread ノイズ (`tt_noise`) は single-thread では載らないため除外する．atomic/lock も plain 化．
 
+pub(crate) mod entry;
+
 use super::mate_len::MateLen;
 use super::search_result::{BitSet64, Depth, Hand, PnDn, SearchAmount, SearchResult};
-use super::ttentry::{Entry, NULL_HAND};
+use entry::{Entry, NULL_HAND};
 use rustc_hash::FxHashMap;
 
 /// `target + (diff_dst - diff_src)` を駒種別に `[0, MAX_HAND_COUNT]` へ clamp する
@@ -247,7 +249,7 @@ impl TranspositionTable {
         board_key: u64,
         hand: Hand,
     ) -> Option<(u64, Hand, PnDn, PnDn)> {
-        use super::ttentry::hand_is_equal_or_superior;
+        use entry::hand_is_equal_or_superior;
         let mut pn: PnDn = 1;
         let mut dn: PnDn = 1;
         let mut cross_bk: u64 = 0;
@@ -311,7 +313,7 @@ impl TranspositionTable {
     /// `ctx` の cluster 先頭 cache line を投機的に prefetch する (memory latency hiding)．
     ///
     /// TT は ~8M entry × 64B = ~512MB と L3 を遥かに超え，`look_up` の cluster 先頭アクセスは
-    /// ほぼ DRAM miss になる (= tt_lookup phase が memory-bound な理由)．[`super::ttentry::Entry`]
+    /// ほぼ DRAM miss になる (= tt_lookup phase が memory-bound な理由)．[`entry::Entry`]
     /// は `#[repr(C, align(64))]` で **ちょうど 1 cache line** に収めてあるため，この 1 line の
     /// prefetch で cluster 先頭 entry 全体が載る．child loop では `build_query` 直後・`look_up` 前に
     /// dom_path / path_depths の flat path 走査が入るため，prefetch を発行すると DRAM fetch が
@@ -488,7 +490,7 @@ impl TranspositionTable {
 
 #[cfg(test)]
 mod tests {
-    use super::super::ttentry::NULL_HAND;
+    use super::entry::NULL_HAND;
     use super::*;
     use crate::types::HAND_KINDS;
 
