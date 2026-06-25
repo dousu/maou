@@ -3,14 +3,16 @@
 //! OR ノード first-visit の終端 seed に用いる．探索状態には依存せず，
 //! `Board::mate_move_in_1ply` + `check_cache` のみを参照する．
 
+use arrayvec::ArrayVec;
+
 use crate::board::Board;
 use crate::moves::Move;
 use crate::types::Color;
 
 use crate::dfpn::solver::DfPnSolver;
+use crate::dfpn::MAX_MOVES;
 
 impl DfPnSolver {
-
     /// 王手リストを `out` へ直接追記する zero-copy 経路．
     ///
     /// `generate_check_moves_cached` の ArrayVec<_, 593> 値返し (2.4KB 級
@@ -91,12 +93,73 @@ impl DfPnSolver {
             // 逆王手: king-geometry 列挙の前提外 → 従来の near2 scan で判定する．
             return self.mate1ply_cached_near2(board);
         }
-        let candidates = self.generate_mate_candidates(board);
-        let kh = board.mate_move_in_1ply_maxdist(candidates.as_slice(), turn, u8::MAX);
-        if mate1ply_verify() {
-            self.verify_mate1ply(board, kh);
+        if m1_fused_disabled() {
+            // 旧 2-pass 経路 (A/B・回帰診断用; 既定は fused)．`generate_mate_candidates` で候補を
+            // ArrayVec に実体化してから `mate_move_in_1ply_maxdist` で走査する．
+            let candidates = self.generate_mate_candidates(board);
+            let kh = board.mate_move_in_1ply_maxdist(candidates.as_slice(), turn, u8::MAX);
+            if mate1ply_verify() {
+                self.verify_mate1ply(board, kh);
+            }
+            return kh;
         }
-        kh
+        // 既定: 候補列挙と検証を 1 パスに融合した経路 (ArrayVec 実体化を回避; 最初の詰みで短絡)．
+        // 計測 (39te, 12 round interleave): 2-pass 比 paired median -0.3s (11/12 round 高速化)，
+        // count 不変 (39te 4,272,957 / 29te 9,288 / 161 lib test, STRICT Some 全維持)．
+        let fused = self.mate1ply_fused(board, turn);
+        if m1_fused_verify() {
+            // 従来 2-pass と Some/None・詰み手まで完全一致を assert (= node 不変の構造保証)．
+            let candidates = self.generate_mate_candidates(board);
+            let orig = board.mate_move_in_1ply_maxdist(candidates.as_slice(), turn, u8::MAX);
+            assert_eq!(
+                fused,
+                orig,
+                "mate1ply_fused != 2-pass: fused={:?} orig={:?} sfen={}",
+                fused.map(|m| m.to_usi()),
+                orig.map(|m| m.to_usi()),
+                board.sfen()
+            );
+        }
+        fused
+    }
+
+    /// 候補列挙と 1 手詰検証を 1 パスに融合した look-ahead (zero-collect, first-mate 短絡)．
+    ///
+    /// [`DfPnSolver::for_each_mate_candidate`] が生成した各候補を即 [`Board::mate1ply_check`] で
+    /// 検証し，最初の真の 1 手詰でその手を返す (= 従来 2-pass の `generate_mate_candidates` +
+    /// `mate_move_in_1ply_maxdist(u8::MAX)` と **同一順序・同一判定**)．ビットボードで確定しない
+    /// 開き/両王手候補 (`None`) は &mut do_move が要るため buffer し，for_each (= &Board 借用) 終了後
+    /// に生成順で解決する (buffer の None は全て最初のビットボード詰みより前に位置するため，先に
+    /// 解決して最初の詰みを返せば 2-pass と一致)．buffer は None ⊆ 全候補 ≤ `MAX_MOVES` で overflow 不可．
+    fn mate1ply_fused(&self, board: &mut Board, turn: Color) -> Option<Move> {
+        use std::ops::ControlFlow;
+        let mut verifier = match board.mate1ply_verifier(turn) {
+            Some(v) => v,
+            None => return None,
+        };
+        let defender = turn.opponent();
+        let mut fallbacks = ArrayVec::<Move, MAX_MOVES>::new();
+        let b: &Board = &*board;
+        let bitboard_mate =
+            self.for_each_mate_candidate(b, |m| match b.mate1ply_check(&mut verifier, m) {
+                Some(true) => ControlFlow::Break(m),
+                Some(false) => ControlFlow::Continue(()),
+                None => {
+                    let _ = fallbacks.try_push(m);
+                    ControlFlow::Continue(())
+                }
+            });
+        // None (開き/両王手) 候補を生成順に do_move 検証する (2-pass の None 分岐と同一)．
+        for &fm in &fallbacks {
+            crate::board::bump_mate1ply_none_dm();
+            let captured = board.do_move(fm);
+            let mated = board.is_in_check(defender) && !crate::movegen::has_any_legal_move(board);
+            board.undo_move(fm, captured);
+            if mated {
+                return Some(fm);
+            }
+        }
+        bitboard_mate
     }
 
     /// `MATE1PLY_VERIFY` 用: 候補列挙の健全性と従来 full scan との一致を照合し統計へ加算する．
@@ -167,6 +230,20 @@ pub(crate) fn mate1ply_enabled() -> bool {
 pub(crate) fn mate1ply_verify() -> bool {
     static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *C.get_or_init(|| std::env::var("MATE1PLY_VERIFY").is_ok())
+}
+
+/// `M1_FUSED_DISABLE=1`: look-ahead 1 手詰を旧 2-pass 経路に戻す (default は融合経路
+/// [`DfPnSolver::mate1ply_fused`])．A/B 計測・回帰診断用の escape hatch．
+fn m1_fused_disabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("M1_FUSED_DISABLE").is_ok())
+}
+
+/// `M1_FUSED_VERIFY=1`: 融合経路の結果を従来 2-pass と毎 look-ahead 突合 assert する
+/// (default OFF; 重い; count 不変の構造保証)．
+fn m1_fused_verify() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("M1_FUSED_VERIFY").is_ok())
 }
 
 thread_local! {

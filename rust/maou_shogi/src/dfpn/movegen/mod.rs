@@ -799,12 +799,27 @@ impl DfPnSolver {
     /// `board` は読むだけ (do_move しない)．
     pub(super) fn generate_mate_candidates(&self, board: &Board) -> ArrayVec<Move, MAX_MOVES> {
         let mut out = ArrayVec::<Move, MAX_MOVES>::new();
+        self.for_each_mate_candidate(board, |m| {
+            super::push_move(&mut out, m);
+            std::ops::ControlFlow::Continue(())
+        });
+        out
+    }
+
+    /// 敵玉隣接 geometry から 1 手詰候補手を駒種順で構成し，各候補を `emit` へ渡す (zero-collect)．
+    ///
+    /// `emit` が [`std::ops::ControlFlow::Break(m)`] を返した時点で `Some(m)` を返して列挙を
+    /// 打ち切る (look-ahead fused 経路の「最初の詰みで短絡」用)．最後まで列挙すれば `None`．
+    /// 候補の構成内容・**順序**は従来の [`Self::generate_mate_candidates`] と完全に同一
+    /// (= 返す詰み手が一致 → node 不変)．`generate_mate_candidates` はこの上の薄い収集ラッパ．
+    pub(super) fn for_each_mate_candidate<F>(&self, board: &Board, mut emit: F) -> Option<Move>
+    where
+        F: FnMut(Move) -> std::ops::ControlFlow<Move>,
+    {
+        use std::ops::ControlFlow;
         let us = board.turn;
         let them = us.opponent();
-        let king = match board.king_square(them) {
-            Some(k) => k,
-            None => return out,
-        };
+        let king = board.king_square(them)?;
         let usi = us.index();
         let all_occ = board.all_occupied();
         let empty = !all_occ;
@@ -831,17 +846,18 @@ impl DfPnSolver {
         let can_promo =
             |from: Square, to: Square| to.is_promotion_zone(us) || from.is_promotion_zone(us);
 
-        // 盤上移動候補を push (自玉 pin 違反 = 自玉王手放置は除外; 駒種・取り駒は board から読む)．
+        // 盤上移動候補を emit (自玉 pin 違反 = 自玉王手放置は除外; 駒種・取り駒は board から読む)．
+        // `emit` は &mut で受け取り (closure を捕獲しない) ので直接 emit と排他しない．
         let push_bm =
-            |out: &mut ArrayVec<Move, MAX_MOVES>, from: Square, to: Square, promote: bool| {
+            |from: Square, to: Square, promote: bool, emit: &mut F| -> ControlFlow<Move> {
                 if let Some(ok) = our_king {
                     if our_pinned.contains(from) && !attack::line_through(from, ok).contains(to) {
-                        return;
+                        return ControlFlow::Continue(());
                     }
                 }
                 let captured_raw = board.squares[to.index()].0;
                 let raw_pt = board.squares[from.index()].piece_type().unwrap() as u8;
-                super::push_move(out, Move::new_move(from, to, promote, captured_raw, raw_pt));
+                emit(Move::new_move(from, to, promote, captured_raw, raw_pt))
             };
 
         // 行き所のない駒の禁止段 (駒打ち)．
@@ -858,37 +874,49 @@ impl DfPnSolver {
         // 飛打ち: 敵玉の上下左右 (rook step ∩ 8 近傍) の空マス．
         if in_hand(PieceType::Rook) {
             for to in attack::rook_attacks(king, Bitboard::EMPTY) & k_neighbors & empty {
-                super::push_move(&mut out, Move::new_drop(to, PieceType::Rook));
+                if let ControlFlow::Break(m) = emit(Move::new_drop(to, PieceType::Rook)) {
+                    return Some(m);
+                }
             }
         }
         // 香打ち: 敵玉の直下 (歩の逆利き) の空マス (最終段除く)．
         if in_hand(PieceType::Lance) {
             for to in pawn_chk & empty & !last_rank {
-                super::push_move(&mut out, Move::new_drop(to, PieceType::Lance));
+                if let ControlFlow::Break(m) = emit(Move::new_drop(to, PieceType::Lance)) {
+                    return Some(m);
+                }
             }
         }
         // 角打ち: 敵玉の斜め 4 近傍の空マス．
         if in_hand(PieceType::Bishop) {
             for to in attack::bishop_attacks(king, Bitboard::EMPTY) & k_neighbors & empty {
-                super::push_move(&mut out, Move::new_drop(to, PieceType::Bishop));
+                if let ControlFlow::Break(m) = emit(Move::new_drop(to, PieceType::Bishop)) {
+                    return Some(m);
+                }
             }
         }
         // 金打ち: 敵玉の金の逆利きの空マス．
         if in_hand(PieceType::Gold) {
             for to in gold_chk & empty {
-                super::push_move(&mut out, Move::new_drop(to, PieceType::Gold));
+                if let ControlFlow::Break(m) = emit(Move::new_drop(to, PieceType::Gold)) {
+                    return Some(m);
+                }
             }
         }
         // 銀打ち: 敵玉の銀の逆利きの空マス．
         if in_hand(PieceType::Silver) {
             for to in silver_chk & empty {
-                super::push_move(&mut out, Move::new_drop(to, PieceType::Silver));
+                if let ControlFlow::Break(m) = emit(Move::new_drop(to, PieceType::Silver)) {
+                    return Some(m);
+                }
             }
         }
         // 桂打ち: 敵玉の桂の逆利きの空マス (最終 2 段除く)．
         if in_hand(PieceType::Knight) {
             for to in knight_chk & empty & !knight_forbidden {
-                super::push_move(&mut out, Move::new_drop(to, PieceType::Knight));
+                if let ControlFlow::Break(m) = emit(Move::new_drop(to, PieceType::Knight)) {
+                    return Some(m);
+                }
             }
         }
 
@@ -896,35 +924,47 @@ impl DfPnSolver {
         // 龍: 敵玉 8 近傍への移動 (成り無し)．
         for from in board.piece_bb[usi][PieceType::Dragon as usize] {
             for to in attack::dragon_attacks(us, from, all_occ) & bb_move & k_neighbors {
-                push_bm(&mut out, from, to, false);
+                if let ControlFlow::Break(m) = push_bm(from, to, false, &mut emit) {
+                    return Some(m);
+                }
             }
         }
         // 飛: 敵玉 8 近傍への移動 (敵陣絡みは成り)．
         for from in board.piece_bb[usi][PieceType::Rook as usize] {
             for to in attack::rook_attacks(from, all_occ) & bb_move & k_neighbors {
-                push_bm(&mut out, from, to, can_promo(from, to));
+                if let ControlFlow::Break(m) = push_bm(from, to, can_promo(from, to), &mut emit) {
+                    return Some(m);
+                }
             }
         }
         // 馬: 敵玉 8 近傍への移動 (成り無し)．
         for from in board.piece_bb[usi][PieceType::Horse as usize] {
             for to in attack::horse_attacks(us, from, all_occ) & bb_move & k_neighbors {
-                push_bm(&mut out, from, to, false);
+                if let ControlFlow::Break(m) = push_bm(from, to, false, &mut emit) {
+                    return Some(m);
+                }
             }
         }
         // 角: 敵玉 8 近傍への移動 (敵陣絡みは成り)．
         for from in board.piece_bb[usi][PieceType::Bishop as usize] {
             for to in attack::bishop_attacks(from, all_occ) & bb_move & k_neighbors {
-                push_bm(&mut out, from, to, can_promo(from, to));
+                if let ControlFlow::Break(m) = push_bm(from, to, can_promo(from, to), &mut emit) {
+                    return Some(m);
+                }
             }
         }
         // 香: 玉の金の逆利き範囲への移動 (成り = 金を優先, 次に不成 = 串刺し)．
         for from in board.piece_bb[usi][PieceType::Lance as usize] {
             for to in attack::lance_attacks(us, from, all_occ) & bb_move & gold_chk {
                 if can_promo(from, to) {
-                    push_bm(&mut out, from, to, true);
+                    if let ControlFlow::Break(m) = push_bm(from, to, true, &mut emit) {
+                        return Some(m);
+                    }
                 }
                 if !movegen::must_promote(us, PieceType::Lance, to) {
-                    push_bm(&mut out, from, to, false);
+                    if let ControlFlow::Break(m) = push_bm(from, to, false, &mut emit) {
+                        return Some(m);
+                    }
                 }
             }
         }
@@ -936,17 +976,23 @@ impl DfPnSolver {
             | board.piece_bb[usi][PieceType::ProSilver as usize];
         for from in golds {
             for to in attack::step_attacks(us, PieceType::Gold, from) & bb_move & gold_chk {
-                push_bm(&mut out, from, to, false);
+                if let ControlFlow::Break(m) = push_bm(from, to, false, &mut emit) {
+                    return Some(m);
+                }
             }
         }
         // 銀: 玉 8 近傍への移動 (各 to で不成を優先, 次に成 = 金)．
         for from in board.piece_bb[usi][PieceType::Silver as usize] {
             for to in attack::step_attacks(us, PieceType::Silver, from) & bb_move & k_neighbors {
                 if silver_chk.contains(to) {
-                    push_bm(&mut out, from, to, false);
+                    if let ControlFlow::Break(m) = push_bm(from, to, false, &mut emit) {
+                        return Some(m);
+                    }
                 }
                 if gold_chk.contains(to) && can_promo(from, to) {
-                    push_bm(&mut out, from, to, true);
+                    if let ControlFlow::Break(m) = push_bm(from, to, true, &mut emit) {
+                        return Some(m);
+                    }
                 }
             }
         }
@@ -954,10 +1000,14 @@ impl DfPnSolver {
         for from in board.piece_bb[usi][PieceType::Knight as usize] {
             for to in attack::step_attacks(us, PieceType::Knight, from) & bb_move {
                 if knight_chk.contains(to) {
-                    push_bm(&mut out, from, to, false);
+                    if let ControlFlow::Break(m) = push_bm(from, to, false, &mut emit) {
+                        return Some(m);
+                    }
                 }
                 if gold_chk.contains(to) && can_promo(from, to) {
-                    push_bm(&mut out, from, to, true);
+                    if let ControlFlow::Break(m) = push_bm(from, to, true, &mut emit) {
+                        return Some(m);
+                    }
                 }
             }
         }
@@ -965,7 +1015,9 @@ impl DfPnSolver {
         for from in board.piece_bb[usi][PieceType::Pawn as usize] {
             for to in attack::step_attacks(us, PieceType::Pawn, from) & bb_move & pawn_chk {
                 if !to.is_promotion_zone(us) {
-                    push_bm(&mut out, from, to, false);
+                    if let ControlFlow::Break(m) = push_bm(from, to, false, &mut emit) {
+                        return Some(m);
+                    }
                 }
             }
         }
@@ -973,12 +1025,14 @@ impl DfPnSolver {
         for from in board.piece_bb[usi][PieceType::Pawn as usize] {
             for to in attack::step_attacks(us, PieceType::Pawn, from) & bb_move & gold_chk {
                 if to.is_promotion_zone(us) {
-                    push_bm(&mut out, from, to, true);
+                    if let ControlFlow::Break(m) = push_bm(from, to, true, &mut emit) {
+                        return Some(m);
+                    }
                 }
             }
         }
 
-        out
+        None
     }
 
     /// 開き王手の元になりうる自駒を計算する．

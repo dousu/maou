@@ -34,6 +34,12 @@ pub fn mate1ply_none_dm() -> u64 {
     MATE1PLY_NONE_DM.with(|c| c.get())
 }
 
+/// fused look-ahead 経路の None (開き/両王手) do_move 検証を加算する (DMBREAK breakdown 整合用)．
+#[inline]
+pub(crate) fn bump_mate1ply_none_dm() {
+    MATE1PLY_NONE_DM.with(|c| c.set(c.get() + 1));
+}
+
 /// `EFFECT_VERIFY` 環境変数の有無を一度だけ読み込みキャッシュする．
 ///
 /// 設定時は `do_move`/`undo_move` 毎に incremental 利き == フルスキャンを検査する
@@ -187,6 +193,24 @@ struct EscInfo {
     /// esc から見える queen-line マス (rook|bishop rays)．from/to がここに
     /// 無ければその着手はこの esc への利きを変えられない．
     qvis: Bitboard,
+}
+
+/// 1 手詰検証の per-call 文脈を一度だけ構築して保持する束ね (ctx + 不変パラメータ)．
+///
+/// `mate_move_in_1ply_maxdist` (王手リスト走査) と look-ahead fused 経路 (候補列挙と検証を
+/// 1 パスに融合) が **同一の [`Board::is_checkmate_after_bb`] 呼び出し**を共有するための土台．
+/// 両経路が同じ verifier を使うため，判定 (Some/None・詰み手) は構造的に一致する．
+pub(crate) struct Mate1plyVerifier {
+    ctx: Mate1plyCtx,
+    attacker: Color,
+    defender: Color,
+    king_sq: Square,
+    king_bb: Bitboard,
+    king_step: Bitboard,
+    all_occ: Bitboard,
+    def_occ: Bitboard,
+    att_idx: usize,
+    def_idx: usize,
 }
 
 impl Board {
@@ -1001,32 +1025,13 @@ impl Board {
         if checks.is_empty() {
             return None;
         }
-        let defender = attacker.opponent();
-        let king_sq = self.king_square(defender)?;
-        let all_occ = self.all_occupied();
-        let att_idx = attacker.index();
-        let def_idx = defender.index();
-        let def_occ = self.occupied[def_idx];
-        let king_bb = Bitboard::from_square(king_sq);
-        let kc = king_sq.col() as i32;
-        let kr = king_sq.row() as i32;
-
-        // 玉の移動先候補(ステップ利き)
-        let king_step = attack::step_attacks(defender, PieceType::King, king_sq);
-
-        // per-position 文脈: 開き王手候補 + escape マス利き情報 (lazy)．
-        // 全候補手で共有し，per-candidate の全駒利きスキャンを bit 演算に置き換える．
-        let mut ctx = Mate1plyCtx {
-            discoverers: self.compute_discoverers(attacker, king_sq),
-            occ_nk_pre: all_occ & !king_bb,
-            esc_sqs: [king_sq; 8],
-            esc_n: 0,
-            esc_info: [None; 8],
+        let mut v = match self.mate1ply_verifier(attacker) {
+            Some(v) => v,
+            None => return None,
         };
-        for esc in king_step & !def_occ {
-            ctx.esc_sqs[ctx.esc_n] = esc;
-            ctx.esc_n += 1;
-        }
+        let kc = v.king_sq.col() as i32;
+        let kr = v.king_sq.row() as i32;
+        let defender = v.defender;
 
         for &m in checks {
             // 着手先が玉から遠い候補は 1 手詰になり得ない (実測 dist≥3 の詰み皆無) ため検査を省く．
@@ -1039,10 +1044,7 @@ impl Board {
                     continue;
                 }
             }
-            match self.is_checkmate_after_bb(
-                m, attacker, defender, king_sq, king_bb, king_step, all_occ, def_occ, att_idx,
-                def_idx, &mut ctx,
-            ) {
+            match self.mate1ply_check(&mut v, m) {
                 Some(true) => return Some(m),
                 Some(false) => {}
                 None => {
@@ -1060,6 +1062,61 @@ impl Board {
             }
         }
         None
+    }
+
+    /// 1 手詰検証の per-call 文脈 ([`Mate1plyVerifier`]) を構築する (受け方玉が無ければ `None`)．
+    /// `mate_move_in_1ply_maxdist` と look-ahead fused 経路が共有する (= 同一判定)．
+    pub(crate) fn mate1ply_verifier(&self, attacker: Color) -> Option<Mate1plyVerifier> {
+        let defender = attacker.opponent();
+        let king_sq = self.king_square(defender)?;
+        let all_occ = self.all_occupied();
+        let att_idx = attacker.index();
+        let def_idx = defender.index();
+        let def_occ = self.occupied[def_idx];
+        let king_bb = Bitboard::from_square(king_sq);
+        let king_step = attack::step_attacks(defender, PieceType::King, king_sq);
+        let mut ctx = Mate1plyCtx {
+            discoverers: self.compute_discoverers(attacker, king_sq),
+            occ_nk_pre: all_occ & !king_bb,
+            esc_sqs: [king_sq; 8],
+            esc_n: 0,
+            esc_info: [None; 8],
+        };
+        for esc in king_step & !def_occ {
+            ctx.esc_sqs[ctx.esc_n] = esc;
+            ctx.esc_n += 1;
+        }
+        Some(Mate1plyVerifier {
+            ctx,
+            attacker,
+            defender,
+            king_sq,
+            king_bb,
+            king_step,
+            all_occ,
+            def_occ,
+            att_idx,
+            def_idx,
+        })
+    }
+
+    /// 王手候補 `m` を `verifier` で 1 手詰判定する (盤面は変更しない)．
+    /// 戻り: `Some(true)`=詰み / `Some(false)`=不詰 / `None`=開き・両王手 (呼出側 do_move 検証)．
+    #[inline]
+    pub(crate) fn mate1ply_check(&self, verifier: &mut Mate1plyVerifier, m: Move) -> Option<bool> {
+        self.is_checkmate_after_bb(
+            m,
+            verifier.attacker,
+            verifier.defender,
+            verifier.king_sq,
+            verifier.king_bb,
+            verifier.king_step,
+            verifier.all_occ,
+            verifier.def_occ,
+            verifier.att_idx,
+            verifier.def_idx,
+            &mut verifier.ctx,
+        )
     }
 
     /// 歩打ち `pawn_drop` (手番側 = 攻め方が打つ) が打ち歩詰めかをビットボード演算のみで判定する
