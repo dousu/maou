@@ -10,6 +10,81 @@ use crate::attack;
 use crate::movegen;
 use crate::types::{PieceType, Square};
 
+/// 最短詰みテストの共通検証 (`find_shortest=true` がデフォルト)．
+///
+/// 以下を確認する:
+/// 1. 結果が `Checkmate`．
+/// 2. PV 手数が最短手数 `expected_len` と一致 (oracle = KH MinLength / maou find_shortest 確定)．
+/// 3. PV を replay した終局面が真の詰み (`in_check && legal==0`)．
+///
+/// **別解は許容**する: 同一最短手数の sound な PV であればどれでも pass する (exact PV は問わない)．
+/// 攻め方の強制性 (全受けが詰む) は solver 内部の STRICT-VERIFY が保証する．
+fn assert_shortest_mate(sfen: &str, depth: u32, max_nodes: u64, expected_len: usize) {
+    let mut board = Board::new();
+    board.set_sfen(sfen).unwrap();
+    let mut solver = DfPnSolver::new(depth, max_nodes, 32767);
+    match solver.solve_impl(&mut board) {
+        TsumeResult::Checkmate { moves, .. } => {
+            let usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+            assert_eq!(
+                moves.len(),
+                expected_len,
+                "最短手数が {expected_len} と不一致: {} 手 {usi:?}",
+                moves.len(),
+            );
+            // PV を replay して終局面が真の詰みか検証 (別解でも sound なら pass)．
+            let mut chk = Board::new();
+            chk.set_sfen(sfen).unwrap();
+            for m in &moves {
+                chk.do_move(*m);
+            }
+            let legal = movegen::generate_legal_moves(&mut chk).len();
+            let in_check = chk.is_in_check(chk.turn());
+            assert!(
+                in_check && legal == 0,
+                "PV 終局面は真の詰みであるべき (sound mate; 別解可): {usi:?}",
+            );
+        }
+        other => panic!("expected Checkmate (mate-{expected_len}), got {other:?}"),
+    }
+}
+
+/// 最短詰みテスト (**PV 完全一致**版)．`find_shortest=true` で解き，maou の PV (USI) が
+/// `acceptable_pvs` に列挙した正解手順 (別解) の **いずれかと完全一致** し，かつ replay 終局面が
+/// 真の詰みであることを検証する．exact PV を pin することで非最短・誤手順を検出する．
+/// 玉の逃げ方等で分岐する別解は `acceptable_pvs` に複数列挙する．
+fn assert_shortest_mate_pv(sfen: &str, depth: u32, max_nodes: u64, acceptable_pvs: &[&[&str]]) {
+    let mut board = Board::new();
+    board.set_sfen(sfen).unwrap();
+    let mut solver = DfPnSolver::new(depth, max_nodes, 32767);
+    match solver.solve_impl(&mut board) {
+        TsumeResult::Checkmate { moves, .. } => {
+            let usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+            // PV を replay して終局面が真の詰みか検証 (sound)．
+            let mut chk = Board::new();
+            chk.set_sfen(sfen).unwrap();
+            for m in &moves {
+                chk.do_move(*m);
+            }
+            let legal = movegen::generate_legal_moves(&mut chk).len();
+            let in_check = chk.is_in_check(chk.turn());
+            assert!(
+                in_check && legal == 0,
+                "PV 終局面は真の詰みであるべき (sound mate): {usi:?}",
+            );
+            // PV 完全一致: acceptable_pvs (別解) のいずれかと一致すること．
+            let matched = acceptable_pvs
+                .iter()
+                .any(|pv| pv.len() == usi.len() && pv.iter().zip(&usi).all(|(a, b)| *a == b.as_str()));
+            assert!(
+                matched,
+                "PV が正解手順 (別解) のいずれとも完全一致しない:\n  maou: {usi:?}\n  正解: {acceptable_pvs:?}",
+            );
+        }
+        other => panic!("expected Checkmate, got {other:?}"),
+    }
+}
+
 // === hand_gte / hand_gte_forward_chain のユニットテスト ===
 
 /// hand_gte: 全駒種で a >= b なら true．
@@ -51,36 +126,11 @@ fn test_hand_gte_different_pieces() {
 /// 正解手順: 1三角成，同玉，2三飛打，1二玉，1三歩打，1一玉，2一飛成，同玉，1二歩成
 #[test]
 fn test_tsume_9te() {
-    let sfen = "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1";
-    let mut board = Board::empty();
-    board.set_sfen(sfen).unwrap();
-
-    let mut solver = DfPnSolver::new(15, 1_048_576, 32767);
-    let result = solver.solve_impl(&mut board);
-
-    match &result {
-        TsumeResult::Checkmate { moves, .. } => {
-            let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-            assert_eq!(
-                usi_moves.len(),
-                9,
-                "should be 9-move checkmate, got: {:?}",
-                usi_moves
-            );
-
-            // 正解手順を検証(USI形式)
-            assert_eq!(usi_moves[0], "2d1c+", "move 1: 1三角成");
-            assert_eq!(usi_moves[1], "1d1c", "move 2: 同玉");
-            assert_eq!(usi_moves[2], "R*2c", "move 3: 2三飛打");
-            assert_eq!(usi_moves[3], "1c1b", "move 4: 1二玉");
-            assert_eq!(usi_moves[4], "P*1c", "move 5: 1三歩打");
-            assert_eq!(usi_moves[5], "1b1a", "move 6: 1一玉");
-            assert_eq!(usi_moves[6], "2c2a+", "move 7: 2一飛成");
-            assert_eq!(usi_moves[7], "1a2a", "move 8: 同玉");
-            assert_eq!(usi_moves[8], "1c1b+", "move 9: 1二歩成");
-        }
-        other => panic!("expected Checkmate, got {:?}", other),
-    }
+    // 9 手詰 PV 完全一致．
+    let pvs: &[&[&str]] = &[&[
+        "2d1c+", "1d1c", "R*2c", "1c1b", "P*1c", "1b1a", "2c2a+", "1a2a", "1c1b+",
+    ]];
+    assert_shortest_mate_pv("6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1", 15, 1_048_576, pvs);
 }
 
 /// 簡単な1手詰め．
@@ -88,20 +138,9 @@ fn test_tsume_9te() {
 fn test_tsume_1te() {
     // 後手玉1一，先手金2三，先手持ち駒: 金
     // G*1b(1二金打)で詰み
-    let sfen = "8k/9/7G1/9/9/9/9/9/9 b G 1";
-    let mut board = Board::empty();
-    board.set_sfen(sfen).unwrap();
-
-    let mut solver = DfPnSolver::new(3, 100_000, 32767);
-    let result = solver.solve_impl(&mut board);
-
-    match &result {
-        TsumeResult::Checkmate { moves, .. } => {
-            assert_eq!(moves.len(), 1);
-            assert_eq!(moves[0].to_usi(), "G*1b", "1手詰め: G*1b(1二金打)");
-        }
-        other => panic!("expected Checkmate, got {:?}", other),
-    }
+    // 1 手詰 PV 完全一致 (G*1b / G*2b はどちらも 1 手詰)．
+    let pvs: &[&[&str]] = &[&["G*1b"], &["G*2b"]];
+    assert_shortest_mate_pv("8k/9/7G1/9/9/9/9/9/9 b G 1", 3, 100_000, pvs);
 }
 
 /// 3手詰め: 後手玉1一，先手飛3三，先手持ち駒: 金
@@ -109,29 +148,9 @@ fn test_tsume_1te() {
 /// 正解: 1三飛成，2一玉，2二金打 まで3手詰
 #[test]
 fn test_tsume_3te() {
-    let sfen = "8k/9/6R2/9/9/9/9/9/9 b G 1";
-    let result = solve_tsume(sfen, Some(7), Some(1_048_576), None).unwrap();
-
-    let expected = ["3c1c+", "1a2a", "G*2b"];
-
-    match &result {
-        TsumeResult::Checkmate { moves, .. } => {
-            let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-            assert_eq!(
-                usi_moves.len(),
-                3,
-                "expected 3 moves, got {}: {:?}",
-                usi_moves.len(),
-                usi_moves
-            );
-            assert_eq!(
-                usi_moves, expected,
-                "PV mismatch:\n  got:      {:?}\n  expected: {:?}",
-                usi_moves, expected,
-            );
-        }
-        other => panic!("expected Checkmate, got {:?}", other),
-    }
+    // 3 手詰 PV 完全一致．
+    let pvs: &[&[&str]] = &[&["3c1c+", "1a2a", "G*2b"]];
+    assert_shortest_mate_pv("8k/9/6R2/9/9/9/9/9/9 b G 1", 7, 1_048_576, pvs);
 }
 
 /// 不詰のケース．
@@ -175,31 +194,11 @@ fn test_solve_tsume_convenience() {
 fn test_tsume_2() {
     // 盤面: 5一と，2一王，1一香，2二銀，4三飛，2四角，先手持駒: 金桂
     // 11手詰め: 32金打，同玉，42角成，21玉，31馬，同銀，23飛成，22銀，33桂打，31玉，41と
-    let sfen = "4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1";
-    let result = solve_tsume(sfen, Some(31), Some(1_048_576), None).unwrap();
-
-    let expected = [
+    // 11 手詰 PV 完全一致．
+    let pvs: &[&[&str]] = &[&[
         "G*3b", "2a3b", "2d4b+", "3b2a", "4b3a", "2b3a", "4c2c+", "3a2b", "N*3c", "2a3a", "5a4a",
-    ];
-
-    match &result {
-        TsumeResult::Checkmate { moves, .. } => {
-            let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-            assert_eq!(
-                moves.len(),
-                11,
-                "expected 11 moves, got {}: {:?}",
-                moves.len(),
-                usi_moves
-            );
-            assert_eq!(
-                usi_moves, expected,
-                "PV mismatch:\n  got:      {:?}\n  expected: {:?}",
-                usi_moves, expected,
-            );
-        }
-        other => panic!("expected Checkmate, got {:?}", other),
-    }
+    ]];
+    assert_shortest_mate_pv("4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1", 31, 1_048_576, pvs);
 }
 
 /// between_bb ヘルパーのテスト．
@@ -250,31 +249,11 @@ fn test_timeout() {
 /// 後手持駒: 歩15，香2，桂2，銀4，金3，角2
 #[test]
 fn test_tsume_3() {
-    let sfen = "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1";
-    let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
-
-    let expected = [
+    // 9 手詰 PV 完全一致．
+    let pvs: &[&[&str]] = &[&[
         "3d2b+", "2c2b", "R*4b", "2b2c", "4b3b+", "2c2d", "2f2e", "2d2e", "3b3e",
-    ];
-
-    match &result {
-        TsumeResult::Checkmate { moves, .. } => {
-            let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-            assert_eq!(
-                usi_moves.len(),
-                9,
-                "expected 9 moves, got {}: {:?}",
-                usi_moves.len(),
-                usi_moves
-            );
-            assert_eq!(
-                usi_moves, expected,
-                "PV mismatch:\n  got:      {:?}\n  expected: {:?}",
-                usi_moves, expected,
-            );
-        }
-        other => panic!("expected Checkmate, got {:?}", other),
-    }
+    ]];
+    assert_shortest_mate_pv("7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1", 31, 2_000_000, pvs);
 }
 
 /// 2一龍後に2三歩打で詰まないことを検証する．
@@ -329,41 +308,25 @@ fn test_tsume_3_ryu_2a_not_checkmate() {
 /// 詰将棋テストケース4．
 ///
 /// 局面: 7nk/9/5R3/8p/6P2/9/9/9/9 b SNPr2b4g3s2n4l15p
-/// 11手詰め(合い効かずにより3二歩打を除外)．
-/// 最終2手は玉の逃げ方により3パターンの正解が存在:
-/// - 1一玉，2二桂成 / 1一玉，2二龍 / 1三玉，2二龍
+/// **最短 11 手詰** (ユーザ確認済)．無駄合い (例: 支えのない P*3b) を含めると 13 手になるが，
+/// 無駄合いは手数に数えない．
+///
+/// 正解手順 (共通 8 手 + 9 手目 4c4b+，以降は玉の逃げ方で別解 ①〜④):
+///   S*2b 1a1b P*1c 1b2b N*3d 2b1a 1c1b 1a1b 4c4b+
+///   ① 1b1a 3d2b+ (1一玉, 2二成桂)  ② 1b1a 4b2b (1一玉, 2二龍)
+///   ③ 1b1c 4b2b (1三玉, 2二龍)     ④ 1b2c 4b2b (2三玉, 2二龍)
+/// (受け方が S*2b に 1a2b と応じる分岐 `S*2b 1a2b N*3d 2b1a P*1b 1a2b 4c4b+` は
+///  同一局面へ合流するより短い受けで max-resistance ではない)．
 #[test]
 fn test_tsume_4() {
-    let sfen = "7nk/9/5R3/8p/6P2/9/9/9/9 b SNPr2b4g3s2n4l15p 1";
-    let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
-
-    match &result {
-        TsumeResult::Checkmate { moves, .. } => {
-            let usi_moves: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-            // 探索は最短保証なしで sound な詰みを返す (proof-tree の詰み手数は探索順依存)．
-            // ここでは PV replay で真の詰みであることを検証する．
-            // 本来の最短は 9 手．最終 2 手は玉の逃げ方で分岐:
-            //   [1一玉 2二桂成 "1b1a 3d2b+"] / [1一玉 2二龍 "1b1a 4b2b"] /
-            //   [1三玉 2二龍 "1b1c 4b2b"]   / [2三玉 2二龍 "1b2c 4b2b"]．
-            assert!(
-                usi_moves.len() % 2 == 1,
-                "tsume must have odd number of moves, got {}",
-                usi_moves.len(),
-            );
-            let mut chk = Board::new();
-            chk.set_sfen(sfen).unwrap();
-            for m in moves {
-                chk.do_move(*m);
-            }
-            let in_check = chk.is_in_check(chk.turn());
-            let legal = movegen::generate_legal_moves(&mut chk).len();
-            assert!(
-                in_check && legal == 0,
-                "PV 終局面は真の詰みであるべき (false mate 検出): in_check={in_check} legal={legal} PV={usi_moves:?}"
-            );
-        }
-        other => panic!("expected Checkmate, got {:?}", other),
-    }
+    // 最短 11 手 PV 完全一致 (別解 ①〜④ のいずれか; 無駄合いは除外)．
+    let pvs: &[&[&str]] = &[
+        &["S*2b", "1a1b", "P*1c", "1b2b", "N*3d", "2b1a", "1c1b", "1a1b", "4c4b+", "1b1a", "3d2b+"],
+        &["S*2b", "1a1b", "P*1c", "1b2b", "N*3d", "2b1a", "1c1b", "1a1b", "4c4b+", "1b1a", "4b2b"],
+        &["S*2b", "1a1b", "P*1c", "1b2b", "N*3d", "2b1a", "1c1b", "1a1b", "4c4b+", "1b1c", "4b2b"],
+        &["S*2b", "1a1b", "P*1c", "1b2b", "N*3d", "2b1a", "1c1b", "1a1b", "4c4b+", "1b2c", "4b2b"],
+    ];
+    assert_shortest_mate_pv("7nk/9/5R3/8p/6P2/9/9/9/9 b SNPr2b4g3s2n4l15p 1", 31, 2_000_000, pvs);
 }
 
 /// generate_check_moves の結果を brute-force と比較する．
@@ -616,47 +579,8 @@ fn test_defense_moves_completeness() {
 /// 17手詰め局面の solve() テスト．
 #[test]
 fn test_tsume_5() {
-    let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
-    let mut board = Board::new();
-    board.set_sfen(sfen).unwrap();
-
-    let mut solver = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
-    let result = solver.solve_impl(&mut board);
-
-    match &result {
-        TsumeResult::Checkmate {
-            moves,
-            nodes_searched,
-        } => {
-            let pv: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-            assert_eq!(
-                pv.len(),
-                17,
-                "expected 17-move checkmate, got {} moves: {}",
-                pv.len(),
-                pv.join(" ")
-            );
-
-            // 攻め方の手順を検証(奇数手)
-            // 41銀打，32銀打，11飛成，33角成，同馬，23金打，21銀成，32銀成
-            assert_eq!(pv[0], "S*4a", "move 1: 41銀打");
-            assert_eq!(pv[2], "S*3b", "move 3: 32銀打");
-            assert_eq!(pv[4], "1d1a+", "move 5: 11飛成");
-            assert_eq!(pv[6], "1e3c+", "move 7: 33角成");
-            assert_eq!(pv[8], "3c2b", "move 9: 同馬");
-            assert_eq!(pv[10], "G*2c", "move 11: 23金打");
-            // move 12: 何を合駒してもよい
-            assert_eq!(pv[12], "3b2a+", "move 13: 21銀成");
-            assert_eq!(pv[14], "4a3b+", "move 15: 32銀成");
-            // move 17: 22成銀(3b2b) or 22金(2c2b) など複数正解
-            assert!(
-                pv[16] == "3b2b" || pv[16] == "2c2b",
-                "move 17: expected 3b2b or 2c2b, got {}",
-                pv[16],
-            );
-        }
-        other => panic!("expected Checkmate for tsume5, got {:?}", other),
-    }
+    // 17 手詰 (正解例: S*4a ... 3b2a+ ... 3b2b/2c2b)．別解可．
+    assert_shortest_mate("9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1", 31, 5_000_000, 17);
 }
 
 /// `does_have_mate_possibility` (詰み可能性の over-approximation) の回帰テスト．
@@ -904,10 +828,16 @@ fn test_29te() {
     }
 }
 
-/// 39te の baseline 計測 + 回帰固定 (**[SLOW]**)．
-/// production `solve_impl` で探索する．
-/// canonical: nodes=4,272,957 / Checkmate(Some) / 真の詰み (in_check && legal==0)．
-/// SFEN/BUDGET/SECS env で局面・予算を上書き可 (上書き時は厳密 node assert を skip)．
+/// 39te (39 手詰) の最短手数検証 + 計測 (**[SLOW]**)．production `solve_impl` で探索する．
+///
+/// **正解 = 39 手詰** (ユーザ提供 KIF; KH MinLength の 47 は無駄合い込みで誤り)．正解 PV (USI):
+///   7b6b 5b4c 8b9c 4c3d 1b2c 3d2c N*1e 2c3b N*2d 3b2b 2d1b+ 2b3b 1b2b 3b2b 4f1c 2b1c
+///   9c3c 1c1d 3c2c 1d1e P*1f 1e1f P*1g 1f1g 5g6f 1g1h 2c2g 1h1i 8g8i S*6i 8i6i 6h6i+
+///   S*2h 1i2i 2h3g 2i3i 2g2h 3i4i 2h4h
+///
+/// **[KNOWN-FAIL]** 現状 maou の find_shortest は 53 手を返す (無駄合いフィルタ適用後)．
+/// len-bound 偽 proof バグ (len=53 再探索が pn=0/mate_len=55 の garbage を返す) が 39 手への
+/// 収束を阻んでいる．このバグ根治後に 39 手 assert が通る見込み．SFEN/BUDGET/SECS env で上書き可．
 #[test]
 #[ignore]
 fn test_39te_measure() {
@@ -972,6 +902,58 @@ fn test_39te_measure() {
             s.nodes,
             elapsed.as_secs_f64()
         ),
+    }
+}
+
+/// 39te 分岐局面プローブ (**[SLOW]**, 診断用)．
+///
+/// 正解 39 手手順を 1 手ずつ進め，**攻め方手番**の各局面 (even ply) で find_shortest 解の詰み
+/// 手数を **期待値 (39 - 手数)** と比較する．maou がどの局面で手数を過大評価するか (無駄合い /
+/// len-bound 偽 proof) を局所化する (user 提案の方法論: 分岐局面 SFEN を再帰的に解いて残手数確認)．
+#[test]
+#[ignore]
+fn test_39te_divergence_probe() {
+    let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
+    let line = [
+        "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c", "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+",
+        "2b3b", "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d", "3c2c", "1d1e", "P*1f", "1e1f",
+        "P*1g", "1f1g", "5g6f", "1g1h", "2c2g", "1h1i", "8g8i", "S*6i", "8i6i", "6h6i+", "S*2h",
+        "1i2i", "2h3g", "2i3i", "2g2h", "3i4i", "2h4h",
+    ];
+    let total = line.len();
+    assert_eq!(total, 39, "正解は 39 手");
+    // 局面のみ最大 PROBE_MAX まで (早期分岐の局所化用; env PROBE_MAX で上書き可)．
+    let probe_max: usize = std::env::var("PROBE_MAX")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(total);
+    let mut board = Board::new();
+    board.set_sfen(sfen).unwrap();
+    for k in 0..total {
+        if k % 2 == 0 && k <= probe_max {
+            let expected = (total - k) as i64;
+            let sub_sfen = board.sfen();
+            let mut b = Board::new();
+            b.set_sfen(&sub_sfen).unwrap();
+            let mut s = DfPnSolver::with_timeout(47, 15_000_000, 32767, 30);
+            let got = match s.solve_impl(&mut b) {
+                TsumeResult::Checkmate { moves, .. } => moves.len() as i64,
+                _ => -1,
+            };
+            let flag = if got == expected {
+                "OK"
+            } else if got > expected {
+                "OVER"
+            } else {
+                "UNDER/UNSOLVED"
+            };
+            eprintln!(
+                "[probe] k={k:2} expected={expected:2} got={got:3} nodes={:>9} [{flag}] sfen={sub_sfen}",
+                s.nodes,
+            );
+        }
+        let m = board.move_from_usi(line[k]).unwrap_or_else(|| panic!("invalid USI: {}", line[k]));
+        board.do_move(m);
     }
 }
 

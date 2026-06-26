@@ -67,12 +67,17 @@ impl MateLen {
     }
 
     /// `self - rhs` 手．
-    /// **無限 (`KDEPTH_MAX` 以上) からは何を引いても無限**のまま (saturating)．
+    /// **無限 (`KDEPTH_MAX` 以上) からは何を引いても無限**のまま (high saturate)．
+    /// **下限は `len_plus_1 == 0` (= `MINUS1`) で saturate** し，それ以下へ wrap させない．
+    /// 旧実装は `wrapping_sub` で 0 を下回ると u32::MAX (≒無限) へ飛び，len 予算を使い切った
+    /// 深いノードが「無限予算」扱いになって find_shortest の余詰で偽 proof (len 予算超過の証明) を
+    /// 生んでいた．予算切れは `MINUS1` に留め，TT look_up で auto-disprove させる．
     #[inline]
     pub(super) const fn sub(self, rhs: u32) -> Self {
-        let new_len_plus_1 = self.len_plus_1.wrapping_sub(rhs);
+        // 下限 0 で clamp (0 を下回る wrap を防止)．
+        let new_len_plus_1 = self.len_plus_1.saturating_sub(rhs);
         let depth_max_plus_1 = KDEPTH_MAX + 1;
-        // 引く前が無限で，引いた後に無限を下回るなら無限へ戻す．
+        // 引く前が無限で，引いた後に無限を下回るなら無限へ戻す (high saturate)．
         if self.len_plus_1 >= depth_max_plus_1 && new_len_plus_1 < depth_max_plus_1 {
             return Self::from_len_plus_1(depth_max_plus_1);
         }

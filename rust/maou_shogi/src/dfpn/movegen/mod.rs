@@ -408,7 +408,7 @@ impl DfPnSolver {
         board: &mut Board,
         moves: &mut ArrayVec<Move, MAX_MOVES>,
         between: &Bitboard,
-        _futile: &Bitboard,
+        futile: &Bitboard,
         _chain: &Bitboard,
         king_sq: Square,
         defender: Color,
@@ -482,7 +482,11 @@ impl DfPnSolver {
             }
 
             // --- 駒打ちによる合い駒 ---
-            {
+            // 無駄合いマス (futile: 守備の支えなし & 飛び駒取り進み後に玉の逃げ道なし &
+            // breakpoint より玉側) への駒打ちは **無駄合い** ゆえスキップする (詰将棋規約上
+            // 無駄合いは手数に数えない; 攻め方は只取りして詰みが変わらない)．駒移動による合駒は
+            // 盤上駒の relocation = 無駄合い対象外なので上で生成済 (futile でも消さない)．
+            if !futile.contains(to) {
                 // 間のマスへ全駒種の合駒 drop を生成する．
                 // 生成順は 歩→香→桂→銀→金→角→飛 (弱い駒から順)．
                 // 同 to_sq の複数 drop は後段で連結され先頭が代表になるため，

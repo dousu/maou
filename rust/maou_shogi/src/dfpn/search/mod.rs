@@ -421,65 +421,63 @@ impl DfPnSolver {
 
         // do_move 数を計測開始 (verify は除外するため探索後に読む)．
         crate::board::reset_do_move_count();
-        // root expansion を **一度だけ** 構築し，閾値反復 (反復深化) 間で `expansion_stack[0]` に
-        // **持続**させる (root を持続させると子の results/idx/sum_mask/excluded が反復跨ぎで累積する)．
-        let attacker_hand = board.hand[self.attacker.index()];
-        let last = match self.emplace(
-            &mut tt,
-            board,
-            DEPTH_MAX_MATE_LEN,
-            0,
-            0u64,
-            true,
-            BitSet64::full(),
-        ) {
-            // root が終局 (王手なし=不詰 / 受けなし=詰み)．即結果 (空 expansion の CurrentResult)．
-            Err(terminal) => terminal,
-            Ok(()) => {
-                // root は expansion_stack[0] に push 済 (emplace が nodes++/dump/key_hand_pair も実施)．
-                // thpn=thdn=0 (len==kDepthMaxMateLen)．初反復は no-op warmup．
-                let mut thpn: PnDn = 0;
-                let mut thdn: PnDn = 0;
-                let cap = K_INFINITE_PN_DN - 1;
-                let mut result = self.expansion_stack[0].current_result(board, 0);
-                loop {
-                    if self.nodes >= self.max_nodes || self.is_timed_out() {
-                        self.timed_out = self.is_timed_out();
-                        break;
-                    }
-                    result =
-                        self.search_impl_root(&mut tt, board, thpn, thdn, DEPTH_MAX_MATE_LEN);
-                    // ROOT: root 反復ごとの th と結果を dump する診断用．
-                    if std::env::var("ROOT").is_ok() {
-                        eprintln!(
-                            "ROOT th=({},{}) -> pn={} dn={}",
-                            thpn,
-                            thdn,
-                            result.pn(),
-                            result.dn()
-                        );
-                    }
-                    if result.pn() == 0 || result.dn() == 0 {
-                        break;
-                    }
-                    if result.pn() >= K_INFINITE_PN_DN || result.dn() >= K_INFINITE_PN_DN {
-                        break;
-                    }
-                    // 次閾値: th = max(curr_th, val*1.7+1) (INF clamp)．val>=1 かつ val≈th なので
-                    // 必ず増加 = stall 無し (budget/timeout は loop 冒頭で break する)．
-                    thpn = thpn.max((result.pn() as f64 * 1.7) as PnDn + 1).min(cap);
-                    thdn = thdn.max((result.dn() as f64 * 1.7) as PnDn + 1).min(cap);
-                    if thpn >= cap && thdn >= cap {
-                        break;
-                    }
+        // 初回探索: len 無制限 (DEPTH_MAX) で詰みを 1 つ見つける．root expansion は
+        // `run_search_at_len` 内で len ごとに構築し，閾値反復 (反復深化) 間で `expansion_stack[0]`
+        // に持続させる (子の results/idx/sum_mask/excluded が反復跨ぎで累積する)．
+        let mut last = self.run_search_at_len(&mut tt, board, DEPTH_MAX_MATE_LEN);
+        let shorten_diag = std::env::var("SHORTEN").is_ok();
+        // [diag] COLD_SHORTEN: 余詰の各 len=d-2 探索前に TT を cold 化し，残存する偽 proof が
+        // warm-TT/cross-hand 再利用に由来するか切り分ける (cold で偽 proof が消えれば warm が原因)．
+        let cold_shorten = std::env::var("COLD_SHORTEN").is_ok();
+        if shorten_diag {
+            eprintln!(
+                "[dfpn] shorten init: mate_len={} pn={} dn={} nodes={}",
+                last.len().len(),
+                last.pn(),
+                last.dn(),
+                self.nodes
+            );
+        }
+        // 余詰探索 (find_shortest): 見つかった詰み手数 d に対し len=d-2 で再探索し，より短い
+        // 詰みがあれば置換，無ければ d が最短手数として確定する (KH SearchMainLoop 相当)．
+        // dual-range len-aware TT (proven_len/disproven_len) により，前回 len=d で proven の
+        // ノードも len<d では再評価される一方，無関係なノードは warm TT のまま再利用され
+        // 不要な再探索を避ける (詰将棋の手数は奇数ゆえ 2 ずつ短縮する)．
+        if self.find_shortest && last.pn() == 0 {
+            loop {
+                if self.nodes >= self.max_nodes || self.is_timed_out() {
+                    self.timed_out = self.is_timed_out();
+                    break;
                 }
-                // 末尾: root の結果を TT へ格納し expansion を pop する．
-                let root_q = tt.build_query(0, super::position_key(board), attacker_hand, 0);
-                tt.set_result(&root_q, result, (0u64, super::tt::entry::NULL_HAND));
-                self.expansion_stack.clear();
-                result
+                let d = last.len().len();
+                if d <= 1 {
+                    break; // 1 手詰より短い詰みは無い．
+                }
+                let nodes_before = self.nodes;
+                if cold_shorten {
+                    tt = TranspositionTable::new(size);
+                }
+                let shorter = self.run_search_at_len(&mut tt, board, MateLen::from_len(d - 2));
+                if shorten_diag {
+                    eprintln!(
+                        "[dfpn] shorten try len={}: pn={} dn={} mate_len={} cost={} nodes (total {})",
+                        d - 2,
+                        shorter.pn(),
+                        shorter.dn(),
+                        shorter.len().len(),
+                        self.nodes - nodes_before,
+                        self.nodes
+                    );
+                }
+                if shorter.pn() == 0 && shorter.len().len() < d {
+                    last = shorter; // **厳密に短い** 詰みを発見 → さらに短い手数を試す．
+                } else {
+                    // d-2 手以下の詰みは無い (disproof) / timeout / len 境界の偽結果 →
+                    // 現在の最短 d で確定 (oscillation 防止: 厳密短縮でなければ採用しない)．
+                    break;
+                }
             }
-        };
+        }
 
         // 2 指標を併記: nodes = 探索ノード訪問数 (Emplace 毎に 1),
         // do_moves = do_move 数 (nodes_searched)．混同しないこと．
@@ -596,6 +594,65 @@ impl DfPnSolver {
         } else {
             TsumeResult::Unknown {
                 nodes_searched: self.nodes,
+            }
+        }
+    }
+
+    /// 単一の `len` 上限で root を emplace し pn/dn 反復深化を 1 探索回す．root 結果を TT へ
+    /// 格納して返す．TT は呼び出し間で持続 (warm) させ，find_shortest の余詰探索が `len` を
+    /// 2 ずつ狭めて反復呼びする．`emplace` が `Err(terminal)` を返す (root 即終局) 場合は
+    /// その結果をそのまま返す (空 expansion ゆえ stack clear 不要)．
+    fn run_search_at_len(
+        &mut self,
+        tt: &mut TranspositionTable,
+        board: &mut Board,
+        len: MateLen,
+    ) -> SearchResult {
+        let attacker_hand = board.hand[self.attacker.index()];
+        match self.emplace(tt, board, len, 0, 0u64, true, BitSet64::full()) {
+            // root が終局 (王手なし=不詰 / 受けなし=詰み)．即結果 (空 expansion の CurrentResult)．
+            Err(terminal) => terminal,
+            Ok(()) => {
+                // root は expansion_stack[0] に push 済．閾値反復で δ を累積し詰み/不詰へ収束させる．
+                let mut thpn: PnDn = 0;
+                let mut thdn: PnDn = 0;
+                let cap = K_INFINITE_PN_DN - 1;
+                let mut result = self.expansion_stack[0].current_result(board, 0);
+                loop {
+                    if self.nodes >= self.max_nodes || self.is_timed_out() {
+                        self.timed_out = self.is_timed_out();
+                        break;
+                    }
+                    result = self.search_impl_root(tt, board, thpn, thdn, len);
+                    // ROOT: root 反復ごとの th と結果を dump する診断用．
+                    if std::env::var("ROOT").is_ok() {
+                        eprintln!(
+                            "ROOT th=({},{}) -> pn={} dn={}",
+                            thpn,
+                            thdn,
+                            result.pn(),
+                            result.dn()
+                        );
+                    }
+                    if result.pn() == 0 || result.dn() == 0 {
+                        break;
+                    }
+                    if result.pn() >= K_INFINITE_PN_DN || result.dn() >= K_INFINITE_PN_DN {
+                        break;
+                    }
+                    // 次閾値: th = max(curr_th, val*1.7+1) (INF clamp)．必ず増加 = stall 無し
+                    // (budget/timeout は loop 冒頭で break)．
+                    thpn = thpn.max((result.pn() as f64 * 1.7) as PnDn + 1).min(cap);
+                    thdn = thdn.max((result.dn() as f64 * 1.7) as PnDn + 1).min(cap);
+                    if thpn >= cap && thdn >= cap {
+                        break;
+                    }
+                }
+                // 末尾: root の結果を TT へ格納し expansion を clear する (次 len 反復は再構築)．
+                let root_q = tt.build_query(0, super::position_key(board), attacker_hand, 0);
+                tt.set_result(&root_q, result, (0u64, super::tt::entry::NULL_HAND));
+                self.expansion_stack.clear();
+                result
             }
         }
     }
@@ -1112,6 +1169,18 @@ impl DfPnSolver {
             return Err(r);
         }
 
+        // len 予算切れ cutoff: 合法手があり (= mate ≤0 の terminal は上で処理済) かつ len < 1 手なら，
+        // budget `len` 内で詰ませられない → **budget-limited disproven** (disproven_len = len)．
+        // OR は攻め方が ≥1 手指す必要があり，AND も受け方が指せば mate ≥1 手なので len ≤ 0 では不詰．
+        // これを欠くと len 予算を超える深さまで探索が進み，例えば len=27 探索が 29 手詰を proven 化
+        // する偽 proof となる (find_shortest の余詰が真の最短へ収束しない根本原因; cold TT でも再現)．
+        // DEPTH_MAX 探索では len が高位飽和し決して発火しないので first-mate 挙動は不変．
+        if len < MateLen::from_len(1) {
+            let hand = board.hand[attacker.index()];
+            self.expansion_buf_pool.release_moves(moves);
+            return Err(SearchResult::make_final(false, hand, len, 1));
+        }
+
         // 生成手を生成順へ並べ替える (これがソート入力)．DML/results/idx すべてこの順で構築する．
         // promo は成→不成の順．
         if or_node {
@@ -1319,7 +1388,7 @@ impl DfPnSolver {
                 let __la = prof_enabled().then(std::time::Instant::now);
                 let captured = board.do_move(m);
                 dm_bump(2); // look-ahead (AND node の first-visit 子へ do_move)
-                let __obv = self.check_obvious_final_or_node(board);
+                let __obv = self.check_obvious_final_or_node(board, len.sub(1));
                 if let Some(res) = __obv {
                     tt.set_result(&q, res, (ch_pos, child_hand));
                     r = res;
@@ -1394,7 +1463,11 @@ impl DfPnSolver {
     ///
     /// proof/disproof hand は **full attacker_hand** (= 子 OR node の手番側持駒) を使う．hand-set
     /// 極小化は cross-hand TT 有効時に偽証明 (mate-39) を生むため不使用 (sound 優先)．
-    fn check_obvious_final_or_node(&self, board: &mut Board) -> Option<SearchResult> {
+    fn check_obvious_final_or_node(
+        &self,
+        board: &mut Board,
+        child_len: MateLen,
+    ) -> Option<SearchResult> {
         let or_hand = board.hand[board.turn.index()];
         let use_handset = handset_enabled();
         // 不詰判定に `does_have_mate_possibility` (blocker 無視の over-approx) を使う．exact
@@ -1432,7 +1505,14 @@ impl DfPnSolver {
             };
             Some(SearchResult::make_final(false, hand, DEPTH_MAX_MATE_LEN, 1))
         } else if let Some(mate_move) = mm_opt {
-            // 1 手詰 → 詰み proven (mate-1)．
+            // 1 手詰 → 詰み proven (mate-1)．**ただし子の len 予算 `child_len` が mate-1 を許す
+            // 場合のみ** seed する: find_shortest の余詰 (tight len 再探索) で予算超過の deep ノードを
+            // look-ahead が proven 化し proof len が len 予算を超過する偽 proof (len=53 探索が
+            // mate_len=55 を返す等) を防ぐ．予算不足なら seed せず通常探索に budget で disprove させる
+            // (sound; DEPTH_MAX 探索では child_len も DEPTH_MAX 飽和なので常に通過し挙動不変)．
+            if child_len < MateLen::from_len(1) {
+                return None;
+            }
             // proof hand = before_hand(mate_move, 詰み局面の proof hand)．
             let hand = if use_handset {
                 let cap = board.do_move(mate_move);
