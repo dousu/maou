@@ -59,11 +59,35 @@ df-pn は探索木を明示的に保持しないため，詰み証明後に **TT
 - **AND ノード**: 詰みに至る応手のうち**最長**手数の手を選ぶ (最善の受け = 最長抵抗)．
 - これにより「最善応手に対する最短詰み手順」が得られる．
 
-### 9-b.3 find_shortest と CheckmateNoPv
+### 9-b.3 find_shortest (余詰探索) と最短手数
 
-`find_shortest` (既定 true) は PV 上の OR ノードで未証明の王手を追加証明し，より短い手順が
-あれば採用する (`complete_or_proofs` 相当)．これは 1 子あたり `pv_nodes_per_child` (既定 1024)
-ノードの予算を使う．長手数 (17 手以上) の問題でこの予算が尽きると，詰みは証明済みでも PV を
-返せず `TsumeResult::CheckmateNoPv` となる ([index §2](index.md))．`pv_nodes_per_child` を
-増やすと改善する．`find_shortest=false` では最初に見つかった手順をそのまま返す
-(最短保証なし; ノード数は削減)．
+`find_shortest` (既定 true) は **mate-length パラメータ化探索 (len-aware df-pn)** で最短手数の
+詰みを返す (KH `SearchMainLoop` 相当の余詰探索):
+
+1. `run_search_at_len(len=DEPTH_MAX)` で詰みを 1 つ見つけ手数 `d` を得る．
+2. `len = d-2` で再探索する．より短い詰みがあれば置換，無ければ `d` が最短と確定する
+   (詰将棋の手数は奇数ゆえ 2 ずつ短縮)．dual-range len-aware TT (`proven_len`/`disproven_len`)
+   により前回 len=d で proven のノードも len<d では再評価され，無関係なノードは warm TT のまま
+   再利用される．
+3. loop guard: `shorter.pn()==0 && shorter.len() < d` のときのみ採用する (非厳密短縮・len 境界の
+   偽結果による oscillation を防ぐ)．
+
+**len 予算の強制 (3.2.0; 重要)**: len-bounded 探索は **len 予算を超える proof を返してはならない**．
+これを欠くと余詰の `len=d-2` 探索が予算超過の偽 proof (例: len=53 探索が mate_len=55) を返し収束
+しない．3 点で予算を強制する:
+- `MateLen::sub` は下限 0 で saturate (旧 `wrapping_sub` は 0 未満で u32::MAX≒∞へ wrap し予算が
+  消失していた)．
+- look-ahead (`check_obvious_final_or_node`) は子の budget が mate-1 を許す場合のみ proven を seed．
+- `build_expansion` は非終端ノードを `len < 1手` で **budget-limited disproven** にする (予算切れ
+  cutoff)．DEPTH_MAX 探索では len が高位飽和し発火しないので first-mate 挙動は不変．
+
+**正解の oracle はユーザ**: 詰将棋の最短手数/正解 PV は **ユーザが絶対的参照点**である．KH は
+詰将棋において参照点ではない (MinLength 余詰は**無駄合いを手数に数える**ため現実の最短と乖離する;
+[aigoma §8.2](aigoma-optimization.md))．maou が既知手順と異なる解を出したら，採用前に SFEN と現 PV
+を提示してユーザに確認する．
+
+**現状 (3.2.0)**: 29te は最短 29 手を confirm (len=27 が正しく disprove)．**39te は 57→45 手まで
+前進するが len=43 で false-disproof する完全性バグが残る** (真の最短 39 手に未到達; cold TT でも
+再現するため warm-TT/無駄合い由来ではなく len-bounded 探索の完全性の別バグ)．
+`test_39te_divergence_probe` が分岐局面の残手数を再帰確認して局所化する診断方法論を提供する．
+`find_shortest=false` では最初に見つかった手順 (最短保証なし; ノード数削減) を返す．

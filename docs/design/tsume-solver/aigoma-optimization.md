@@ -44,12 +44,29 @@ flowchart TD
 
 非合駒の応手で反証できれば合駒の展開自体を省け，逐次活性化で不要な分岐を抑える．
 
-### 8.2 無駄合いの扱い (opt-in)
+### 8.2 無駄合いの除外 (最短手数のため既定 on)
 
-無駄合い (取られて終わる無意味な中合い) を手生成段階で除外する filter は opt-in で用意される
-(`Params::muda_filter`, 既定 off; `generate_defense_moves_inner` は futile 合駒を除外し chain
-マスは歩のみ生成する)．実測では深い AND の breadth は無駄合いでなく，玉移動・駒取り・攻め方の
-打ち王手の多様性が主因であり，無駄合い filter の寄与は小さいため既定では無効としている．
+無駄合い (取られて終わる無意味な中合い) は詰将棋規約上**手数に数えない**ため，最短手数を正しく
+求めるには手生成段階で除外する必要がある．`compute_futile_and_chain_squares` が合駒マスを
+futile / chain / normal に分類し，`generate_interpositions` が **futile マスへの駒打ちを skip**
+する (駒移動による合駒は盤上駒の relocation = 無駄合い対象外ゆえ除外しない)．
+
+**無駄合いの正確な定義 (誤りやすい)**: 中合いが無駄合いになる条件は「守備の支えがない」だけでは
+**不十分**で，**玉がどこへ逃げても同じ手数以下で詰む (中合いしても詰み手数が変わらない)** ことが
+必須である．単に支えなしで除外すると，**中合いで攻め方の駒をずらす (取らせて利きを変える) 正当な
+受けテクニック**を誤って消す．`king_can_escape_after_slider_capture` が「飛び駒が合駒を取り進んだ
+後に玉が逃げられるか」を検査してこれを防ぐ (逃げられれば駒ずらしが効く = 無駄合いでない)．
+
+**3.2.0 での再配線**: この filter は旧 PNS エンジンに存在したが，PNS→mid 移行で
+`compute_futile_and_chain_squares` の結果が `generate_interpositions` に**適用されないまま**
+残っていた (`_futile`/`_chain` 引数が未使用)．3.2.0 で再配線し，無駄合いを最短手数に算入しない
+ようにした (例: tsume_4 は無駄合い込み 13 手 → 規約上の 11 手)．旧記述の「無駄合い filter の
+寄与は小さい」は誤りであった (無駄合いが max-resistance に算入され最短手数を過大評価していた)．
+`Params::muda_filter` は歴史的フラグで現在は未参照 (futile skip は常時有効)．
+
+**正解の oracle はユーザ**: 無駄合いの判定は微妙で，最短手数/正解 PV の最終確認先は常にユーザで
+ある (KH MinLength は無駄合いを数えるため最短 oracle にならない; [move-ordering-and-pv §9-b.3]
+(move-ordering-and-pv.md))．
 
 同様に，同一マスへの異種合駒間で取り進み後の局面の証明/反証を転用する cross-deduction
 (`Params::capture_dedup` / `cross_dedup`, 既定 off) も用意されるが，deep AND fan-out の主因を
