@@ -567,8 +567,11 @@ impl DfPnSolver {
             let mut path: Vec<u64> = Vec::new();
             let mut memo: std::collections::HashMap<u64, Option<u16>> =
                 std::collections::HashMap::new();
+            let mut pv_choice: std::collections::HashMap<u64, crate::moves::Move> =
+                std::collections::HashMap::new();
             let mut budget: u64 = 80_000_000;
-            let verified = self.verify_proof(&mut tt, board, &mut path, &mut memo, &mut budget);
+            let verified =
+                self.verify_proof(&mut tt, board, &mut path, &mut memo, &mut pv_choice, &mut budget);
             match verified {
                 Some(d) => eprintln!(
                     "[dfpn] STRICT VERIFY Some({}) (root mate_len={}, budget_left={})",
@@ -581,8 +584,8 @@ impl DfPnSolver {
                 }
                 None => eprintln!("[dfpn] STRICT VERIFY None — UNSOUND or incomplete proof tree"),
             }
-            // PV は memo (検証済距離) を辿って復元 (OR=最短 proven, AND=max-resistance)．
-            let pv = self.build_pv(board, &mut tt, &memo, last.len().len() as usize + 8);
+            // PV は pv_choice (verify_proof が記録した無駄合い除外後の最適手) を辿って復元する．
+            let pv = self.build_pv(board, &pv_choice, last.len().len() as usize + 8);
             TsumeResult::Checkmate {
                 moves: pv,
                 nodes_searched: self.nodes,
