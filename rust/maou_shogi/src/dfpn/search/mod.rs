@@ -610,23 +610,42 @@ impl DfPnSolver {
                 &mut pv_choice,
                 &mut budget,
             );
+            // **STRICT verify を authoritative にする** (soundness keystone)．
+            // 探索の pn/dn は GHI (proof-tree 循環を TT 再利用で作る) 等で偽 proven を生じ得るが，
+            // verify_proof は全合法防御を実 replay し path 循環も検出する厳密判定ゆえ，これを最終権威
+            // とする．Some(d)=真の強制詰み → Checkmate．None (偽証明 or budget 不完全) → **偽の詰みを
+            // 返さず Unknown** (詰みを取りこぼしても偽詰みは出さない; soundness > completeness)．
+            // default 構成では verify は常に Some ゆえ挙動不変; 閾値変更等で探索が偽 proven を出した
+            // 場合のみ Unknown へ落ちる．
             match verified {
-                Some(d) => eprintln!(
-                    "[dfpn] STRICT VERIFY Some({}) (root mate_len={}, budget_left={})",
-                    d,
-                    last.len().len(),
-                    budget
-                ),
-                None if budget == 0 => {
-                    eprintln!("[dfpn] STRICT VERIFY INCONCLUSIVE (budget exhausted)")
+                Some(d) => {
+                    eprintln!(
+                        "[dfpn] STRICT VERIFY Some({}) (root mate_len={}, budget_left={})",
+                        d,
+                        last.len().len(),
+                        budget
+                    );
+                    // PV は pv_choice (verify が記録した無駄合い除外後の最適手) を辿って復元．
+                    let pv = self.build_pv(board, &pv_choice, last.len().len() as usize + 8);
+                    TsumeResult::Checkmate {
+                        moves: pv,
+                        nodes_searched: self.nodes,
+                    }
                 }
-                None => eprintln!("[dfpn] STRICT VERIFY None — UNSOUND or incomplete proof tree"),
-            }
-            // PV は pv_choice (verify_proof が記録した無駄合い除外後の最適手) を辿って復元する．
-            let pv = self.build_pv(board, &pv_choice, last.len().len() as usize + 8);
-            TsumeResult::Checkmate {
-                moves: pv,
-                nodes_searched: self.nodes,
+                None => {
+                    if budget == 0 {
+                        eprintln!(
+                            "[dfpn] STRICT VERIFY INCONCLUSIVE (budget exhausted) → Unknown (偽詰み回避)"
+                        );
+                    } else {
+                        eprintln!(
+                            "[dfpn] STRICT VERIFY None (偽証明/不完全) → Unknown (偽詰み回避)"
+                        );
+                    }
+                    TsumeResult::Unknown {
+                        nodes_searched: self.nodes,
+                    }
+                }
             }
         } else if last.dn() == 0 {
             TsumeResult::NoCheckmate {
