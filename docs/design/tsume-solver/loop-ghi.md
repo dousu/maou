@@ -64,3 +64,26 @@ soundness バグ**になる (より深く探索すれば詰む局面を「不詰
 TT エントリの `proven_len` / `disproven_len` (len-aware, [TT §6.3](transposition-table.md)) と
 §7.2 の scope 化で扱う．`REMAINING_INFINITE` (深さ非依存の確定結果) と scope 付き (深さ依存の
 仮結果) を区別し，深い反復で自動的に再評価する．
+
+### 7.5 転置による偽証明 (proof-tree 循環) と STRICT verify の権威化
+
+§7.1 の `path_depths` は **現在の探索スタック上**の循環しか検出しない．一方，**転置 (TT) の
+proven エントリを別分岐で再利用**すると，**探索スタックに現れない proof-tree の循環**が
+形成され得る (proven 局面 X が分岐 B1 で確定 → 別分岐 B2 で X を TT 再利用 → B2 の経路が X の
+証明内へ戻る循環)．この循環は「玉が逃げられる非詰み」を proven と記録する **偽証明 (false
+proof / false mate)** を生む．探索順序 (閾値ゆるめ等) に依存して露出するが，バグ自体は順序に
+依存せず潜在する (localize 例: AND 局面 `9/9/4+N1pS1/9/4+R4/5+B3/6R1P/3S2k2/9 w` で玉が `3h2i`
+へ合法脱出できるのに proven と記録)．
+
+- **TT look_up の穴** (`tt/mod.rs::look_up`): proven (`pn==0`) 分岐は即 `make_final(true)` を
+  返し，unknown 分岐が行う `is_possible_repetition` + rep-table 再チェックを**欠く**．ただし
+  cross-branch の clean-proof 再利用では `is_possible_repetition` が立たないため，proven 分岐に
+  同じ再チェックを足しても捕捉できない．探索側での完全な GHI-safe 化は **proof-path 循環追跡**を
+  要する (Kishimoto & Müller の source-node 方式等) research-level 課題として残る．
+- **採用した健全化 — STRICT verify の権威化 (maou_shogi 3.4.2)**: `verify_proof`
+  ([move-ordering-and-pv.md](move-ordering-and-pv.md)) は全合法防御を実 replay し `path.contains`
+  で proof-path 循環も検出する **GHI-correct な厳密判定**である．`solve_impl` はこれを**最終
+  権威**とし，**STRICT VERIFY が `Some(d)` を返したときのみ `Checkmate` を返す**．`None` (偽証明
+  もしくは verify budget 不完全) は偽の詰みを返さず `Unknown` を返す (**soundness > completeness**:
+  真の詰みの取りこぼしより偽詰みの回避を優先)．default 探索では verify が常に `Some` ゆえ挙動は
+  不変 (探索が偽 proven を出した場合のみ `Unknown` へ落ちる)．
