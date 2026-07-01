@@ -317,6 +317,12 @@ pub(super) struct BufPool {
     results: Vec<Vec<SearchResult>>,
     idx: Vec<Vec<u32>>,
     dml: Vec<Vec<i32>>,
+    /// DML build 用 scratch (prev/next=Vec<u32>, raw_pts=Vec<u8>, interp_chain=Vec<bool>)．
+    /// 従来 build 毎に `vec![0u32; n]`×2 / collect×2 を heap alloc していたが (from_elem hot),
+    /// pool 再利用で per-node alloc を除去する (探索完全不変)．
+    u32s: Vec<Vec<u32>>,
+    u8s: Vec<Vec<u8>>,
+    bools: Vec<Vec<bool>>,
 }
 
 impl BufPool {
@@ -350,6 +356,30 @@ impl BufPool {
         v.clear();
         v
     }
+    fn take_u32(&mut self) -> Vec<u32> {
+        let mut v = self.u32s.pop().unwrap_or_default();
+        v.clear();
+        v
+    }
+    fn release_u32(&mut self, v: Vec<u32>) {
+        self.u32s.push(v);
+    }
+    fn take_u8(&mut self) -> Vec<u8> {
+        let mut v = self.u8s.pop().unwrap_or_default();
+        v.clear();
+        v
+    }
+    fn release_u8(&mut self, v: Vec<u8>) {
+        self.u8s.push(v);
+    }
+    fn take_bool(&mut self) -> Vec<bool> {
+        let mut v = self.bools.pop().unwrap_or_default();
+        v.clear();
+        v
+    }
+    fn release_bool(&mut self, v: Vec<bool>) {
+        self.bools.push(v);
+    }
     /// `moves` のみ返却する (build 早期 Err = terminal node では他 5 本は未取得)．
     fn release_moves(&mut self, v: Vec<crate::moves::Move>) {
         self.moves.push(v);
@@ -379,6 +409,9 @@ impl BufPool {
         self.results.clear();
         self.idx.clear();
         self.dml.clear();
+        self.u32s.clear();
+        self.u8s.clear();
+        self.bools.clear();
     }
 }
 
@@ -1236,49 +1269,57 @@ impl DfPnSolver {
         // DelayedMoveList: 同マス合駒/成不成ペアを双方向 chain 化し，prev が未 final の手は idx から
         // 除外 (= 後回し) する．is_delayable 判定のため移動元駒種 (raw ID) を渡す (駒打ちは 0)．
         let __dml_t = prof_enabled().then(std::time::Instant::now);
-        let dml = {
-            let raw_pts: Vec<u8> = moves
-                .iter()
-                .map(|&m| {
-                    if m.is_drop() {
-                        0
-                    } else {
-                        board.piece_at(m.from_sq()) & 0x0F
-                    }
-                })
-                .collect();
-            let us_black = board.turn == crate::types::Color::Black;
-            if !or_node {
-                // 中合い対称性: AND node の drop で「攻方支援なし & 逆王手でない」もの同士は別マスでも
-                // 同一 chain とみなし後回しにする．
-                let defender = board.turn;
-                let atk_king = board.king_square(attacker);
-                let interp_chain: Vec<bool> = moves
-                    .iter()
-                    .map(|&m| {
-                        if !m.is_drop() {
-                            return false;
-                        }
-                        let to = m.to_sq();
-                        let unsupported = !board.is_attacked_by(to, defender);
-                        let no_check = match (atk_king, m.drop_piece_type()) {
-                            (Some(k), Some(pt)) => !drop_gives_check(board, to, pt, defender, k),
-                            _ => true,
-                        };
-                        unsupported && no_check
-                    })
-                    .collect();
-                DelayedMoveList::build_with_types_interp(
-                    &moves,
-                    or_node,
-                    &raw_pts,
-                    us_black,
-                    &interp_chain,
-                )
+        // DML build の scratch (raw_pts/interp_chain/prev/next) を pool から取り per-node alloc を除去．
+        let mut raw_pts = self.expansion_buf_pool.take_u8();
+        raw_pts.extend(moves.iter().map(|&m| {
+            if m.is_drop() {
+                0u8
             } else {
-                DelayedMoveList::build_with_types(&moves, or_node, &raw_pts, us_black)
+                board.piece_at(m.from_sq()) & 0x0F
             }
+        }));
+        let us_black = board.turn == crate::types::Color::Black;
+        let dml_prev = self.expansion_buf_pool.take_u32();
+        let dml_next_buf = self.expansion_buf_pool.take_u32();
+        let mut interp_buf = self.expansion_buf_pool.take_bool();
+        let dml = if !or_node {
+            // 中合い対称性: AND node の drop で「攻方支援なし & 逆王手でない」もの同士は別マスでも
+            // 同一 chain とみなし後回しにする．
+            let defender = board.turn;
+            let atk_king = board.king_square(attacker);
+            interp_buf.extend(moves.iter().map(|&m| {
+                if !m.is_drop() {
+                    return false;
+                }
+                let to = m.to_sq();
+                let unsupported = !board.is_attacked_by(to, defender);
+                let no_check = match (atk_king, m.drop_piece_type()) {
+                    (Some(k), Some(pt)) => !drop_gives_check(board, to, pt, defender, k),
+                    _ => true,
+                };
+                unsupported && no_check
+            }));
+            DelayedMoveList::build_with_types_interp(
+                dml_prev,
+                dml_next_buf,
+                &moves,
+                or_node,
+                &raw_pts,
+                us_black,
+                &interp_buf,
+            )
+        } else {
+            DelayedMoveList::build_with_types(
+                dml_prev,
+                dml_next_buf,
+                &moves,
+                or_node,
+                &raw_pts,
+                us_black,
+            )
         };
+        self.expansion_buf_pool.release_u8(raw_pts);
+        self.expansion_buf_pool.release_bool(interp_buf);
         if let Some(t) = __dml_t {
             prof_add(5, t.elapsed().as_nanos() as u64);
         }
@@ -1463,6 +1504,10 @@ impl DfPnSolver {
                 *slot = nx as i32;
             }
         }
+        // DML の prev/next scratch を pool へ返却する (次 build で再利用)．
+        let (dml_p, dml_n) = dml.into_buffers();
+        self.expansion_buf_pool.release_u32(dml_p);
+        self.expansion_buf_pool.release_u32(dml_n);
 
         let mut __exp = LocalExpansion::from_parts(
             or_node,

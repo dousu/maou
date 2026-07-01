@@ -54,12 +54,19 @@ impl DelayedMoveList {
     /// 手番側が先手か (enemy_field/香の段判定用)．`raw_pts` が空なら粗い fallback (dummy 歩) に委ねる．
     /// 盤上移動は歩/角/飛, 及び香の敵陣 2/8 段昇り のみ遅延対象とする．
     pub(crate) fn build_with_types(
+        prev: Vec<u32>,
+        next: Vec<u32>,
         moves: &[Move],
         or_node: bool,
         raw_pts: &[u8],
         us_black: bool,
     ) -> Self {
-        Self::build_inner(moves, or_node, raw_pts, us_black, &[])
+        Self::build_inner(prev, next, moves, or_node, raw_pts, us_black, &[])
+    }
+
+    /// prev/next の pooled buffer を返却用に取り出す (build_expansion が pool へ戻す)．
+    pub(crate) fn into_buffers(self) -> (Vec<u32>, Vec<u32>) {
+        (self.prev, self.next)
     }
 
     /// `build_with_types` に中合い対称性の判定を加えた版．
@@ -67,16 +74,20 @@ impl DelayedMoveList {
     /// (呼出側で Board から算出)．この条件を満たす 2 つの drop は **別 to_sq でも同一 chain**
     /// とみなし後回しにする (逆王手でない中合いは無意味なことが多いため)．
     pub(crate) fn build_with_types_interp(
+        prev: Vec<u32>,
+        next: Vec<u32>,
         moves: &[Move],
         or_node: bool,
         raw_pts: &[u8],
         us_black: bool,
         interp_chain: &[bool],
     ) -> Self {
-        Self::build_inner(moves, or_node, raw_pts, us_black, interp_chain)
+        Self::build_inner(prev, next, moves, or_node, raw_pts, us_black, interp_chain)
     }
 
     fn build_inner(
+        mut prev: Vec<u32>,
+        mut next: Vec<u32>,
         moves: &[Move],
         or_node: bool,
         raw_pts: &[u8],
@@ -84,8 +95,11 @@ impl DelayedMoveList {
         interp_chain: &[bool],
     ) -> Self {
         let n = moves.len();
-        let mut prev = vec![0u32; n];
-        let mut next = vec![0u32; n];
+        // pooled buffer を n 長・全 0 で初期化 (旧 `vec![0u32; n]` と同値, alloc 無し)．
+        prev.clear();
+        prev.resize(n, 0);
+        next.clear();
+        next.resize(n, 0);
 
         // head_moves: (move, idx) の最大 MAX_DELAY_HEADS 件．各 chain の末尾を追跡．
         let mut heads: [(Move, u32); MAX_DELAY_HEADS] = [(Move(0), 0); MAX_DELAY_HEADS];
@@ -311,7 +325,14 @@ mod tests {
         let m_n = Move::new_drop(sq, PieceType::Knight);
         let moves = vec![m_p, m_l, m_n];
 
-        let dml = DelayedMoveList::build_with_types(&moves, /*or_node=*/ false, &[], false);
+        let dml = DelayedMoveList::build_with_types(
+            Vec::new(),
+            Vec::new(),
+            &moves,
+            /*or_node=*/ false,
+            &[],
+            false,
+        );
         // index 0 が head (prev=None), 1,2 は prev あり
         assert_eq!(dml.prev(0), None);
         assert_eq!(dml.prev(1), Some(0));
@@ -332,7 +353,14 @@ mod tests {
         let m_la = Move::new_drop(sq_a, PieceType::Lance);
         let moves = vec![m_pa, m_pb, m_la];
 
-        let dml = DelayedMoveList::build_with_types(&moves, /*or_node=*/ false, &[], false);
+        let dml = DelayedMoveList::build_with_types(
+            Vec::new(),
+            Vec::new(),
+            &moves,
+            /*or_node=*/ false,
+            &[],
+            false,
+        );
         // index 0 と 1 はそれぞれ head (異なる sq)
         assert_eq!(dml.prev(0), None);
         assert_eq!(dml.prev(1), None);
@@ -348,7 +376,14 @@ mod tests {
         let m_l = Move::new_drop(sq, PieceType::Lance);
         let moves = vec![m_p, m_l];
 
-        let dml = DelayedMoveList::build_with_types(&moves, /*or_node=*/ true, &[], false);
+        let dml = DelayedMoveList::build_with_types(
+            Vec::new(),
+            Vec::new(),
+            &moves,
+            /*or_node=*/ true,
+            &[],
+            false,
+        );
         // OR ノードの drop は遅延対象外なので chain なし
         assert_eq!(dml.prev(0), None);
         assert_eq!(dml.prev(1), None);
@@ -363,7 +398,14 @@ mod tests {
             Move::new_drop(sq, PieceType::Lance),
             Move::new_drop(sq, PieceType::Knight),
         ];
-        let dml = DelayedMoveList::build_with_types(&moves, /*or_node=*/ false, &[], false);
+        let dml = DelayedMoveList::build_with_types(
+            Vec::new(),
+            Vec::new(),
+            &moves,
+            /*or_node=*/ false,
+            &[],
+            false,
+        );
 
         // index 0: prev なし → 常に false
         assert!(!dml.has_unresolved_prev(0, |_| true));
