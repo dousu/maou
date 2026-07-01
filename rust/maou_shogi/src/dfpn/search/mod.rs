@@ -29,9 +29,8 @@ pub(crate) mod expansion;
 mod pv;
 
 use super::heuristics::{check_order_key, evasion_order_key};
-use super::movegen::delayed_move_list::DelayedMoveList;
-use expansion::{BranchRootEdge, LocalExpansion, K_ANCESTOR_SEARCH_THRESHOLD};
 use super::mate_len::{MateLen, DEPTH_MAX_MATE_LEN, ZERO_MATE_LEN};
+use super::movegen::delayed_move_list::DelayedMoveList;
 use super::path_key::path_key_after;
 use super::search_result::{
     extend_search_threshold, BitSet64, Hand, PnDn, SearchResult, K_INFINITE_PN_DN,
@@ -39,6 +38,7 @@ use super::search_result::{
 use super::solver::{DfPnSolver, TsumeResult};
 use super::tt::TranspositionTable;
 use crate::board::Board;
+use expansion::{BranchRootEdge, LocalExpansion, K_ANCESTOR_SEARCH_THRESHOLD};
 
 /// init_pn_dn (unit-16) を pn/dn unit=2 へ縮約する除数．
 const DIV: u64 = 8;
@@ -250,7 +250,6 @@ fn no_dag() -> bool {
     static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *C.get_or_init(|| std::env::var("NODAG").is_ok())
 }
-
 
 thread_local! {
     /// ply 0-7 の dump 済 bitmask (solve 毎に reset)．
@@ -570,8 +569,14 @@ impl DfPnSolver {
             let mut pv_choice: std::collections::HashMap<u64, crate::moves::Move> =
                 std::collections::HashMap::new();
             let mut budget: u64 = 80_000_000;
-            let verified =
-                self.verify_proof(&mut tt, board, &mut path, &mut memo, &mut pv_choice, &mut budget);
+            let verified = self.verify_proof(
+                &mut tt,
+                board,
+                &mut path,
+                &mut memo,
+                &mut pv_choice,
+                &mut budget,
+            );
             match verified {
                 Some(d) => eprintln!(
                     "[dfpn] STRICT VERIFY Some({}) (root mate_len={}, budget_left={})",
@@ -693,8 +698,7 @@ impl DfPnSolver {
         }
         let attacker_hand = board.hand[self.attacker.index()];
         let __bt = prof_enabled().then(std::time::Instant::now);
-        let built =
-            self.build_expansion(tt, board, len, depth, path_key, first_search, sum_mask);
+        let built = self.build_expansion(tt, board, len, depth, path_key, first_search, sum_mask);
         if let Some(t) = __bt {
             prof_add(4, t.elapsed().as_nanos() as u64);
         }
@@ -707,6 +711,22 @@ impl DfPnSolver {
         let my = self.expansion_stack.len() - 1;
         self.expansion_stack[my].set_key_hand_pair((super::position_key(board), attacker_hand));
         Ok(())
+    }
+
+    /// [案A] 子局面へ渡す len 予算．透過中合い (chain マス) drop は無駄合いゆえ len を減じず `add(1)`
+    /// (直後の攻め方取り返し `sub(1)` と相殺 → 合駒+取り返し pair の len コスト 0 = 無駄合い-free)．
+    /// `len == DEPTH_MAX` (first-mate) では credit せず → canonical anchor / first-mate 挙動 不変．
+    #[inline]
+    fn child_len(
+        chain_sqs: &crate::bitboard::Bitboard,
+        m: crate::moves::Move,
+        len: MateLen,
+    ) -> MateLen {
+        if len < DEPTH_MAX_MATE_LEN && m.is_drop() && chain_sqs.contains(m.to_sq()) {
+            len.add(1)
+        } else {
+            len.sub(1)
+        }
     }
 
     /// 親ループの 1 子処理 (探索ループ本体)．`my` = 親 expansion の stack index．best child を
@@ -727,6 +747,12 @@ impl DfPnSolver {
     ) {
         let attacker_hand = board.hand[self.attacker.index()];
         let best_move = self.expansion_stack[my].best_move();
+        // [案A] best_move が透過中合い drop なら子 len を credit．board は do_move 前 (親局面)．
+        let child_len = Self::child_len(
+            &self.transparent_interposition_squares(board),
+            best_move,
+            len,
+        );
         let is_first = self.expansion_stack[my].front_is_first_visit();
         let (cthpn, cthdn) = self.expansion_stack[my].front_pn_dn_thresholds(thpn, thdn);
         if inc_active() {
@@ -757,7 +783,7 @@ impl DfPnSolver {
         let child_result = match self.emplace(
             tt,
             board,
-            len.sub(1),
+            child_len,
             depth + 1,
             child_pk,
             is_first,
@@ -801,7 +827,7 @@ impl DfPnSolver {
                             board,
                             cthpn,
                             cthdn,
-                            len.sub(1),
+                            child_len,
                             depth + 1,
                             child_pk,
                             inc_flag,
@@ -813,7 +839,7 @@ impl DfPnSolver {
                         board,
                         cthpn,
                         cthdn,
-                        len.sub(1),
+                        child_len,
                         depth + 1,
                         child_pk,
                         inc_flag,
@@ -902,20 +928,14 @@ impl DfPnSolver {
         let mut curr = self.expansion_stack[my].current_result(board, depth as i32);
         if curr.is_final() {
             if inc_active() {
-                inc_log(&format!(
-                    "INC EXIT-curfinal d={} inc={}",
-                    depth, *inc_flag
-                ));
+                inc_log(&format!("INC EXIT-curfinal d={} inc={}", depth, *inc_flag));
             }
             inc_close_window(inc_opened);
             return curr; // 親 (step_best_child) が Pop する．
         }
         if self.expansion_stack[my].does_have_old_child() {
             *inc_flag += 1;
-            inc_log(&format!(
-                "INC INC d={} -> inc={} (dhoc)",
-                depth, *inc_flag
-            ));
+            inc_log(&format!("INC INC d={} -> inc={} (dhoc)", depth, *inc_flag));
         }
         if *inc_flag > 0 {
             extend_search_threshold(curr, &mut thpn, &mut thdn);
@@ -1279,6 +1299,8 @@ impl DfPnSolver {
         // 親から渡された sum_mask を起点に，非 final 子のうち sum 集約に適さない手 (is_sum_delta_node が
         // false) / δ が `K_FORCE_SUM_PN_DN` 以上の手を max 集約へ落とす．
         let mut cur_sum_mask = sum_mask;
+        // [案A] 透過中合いマス (AND node のみ非空)．子 len credit 判定に使う (loop 不変ゆえ 1 回算出)．
+        let chain_sqs = self.transparent_interposition_squares(board);
 
         for (i, &m) in moves.iter().enumerate() {
             // eval / seed は親局面で計算 (move_brief_eval / init_pn_dn)．
@@ -1297,6 +1319,8 @@ impl DfPnSolver {
             if let Some(t) = __seed_t {
                 prof_add(8, t.elapsed().as_nanos() as u64);
             }
+            // [案A] 子 len 予算 (透過中合い drop は credit)．seed/look-ahead 双方で同一値を使う．
+            let cl = Self::child_len(&chain_sqs, m, len);
 
             // 子 key/hand を **do_move せず** incremental に算出する (per-child do_move を回避し
             // per-node time を節約)．do_move は子局面が必須な look-ahead でのみ行う．**TT board_key は
@@ -1345,7 +1369,7 @@ impl DfPnSolver {
             } else {
                 let mut dhoc = false;
                 let __lu = prof_enabled().then(std::time::Instant::now);
-                let res = tt.look_up(&q, len.sub(1), &mut dhoc, || seed);
+                let res = tt.look_up(&q, cl, &mut dhoc, || seed);
                 if let Some(t) = __lu {
                     prof_add(1, t.elapsed().as_nanos() as u64);
                 }
@@ -1391,7 +1415,7 @@ impl DfPnSolver {
                 let __la = prof_enabled().then(std::time::Instant::now);
                 let captured = board.do_move(m);
                 dm_bump(2); // look-ahead (AND node の first-visit 子へ do_move)
-                let __obv = self.check_obvious_final_or_node(board, len.sub(1));
+                let __obv = self.check_obvious_final_or_node(board, cl);
                 if let Some(res) = __obv {
                     tt.set_result(&q, res, (ch_pos, child_hand));
                     r = res;
@@ -1440,7 +1464,7 @@ impl DfPnSolver {
             }
         }
 
-        let __exp = LocalExpansion::from_parts(
+        let mut __exp = LocalExpansion::from_parts(
             or_node,
             len,
             moves,
@@ -1453,6 +1477,7 @@ impl DfPnSolver {
             dml_next,
             1,
         );
+        __exp.set_chain_sqs(chain_sqs); // [案A] AND-proven mate_len 集計用
         if let Some(t) = __fp_t {
             prof_add(7, t.elapsed().as_nanos() as u64);
         }
@@ -1577,7 +1602,14 @@ impl DfPnSolver {
             board.hand_after(best_move, self.attacker),
         );
 
-        let edge = match self.find_known_ancestor(tt, current_key_hand, child_key_hand, or_node, depth, my) {
+        let edge = match self.find_known_ancestor(
+            tt,
+            current_key_hand,
+            child_key_hand,
+            or_node,
+            depth,
+            my,
+        ) {
             Some(e) => e,
             None => return,
         };
@@ -1651,7 +1683,8 @@ impl DfPnSolver {
 
     /// (board_key, hand) が現探索 path の祖先 (`expansion_stack[0..my]`) に在るか．
     fn contains_in_path(&self, kh: (u64, Hand), my: usize) -> bool {
-        self.expansion_stack[..my].iter().any(|e| e.key_hand_pair() == kh)
+        self.expansion_stack[..my]
+            .iter()
+            .any(|e| e.key_hand_pair() == kh)
     }
-
 }

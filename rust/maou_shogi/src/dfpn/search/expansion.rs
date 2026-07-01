@@ -9,13 +9,13 @@
 //! - 構築 (movegen/TT LookUp/DML 配線/1 手詰) と win/lose result (proof/disproof hand) は
 //!   movegen/TT 依存側で接続する．
 
+use crate::board::Board;
 use crate::dfpn::mate_len::{MateLen, MINUS1_MATE_LEN};
 use crate::dfpn::search_result::{
     clamp_pn_dn, compare_results, BitSet64, Depth, Hand, Ordering3, PnDn, SearchAmount,
     SearchResult, K_INFINITE_PN_DN,
 };
 use crate::dfpn::tt::TtContext;
-use crate::board::Board;
 use crate::moves::Move;
 use std::cmp::Ordering;
 
@@ -296,6 +296,9 @@ pub(crate) struct LocalExpansion {
     /// 本ノードの (position_key, attacker_hand)．二重カウント除去で
     /// 分岐元一致判定に使う．`set_key_hand_pair` で構築後に設定する (未設定は (0, 空))．
     key_hand_pair: (u64, Hand),
+    /// [案A] AND node の透過中合いマス集合 (build 時設定; 未設定/OR node は空)．AND-proven の
+    /// mate_len 集計でこれらへの合駒 drop 子を無駄合いとして手数から除外する (child.len().sub(2))．
+    chain_sqs: crate::bitboard::Bitboard,
 }
 
 impl LocalExpansion {
@@ -331,6 +334,7 @@ impl LocalExpansion {
             dml_next,
             multi_pv: multi_pv.max(1),
             key_hand_pair: (0, [0u8; crate::types::HAND_KINDS]),
+            chain_sqs: crate::bitboard::Bitboard::EMPTY,
         };
         // 構築時点で既に φ=0 の手があれば excluded_moves を進める．
         for k in 0..e.idx.len() {
@@ -452,6 +456,12 @@ impl LocalExpansion {
     pub(super) fn front_sum_mask(&self) -> BitSet64 {
         self.front_result().sum_mask()
     }
+    /// [案A] 透過中合いマス集合を設定する (build 後に呼ぶ; AND-proven mate_len 集計で使用)．
+    #[inline]
+    pub(super) fn set_chain_sqs(&mut self, chain_sqs: crate::bitboard::Bitboard) {
+        self.chain_sqs = chain_sqs;
+    }
+
     /// 本ノードの (board_key, hand) を設定する．build 後に呼ぶ．
     #[inline]
     pub(super) fn set_key_hand_pair(&mut self, kh: (u64, Hand)) {
@@ -665,8 +675,20 @@ impl LocalExpansion {
                     if r.len() < mate_len {
                         mate_len = r.len();
                     }
-                } else if r.len() > mate_len {
-                    mate_len = r.len();
+                } else {
+                    // AND-proven max-resistance．[案A] 透過中合い (chain マス) への合駒 drop 子は
+                    // 無駄合いゆえ `sub(2)` (末尾 `+1` 後に `r.len()-1` = 取り返し後局面の手数 =
+                    // 無駄合い-free)．非中合い子は通常の `r.len()`．len-budget credit と対で，AND の
+                    // 手数が無駄合いで膨らまず find_shortest が真の最短へ収束する．
+                    let cm = self.moves[ir as usize];
+                    let contrib = if cm.is_drop() && self.chain_sqs.contains(cm.to_sq()) {
+                        r.len().sub(2)
+                    } else {
+                        r.len()
+                    };
+                    if contrib > mate_len {
+                        mate_len = contrib;
+                    }
                 }
             }
             amount = amount.saturating_add(self.moves.len().max(1) as SearchAmount - 1);

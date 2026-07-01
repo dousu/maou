@@ -13,6 +13,7 @@
 | [手順改善・PV 復元](move-ordering-and-pv.md) | move ordering，PV 復元 (verify_proof + build_pv) |
 | [合駒最適化](aigoma-optimization.md) | 中合いの再帰構造，遅延展開 (DelayedMoveList)，chain 対称性 |
 | [最適化案の評価](optimization-proposals.md) | 単一スレッド方針 (binding)，不採用方針 |
+| [39手詰 Oracle リファレンス](39te-oracle.md) | 39te ベンチ問題の user 確認済 oracle (正解手数・PV・サブ局面)，検証規則 |
 | [参考文献](references.md) | 論文，既存ソルバー，日本語リソース |
 | [legacy/](legacy/README.md) | 旧二エンジン期 (v0.x〜v0.55) の記録・将来再検討しうる方法論 |
 

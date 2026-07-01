@@ -73,9 +73,9 @@ fn assert_shortest_mate_pv(sfen: &str, depth: u32, max_nodes: u64, acceptable_pv
                 "PV 終局面は真の詰みであるべき (sound mate): {usi:?}",
             );
             // PV 完全一致: acceptable_pvs (別解) のいずれかと一致すること．
-            let matched = acceptable_pvs
-                .iter()
-                .any(|pv| pv.len() == usi.len() && pv.iter().zip(&usi).all(|(a, b)| *a == b.as_str()));
+            let matched = acceptable_pvs.iter().any(|pv| {
+                pv.len() == usi.len() && pv.iter().zip(&usi).all(|(a, b)| *a == b.as_str())
+            });
             assert!(
                 matched,
                 "PV が正解手順 (別解) のいずれとも完全一致しない:\n  maou: {usi:?}\n  正解: {acceptable_pvs:?}",
@@ -130,7 +130,12 @@ fn test_tsume_9te() {
     let pvs: &[&[&str]] = &[&[
         "2d1c+", "1d1c", "R*2c", "1c1b", "P*1c", "1b1a", "2c2a+", "1a2a", "1c1b+",
     ]];
-    assert_shortest_mate_pv("6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1", 15, 1_048_576, pvs);
+    assert_shortest_mate_pv(
+        "6s2/6l2/9/6BBk/9/9/9/9/9 b RPr4g3s4n3l17p 1",
+        15,
+        1_048_576,
+        pvs,
+    );
 }
 
 /// 簡単な1手詰め．
@@ -198,7 +203,12 @@ fn test_tsume_2() {
     let pvs: &[&[&str]] = &[&[
         "G*3b", "2a3b", "2d4b+", "3b2a", "4b3a", "2b3a", "4c2c+", "3a2b", "N*3c", "2a3a", "5a4a",
     ]];
-    assert_shortest_mate_pv("4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1", 31, 1_048_576, pvs);
+    assert_shortest_mate_pv(
+        "4+P2kl/7s1/5R3/7B1/9/9/9/9/9 b GNrb3g3s3n3l17p 1",
+        31,
+        1_048_576,
+        pvs,
+    );
 }
 
 /// between_bb ヘルパーのテスト．
@@ -253,7 +263,12 @@ fn test_tsume_3() {
     let pvs: &[&[&str]] = &[&[
         "3d2b+", "2c2b", "R*4b", "2b2c", "4b3b+", "2c2d", "2f2e", "2d2e", "3b3e",
     ]];
-    assert_shortest_mate_pv("7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1", 31, 2_000_000, pvs);
+    assert_shortest_mate_pv(
+        "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1",
+        31,
+        2_000_000,
+        pvs,
+    );
 }
 
 /// 2一龍後に2三歩打で詰まないことを検証する．
@@ -321,12 +336,26 @@ fn test_tsume_3_ryu_2a_not_checkmate() {
 fn test_tsume_4() {
     // 最短 11 手 PV 完全一致 (別解 ①〜④ のいずれか; 無駄合いは除外)．
     let pvs: &[&[&str]] = &[
-        &["S*2b", "1a1b", "P*1c", "1b2b", "N*3d", "2b1a", "1c1b", "1a1b", "4c4b+", "1b1a", "3d2b+"],
-        &["S*2b", "1a1b", "P*1c", "1b2b", "N*3d", "2b1a", "1c1b", "1a1b", "4c4b+", "1b1a", "4b2b"],
-        &["S*2b", "1a1b", "P*1c", "1b2b", "N*3d", "2b1a", "1c1b", "1a1b", "4c4b+", "1b1c", "4b2b"],
-        &["S*2b", "1a1b", "P*1c", "1b2b", "N*3d", "2b1a", "1c1b", "1a1b", "4c4b+", "1b2c", "4b2b"],
+        &[
+            "S*2b", "1a1b", "P*1c", "1b2b", "N*3d", "2b1a", "1c1b", "1a1b", "4c4b+", "1b1a",
+            "3d2b+",
+        ],
+        &[
+            "S*2b", "1a1b", "P*1c", "1b2b", "N*3d", "2b1a", "1c1b", "1a1b", "4c4b+", "1b1a", "4b2b",
+        ],
+        &[
+            "S*2b", "1a1b", "P*1c", "1b2b", "N*3d", "2b1a", "1c1b", "1a1b", "4c4b+", "1b1c", "4b2b",
+        ],
+        &[
+            "S*2b", "1a1b", "P*1c", "1b2b", "N*3d", "2b1a", "1c1b", "1a1b", "4c4b+", "1b2c", "4b2b",
+        ],
     ];
-    assert_shortest_mate_pv("7nk/9/5R3/8p/6P2/9/9/9/9 b SNPr2b4g3s2n4l15p 1", 31, 2_000_000, pvs);
+    assert_shortest_mate_pv(
+        "7nk/9/5R3/8p/6P2/9/9/9/9 b SNPr2b4g3s2n4l15p 1",
+        31,
+        2_000_000,
+        pvs,
+    );
 }
 
 /// generate_check_moves の結果を brute-force と比較する．
@@ -580,7 +609,12 @@ fn test_defense_moves_completeness() {
 #[test]
 fn test_tsume_5() {
     // 17 手詰 (正解例: S*4a ... 3b2a+ ... 3b2b/2c2b)．別解可．
-    assert_shortest_mate("9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1", 31, 5_000_000, 17);
+    assert_shortest_mate(
+        "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1",
+        31,
+        5_000_000,
+        17,
+    );
 }
 
 /// `does_have_mate_possibility` (詰み可能性の over-approximation) の回帰テスト．
@@ -815,15 +849,14 @@ fn test_29te() {
                     "default は canonical mate-29 を返すべき: {}",
                     moves.len()
                 );
+                // 無駄合い-free len (案A credit) 導入後の find_shortest 総ノード数．
+                // first-mate 単体は 9,288 で不変 (credit は find_shortest 再探索のみに作用)．
                 assert_eq!(
-                    nodes_searched, 9_288,
-                    "29te の探索ノード数が canonical (9,288) から乖離: {nodes_searched}"
+                    nodes_searched, 531_296,
+                    "29te の探索ノード数が canonical (531,296) から乖離: {nodes_searched}"
                 );
             }
-            other => panic!(
-                "[dfpn] 29te NON-SOLVE: {other:?}, {} nodes",
-                s.nodes
-            ),
+            other => panic!("[dfpn] 29te NON-SOLVE: {other:?}, {} nodes", s.nodes),
         }
     }
 }
@@ -835,9 +868,11 @@ fn test_29te() {
 ///   9c3c 1c1d 3c2c 1d1e P*1f 1e1f P*1g 1f1g 5g6f 1g1h 2c2g 1h1i 8g8i S*6i 8i6i 6h6i+
 ///   S*2h 1i2i 2h3g 2i3i 2g2h 3i4i 2h4h
 ///
-/// **[KNOWN-FAIL]** 現状 maou の find_shortest は 53 手を返す (無駄合いフィルタ適用後)．
-/// len-bound 偽 proof バグ (len=53 再探索が pn=0/mate_len=55 の garbage を返す) が 39 手への
-/// 収束を阻んでいる．このバグ根治後に 39 手 assert が通る見込み．SFEN/BUDGET/SECS env で上書き可．
+/// **[FIXED]** 案A (無駄合い-free len budget; 透過中合い drop を len から credit) 導入により
+/// find_shortest が真の最短 **39 手** へ収束するようになった (旧: len-budget が無駄合い込み raw ply を
+/// 数え len=37 以下を偽 disproof → root 43 へ過大評価)．STRICT-VERIFY Some(39)・PV は上記正解と一致．
+/// perf: 無駄合いを正しく展開するため node 数増 (旧 4.27M→24.8M)．collapse 最適化は follow-up．
+/// SFEN/BUDGET/SECS env で上書き可．
 #[test]
 #[ignore]
 fn test_39te_measure() {
@@ -889,11 +924,17 @@ fn test_39te_measure() {
                 in_check && final_legal == 0,
                 "39te PV 終局面は真の詰みであるべき (false mate 検出): in_check={in_check} legal={final_legal}"
             );
-            // default sfen のときのみ canonical node 数を固定 (回帰ガード)．
+            // default sfen のときのみ最短手数 + canonical node 数を固定 (回帰ガード)．
             if sfen_env.is_none() {
                 assert_eq!(
-                    nodes_searched, 4_272_957,
-                    "39te の探索ノード数が canonical (4,272,957) から乖離"
+                    moves.len(),
+                    39,
+                    "39te は真の最短 39 手を返すべき (案A 修正後): {}",
+                    moves.len()
+                );
+                assert_eq!(
+                    nodes_searched, 24_773_536,
+                    "39te の探索ノード数が canonical (24,773,536; 案A credit) から乖離"
                 );
             }
         }
@@ -952,8 +993,164 @@ fn test_39te_divergence_probe() {
                 s.nodes,
             );
         }
-        let m = board.move_from_usi(line[k]).unwrap_or_else(|| panic!("invalid USI: {}", line[k]));
+        let m = board
+            .move_from_usi(line[k])
+            .unwrap_or_else(|| panic!("invalid USI: {}", line[k]));
         board.do_move(m);
+    }
+}
+
+/// [DIAG] post-2c3d (Bug2 clean repro) の真 17 手 line を 1 手ずつ進め，攻め方手番の各局面で
+/// find_shortest 解が期待値 (17 - k) と一致するか確認する．最初の OVER で divergence を局所化する．
+#[test]
+#[ignore]
+fn test_post2c3d_divergence_probe() {
+    let sfen = "9/3+N1P3/+R5p2/6k2/8N/5+B3/1R2S4/3p5/9 b NPb4g3sn4l14p 9";
+    // Branch A (即 4d5c 逃げ) oracle line — total 29 (post-2c3d から 21 手)．user KIF 由来．
+    let default_line = "8g8d P*4d 8d4d 3d4d 9c8d 4d5c 8d6d 5c4b P*4c 4b4c N*3e 4c4b 6d4d 4b3a 4f6d 3a2a P*2b 2a2b 3e2c+ 2b1a 4d1d";
+    let line_str = std::env::var("MOVES").unwrap_or_else(|_| default_line.to_string());
+    let line: Vec<&str> = line_str.split_whitespace().collect();
+    let total = line.len();
+    let probe_max: usize = std::env::var("PROBE_MAX")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(total);
+    let budget: u64 = std::env::var("BUDGET")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(15_000_000);
+    let mut board = Board::new();
+    board.set_sfen(sfen).unwrap();
+    for k in 0..total {
+        if k % 2 == 0 && k <= probe_max {
+            let expected = (total - k) as i64;
+            let sub_sfen = board.sfen();
+            let mut b = Board::new();
+            b.set_sfen(&sub_sfen).unwrap();
+            let mut s = DfPnSolver::with_timeout(47, budget, 32767, 60);
+            let got = match s.solve_impl(&mut b) {
+                TsumeResult::Checkmate { moves, .. } => moves.len() as i64,
+                _ => -1,
+            };
+            let flag = if got == expected {
+                "OK"
+            } else if got > expected {
+                "OVER"
+            } else {
+                "UNDER/UNSOLVED"
+            };
+            eprintln!(
+                "[probe2c3d] k={k:2} expected={expected:2} got={got:3} nodes={:>9} [{flag}] sfen={sub_sfen}",
+                s.nodes,
+            );
+        }
+        let m = board
+            .move_from_usi(line[k])
+            .unwrap_or_else(|| panic!("invalid USI: {}", line[k]));
+        board.do_move(m);
+    }
+}
+
+/// [DIAG] OR-node (攻め方手番) の各王手手 M について，全防御 D に対する孫局面を find_shortest で
+/// 解き，value(M)=2+max_D(孫手数) を出す．最短 M が真の詰み手順．maou の find_shortest が
+/// どの M を過小に避け / どの孫を過大評価するかを局面+手の粒度で可視化する．env CHILDSFEN で局面指定．
+#[test]
+#[ignore]
+fn test_children_probe() {
+    let sfen = std::env::var("CHILDSFEN").expect("set CHILDSFEN");
+    let budget: u64 = std::env::var("BUDGET")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4_000_000);
+    let mut board = Board::new();
+    board.set_sfen(&sfen).unwrap();
+    let all_moves = crate::movegen::generate_legal_moves(&mut board);
+    // 攻め方は王手のみ (tsume)．do_move 後に防御側が王手されている手だけ残す．
+    let atk_moves: Vec<_> = all_moves
+        .into_iter()
+        .filter(|&m| {
+            let mut b1 = board.clone();
+            b1.do_move(m);
+            b1.is_in_check(b1.turn())
+        })
+        .collect();
+    eprintln!(
+        "[children] root sfen={sfen} ({} checking moves)",
+        atk_moves.len()
+    );
+    let mut best = i64::MAX;
+    let mut best_m = String::new();
+    for m in atk_moves {
+        let mut b1 = board.clone();
+        b1.do_move(m);
+        let def_moves = crate::movegen::generate_legal_moves(&mut b1);
+        if def_moves.is_empty() {
+            // M で即詰み (defender 受けなし)．
+            eprintln!("[children] M={:<7} -> value=1 (mate-in-1)", m.to_usi());
+            if 1 < best {
+                best = 1;
+                best_m = m.to_usi();
+            }
+            continue;
+        }
+        let mut max_gc = 0i64;
+        let mut refuted: Option<String> = None;
+        let mut worst_d = String::new();
+        for d in def_moves {
+            let mut b2 = b1.clone();
+            b2.do_move(d);
+            let mut s = DfPnSolver::with_timeout(47, budget, 32767, 30);
+            match s.solve_impl(&mut b2) {
+                TsumeResult::Checkmate { moves, .. } => {
+                    let v = moves.len() as i64;
+                    if v > max_gc {
+                        max_gc = v;
+                        worst_d = d.to_usi();
+                    }
+                }
+                _ => {
+                    refuted = Some(d.to_usi());
+                    break;
+                }
+            }
+        }
+        match refuted {
+            Some(d) => eprintln!(
+                "[children] M={:<7} -> REFUTED (defender {d} escapes)",
+                m.to_usi()
+            ),
+            None => {
+                let val = 2 + max_gc;
+                eprintln!(
+                    "[children] M={:<7} -> value={:>3} (worst defense {worst_d} -> grandchild {max_gc})",
+                    m.to_usi(), val
+                );
+                if val < best {
+                    best = val;
+                    best_m = m.to_usi();
+                }
+            }
+        }
+    }
+    eprintln!("[children] BEST: M={best_m} value={best} (= true shortest if grandchildren solved correctly)");
+}
+
+/// [DIAG] 手順を env MOVES (space 区切り USI) で与え，post-2c3d から進めて各局面の SFEN を印字．
+#[test]
+#[ignore]
+fn test_dump_sfen() {
+    let sfen = std::env::var("STARTSFEN")
+        .unwrap_or_else(|_| "9/3+N1P3/+R5p2/6k2/8N/5+B3/1R2S4/3p5/9 b NPb4g3sn4l14p 9".to_string());
+    let moves = std::env::var("MOVES").unwrap_or_default();
+    let mut board = Board::new();
+    board.set_sfen(&sfen).unwrap();
+    eprintln!("[dump] start: {}", board.sfen());
+    for (i, mv) in moves.split_whitespace().enumerate() {
+        let m = board
+            .move_from_usi(mv)
+            .unwrap_or_else(|| panic!("invalid USI: {mv}"));
+        board.do_move(m);
+        eprintln!("[dump] after {:>2} {:<6}: {}", i + 1, mv, board.sfen());
     }
 }
 

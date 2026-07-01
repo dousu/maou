@@ -319,6 +319,35 @@ impl DfPnSolver {
         (futile, chain)
     }
 
+    /// [案A] find_shortest の len 予算を無駄合い-free 化する: AND node (受け方手番・飛び駒王手中) で
+    /// **透過的に取り返される中合いマス (chain)** を返す．これらへの合駒 drop は無駄合いゆえ len を
+    /// 減じない (child len = `len.add(1)` → 攻め方の取り返し `len.sub(1)` と相殺し pair cost 0)．
+    /// 非 AND / 非王手 / 非飛び駒王手 / 間マス無しでは空 bitboard (= 全 drop が通常 decrement)．
+    /// `futile` マスは generate_interpositions で drop 自体が skip されるため対象外 (chain のみ返す)．
+    pub(super) fn transparent_interposition_squares(&self, board: &Board) -> Bitboard {
+        let attacker = self.attacker;
+        let defender = attacker.opponent();
+        if board.turn != defender {
+            return Bitboard::EMPTY; // OR node (攻め方手番) では credit しない
+        }
+        let king_sq = match board.king_square(defender) {
+            Some(k) => k,
+            None => return Bitboard::EMPTY,
+        };
+        let checker_sq = match self.find_sliding_checker(board, king_sq, attacker) {
+            Some(c) => c,
+            None => return Bitboard::EMPTY,
+        };
+        let between = attack::between_bb(checker_sq, king_sq);
+        if !between.is_not_empty() {
+            return Bitboard::EMPTY;
+        }
+        let (_futile, chain) = self.compute_futile_and_chain_squares(
+            board, &between, king_sq, checker_sq, defender, attacker,
+        );
+        chain
+    }
+
     /// 飛び駒が玉隣接マスへ取り進んだ後に玉の逃げ道があるか判定する．
     ///
     /// 飛び駒が `capture_sq` へ移動した場合を想定し，
