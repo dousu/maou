@@ -1,6 +1,6 @@
 ---
-status: approved
-applied_in:
+status: applied
+applied_in: 03f635a
 target: docs/design/tsume-solver/39te-oracle.md, docs/design/tsume-solver/index.md
 date: 2026-06-30
 ---
