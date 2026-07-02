@@ -39,24 +39,48 @@ df-pn は探索木を明示的に保持しないため，詰み証明後に **TT
 (`search/pv.rs`)．旧版の 3-phase 構成 (complete_or_proofs / extract_pv_recursive / 検証) は
 この 2 段に整理された．
 
-### 9-b.1 verify_proof (STRICT replay)
+### 9-b.1 verify_proof (STRICT replay; solve_impl の最終権威)
 
 証明木を再帰的に辿り直し，**PV 上の全応手が実際に詰むこと**を検証する (偽の証明を弾く)．
+`solve_impl` はこれを**最終権威**とし，STRICT が `Some(d)` のときのみ `Checkmate` を返す
+([loop-ghi §7.5](loop-ghi.md))．
 
 - **OR ノード** (攻め方): まず `mate1ply` を試し ([heuristics §5.3](initial-heuristics.md))，
-  無ければ王手を列挙して各子を再帰検証する．1 つでも詰む王手があれば proven．
+  無ければ王手を列挙して TT-proven の子を候補化し再帰検証する．1 つでも詰む王手があれば
+  proven．候補の子 key/hand は do_move せず incremental に算出し (`hashes_after`/`hand_after`)，
+  query 一括構築 + prefetch で TT の DRAM latency を隠す (探索の child loop と同手法; 3.4.6)．
 - **AND ノード** (守備方): 全合法応手を列挙し，**全てが詰みに至る**ことを要求する (最長抵抗)．
-- **memo** (`HashMap<u64, Option<u16>>`): 局面ごとに検証済み手数を記録し再検証を避ける．
-- 予算 (既定 80M ノード) 内で詰み手数 `Option<u16>` を返す．None = 未完/不健全．
+  無駄合いの除外 (手数集計のみ) は [aigoma §8.2](aigoma-optimization.md)．
+- **memo** (`FxHashMap<u64, Option<u16>>`): 局面ごとに検証結果を記録し再検証を避ける．
+  **経路依存の None (千日手拒否・budget 枯渇由来) は memo しない** — dep 伝播で依存が自
+  subtree 内に閉じた None のみ cache する (verify 内 GHI の根治, 3.4.3;
+  [loop-ghi §7.5](loop-ghi.md))．Some は構成的に経路非依存で常に memo する．
+- 予算 (既定 80M call) 内で詰み手数 `Option<u16>` を返す．None = 未完/不健全 → `Unknown`．
+
+**2-tier fast/full (3.4.6)**: verify は「証明 DAG 閉包の全 replay」ゆえ全候補検証は高価
+(39te で全体 wall の ~31% を占めていた)．そこで 2 段構成にする:
+
+1. **fast tier**: OR ノードで TT len 昇順の**最初に検証成功した候補**を採用して打ち切る．
+   どの検証済 child でも詰みの証明になるため **soundness は全候補検証と同一**．非保証なのは
+   PV の最短選択のみ．
+2. **full fallback**: fast の PV 長が search の最短 claim (`mate_len`) を超えた場合のみ，
+   全候補から最短を選ぶ従来動作で再検証し最短性を保全する (canonical 問題では fast で常に
+   一致し fallback は発火しない)．
+
+測定 (39te, 2026-07-02): verify wall 24.5s → 6.6s，全体 87.6s → ~70s．ログは
+`STRICT VERIFY Some(d) (..., wall=…, tier=fast|full-fallback)` で tier を報告する．
 
 この STRICT 検証は，canonical テストの健全性ゲート (偽証明 = 即停止) の基盤である．
 
 ### 9-b.2 build_pv (手順構築)
 
-`verify_proof` が残した手数 memo を辿り，手順を構築する:
+`verify_proof` が局面ごとに記録した最適手 (`pv_choice: FxHashMap<u64, Move>`) を辿り，
+手順を構築する:
 
-- **OR ノード**: 詰みが証明された子のうち**最短**手数の手を選ぶ (最善の攻め)．
-- **AND ノード**: 詰みに至る応手のうち**最長**手数の手を選ぶ (最善の受け = 最長抵抗)．
+- **OR ノード**: 検証済みの子のうち**最短**手数の手 (fast tier では TT len 昇順の最初の
+  検証成功手; PV 長 guard は §9-b.1) を選ぶ (最善の攻め)．
+- **AND ノード**: 詰みに至る応手のうち**最長**手数の手を選ぶ (最善の受け = 最長抵抗;
+  無駄合いは集計から除外済)．
 - これにより「最善応手に対する最短詰み手順」が得られる．
 
 ### 9-b.3 find_shortest (余詰探索) と最短手数
@@ -86,8 +110,9 @@ df-pn は探索木を明示的に保持しないため，詰み証明後に **TT
 [aigoma §8.2](aigoma-optimization.md))．maou が既知手順と異なる解を出したら，採用前に SFEN と現 PV
 を提示してユーザに確認する．
 
-**現状 (3.2.0)**: 29te は最短 29 手を confirm (len=27 が正しく disprove)．**39te は 57→45 手まで
-前進するが len=43 で false-disproof する完全性バグが残る** (真の最短 39 手に未到達; cold TT でも
-再現するため warm-TT/無駄合い由来ではなく len-bounded 探索の完全性の別バグ)．
+**現状 (3.4.x)**: 旧 3.2.0 の「39te が len=43 で false-disproof する」問題は len 予算の units
+バグと診断され，**無駄合い-free len credit (案A, 3.4.0; [aigoma §8.4](aigoma-optimization.md))
+で根治**した．29te 最短 29 手 / **39te 最短 39 手** / post-2c3d 31 手を user oracle と一致で
+confirm する (canonical anchor: 29te 396,516 / 39te 17,545,528 nodes @3.4.4)．
 `test_39te_divergence_probe` が分岐局面の残手数を再帰確認して局所化する診断方法論を提供する．
 `find_shortest=false` では最初に見つかった手順 (最短保証なし; ノード数削減) を返す．

@@ -65,25 +65,33 @@ TT エントリの `proven_len` / `disproven_len` (len-aware, [TT §6.3](transpo
 §7.2 の scope 化で扱う．`REMAINING_INFINITE` (深さ非依存の確定結果) と scope 付き (深さ依存の
 仮結果) を区別し，深い反復で自動的に再評価する．
 
-### 7.5 転置による偽証明 (proof-tree 循環) と STRICT verify の権威化
+### 7.5 verify 内 GHI (経路依存 None の memo 汚染) と STRICT verify の権威化
 
-§7.1 の `path_depths` は **現在の探索スタック上**の循環しか検出しない．一方，**転置 (TT) の
-proven エントリを別分岐で再利用**すると，**探索スタックに現れない proof-tree の循環**が
-形成され得る (proven 局面 X が分岐 B1 で確定 → 別分岐 B2 で X を TT 再利用 → B2 の経路が X の
-証明内へ戻る循環)．この循環は「玉が逃げられる非詰み」を proven と記録する **偽証明 (false
-proof / false mate)** を生む．探索順序 (閾値ゆるめ等) に依存して露出するが，バグ自体は順序に
-依存せず潜在する (localize 例: AND 局面 `9/9/4+N1pS1/9/4+R4/5+B3/6R1P/3S2k2/9 w` で玉が `3h2i`
-へ合法脱出できるのに proven と記録)．
+**再診断 (3.4.3) による訂正**: 本節の旧版 (3.4.2 時点) は「転置 (TT) の proven エントリの
+cross-branch 再利用が proof-tree 循環を作り偽証明 (false mate) を生む」と診断していたが，
+これは**誤診**だった．localize 例とされた AND 局面 `9/9/4+N1pS1/9/4+R4/5+B3/6R1P/3S2k2/9 w`
+は，全 4 防御 (3h2i/3h2h/3h4h/3h4i) の子局面を個別に solve して **全 hand で真の詰み**と
+STRICT 確認された (「3h2i で脱出可能」は誤認)．**探索は偽 proven を作っておらず，TT
+lookup の proven 無条件返却も KH user-engine と同構造で健全**である (千日手由来の結論は
+`set_repetition` が rep flag + path_key 別テーブルへ隔離し，proven/disproven Final に昇格
+しない — §7.1 の設計により「TT の Final = 経路非依存な真の結論」が不変条件として成立する)．
 
-- **TT look_up の穴** (`tt/mod.rs::look_up`): proven (`pn==0`) 分岐は即 `make_final(true)` を
-  返し，unknown 分岐が行う `is_possible_repetition` + rep-table 再チェックを**欠く**．ただし
-  cross-branch の clean-proof 再利用では `is_possible_repetition` が立たないため，proven 分岐に
-  同じ再チェックを足しても捕捉できない．探索側での完全な GHI-safe 化は **proof-path 循環追跡**を
-  要する (Kishimoto & Müller の source-node 方式等) research-level 課題として残る．
-- **採用した健全化 — STRICT verify の権威化 (maou_shogi 3.4.2)**: `verify_proof`
-  ([move-ordering-and-pv.md](move-ordering-and-pv.md)) は全合法防御を実 replay し `path.contains`
-  で proof-path 循環も検出する **GHI-correct な厳密判定**である．`solve_impl` はこれを**最終
-  権威**とし，**STRICT VERIFY が `Some(d)` を返したときのみ `Checkmate` を返す**．`None` (偽証明
-  もしくは verify budget 不完全) は偽の詰みを返さず `Unknown` を返す (**soundness > completeness**:
-  真の詰みの取りこぼしより偽詰みの回避を優先)．default 探索では verify が常に `Some` ゆえ挙動は
-  不変 (探索が偽 proven を出した場合のみ `Unknown` へ落ちる)．
+実バグは **verify 側**にあった (**verify 内 GHI**; maou_shogi 3.4.3 で根治):
+
+- **機構**: `verify_proof` は path 上の祖先と一致した子を千日手 (受け方脱出) として `None` で
+  拒否する．この None は**その経路でのみ有効**な経路依存結果だが，旧実装はこれを経路非依存の
+  `memo` に書き込んでいた．証明候補が祖先へ戻る**循環近傍** (例: 王 3h↔2i・飛 3g↔2g の 4-ply
+  循環) を先に訪れた文脈で書かれた None が残り，以後**本物の証明線**の verify が memo=None を
+  引いて root まで連鎖 → **偽 Unknown** (偽証明ではなく検証の偽陰性)．探索順序 (閾値等) で
+  「どの文脈が先に verify するか」が変わるため order-dependent に露出する．
+- **fix (dep 伝播; §7.1 の `repetition_start < depth` ゲートと同型)**: 各再帰が「結果が依存した
+  最浅の path index」を `dep_out` で親へ返す．None は依存が自 subtree 内で閉じた場合のみ memo
+  し，祖先依存の None (と budget 枯渇 None) は memo せず別文脈で再検証させる．**Some は常に
+  memo 可** — Some の導出木には循環拒否が入り込めない (AND は任意の None で None 化し，OR の
+  None 候補は Some を支えない) ため構成的に経路非依存である．
+- **STRICT verify の権威化 (3.4.2) は多層防御として維持**: `solve_impl` は `verify_proof`
+  ([move-ordering-and-pv.md §9-b.1](move-ordering-and-pv.md)) を**最終権威**とし，**STRICT
+  VERIFY が `Some(d)` を返したときのみ `Checkmate` を返す**．`None` (万一の偽証明 / verify
+  budget 不完全) は偽の詰みを返さず `Unknown` を返す (**soundness > completeness**)．これに
+  より閾値チューニングは健全性に影響しない (効率のみ; [threshold §3.1](threshold-control.md))．
+  verify の実行コストは 2-tier 化で削減した ([move-ordering-and-pv.md §9-b.1](move-ordering-and-pv.md))．
