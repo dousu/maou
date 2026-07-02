@@ -602,6 +602,7 @@ impl DfPnSolver {
             let mut pv_choice: std::collections::HashMap<u64, crate::moves::Move> =
                 std::collections::HashMap::new();
             let mut budget: u64 = 80_000_000;
+            let mut root_dep = usize::MAX;
             let verified = self.verify_proof(
                 &mut tt,
                 board,
@@ -609,6 +610,7 @@ impl DfPnSolver {
                 &mut memo,
                 &mut pv_choice,
                 &mut budget,
+                &mut root_dep,
             );
             // **STRICT verify を authoritative にする** (soundness keystone)．
             // 探索の pn/dn は GHI (proof-tree 循環を TT 再利用で作る) 等で偽 proven を生じ得るが，

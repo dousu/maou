@@ -24,6 +24,15 @@ impl DfPnSolver {
     ///   帰着するか確認 (futile filter は探索と同一 move set)．1 つでも逃れれば `None` (偽証明)．
     /// - 末端: AND 手なし & 王手 = 詰み `Some(0)`．OR proven child 無し = 不完全 `None`．
     /// - path 上の同一局面 = 千日手 = 受け方脱出 = `None`．`memo` で局面を重複検証しない．
+    ///
+    /// # 経路依存 None の memo 汚染防止 (verify 内 GHI)
+    ///
+    /// 千日手拒否 (`path` 上の祖先と一致) による `None` は **その経路でのみ有効** な結果である．
+    /// これを無条件に `memo` へ書くと，循環文脈で先に訪れたノードの None が経路非依存キャッシュ
+    /// として残り，**本物の証明線の verify を偽 None (→偽 Unknown) に落とす** (order-dependent)．
+    /// 対策 (KH の rep-close gate と同型): `dep_out` に「結果が依存した最浅の path index」を伝播し，
+    /// 依存先が自ノードの subtree 内 (`dep >= 自 level`) のときだけ memo する．祖先依存 (`dep <
+    /// 自 level`) の結果は memo せず，別文脈では再検証させる．budget 枯渇 None も同様に汚染扱い．
     pub(super) fn verify_proof(
         &mut self,
         tt: &mut TranspositionTable,
@@ -32,18 +41,27 @@ impl DfPnSolver {
         memo: &mut HashMap<u64, Option<u16>>,
         pv_choice: &mut HashMap<u64, Move>,
         budget: &mut u64,
+        dep_out: &mut usize,
     ) -> Option<u16> {
         if *budget == 0 {
+            // budget 枯渇 None は経路にも memo 状態にも依存する → 最大汚染として伝播し
+            // 祖先にも memo させない (偽 None のキャッシュ化を防ぐ)．
+            *dep_out = 0;
             return None;
         }
         *budget -= 1;
         let h = board.hash;
-        if path.contains(&h) {
-            return None; // 千日手 = 受け方脱出 = 不詰
+        if let Some(anc) = path.iter().position(|&x| x == h) {
+            // 千日手 = 受け方脱出 = 不詰．ただし path[anc] (祖先) に依存する経路依存の結論．
+            *dep_out = (*dep_out).min(anc);
+            return None;
         }
         if let Some(&r) = memo.get(&h) {
             return r;
         }
+        // この呼び出しの結果が依存した最浅 path index (usize::MAX = 経路非依存)．
+        let mut dep = usize::MAX;
+        let my_level = path.len();
         let attacker = self.attacker;
         let or_node = board.turn == attacker;
         let result = if or_node {
@@ -85,7 +103,7 @@ impl DfPnSolver {
                 let mut best: Option<(Move, u16)> = None;
                 for (mv, _) in cands {
                     let cap = board.do_move(mv);
-                    let r = self.verify_proof(tt, board, path, memo, pv_choice, budget);
+                    let r = self.verify_proof(tt, board, path, memo, pv_choice, budget, &mut dep);
                     board.undo_move(mv, cap);
                     if let Some(d) = r {
                         let dist = d + 1;
@@ -134,7 +152,7 @@ impl DfPnSolver {
                     let is_drop = m.is_drop();
                     let cap = board.do_move(*m);
                     let child_h = board.hash;
-                    let r = self.verify_proof(tt, board, path, memo, pv_choice, budget);
+                    let r = self.verify_proof(tt, board, path, memo, pv_choice, budget, &mut dep);
                     // (A) 取り返し透過の判定．board は verify 後 child OR 局面 (m do_move 済)．
                     let mut recapture_transparent = false;
                     if is_drop {
@@ -195,7 +213,12 @@ impl DfPnSolver {
                 }
             }
         };
-        memo.insert(h, result);
+        // 経路依存 (祖先の千日手拒否 / budget 枯渇に汚染) の結果は memo しない — 別文脈で
+        // 再検証させる．subtree 内で閉じた結果 (dep >= my_level) のみ経路非依存として cache 可．
+        if dep >= my_level {
+            memo.insert(h, result);
+        }
+        *dep_out = (*dep_out).min(dep);
         result
     }
 
