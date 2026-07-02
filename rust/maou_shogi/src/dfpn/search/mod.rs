@@ -597,13 +597,18 @@ impl DfPnSolver {
             // AND は **全合法防御** を列挙して詰みに帰着するか厳密検証する (TT pn/dn を信用しない)．
             // Some(d) = sound mate-d / None = 偽証明 or 不完全 (budget 枯渇は別表示)．
             let mut path: Vec<u64> = Vec::new();
-            let mut memo: std::collections::HashMap<u64, Option<u16>> =
-                std::collections::HashMap::new();
-            let mut pv_choice: std::collections::HashMap<u64, crate::moves::Move> =
-                std::collections::HashMap::new();
+            let mut memo: rustc_hash::FxHashMap<u64, Option<u16>> =
+                rustc_hash::FxHashMap::default();
+            let mut pv_choice: rustc_hash::FxHashMap<u64, crate::moves::Move> =
+                rustc_hash::FxHashMap::default();
             let mut budget: u64 = 80_000_000;
             let mut root_dep = usize::MAX;
-            let verified = self.verify_proof(
+            let verify_start = std::time::Instant::now();
+            // 2-tier verify: まず fast (OR node で最初の検証済候補を採用; soundness 同一) で
+            // 検証し，得られた PV が search の最短 claim (mate_len) 以下ならそのまま採用する．
+            // fast の PV が claim を超えた場合のみ full (全候補から最短選択 = 従来動作) へ
+            // fallback して最短性を保全する (fast は最短選択だけが非保証のため)．
+            let mut verified = self.verify_proof(
                 &mut tt,
                 board,
                 &mut path,
@@ -611,7 +616,35 @@ impl DfPnSolver {
                 &mut pv_choice,
                 &mut budget,
                 &mut root_dep,
+                true,
             );
+            let mut pv: Vec<crate::moves::Move> = Vec::new();
+            let mut tier = "fast";
+            if verified.is_some() {
+                pv = self.build_pv(board, &pv_choice, last.len().len() as usize + 8);
+                if pv.len() > last.len().len() as usize {
+                    tier = "full-fallback";
+                    path.clear();
+                    memo.clear();
+                    pv_choice.clear();
+                    budget = 80_000_000;
+                    root_dep = usize::MAX;
+                    verified = self.verify_proof(
+                        &mut tt,
+                        board,
+                        &mut path,
+                        &mut memo,
+                        &mut pv_choice,
+                        &mut budget,
+                        &mut root_dep,
+                        false,
+                    );
+                    if verified.is_some() {
+                        pv = self.build_pv(board, &pv_choice, last.len().len() as usize + 8);
+                    }
+                }
+            }
+            let verify_wall = verify_start.elapsed();
             // **STRICT verify を authoritative にする** (soundness keystone)．
             // 探索の pn/dn は GHI (proof-tree 循環を TT 再利用で作る) 等で偽 proven を生じ得るが，
             // verify_proof は全合法防御を実 replay し path 循環も検出する厳密判定ゆえ，これを最終権威
@@ -622,13 +655,14 @@ impl DfPnSolver {
             match verified {
                 Some(d) => {
                     eprintln!(
-                        "[dfpn] STRICT VERIFY Some({}) (root mate_len={}, budget_left={})",
+                        "[dfpn] STRICT VERIFY Some({}) (root mate_len={}, budget_left={}, wall={:.2}s, tier={})",
                         d,
                         last.len().len(),
-                        budget
+                        budget,
+                        verify_wall.as_secs_f64(),
+                        tier
                     );
-                    // PV は pv_choice (verify が記録した無駄合い除外後の最適手) を辿って復元．
-                    let pv = self.build_pv(board, &pv_choice, last.len().len() as usize + 8);
+                    // PV は pv_choice (verify が記録した無駄合い除外後の最適手) を辿って復元済．
                     TsumeResult::Checkmate {
                         moves: pv,
                         nodes_searched: self.nodes,

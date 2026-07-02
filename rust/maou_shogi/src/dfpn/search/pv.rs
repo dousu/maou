@@ -6,7 +6,7 @@
 
 use crate::board::Board;
 use crate::moves::Move;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::dfpn::mate_len::DEPTH_MAX_MATE_LEN;
 use crate::dfpn::search_result::K_INFINITE_PN_DN;
@@ -31,17 +31,27 @@ impl DfPnSolver {
     /// これを無条件に `memo` へ書くと，循環文脈で先に訪れたノードの None が経路非依存キャッシュ
     /// として残り，**本物の証明線の verify を偽 None (→偽 Unknown) に落とす** (order-dependent)．
     /// 対策 (KH の rep-close gate と同型): `dep_out` に「結果が依存した最浅の path index」を伝播し，
-    /// 依存先が自ノードの subtree 内 (`dep >= 自 level`) のときだけ memo する．祖先依存 (`dep <
-    /// 自 level`) の結果は memo せず，別文脈では再検証させる．budget 枯渇 None も同様に汚染扱い．
+    /// None は依存先が自ノードの subtree 内 (`dep >= 自 level`) のときだけ memo する．祖先依存
+    /// (`dep < 自 level`) の None は memo せず，別文脈では再検証させる．budget 枯渇 None も同様に
+    /// 汚染扱い．**Some は常に memo 可** (導出木に循環拒否が入り込めないため構成的に経路非依存;
+    /// dep_out へも None のみ伝播する)．
+    /// # fast (2-tier verify)
+    ///
+    /// `fast=true` は OR node で TT len 昇順の**最初に verify 成功した候補**で打ち切る
+    /// (soundness は不変: どの検証済 child でも詰みの証明になる)．全候補検証との違いは
+    /// PV の最短選択のみで，呼び出し側 (`solve_impl`) が「fast PV 長 > search の最短 claim」
+    /// のとき `fast=false` (全候補検証 = 従来動作) へ fallback して最短性を保全する．
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn verify_proof(
         &mut self,
         tt: &mut TranspositionTable,
         board: &mut Board,
         path: &mut Vec<u64>,
-        memo: &mut HashMap<u64, Option<u16>>,
-        pv_choice: &mut HashMap<u64, Move>,
+        memo: &mut FxHashMap<u64, Option<u16>>,
+        pv_choice: &mut FxHashMap<u64, Move>,
         budget: &mut u64,
         dep_out: &mut usize,
+        fast: bool,
     ) -> Option<u16> {
         if *budget == 0 {
             // budget 枯渇 None は経路にも memo 状態にも依存する → 最大汚染として伝播し
@@ -84,16 +94,24 @@ impl DfPnSolver {
                 let mut moves: Vec<Move> = Vec::new();
                 self.check_moves_into(board, &mut moves);
                 let mut cands: Vec<(Move, u16)> = Vec::new();
-                for &m in &moves {
-                    let cap = board.do_move(m);
-                    let ch_pos = crate::dfpn::position_key(board);
-                    let child_hand = board.hand[attacker.index()];
-                    let q = tt.build_query(0, ch_pos, child_hand, 0);
+                // 子 key/hand は do_move せず incremental に算出し (search の child loop と同手法)，
+                // query を先に全構築 + prefetch して TT の DRAM latency を重ねる．
+                let queries: Vec<_> = moves
+                    .iter()
+                    .map(|&m| {
+                        let (_ch_full, ch_pos) = board.hashes_after(m);
+                        let child_hand = board.hand_after(m, attacker);
+                        tt.build_query(0, ch_pos, child_hand, 0)
+                    })
+                    .collect();
+                for q in &queries {
+                    tt.prefetch(q);
+                }
+                for (i, &m) in moves.iter().enumerate() {
                     let mut dhoc = false;
-                    let r = tt.look_up(&q, DEPTH_MAX_MATE_LEN, &mut dhoc, || {
+                    let r = tt.look_up(&queries[i], DEPTH_MAX_MATE_LEN, &mut dhoc, || {
                         (K_INFINITE_PN_DN, K_INFINITE_PN_DN)
                     });
-                    board.undo_move(m, cap);
                     if r.pn() == 0 {
                         cands.push((m, r.len().len() as u16));
                     }
@@ -103,12 +121,16 @@ impl DfPnSolver {
                 let mut best: Option<(Move, u16)> = None;
                 for (mv, _) in cands {
                     let cap = board.do_move(mv);
-                    let r = self.verify_proof(tt, board, path, memo, pv_choice, budget, &mut dep);
+                    let r =
+                        self.verify_proof(tt, board, path, memo, pv_choice, budget, &mut dep, fast);
                     board.undo_move(mv, cap);
                     if let Some(d) = r {
                         let dist = d + 1;
                         if best.map_or(true, |(_, bd)| dist < bd) {
                             best = Some((mv, dist));
+                        }
+                        if fast {
+                            break;
                         }
                     }
                 }
@@ -152,7 +174,8 @@ impl DfPnSolver {
                     let is_drop = m.is_drop();
                     let cap = board.do_move(*m);
                     let child_h = board.hash;
-                    let r = self.verify_proof(tt, board, path, memo, pv_choice, budget, &mut dep);
+                    let r =
+                        self.verify_proof(tt, board, path, memo, pv_choice, budget, &mut dep, fast);
                     // (A) 取り返し透過の判定．board は verify 後 child OR 局面 (m do_move 済)．
                     let mut recapture_transparent = false;
                     if is_drop {
@@ -213,12 +236,17 @@ impl DfPnSolver {
                 }
             }
         };
-        // 経路依存 (祖先の千日手拒否 / budget 枯渇に汚染) の結果は memo しない — 別文脈で
-        // 再検証させる．subtree 内で閉じた結果 (dep >= my_level) のみ経路非依存として cache 可．
-        if dep >= my_level {
+        // 経路依存の可能性があるのは None のみ (Some の導出木に循環拒否は入り込めない: AND は
+        // 任意の None で結果が None 化し，OR の None 候補は Some を支えない → Some は構成的に
+        // 経路非依存で常に memo 可)．None は祖先の千日手拒否 / budget 枯渇に汚染されている場合
+        // (dep < my_level) memo せず，別文脈で再検証させる．dep_out へも None のみ伝播する
+        // (Some まで汚染扱いすると循環近傍で巨大 subtree を再検証し verify wall が膨張する)．
+        if result.is_some() || dep >= my_level {
             memo.insert(h, result);
         }
-        *dep_out = (*dep_out).min(dep);
+        if result.is_none() {
+            *dep_out = (*dep_out).min(dep);
+        }
         result
     }
 
@@ -229,7 +257,7 @@ impl DfPnSolver {
     pub(super) fn build_pv(
         &mut self,
         board: &Board,
-        pv_choice: &HashMap<u64, Move>,
+        pv_choice: &FxHashMap<u64, Move>,
         max_steps: usize,
     ) -> Vec<Move> {
         let mut b = board.clone();
