@@ -849,11 +849,11 @@ fn test_29te() {
                     "default は canonical mate-29 を返すべき: {}",
                     moves.len()
                 );
-                // 無駄合い-free len (案A credit) 導入後の find_shortest 総ノード数．
-                // first-mate 単体は 9,288 で不変 (credit は find_shortest 再探索のみに作用)．
+                // find_shortest 総ノード数 (子 φ 予算 2nd+2nd/8+1 化後の canonical; 旧式
+                // 2nd+1 では 531,296)．
                 assert_eq!(
-                    nodes_searched, 531_296,
-                    "29te の探索ノード数が canonical (531,296) から乖離: {nodes_searched}"
+                    nodes_searched, 396_516,
+                    "29te の探索ノード数が canonical (396,516) から乖離: {nodes_searched}"
                 );
             }
             other => panic!("[dfpn] 29te NON-SOLVE: {other:?}, {} nodes", s.nodes),
@@ -933,8 +933,8 @@ fn test_39te_measure() {
                     moves.len()
                 );
                 assert_eq!(
-                    nodes_searched, 24_773_536,
-                    "39te の探索ノード数が canonical (24,773,536; 案A credit) から乖離"
+                    nodes_searched, 17_545_528,
+                    "39te の探索ノード数が canonical (17,545,528; 子 φ 予算 2nd+2nd/8+1) から乖離"
                 );
             }
         }

@@ -750,13 +750,21 @@ impl LocalExpansion {
         }
     }
     /// 子に渡す (pn, dn) 閾値．
+    ///
+    /// 子 φ 予算は `2nd_phi + 2nd_phi/8 + 1` (乗算緩和 ×1.125)．旧式 `2nd_phi + 1` より
+    /// 閾値反復の再展開が減り，39te full 最小化で nodes −29% / wall −12.5%，29te −25%
+    /// (2026-07-02 測定; 最短手数・canonical PV・STRICT verify・161 tests 全て不変)．
+    /// 閾値は df-pn の健全性に影響しない (効率のみ)．健全性は STRICT verify (authoritative)
+    /// が担保する．
     pub(super) fn front_pn_dn_thresholds(&self, thpn: PnDn, thdn: PnDn) -> (PnDn, PnDn) {
         let (thphi, thdelta) = if self.or_node {
             (thpn, thdn)
         } else {
             (thdn, thpn)
         };
-        let child_thphi = thphi.min(self.get_second_phi().saturating_add(1));
+        let second = self.get_second_phi();
+        let relaxed = clamp_pn_dn(second.saturating_add(second / 8).saturating_add(1));
+        let child_thphi = thphi.min(relaxed);
         let child_thdelta = self.new_thdelta_for_best_move(thdelta);
         if self.or_node {
             (child_thphi, child_thdelta)
@@ -994,12 +1002,17 @@ mod tests {
 
     #[test]
     fn front_thresholds_or_second_phi() {
-        // best=pn2, second=pn5 => child_thphi = min(thpn, second+1) = min(100, 6) = 6．
+        // best=pn2, second=pn5 => child_thphi = min(thpn, second + second/8 + 1) = min(100, 6) = 6．
         let e = or_node(&[(5, 3), (2, 4), (9, 1)]);
         let (cthpn, cthdn) = e.front_pn_dn_thresholds(100, 1000);
-        assert_eq!(cthpn, 6); // min(100, second_phi(5)+1)
+        assert_eq!(cthpn, 6); // min(100, second_phi(5) + 5/8(=0) + 1)
                               // child_thdelta = thdn - sum_delta_except_best(他子 dn = 3+1=4) = 1000-4 = 996．
         assert_eq!(cthdn, 996);
+
+        // second が大きいと乗算緩和が効く: second=16 => 16 + 16/8 + 1 = 19．
+        let e2 = or_node(&[(16, 3), (2, 4)]);
+        let (cthpn2, _) = e2.front_pn_dn_thresholds(100, 1000);
+        assert_eq!(cthpn2, 19);
     }
 
     #[test]
