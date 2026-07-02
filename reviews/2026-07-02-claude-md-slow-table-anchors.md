@@ -1,6 +1,7 @@
 ---
 title: "CLAUDE.md [SLOW] table の canonical anchor を 3.4.x 実態へ更新"
-status: pending
+status: applied
+applied_in: 44d8cd3
 date: 2026-07-02
 branch: feat/tsume-solver
 target: CLAUDE.md
