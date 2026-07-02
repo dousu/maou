@@ -1,11 +1,19 @@
 ---
-title: "GHI 再診断: 偽証明は誤診 (実体は verify memo 汚染の偽 Unknown)．loop-ghi §7.5 訂正 + CLAUDE.md [SLOW] anchor 更新"
-status: pending
+title: "GHI 再診断: 偽証明は誤診 (実体は verify memo 汚染の偽 Unknown)．設計ドキュメント反映 (loop-ghi §7.5 訂正ほか)"
+status: applied
+applied_in: 22e1c03
 date: 2026-07-02
 branch: feat/tsume-solver
-target: docs/design/tsume-solver/loop-ghi.md, CLAUDE.md
-risk: low  # docs 訂正のみ; コード変更 (0088291=3.4.3, 08c3a6f=3.4.4) は別 commit で既済
+target: docs/design/tsume-solver/ (loop-ghi.md, threshold-control.md, move-ordering-and-pv.md)
+risk: low  # docs 訂正のみ; コード変更 (0088291=3.4.3, 08c3a6f=3.4.4, 0a764f9=3.4.6) は別 commit で既済
 ---
+
+> **適用メモ (2026-07-02)**: user 指示「詰将棋ソルバー設計ドキュメントに今回の変更を反映して
+> ください」を承認とみなし，設計ドキュメント 3 ファイルへ適用した (22e1c03)．適用時に scope を
+> 拡張: loop-ghi §7.5 訂正に加え，threshold-control §3.1 (子 φ 予算 1+ε ε=1/8, 3.4.4) と
+> move-ordering-and-pv §9-b (dep memo ゲート + 2-tier verify, 3.4.3/3.4.6 + 旧 3.2.0 状況記述の
+> 更新) を反映．**CLAUDE.md [SLOW] table の anchor 更新は本 review から分離** →
+> [2026-07-02-claude-md-slow-table-anchors.md](2026-07-02-claude-md-slow-table-anchors.md) (pending)．
 
 ## Trigger
 
