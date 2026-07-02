@@ -302,6 +302,210 @@ fn dm_bump(idx: usize) {
     });
 }
 
+/// [diag/一時] SPROF env: find_shortest の pass 別に反証構造 (node 種別/終端原因/子構成/
+/// 残 len 分布) を集計する．off 時は OnceLock bool 分岐のみで実質ゼロコスト．
+#[derive(Clone, Copy)]
+struct Sprof {
+    bx_or: u64,
+    bx_and: u64,
+    bx_or_first: u64,
+    bx_and_first: u64,
+    t_or_no_check: u64,
+    t_and_mated: u64,
+    t_budget_or: u64,
+    t_budget_and: u64,
+    c_dom: u64,
+    c_rep: u64,
+    or_children: u64,
+    or_drops: u64,
+    or_seed_proven: u64,
+    or_seed_disproven: u64,
+    and_children: u64,
+    la_mate1: u64,
+    la_no_mate: u64,
+    la_budget_gate: u64,
+    stash_hit: u64,
+    or_len_hist: [u64; 48],
+    and_len_hist: [u64; 48],
+}
+
+impl Sprof {
+    const ZERO: Sprof = Sprof {
+        bx_or: 0,
+        bx_and: 0,
+        bx_or_first: 0,
+        bx_and_first: 0,
+        t_or_no_check: 0,
+        t_and_mated: 0,
+        t_budget_or: 0,
+        t_budget_and: 0,
+        c_dom: 0,
+        c_rep: 0,
+        or_children: 0,
+        or_drops: 0,
+        or_seed_proven: 0,
+        or_seed_disproven: 0,
+        and_children: 0,
+        la_mate1: 0,
+        la_no_mate: 0,
+        la_budget_gate: 0,
+        stash_hit: 0,
+        or_len_hist: [0; 48],
+        and_len_hist: [0; 48],
+    };
+}
+
+thread_local! {
+    static SPROF: std::cell::RefCell<Sprof> = const { std::cell::RefCell::new(Sprof::ZERO) };
+    /// [diag/一時] build 回数 per distinct node (full hash key; pass 毎 reset)．
+    static SPROF_SEEN: std::cell::RefCell<rustc_hash::FxHashMap<u64, u32>> =
+        std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+    /// [diag/一時] build 回数 per distinct (node, path_key) (pass 毎 reset)．
+    /// 同一 path 経由の rebuild = path-keyed expansion cache の捕捉上限．
+    static SPROF_SEEN_PATH: std::cell::RefCell<rustc_hash::FxHashMap<(u64, u64), u32>> =
+        std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+    /// [diag/一時] stack level 別「pop 済み子 (= 親健在なら stash 到達可能)」hash 集合．
+    /// level L のノードが pop されたら set[L+1] (その子らの stash) は無効化 (clear)．
+    static SPROF_POPPED: std::cell::RefCell<Vec<rustc_hash::FxHashSet<u64>>> =
+        std::cell::RefCell::new(Vec::new());
+}
+
+/// [diag/一時] 子 pop 時に記録: level `cidx` の hash を stash 到達可能集合へ，子自身の
+/// stash (level cidx+1) は無効化．
+fn sprof_stash_pop(cidx: usize, hash: u64) {
+    if !sprof_enabled() {
+        return;
+    }
+    SPROF_POPPED.with(|c| {
+        let mut v = c.borrow_mut();
+        if v.len() <= cidx + 1 {
+            v.resize_with(cidx + 2, Default::default);
+        }
+        v[cidx + 1].clear();
+        v[cidx].insert(hash);
+    });
+}
+
+/// [diag/一時] emplace 直前に判定: この (level, hash) は stash 到達可能な rebuild か．
+fn sprof_stash_check(level: usize, hash: u64) {
+    if !sprof_enabled() {
+        return;
+    }
+    let hit = SPROF_POPPED.with(|c| {
+        c.borrow()
+            .get(level)
+            .map(|s| s.contains(&hash))
+            .unwrap_or(false)
+    });
+    if hit {
+        sprof(|s| s.stash_hit += 1);
+    }
+}
+
+#[inline]
+fn sprof_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("SPROF").is_ok())
+}
+
+#[inline]
+fn sprof<F: FnOnce(&mut Sprof)>(f: F) {
+    if sprof_enabled() {
+        SPROF.with(|c| f(&mut c.borrow_mut()));
+    }
+}
+
+fn sprof_reset() {
+    if sprof_enabled() {
+        SPROF.with(|c| *c.borrow_mut() = Sprof::ZERO);
+        SPROF_SEEN.with(|c| c.borrow_mut().clear());
+        SPROF_SEEN_PATH.with(|c| c.borrow_mut().clear());
+        SPROF_POPPED.with(|c| c.borrow_mut().clear());
+    }
+}
+
+fn sprof_report(tag: &str) {
+    if !sprof_enabled() {
+        return;
+    }
+    SPROF.with(|c| {
+        let s = c.borrow();
+        eprintln!(
+            "[sprof] pass {tag}: built or={} (first={}) and={} (first={}) | term: or_no_check={} and_mated={} budget(or/and)={}/{} | child-cut: dom={} rep={}",
+            s.bx_or, s.bx_or_first, s.bx_and, s.bx_and_first, s.t_or_no_check, s.t_and_mated, s.t_budget_or, s.t_budget_and, s.c_dom, s.c_rep
+        );
+        eprintln!(
+            "[sprof]   children: or={} (drops={} seed_prov={} seed_disp={}) and={} | lookahead: mate1={} no_mate={} budget_gate={} | stash_hit={}",
+            s.or_children,
+            s.or_drops,
+            s.or_seed_proven,
+            s.or_seed_disproven,
+            s.and_children,
+            s.la_mate1,
+            s.la_no_mate,
+            s.la_budget_gate,
+            s.stash_hit
+        );
+        let fmt_hist = |h: &[u64; 48]| -> String {
+            h.iter()
+                .enumerate()
+                .filter(|(_, &v)| v > 0)
+                .map(|(i, &v)| {
+                    if i == 47 {
+                        format!("MAX:{v}")
+                    } else {
+                        format!("{i}:{v}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        eprintln!("[sprof]   or_len_hist  {}", fmt_hist(&s.or_len_hist));
+        eprintln!("[sprof]   and_len_hist {}", fmt_hist(&s.and_len_hist));
+    });
+    SPROF_SEEN.with(|c| {
+        let seen = c.borrow();
+        // 再訪分布: visit 回数 k のノード数と，k>=2 ノードが占める再 build 総数．
+        let mut by_k = [0u64; 9]; // 1..=8, [8]=9+
+        let mut rebuilds_total = 0u64;
+        let mut max_k = 0u32;
+        for &k in seen.values() {
+            by_k[((k as usize).min(9)) - 1] += 1;
+            rebuilds_total += (k as u64) - 1;
+            max_k = max_k.max(k);
+        }
+        let dist = by_k
+            .iter()
+            .enumerate()
+            .filter(|(_, &v)| v > 0)
+            .map(|(i, &v)| {
+                if i == 8 {
+                    format!("9+:{v}")
+                } else {
+                    format!("{}:{v}", i + 1)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        eprintln!(
+            "[sprof]   revisit: distinct={} rebuilds={} max_visits={} dist(visits:count) {}",
+            seen.len(),
+            rebuilds_total,
+            max_k,
+            dist
+        );
+    });
+    SPROF_SEEN_PATH.with(|c| {
+        let seen = c.borrow();
+        let rebuilds_same_path: u64 = seen.values().map(|&k| (k as u64) - 1).sum();
+        eprintln!(
+            "[sprof]   revisit(same-path): distinct(node,path)={} same_path_rebuilds={}",
+            seen.len(),
+            rebuilds_same_path
+        );
+    });
+}
+
 /// `build_expansion` が per-node に確保する 6 本の Vec を再利用する free-list pool．
 ///
 /// `LocalExpansion` は moves / move_evals / queries / results / idx / dml_next の 6 Vec を所有する．
@@ -457,6 +661,7 @@ impl DfPnSolver {
         // `run_search_at_len` 内で len ごとに構築し，閾値反復 (反復深化) 間で `expansion_stack[0]`
         // に持続させる (子の results/idx/sum_mask/excluded が反復跨ぎで累積する)．
         let mut last = self.run_search_at_len(&mut tt, board, DEPTH_MAX_MATE_LEN);
+        sprof_report("init(DEPTH_MAX)");
         let shorten_diag = std::env::var("SHORTEN").is_ok();
         // [diag] COLD_SHORTEN: 余詰の各 len=d-2 探索前に TT を cold 化し，残存する偽 proof が
         // warm-TT/cross-hand 再利用に由来するか切り分ける (cold で偽 proof が消えれば warm が原因)．
@@ -490,6 +695,7 @@ impl DfPnSolver {
                     tt = TranspositionTable::new(size);
                 }
                 let shorter = self.run_search_at_len(&mut tt, board, MateLen::from_len(d - 2));
+                sprof_report(&format!("len={}", d - 2));
                 if shorten_diag {
                     eprintln!(
                         "[dfpn] shorten try len={}: pn={} dn={} mate_len={} cost={} nodes (total {})",
@@ -705,6 +911,7 @@ impl DfPnSolver {
         len: MateLen,
     ) -> SearchResult {
         let attacker_hand = board.hand[self.attacker.index()];
+        sprof_reset();
         match self.emplace(tt, board, len, 0, 0u64, true, BitSet64::full()) {
             // root が終局 (王手なし=不詰 / 受けなし=詰み)．即結果 (空 expansion の CurrentResult)．
             Err(terminal) => terminal,
@@ -867,6 +1074,7 @@ impl DfPnSolver {
 
         let captured = board.do_move(best_move);
         dm_bump(0); // step_best_child 再帰
+        sprof_stash_check(self.expansion_stack.len(), board.hash);
         let child_pk = path_key_after(path_key, best_move, depth as usize);
         let child_result = match self.emplace(
             tt,
@@ -938,6 +1146,7 @@ impl DfPnSolver {
                 // (per-node アロケーション削減; 探索不変)．
                 if let Some(child_exp) = self.expansion_stack.pop() {
                     debug_assert_eq!(self.expansion_stack.len(), cidx);
+                    sprof_stash_pop(cidx, board.hash);
                     let (bm, be, bq, br, bi, bd) = child_exp.into_buffers();
                     self.expansion_buf_pool.release(bm, be, bq, br, bi, bd);
                 }
@@ -1242,6 +1451,23 @@ impl DfPnSolver {
     ) -> Result<LocalExpansion, SearchResult> {
         let attacker = self.attacker;
         let or_node = board.turn == attacker;
+        sprof(|s| {
+            let b = (len.len() as usize).min(47);
+            if or_node {
+                s.bx_or += 1;
+                s.bx_or_first += first_search as u64;
+                s.or_len_hist[b] += 1;
+            } else {
+                s.bx_and += 1;
+                s.bx_and_first += first_search as u64;
+                s.and_len_hist[b] += 1;
+            }
+        });
+        if sprof_enabled() {
+            SPROF_SEEN.with(|c| *c.borrow_mut().entry(board.hash).or_insert(0) += 1);
+            SPROF_SEEN_PATH
+                .with(|c| *c.borrow_mut().entry((board.hash, path_key)).or_insert(0) += 1);
+        }
 
         let mut moves = self.expansion_buf_pool.take_moves();
         let __mg = prof_enabled().then(std::time::Instant::now);
@@ -1275,6 +1501,13 @@ impl DfPnSolver {
                 };
                 SearchResult::make_final(true, hand, ZERO_MATE_LEN, 1)
             };
+            sprof(|s| {
+                if or_node {
+                    s.t_or_no_check += 1
+                } else {
+                    s.t_and_mated += 1
+                }
+            });
             // terminal node では child loop の 5 本は未取得．moves のみ pool へ返却する．
             self.expansion_buf_pool.release_moves(moves);
             return Err(r);
@@ -1287,6 +1520,13 @@ impl DfPnSolver {
         // する偽 proof となる (find_shortest の余詰が真の最短へ収束しない根本原因; cold TT でも再現)．
         // DEPTH_MAX 探索では len が高位飽和し決して発火しないので first-mate 挙動は不変．
         if len < MateLen::from_len(1) {
+            sprof(|s| {
+                if or_node {
+                    s.t_budget_or += 1
+                } else {
+                    s.t_budget_and += 1
+                }
+            });
             let hand = board.hand[attacker.index()];
             self.expansion_buf_pool.release_moves(moves);
             return Err(SearchResult::make_final(false, hand, len, 1));
@@ -1458,9 +1698,11 @@ impl DfPnSolver {
             }
             let mut r = if let Some(anc_depth) = dom_depth {
                 self.dom_fires += 1;
+                sprof(|s| s.c_dom += 1);
                 SearchResult::make_repetition(child_hand, len, 1, anc_depth as i32)
             } else if let Some(anc_ply) = rep_ply {
                 // path 上の同一局面 = 千日手．
+                sprof(|s| s.c_rep += 1);
                 SearchResult::make_repetition(child_hand, len, 1, anc_ply as i32)
             } else {
                 let mut dhoc = false;
@@ -1469,9 +1711,28 @@ impl DfPnSolver {
                 if let Some(t) = __lu {
                     prof_add(1, t.elapsed().as_nanos() as u64);
                 }
+                sprof(|s| {
+                    if or_node && res.is_final() {
+                        if res.pn() == 0 {
+                            s.or_seed_proven += 1
+                        } else {
+                            s.or_seed_disproven += 1
+                        }
+                    }
+                });
                 does_have_old = does_have_old || dhoc;
                 res
             };
+            sprof(|s| {
+                if or_node {
+                    s.or_children += 1;
+                    if m.is_drop() {
+                        s.or_drops += 1;
+                    }
+                } else {
+                    s.and_children += 1;
+                }
+            });
             // 非 final 子の δ 集約方式を決める．似た子局面で過小評価を招く手 (`!is_sum_delta_node`) と
             // 既に δ が巨大な子 (`>= K_FORCE_SUM_PN_DN`) は max 集約へ落とす (sum_mask bit を reset)．
             // look-ahead で final 化する前の seed の δ で判定する．
@@ -1512,6 +1773,11 @@ impl DfPnSolver {
                 let captured = board.do_move(m);
                 dm_bump(2); // look-ahead (AND node の first-visit 子へ do_move)
                 let __obv = self.check_obvious_final_or_node(board, cl);
+                sprof(|s| match &__obv {
+                    Some(res) if res.pn() == 0 => s.la_mate1 += 1,
+                    Some(_) => s.la_no_mate += 1,
+                    None => {}
+                });
                 if let Some(res) = __obv {
                     tt.set_result(&q, res, (ch_pos, child_hand));
                     r = res;
@@ -1639,6 +1905,7 @@ impl DfPnSolver {
             // mate_len=55 を返す等) を防ぐ．予算不足なら seed せず通常探索に budget で disprove させる
             // (sound; DEPTH_MAX 探索では child_len も DEPTH_MAX 飽和なので常に通過し挙動不変)．
             if child_len < MateLen::from_len(1) {
+                sprof(|s| s.la_budget_gate += 1);
                 return None;
             }
             // proof hand = before_hand(mate_move, 詰み局面の proof hand)．
