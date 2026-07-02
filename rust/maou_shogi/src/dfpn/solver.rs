@@ -129,8 +129,6 @@ pub(super) struct Params {
     /// から最初の親を取得し，それが path 上にあれば DAG と判定．
     pub(super) use_dag_correction: bool,
 
-
-
     /// 1+ε 閾値 epsilon (PN_UNIT スケール考慮で PN_UNIT が候補)．
     pub(super) threshold_epsilon: u32,
     /// first-visit 初期 pn から edge_cost を外し，純 `init_pn_dn_*` (df-pn+ 難易度推定)
@@ -246,7 +244,6 @@ pub(super) struct Params {
     /// 現状の実装は node 増となるため default では除外する．
     pub(super) path_dominance: bool,
 
-
     /// TCA inc_flag を有効化する．
     ///
     /// true で，mid() が「loop child を検出した時に inc_flag を increment し，
@@ -257,8 +254,6 @@ pub(super) struct Params {
     /// 効果: 深い transposition chain で，先祖フレームで検出された
     /// loop が子孫フレームの閾値にも反映され，wrong branch から早期復帰する．
     pub(super) use_tca: bool,
-
-
 
     /// 診断: root (ply 0) trace．
     /// true で，mid() の OR/AND multi-child loop が ply==0 で iterate するたびに
@@ -315,7 +310,6 @@ pub(super) struct Params {
     /// argmin pn の tie 時 (`pn == best_pn`) に max(dn) で tie-break する．
     /// = defender の抵抗が強い attack を優先 → 探索 commit 強化．
     pub(super) or_dn_tiebreak: bool,
-
 
     /// 診断: periodic GC (overflow-based working TT GC) を無効化する．
     /// default false (= GC fire OK)．true で `nodes_searched % 100_000 == 0` の
@@ -561,100 +555,100 @@ impl DfPnSolver {
             #[cfg(feature = "visit_diag")]
             visit_first_ply: FxHashMap::default(),
             params: Params {
-            refine_iter_cap: 0,
-            refut_full_eval: false,
-            refut_partial_recursion: false,
-            // F3 (or_success_cache): default ON．
-            // 深い問題で nodes / time を大幅削減し，shallow 問題では no-op (safe)．
-            // full_hash keying で false positive を防止済み．
-            refut_or_success_cache: true,
-            refut_extended_lookup: false,
-            pns_arena_max: PNS_MAX_ARENA_NODES,
-            // default: ADAPTIVE．refutable depth floor により false-NoMate を
-            // 起こさず adaptive を default にできる．
-            // depth ≤ 19: 0, depth 20-22: 1, depth ≥ 23: 3．
-            disproof_remaining_threshold: DISPROOF_THRESHOLD_ADAPTIVE,
-            use_visit_history_dominance: true,
-            // default ON．常時 OR disproof_hand を要素 min で集約する．
-            // OFF にしたい場合は `set_use_handset_combination(false)` を明示呼出．
-            use_handset_combination: true,
-            // DelayedMoveList．AND ノードで同マス合駒 chain の prev が未解決なら
-            // next を skip する．default ON．
-            use_delayed_move_list: true,
-            // path-aware DAG 補正．opt-in (default false)．
-            use_dag_correction: false,
-            threshold_epsilon: 2,
-            decouple_edge_cost: false,
-            obvious_final_max_depth: 25,
-            middle_range: false,
-            scale: false,
-            full_comparer: false,
-            capture_dedup: false,
-            rich_seed: false,
-            cross_dedup: false,
-            comparer_and_only: false,
-            muda_filter: false,
-            tca_clamp: false,
-            root_ids_enable: false,
-            dml: true,
-            scope_disproof: true,
-            is_sum_delta_node: false,
-            minimal_proof_hand: false,
-            minimal_disproof_hand: false,
-            repetition: false,
-            deferred_penalty_denom: 0,
-            deferred_penalty_floor: false,
-            tca_use_shallow_gate: false,
-            path_dominance: false,
-            use_tca: false,
-            root_trace: false,
-            trace_ply: 0,
-            trace_full_children: false,
-            tt_lookup_diag: false,
-            root_child_pn_floor: 0,
-            use_exhaustive_and: false,
-            use_and_proven_bitmap: false,
-            or_dn_tiebreak: false,
-            disable_periodic_gc: false,
-            skip_ids_shallow: false,
-            // per-move attack/defense support 差別化．opt-in (default false)．
-            use_per_move_support: false,
-            no_ids17: false,
-            refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
-            refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
-            pns_refutable_call_limit: 500,
+                refine_iter_cap: 0,
+                refut_full_eval: false,
+                refut_partial_recursion: false,
+                // F3 (or_success_cache): default ON．
+                // 深い問題で nodes / time を大幅削減し，shallow 問題では no-op (safe)．
+                // full_hash keying で false positive を防止済み．
+                refut_or_success_cache: true,
+                refut_extended_lookup: false,
+                pns_arena_max: PNS_MAX_ARENA_NODES,
+                // default: ADAPTIVE．refutable depth floor により false-NoMate を
+                // 起こさず adaptive を default にできる．
+                // depth ≤ 19: 0, depth 20-22: 1, depth ≥ 23: 3．
+                disproof_remaining_threshold: DISPROOF_THRESHOLD_ADAPTIVE,
+                use_visit_history_dominance: true,
+                // default ON．常時 OR disproof_hand を要素 min で集約する．
+                // OFF にしたい場合は `set_use_handset_combination(false)` を明示呼出．
+                use_handset_combination: true,
+                // DelayedMoveList．AND ノードで同マス合駒 chain の prev が未解決なら
+                // next を skip する．default ON．
+                use_delayed_move_list: true,
+                // path-aware DAG 補正．opt-in (default false)．
+                use_dag_correction: false,
+                threshold_epsilon: 2,
+                decouple_edge_cost: false,
+                obvious_final_max_depth: 25,
+                middle_range: false,
+                scale: false,
+                full_comparer: false,
+                capture_dedup: false,
+                rich_seed: false,
+                cross_dedup: false,
+                comparer_and_only: false,
+                muda_filter: false,
+                tca_clamp: false,
+                root_ids_enable: false,
+                dml: true,
+                scope_disproof: true,
+                is_sum_delta_node: false,
+                minimal_proof_hand: false,
+                minimal_disproof_hand: false,
+                repetition: false,
+                deferred_penalty_denom: 0,
+                deferred_penalty_floor: false,
+                tca_use_shallow_gate: false,
+                path_dominance: false,
+                use_tca: false,
+                root_trace: false,
+                trace_ply: 0,
+                trace_full_children: false,
+                tt_lookup_diag: false,
+                root_child_pn_floor: 0,
+                use_exhaustive_and: false,
+                use_and_proven_bitmap: false,
+                or_dn_tiebreak: false,
+                disable_periodic_gc: false,
+                skip_ids_shallow: false,
+                // per-move attack/defense support 差別化．opt-in (default false)．
+                use_per_move_support: false,
+                no_ids17: false,
+                refutable_depth: Self::DEFAULT_REFUTABLE_DEPTH,
+                refutable_call_limit: Self::DEFAULT_REFUTABLE_CALL_LIMIT,
+                pns_refutable_call_limit: 500,
             },
             diag: Diagnostics {
-            #[cfg(feature = "tt_diag")]
-            pc_summary_disproof_hits: 0,
-            deferred_frames: 0,
-            deferred_penalty_sum: 0,
-            tca_shallow_fire: 0,
-            tca_shallow_would_fire: 0,
-            tt_lookups: std::cell::Cell::new(0),
-            tt_misses: std::cell::Cell::new(0),
-            tt_proven: std::cell::Cell::new(0),
-            tt_disproven: std::cell::Cell::new(0),
-            tt_working: std::cell::Cell::new(0),
-            proven_per_ply: [0u64; 64],
-            and_visit_count: 0,
-            and_proven_sum: 0,
-            and_total_sum: 0,
-            and_zero_proven: 0,
-            and_full_proven: 0,
-            or_visit_count: 0,
-            or_proven_count_visits: 0,
-            or_total_sum: 0,
-            pos_visits: rustc_hash::FxHashMap::default(),
-            pos_visits_capped: false,
-            #[cfg(feature = "tt_diag")]
-            ply: 0,
-            #[cfg(feature = "tt_diag")]
-            move_usi: String::new(),
-            #[cfg(feature = "tt_diag")]
-            max_iterations: 0,
-            #[cfg(feature = "tt_diag")]
-            alpha_x_filter_applied: 0,
+                #[cfg(feature = "tt_diag")]
+                pc_summary_disproof_hits: 0,
+                deferred_frames: 0,
+                deferred_penalty_sum: 0,
+                tca_shallow_fire: 0,
+                tca_shallow_would_fire: 0,
+                tt_lookups: std::cell::Cell::new(0),
+                tt_misses: std::cell::Cell::new(0),
+                tt_proven: std::cell::Cell::new(0),
+                tt_disproven: std::cell::Cell::new(0),
+                tt_working: std::cell::Cell::new(0),
+                proven_per_ply: [0u64; 64],
+                and_visit_count: 0,
+                and_proven_sum: 0,
+                and_total_sum: 0,
+                and_zero_proven: 0,
+                and_full_proven: 0,
+                or_visit_count: 0,
+                or_proven_count_visits: 0,
+                or_total_sum: 0,
+                pos_visits: rustc_hash::FxHashMap::default(),
+                pos_visits_capped: false,
+                #[cfg(feature = "tt_diag")]
+                ply: 0,
+                #[cfg(feature = "tt_diag")]
+                move_usi: String::new(),
+                #[cfg(feature = "tt_diag")]
+                max_iterations: 0,
+                #[cfg(feature = "tt_diag")]
+                alpha_x_filter_applied: 0,
             },
         }
     }

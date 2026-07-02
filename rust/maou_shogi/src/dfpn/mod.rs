@@ -30,11 +30,11 @@ macro_rules! verbose_eprintln {
 mod api;
 mod heuristics;
 mod mate_len;
-mod search;
 mod movegen;
 mod path_key;
 mod path_stack;
 mod proof_hand;
+mod search;
 mod search_result;
 mod solver;
 #[cfg(test)]
@@ -46,8 +46,8 @@ pub use solver::{DfPnSolver, TsumeResult};
 
 // heuristics / check_cache / proof_hand へ移設した item を root に再エクスポートし，
 // sibling module から従来どおり `super::<name>` で参照できるようにする．
-use movegen::check_cache::CheckCache;
 use heuristics::{init_pn_dn_and, init_pn_dn_or, move_brief_eval};
+use movegen::check_cache::CheckCache;
 use proof_hand::hand_gte;
 
 /// 王手手/応手の最大数．
@@ -106,4 +106,3 @@ pub(super) const DISPROOF_THRESHOLD_ADAPTIVE: u16 = u16::MAX;
 fn position_key(board: &Board) -> u64 {
     board.board_hash
 }
-
