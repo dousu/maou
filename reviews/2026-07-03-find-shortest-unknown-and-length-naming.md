@@ -1,8 +1,8 @@
 ---
 title: find_shortest 未確定時 unknown 化 + ベンチ/テスト命名を実手数へ
-status: approved
+status: applied
 approved_by: user (2026-07-03 指示)
-applied_in: (適用コミット SHA を applied 化時に記入)
+applied_in: af5c542 (code) + 36a35d0 (docs)
 ---
 
 # find_shortest 未確定時 unknown 化 + ベンチ/テスト命名を実手数へ
