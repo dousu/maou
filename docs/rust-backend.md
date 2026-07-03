@@ -364,7 +364,7 @@ from maou._rust.maou_shogi import solve_tsume
 
 result = solve_tsume(
     sfen,                    # SFEN 局面文字列 (不正なら ValueError)
-    depth=31,                # 最大探索手数 (有効範囲 1〜47; 範囲外は ValueError)
+    depth=31,                # 最大探索手数 (有効範囲 1〜2047; 範囲外は ValueError)
     nodes=1_048_576,         # 最大探索ノード数
     timeout_secs=300,        # タイムアウト (秒)
     find_shortest=True,      # 最短手数探索の有無
@@ -416,7 +416,7 @@ match result {
 
 | パラメータ | デフォルト | 説明 |
 |-----------|----------|------|
-| `depth` | 31 | 最大探索手数．**上限 47** (超えると Python は `ValueError`，Rust はパニック) |
+| `depth` | 31 | 最大探索手数．**上限 2047** (長手数詰将棋対応; 超えると Python は `ValueError`，Rust はパニック) |
 | `nodes` | 1,048,576 (2^20) | 探索ノード数上限．TT サイズはこれに比例して確保される (上限 2^23 エントリ × 64B ≈ 512MB) |
 | `timeout_secs` | 300 | 時間制限 (秒)．探索中は GIL を解放するが Ctrl-C は効かないため，中断制御はこれと `nodes` で行う |
 | `find_shortest` | `true` | `true` は**最短を確定できた場合のみ** `checkmate`，budget/timeout で確定できなければ `unknown`．`false` は最初の詰みを発見時点で返す (予算を使い切らず高速; 最短保証なし)．早いレスポンス重視なら `false` |

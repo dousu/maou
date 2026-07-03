@@ -22,6 +22,15 @@ GHI (Graph History Interaction): 千日手のような繰り返し判定は**経
 - 循環子の検出 (`does_have_old_child`) は TCA の inc_flag も駆動する
   ([threshold-control.md §3.2](threshold-control.md))．
 
+**千日手テーブル (`RepetitionTable`, `tt/mod.rs`)**: 千日手由来の経路依存結果は，局面キー
+(board_key) の通常 TT でなく **経路ハッシュ (`path_key`) をキーとする専用テーブル**へ記録する
+(経路非依存な proven/disproven Final へは昇格させない — §7.5)．このテーブルは **固定サイズの
+open-addressing + generation ベース GC** で管理する ([transposition-table.md §6.7](transposition-table.md))．
+GC でエントリが退去しても健全性は保たれる: rep 表を引けなかった場合 `look_up` は
+`make_unknown` にフォールスルーして**再探索**するだけで (千日手の正しさは上記 `path_depths` の
+on-path 検出が独立に担保する)，誤った不詰は生じない．超長手数詰将棋 (ミクロコスモス級 1525 手)
+では経路数が膨大なため，この GC が無ければテーブルが青天井に膨張して OOM する．
+
 ### 7.2 経路依存反証の scope 化 (horizon disproof)
 
 深さ上限 (horizon) 到達による仮反証 (`look_up_pn_dn` で `remaining == 0` → `(INF, 0)`) が
