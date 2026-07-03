@@ -20,6 +20,9 @@ from maou._rust.maou_shogi import solve_tsume
 MATE_1TE = "8k/9/7G1/9/9/9/9/9/9 b G 1"
 # 玉のみ (攻め方に王手手段なし) → 不詰．
 NO_MATE = "4k4/9/9/9/9/9/9/9/4K4 b - 1"
+# 29 手詰: first-mate は ~7K node で 31 手，最短 29 手の確定には ~396K node 必要．
+# find_shortest のセマンティクス (予算不足時の unknown / first-mate 早期返却) の検証に使う．
+MATE_29TE = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1"
 
 
 class TestSolveTsumeBasic:
@@ -56,6 +59,60 @@ class TestSolveTsumeBasic:
         )
         assert result.status == "checkmate"
         assert len(result.moves) == 1
+
+
+class TestSolveTsumeFindShortestSemantics:
+    """find_shortest の予算セマンティクス (呼び出し側の速度⇄最短性トレードオフ)．"""
+
+    def test_find_shortest_unknown_when_budget_insufficient(
+        self,
+    ) -> None:
+        """find_shortest=True で最小性を証明しきれない予算では unknown を返す．
+
+        29 手詰は first-mate(31 手) は安く見つかるが，最短 29 手の確定には ~396K node
+        を要する．予算 50K では最小性を証明できないため，**非最小の詰みでなく unknown**．
+        """
+        result = solve_tsume(
+            MATE_29TE,
+            depth=31,
+            nodes=50_000,
+            find_shortest=True,
+        )
+        assert result.status == "unknown"
+        assert result.moves == []
+
+    def test_find_shortest_checkmate_when_budget_sufficient(
+        self,
+    ) -> None:
+        """十分な予算 (最小性を確定できる) では最短 29 手の checkmate を返す．"""
+        result = solve_tsume(
+            MATE_29TE,
+            depth=31,
+            nodes=500_000,
+            find_shortest=True,
+        )
+        assert result.status == "checkmate"
+        assert len(result.moves) == 29
+
+    def test_find_first_returns_early_without_exhausting_budget(
+        self,
+    ) -> None:
+        """find_shortest=False は最初の詰みを発見時点で返し，予算を使い切らない．
+
+        29 手詰の first-mate は ~7K node で見つかる．予算 500K を与えても，
+        発見時点で即返るため nodes_searched << 予算 となる (早いレスポンス重視)．
+        """
+        result = solve_tsume(
+            MATE_29TE,
+            depth=31,
+            nodes=500_000,
+            find_shortest=False,
+        )
+        assert result.status == "checkmate"
+        # first-mate は 31 手 (最短の 29 手ではない)．
+        assert len(result.moves) == 31
+        # 予算 (500K) を使い切らず，発見時点 (~7K node) で返っている．
+        assert result.nodes_searched < 100_000
 
 
 class TestSolveTsumeValidation:

@@ -120,7 +120,7 @@ fn test_hand_gte_different_pieces() {
 ///
 /// 正解手順: 1三角成，同玉，2三飛打，1二玉，1三歩打，1一玉，2一飛成，同玉，1二歩成
 #[test]
-fn test_tsume_9te() {
+fn test_tsume_9te_a() {
     // 9 手詰 PV 完全一致．
     let pvs: &[&[&str]] = &[&[
         "2d1c+", "1d1c", "R*2c", "1c1b", "P*1c", "1b1a", "2c2a+", "1a2a", "1c1b+",
@@ -191,7 +191,7 @@ fn test_solve_tsume_convenience() {
 }
 
 #[test]
-fn test_tsume_2() {
+fn test_tsume_11te_a() {
     // 盤面: 5一と，2一王，1一香，2二銀，4三飛，2四角，先手持駒: 金桂
     // 11手詰め: 32金打，同玉，42角成，21玉，31馬，同銀，23飛成，22銀，33桂打，31玉，41と
     // 11 手詰 PV 完全一致．
@@ -253,7 +253,7 @@ fn test_timeout() {
 /// 先手持駒: 飛
 /// 後手持駒: 歩15，香2，桂2，銀4，金3，角2
 #[test]
-fn test_tsume_3() {
+fn test_tsume_9te_b() {
     // 9 手詰 PV 完全一致．
     let pvs: &[&[&str]] = &[&[
         "3d2b+", "2c2b", "R*4b", "2b2c", "4b3b+", "2c2d", "2f2e", "2d2e", "3b3e",
@@ -272,7 +272,7 @@ fn test_tsume_3() {
 /// 2二桂成，同玉，4二飛打，2三玉，3二飛成，2四玉，2一龍 の後，
 /// 後手は2三歩打で合い駒でき，これは無駄合いではない．
 #[test]
-fn test_tsume_3_ryu_2a_not_checkmate() {
+fn test_tsume_9te_b_ryu_2a_not_checkmate() {
     // 2一龍後の局面を作成
     // 初期局面から 3d2b+, 2c2b, R*4b, 2b2c, 4b3b+, 2c2d, 3b2a を実行
     let sfen = "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/9 b R2b3g4s2n2l15p 1";
@@ -328,7 +328,7 @@ fn test_tsume_3_ryu_2a_not_checkmate() {
 /// (受け方が S*2b に 1a2b と応じる分岐 `S*2b 1a2b N*3d 2b1a P*1b 1a2b 4c4b+` は
 ///  同一局面へ合流するより短い受けで max-resistance ではない)．
 #[test]
-fn test_tsume_4() {
+fn test_tsume_11te_b() {
     // 最短 11 手 PV 完全一致 (別解 ①〜④ のいずれか; 無駄合いは除外)．
     let pvs: &[&[&str]] = &[
         &[
@@ -550,7 +550,7 @@ fn test_defense_moves_completeness() {
         "9/5Pk2/9/5R3/8B/9/9/9/9 w 2Srb4g2s4n4l17p 2",
         // 角で王手
         "9/5Pk2/9/8R/5B3/9/9/9/9 w 2Srb4g2s4n4l17p 2",
-        // test_tsume_3 の中間局面(R*2a 後)
+        // test_tsume_9te_b の中間局面(R*2a 後)
         "l1k6/R8/1pB6/9/9/9/9/9/9 w rb4g4s4n3l16p 2",
     ];
 
@@ -602,7 +602,7 @@ fn test_defense_moves_completeness() {
 
 /// 17手詰め局面の solve() テスト．
 #[test]
-fn test_tsume_5() {
+fn test_tsume_17te() {
     // 17 手詰 (正解例: S*4a ... 3b2a+ ... 3b2b/2c2b)．別解可．
     assert_shortest_mate(
         "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1",

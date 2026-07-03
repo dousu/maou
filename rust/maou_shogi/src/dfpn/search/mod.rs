@@ -552,15 +552,22 @@ impl DfPnSolver {
         // dual-range len-aware TT (proven_len/disproven_len) により，前回 len=d で proven の
         // ノードも len<d では再評価される一方，無関係なノードは warm TT のまま再利用され
         // 不要な再探索を避ける (詰将棋の手数は奇数ゆえ 2 ずつ短縮する)．
+        // find_shortest=true では **最小性が証明できた場合のみ** 詰みを返す (`shortest_confirmed`)．
+        // 最小性の証明 = 「len=d-2 の探索が不詰 (dn==0) を返す」= d-2 手以下の詰みが無い，または
+        // d<=1 (1 手詰は自明に最短)．budget/timeout で d-2 の探索が inconclusive のまま打ち切られた
+        // 場合は最小性未確定ゆえ **詰みでなく Unknown を返す** (find_shortest=false は短縮せず
+        // 発見時点の PV を返すのでこのフラグは使わない)．
+        let mut shortest_confirmed = false;
         if self.find_shortest && last.pn() == 0 {
             loop {
                 if self.nodes >= self.max_nodes || self.is_timed_out() {
                     self.timed_out = self.is_timed_out();
-                    break;
+                    break; // budget/timeout: 最小性未確定 (shortest_confirmed=false)．
                 }
                 let d = last.len().len();
                 if d <= 1 {
-                    break; // 1 手詰より短い詰みは無い．
+                    shortest_confirmed = true; // 1 手詰より短い詰みは無い (自明に最短)．
+                    break;
                 }
                 let nodes_before = self.nodes;
                 if cold_shorten {
@@ -581,9 +588,13 @@ impl DfPnSolver {
                 }
                 if shorter.pn() == 0 && shorter.len().len() < d {
                     last = shorter; // **厳密に短い** 詰みを発見 → さらに短い手数を試す．
+                } else if shorter.dn() == 0 {
+                    // d-2 手以下の詰みは無い (健全な disproof) → 現在の d が真の最短と確定．
+                    shortest_confirmed = true;
+                    break;
                 } else {
-                    // d-2 手以下の詰みは無い (disproof) / timeout / len 境界の偽結果 →
-                    // 現在の最短 d で確定 (oscillation 防止: 厳密短縮でなければ採用しない)．
+                    // d-2 探索が budget/timeout で inconclusive (pn!=0 && dn!=0)，または len 境界の
+                    // 偽結果 → 最小性を証明できていない (shortest_confirmed=false)．
                     break;
                 }
             }
@@ -731,6 +742,17 @@ impl DfPnSolver {
             // default 構成では verify は常に Some ゆえ挙動不変; 閾値変更等で探索が偽 proven を出した
             // 場合のみ Unknown へ落ちる．
             match verified {
+                Some(d) if self.find_shortest && !shortest_confirmed => {
+                    // find_shortest=true だが budget/timeout で最小性を証明しきれなかった
+                    // (len=d-2 の不詰を確認できていない) → 非最小の詰みを返さず Unknown．
+                    eprintln!(
+                        "[dfpn] find_shortest 未確定 (最小性 unproven; verify Some({}), budget/timeout) → Unknown",
+                        d
+                    );
+                    TsumeResult::Unknown {
+                        nodes_searched: self.nodes,
+                    }
+                }
                 Some(d) => {
                     eprintln!(
                         "[dfpn] STRICT VERIFY Some({}) (root mate_len={}, budget_left={}, wall={:.2}s, tier={})",

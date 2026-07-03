@@ -48,9 +48,11 @@ pub struct DfPnSolver {
     pub(super) attacker: Color,
     /// 最短手数探索を行うかどうか(デフォルト: true)．
     ///
-    /// true の場合，最初の詰み発見後に mate-length パラメータ化再探索
-    /// (`len = d-2` の反復) で最短手数を確定させる．
-    /// false の場合，最初に見つかった詰み手順をそのまま返す(最短保証なし)．
+    /// - true: 最初の詰み発見後に mate-length パラメータ化再探索 (`len = d-2` の反復) で
+    ///   最短手数を確定させる．**最小性を証明できた場合のみ [`TsumeResult::Checkmate`]**，
+    ///   budget/timeout で証明しきれなければ [`TsumeResult::Unknown`] を返す (非最小の詰みは返さない)．
+    /// - false: 短縮再探索をせず，最初に見つかった詰み手順を発見時点で返す (予算を使い切らず速い;
+    ///   最短保証なし)．
     pub(super) find_shortest: bool,
     /// PV 復元フェーズで未証明子1つあたりに割り当てるノード予算(デフォルト: 1024)．
     ///

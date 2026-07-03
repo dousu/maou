@@ -37,7 +37,9 @@ N_WARMUP = 1_000
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def _timeit(fn: Callable[[], object], n: int, warmup: int = N_WARMUP) -> float:
+def _timeit(
+    fn: Callable[[], object], n: int, warmup: int = N_WARMUP
+) -> float:
     """Run *fn* n times after warmup, return average microseconds."""
     for _ in range(warmup):
         fn()
@@ -88,7 +90,9 @@ def bench_legal_moves() -> None:
         cb = cshogi.Board(sfen)
 
         maou_us = _timeit(mb.legal_moves, N_ITER)
-        cshogi_us = _timeit(lambda: list(cb.legal_moves), N_ITER)
+        cshogi_us = _timeit(
+            lambda: list(cb.legal_moves), N_ITER
+        )
 
         n_moves = len(mb.legal_moves())
         print(
@@ -102,9 +106,7 @@ def bench_legal_moves() -> None:
 # ---------------------------------------------------------------------------
 def bench_push_pop() -> None:
     _print_header(f"push + pop (do/undo move)  (N={N_ITER:,})")
-    header = (
-        f"{'Position':<14}{'maou(us)':>10}{'cshogi(us)':>12}{'ratio':>8}"
-    )
+    header = f"{'Position':<14}{'maou(us)':>10}{'cshogi(us)':>12}{'ratio':>8}"
     print(header)
     print("-" * len(header))
     for name, sfen in POSITIONS.items():
@@ -137,9 +139,7 @@ def bench_push_pop() -> None:
 # ---------------------------------------------------------------------------
 def bench_sfen() -> None:
     _print_header(f"SFEN parse + serialize  (N={N_ITER:,})")
-    header = (
-        f"{'Position':<14}{'maou(us)':>10}{'cshogi(us)':>12}{'ratio':>8}"
-    )
+    header = f"{'Position':<14}{'maou(us)':>10}{'cshogi(us)':>12}{'ratio':>8}"
     print(header)
     print("-" * len(header))
     for name, sfen in POSITIONS.items():
@@ -213,7 +213,9 @@ def bench_perft() -> None:
         c_nodes = _perft_cshogi(cb, depth)
         cshogi_ms = (time.perf_counter() - t0) * 1000
 
-        assert m_nodes == c_nodes, f"Node count mismatch: {m_nodes} vs {c_nodes}"
+        assert m_nodes == c_nodes, (
+            f"Node count mismatch: {m_nodes} vs {c_nodes}"
+        )
         ratio = _ratio_str(maou_ms, cshogi_ms)
 
         print(
@@ -225,17 +227,18 @@ def bench_perft() -> None:
 # ---------------------------------------------------------------------------
 # 5. Tsume-shogi solver (Df-Pn)
 # ---------------------------------------------------------------------------
+# キーは maou の無駄合い抜き最短手数 (ユーザ確認済; Rust dfpn::tests と一致)．
 TSUME_PROBLEMS = {
-    "tsume_5te": (
-        "7nk/9/5R3/8p/6P2/9/9/9/K8 b SNPr2b4g3s2n4l15p 1",
-        31,
-    ),
     "tsume_9te": (
         "6s2/6l2/9/6BBk/9/9/9/9/K8 b RPr4g3s4n3l17p 1",
         31,
     ),
-    "tsume_11te": (
+    "tsume_11te_a": (
         "4+P2kl/7s1/5R3/7B1/9/9/9/9/K8 b GNrb3g3s3n3l17p 1",
+        31,
+    ),
+    "tsume_11te_b": (
+        "7nk/9/5R3/8p/6P2/9/9/9/K8 b SNPr2b4g3s2n4l15p 1",
         31,
     ),
     "tsume_17te": (
@@ -267,18 +270,29 @@ def bench_tsume() -> None:
         # maou (find_shortest=False — cshogi相当)
         t0 = time.perf_counter()
         result_fast = solve_tsume(
-            sfen, depth=depth, nodes=max_nodes, find_shortest=False
+            sfen,
+            depth=depth,
+            nodes=max_nodes,
+            find_shortest=False,
         )
         maou_fast_ms = (time.perf_counter() - t0) * 1000
         mf_nodes = result_fast.nodes_searched
-        mf_pv = len(result_fast.moves) if result_fast.status == "checkmate" else 0
+        mf_pv = (
+            len(result_fast.moves)
+            if result_fast.status == "checkmate"
+            else 0
+        )
 
         # maou (find_shortest=True — 最短手数探索)
         t0 = time.perf_counter()
         result = solve_tsume(sfen, depth=depth, nodes=max_nodes)
         maou_ms = (time.perf_counter() - t0) * 1000
         m_nodes = result.nodes_searched
-        m_pv = len(result.moves) if result.status == "checkmate" else 0
+        m_pv = (
+            len(result.moves)
+            if result.status == "checkmate"
+            else 0
+        )
 
         # cshogi
         dfpn = DfPn()
@@ -316,8 +330,13 @@ def bench_tsume() -> None:
 
         # Show PV
         if result_fast.status == "checkmate":
-            print(f"  maou(fast): {' '.join(result_fast.moves)}")
-        if result.status == "checkmate" and result.moves != result_fast.moves:
+            print(
+                f"  maou(fast): {' '.join(result_fast.moves)}"
+            )
+        if (
+            result.status == "checkmate"
+            and result.moves != result_fast.moves
+        ):
             print(f"  maou(short): {' '.join(result.moves)}")
         if found:
             print(f"  cshogi    : {' '.join(c_pv_list)}")
@@ -327,7 +346,9 @@ def bench_tsume() -> None:
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
-    print("Benchmark: maou_shogi (Rust/PyO3) vs cshogi (C/Cython)")
+    print(
+        "Benchmark: maou_shogi (Rust/PyO3) vs cshogi (C/Cython)"
+    )
     print(f"Python iterations per micro-bench: {N_ITER:,}")
 
     bench_legal_moves()
