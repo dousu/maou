@@ -13,7 +13,6 @@ pub(crate) mod entry;
 use super::mate_len::MateLen;
 use super::search_result::{BitSet64, Depth, Hand, PnDn, SearchAmount, SearchResult};
 use entry::{Entry, NULL_HAND};
-use rustc_hash::FxHashMap;
 
 /// `target + (diff_dst - diff_src)` を駒種別に `[0, MAX_HAND_COUNT]` へ clamp する
 /// (cross-hand 親持駒の補正)．
@@ -154,40 +153,175 @@ impl RegularTable {
     }
 }
 
-/// 経路 (path_key) 依存の千日手結果を記録する．`FxHashMap` で
-/// path_key ごとに 1 つの (depth, len) を保持する．
+/// 千日手手順 (経路ハッシュ) を記録する **固定サイズ** 置換表 (KomoringHeights 移植)．
+///
+/// open-addressing + 線形走査．**generation ベース GC** で古い経路エントリを間引き，
+/// メモリを bound する (旧実装は `FxHashMap` で無制限に膨張し，超長手数探索で OOM
+/// していた)．eviction/compaction が不完全でも健全性は保たれる: rep 表の miss は
+/// look_up で `make_unknown` にフォールスルーし **再探索** されるだけで (千日手の正しさは
+/// on-path 検出 `path_depths`/`dom_path` が独立に担保する)，誤結果は生じない．
+///
+/// `path_key == 0` を空スロット sentinel とする (root の path_key は 0 だが root 局面が
+/// 千日手化することはない; 稀な XOR 衝突での memo 損失は再探索で sound)．
+#[derive(Clone, Copy)]
+struct RepEntry {
+    key: u64,
+    depth: Depth,
+    len: MateLen,
+    generation: u16,
+}
+
 pub(super) struct RepetitionTable {
-    map: FxHashMap<u64, (Depth, MateLen)>,
+    entries: Vec<RepEntry>,
+    generation: u16,
+    entry_count: u64,
+    next_generation_update: u64,
+    next_gc: u16,
+    entries_per_generation: usize,
 }
 
 impl RepetitionTable {
-    pub(super) fn new() -> Self {
+    /// テーブル全体を何 generation で管理するか (KH と同値)．
+    const GEN_PER_TABLE: u64 = 20;
+    const INITIAL_GC_DURATION: u16 = 6;
+    const GC_DURATION: u16 = 3;
+    const GC_KEEP_GENERATION: u16 = 3;
+
+    pub(super) fn new(size: usize) -> Self {
+        let size = size.max(1);
+        let epg = ((size as u64 / Self::GEN_PER_TABLE).max(1)) as usize;
         RepetitionTable {
-            map: FxHashMap::default(),
+            entries: vec![
+                RepEntry {
+                    key: 0,
+                    depth: 0,
+                    len: MateLen::from_len(0),
+                    generation: 0,
+                };
+                size
+            ],
+            generation: 0,
+            entry_count: 0,
+            next_generation_update: epg as u64,
+            next_gc: Self::INITIAL_GC_DURATION,
+            entries_per_generation: epg,
         }
     }
+
+    #[inline]
+    fn start_index(&self, key: u64) -> usize {
+        let key_low = (key & 0xffff_ffff) as u128;
+        ((key_low * self.entries.len() as u128) >> 32) as usize
+    }
+    #[inline]
+    fn next_index(&self, idx: usize) -> usize {
+        if idx + 1 >= self.entries.len() {
+            0
+        } else {
+            idx + 1
+        }
+    }
+
     /// path_key へ (depth, len) を記録する．
     pub(super) fn insert(&mut self, path_key: u64, depth: Depth, len: MateLen) {
-        match self.map.get_mut(&path_key) {
-            None => {
-                self.map.insert(path_key, (depth, len));
+        if path_key == 0 {
+            return; // 空 sentinel と衝突するので memo しない (sound)．
+        }
+        let cap = self.entries.len();
+        let mut index = self.start_index(path_key);
+        let mut probes = 0usize;
+        while self.entries[index].key != 0 && self.entries[index].key != path_key {
+            index = self.next_index(index);
+            probes += 1;
+            if probes >= cap {
+                return; // テーブル満杯 (GC 前の窓)．memo を諦める (再探索で sound)．
             }
-            Some(slot) => {
-                if slot.1 != len {
-                    // len が変われば上書き
-                    *slot = (depth, len);
-                } else if slot.0 <= depth {
-                    // 同 len なら深い (= 千日手が浅くまで及ばない) 方を採る
-                    slot.0 = depth;
+        }
+        if self.entries[index].key == 0 {
+            self.entries[index] = RepEntry {
+                key: path_key,
+                depth,
+                len,
+                generation: self.generation,
+            };
+            self.entry_count += 1;
+            if self.entry_count >= self.next_generation_update {
+                self.generation = self.generation.wrapping_add(1);
+                self.next_generation_update = self.entry_count + self.entries_per_generation as u64;
+                if self.generation >= self.next_gc {
+                    self.collect_garbage();
+                    self.next_gc = self.generation.wrapping_add(Self::GC_DURATION);
                 }
+            }
+        } else {
+            // 既存更新: len が変われば上書き，同 len なら深い方を採る．
+            if self.entries[index].len != len {
+                self.entries[index].depth = depth;
+                self.entries[index].len = len;
+                self.entries[index].generation = self.generation;
+            } else if self.entries[index].depth <= depth {
+                self.entries[index].depth = depth;
+                self.entries[index].generation = self.generation;
             }
         }
     }
+
     /// 記録された table_len が探索 len 以上なら，その千日手はこの探索にも適用される．
     pub(super) fn contains(&self, path_key: u64, len: MateLen) -> Option<(Depth, MateLen)> {
-        match self.map.get(&path_key) {
-            Some(&(depth, table_len)) if table_len >= len => Some((depth, table_len)),
-            _ => None,
+        if path_key == 0 {
+            return None;
+        }
+        let cap = self.entries.len();
+        let mut index = self.start_index(path_key);
+        let mut probes = 0usize;
+        while self.entries[index].key != 0 {
+            let e = self.entries[index];
+            if e.key == path_key && e.len >= len {
+                return Some((e.depth, e.len));
+            }
+            index = self.next_index(index);
+            probes += 1;
+            if probes >= cap {
+                break;
+            }
+        }
+        None
+    }
+
+    /// generation ベース GC: 直近 `GC_KEEP_GENERATION` 世代のエントリだけ残し，
+    /// 古い世代を消してから compaction する (KH 移植)．compaction が不完全で一部
+    /// エントリが到達不能になっても健全 (miss = 再探索)．
+    fn collect_garbage(&mut self) {
+        let gen = self.generation;
+        let erased = gen.wrapping_sub(Self::GC_KEEP_GENERATION);
+        let should_erase = |g: u16| -> bool {
+            if erased < gen {
+                g < erased || gen < g
+            } else {
+                gen < g && g < erased
+            }
+        };
+        for e in self.entries.iter_mut() {
+            if e.key != 0 && should_erase(e.generation) {
+                e.key = 0;
+            }
+        }
+        // compaction: 各エントリを start_index 方向の空きへ手前詰めする．
+        let cap = self.entries.len();
+        for i in 0..cap {
+            if self.entries[i].key == 0 {
+                continue;
+            }
+            let entry = self.entries[i];
+            let mut index = self.start_index(entry.key);
+            while index != i {
+                if self.entries[index].key == 0 {
+                    self.entries[index] = entry;
+                    self.entries[i].key = 0;
+                    break;
+                }
+                index = self.next_index(index);
+            }
         }
     }
 }
@@ -218,10 +352,10 @@ pub(super) struct TranspositionTable {
 }
 
 impl TranspositionTable {
-    pub(super) fn new(num_entries: usize) -> Self {
+    pub(super) fn new(num_entries: usize, rep_entries: usize) -> Self {
         TranspositionTable {
             regular: RegularTable::new(num_entries),
-            rep: RepetitionTable::new(),
+            rep: RepetitionTable::new(rep_entries),
             gc_count: 0,
         }
     }
@@ -234,8 +368,8 @@ impl TranspositionTable {
         self.gc_count
     }
 
-    /// hashfull が 0.5 以上なら GC を実行する．
-    /// 通常テーブルのみで判断する (千日手テーブルは無制限 `FxHashMap`)．
+    /// hashfull が 0.5 以上なら GC を実行する (通常テーブル)．
+    /// 千日手テーブルは自前の generation GC で独立に bound される．
     /// テーブル満杯による `look_up` の O(cap) probe 退化を防ぐ．戻り値 = GC を実行したか．
     pub(super) fn maybe_collect_garbage(&mut self) -> bool {
         if self.regular.calculate_hash_rate() >= 0.5 {
@@ -513,7 +647,7 @@ mod tests {
 
     #[test]
     fn unknown_roundtrip() {
-        let mut tt = TranspositionTable::new(1024);
+        let mut tt = TranspositionTable::new(1024, 1024);
         let q = tt.build_query(0x11, BK, hand(2), 5);
         // 初回 LookUp: エントリ無し => eval seed．
         let mut old = false;
@@ -536,7 +670,7 @@ mod tests {
 
     #[test]
     fn proven_len_aware_roundtrip() {
-        let mut tt = TranspositionTable::new(1024);
+        let mut tt = TranspositionTable::new(1024, 1024);
         let q = tt.build_query(0x22, BK, hand(1), 3);
         // まず探索中 (unknown pn=3,dn=5) を格納し，その後 len=8 で詰みを格納する (実探索の順序)．
         tt.set_result(
@@ -565,7 +699,7 @@ mod tests {
 
     #[test]
     fn cross_hand_superior_lookup() {
-        let mut tt = TranspositionTable::new(1024);
+        let mut tt = TranspositionTable::new(1024, 1024);
         // hand=1 で len=8 詰みを格納．
         let q1 = tt.build_query(0x33, BK, hand(1), 3);
         tt.set_result(
@@ -583,7 +717,7 @@ mod tests {
 
     #[test]
     fn repetition_roundtrip() {
-        let mut tt = TranspositionTable::new(1024);
+        let mut tt = TranspositionTable::new(1024, 1024);
         let q = tt.build_query(0x44, BK, hand(2), 7);
         // 千日手結果 (dn=0, rep_start=2) を格納．
         let rep = SearchResult::make_repetition(hand(2), MateLen::from_len(0), 1, 2);
@@ -599,7 +733,7 @@ mod tests {
 
     #[test]
     fn distinct_boards_do_not_collide() {
-        let mut tt = TranspositionTable::new(1024);
+        let mut tt = TranspositionTable::new(1024, 1024);
         let qa = tt.build_query(0x1, 0xAAAA, hand(1), 1);
         let qb = tt.build_query(0x2, 0xBBBB, hand(1), 1);
         tt.set_result(

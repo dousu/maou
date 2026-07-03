@@ -525,7 +525,14 @@ impl DfPnSolver {
         } else {
             ((self.max_nodes as usize).saturating_mul(2)).clamp(1 << 18, 1 << 23)
         };
-        let mut tt = TranspositionTable::new(size);
+        // 千日手テーブルも固定サイズ (generation GC で bound)．既定は主 TT と同数
+        // (24 byte/entry ≒ 主 TT の 37.5% メモリ)．`REPSIZE` で上書き可．
+        let rep_size = if let Ok(s) = std::env::var("REPSIZE") {
+            s.parse::<usize>().unwrap_or(size).max(1 << 12)
+        } else {
+            size
+        };
+        let mut tt = TranspositionTable::new(size, rep_size);
 
         // do_move 数を計測開始 (verify は除外するため探索後に読む)．
         crate::board::reset_do_move_count();
@@ -571,7 +578,7 @@ impl DfPnSolver {
                 }
                 let nodes_before = self.nodes;
                 if cold_shorten {
-                    tt = TranspositionTable::new(size);
+                    tt = TranspositionTable::new(size, rep_size);
                 }
                 let shorter = self.run_search_at_len(&mut tt, board, MateLen::from_len(d - 2));
                 sprof_report(&format!("len={}", d - 2));

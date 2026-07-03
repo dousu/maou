@@ -8,8 +8,13 @@ use crate::types::Color;
 
 use super::CheckCache;
 
-/// path 配列の容量．depth の最大値(41) + マージン．
-pub(super) const PATH_CAPACITY: usize = 48;
+/// path 配列の容量 (= 探索深さの上限 + 1)．
+///
+/// **長手数詰将棋 (ミクロコスモス級 1525 手など) に対応するため 2048**．
+/// `depth < PATH_CAPACITY` を assert し，`path_key` の per-ply Zobrist テーブルも
+/// この幅で確保する ([`super::path_key`])．path stack (`path_depths`/`dom_path`) や
+/// `expansion_stack` は実深さで動的成長するため PATH_CAPACITY には依存しない．
+pub(super) const PATH_CAPACITY: usize = 2048;
 
 /// 詰将棋の探索結果．
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,7 +111,7 @@ impl DfPnSolver {
     ///
     /// # Panics
     ///
-    /// `depth >= PATH_CAPACITY`(48)の場合パニックする．
+    /// `depth >= PATH_CAPACITY`(2048)の場合パニックする．
     pub fn with_timeout(depth: u32, max_nodes: u64, timeout_secs: u64) -> Self {
         assert!(
             (depth as usize) < PATH_CAPACITY,

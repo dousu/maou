@@ -20,11 +20,13 @@ const MAX_PLY: usize = PATH_CAPACITY;
 const HAND_KINDS: usize = crate::types::HAND_KINDS;
 
 /// 経路ハッシュの事前計算テーブル (深さ index 付き Zobrist)．
+/// 外側次元は `Vec` (ヒープ) で持つ — `MAX_PLY` が大きい (長手数対応) と
+/// `[[u64; MAX_PLY]; SQ_NB]` の一括構築が test thread の小スタックを溢れさせるため．
 struct PathKeyTables {
-    move_to: [[u64; MAX_PLY]; SQ_NB],
-    move_from: [[u64; MAX_PLY]; SQ_NB],
+    move_to: Vec<[u64; MAX_PLY]>,
+    move_from: Vec<[u64; MAX_PLY]>,
     promote: [u64; MAX_PLY],
-    dropped_pr: [[u64; MAX_PLY]; HAND_KINDS],
+    dropped_pr: Vec<[u64; MAX_PLY]>,
 }
 
 /// splitmix64 PRNG (固定 seed 334334)．
@@ -40,10 +42,10 @@ fn splitmix64(state: &mut u64) -> u64 {
 static TABLES: LazyLock<PathKeyTables> = LazyLock::new(|| {
     let mut s: u64 = 334_334;
     let mut t = PathKeyTables {
-        move_to: [[0; MAX_PLY]; SQ_NB],
-        move_from: [[0; MAX_PLY]; SQ_NB],
+        move_to: vec![[0; MAX_PLY]; SQ_NB],
+        move_from: vec![[0; MAX_PLY]; SQ_NB],
         promote: [0; MAX_PLY],
-        dropped_pr: [[0; MAX_PLY]; HAND_KINDS],
+        dropped_pr: vec![[0; MAX_PLY]; HAND_KINDS],
     };
     for sq in 0..SQ_NB {
         for d in 0..MAX_PLY {

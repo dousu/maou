@@ -327,8 +327,8 @@ impl TsumeResult {
 /// # 引数
 ///
 /// - `sfen` (str): 局面のSFEN文字列．不正な場合は `ValueError`．
-/// - `depth` (int, optional): 最大探索手数(デフォルト 31)．**有効範囲: 1〜47**．
-///   範囲外は `ValueError` を送出する．
+/// - `depth` (int, optional): 最大探索手数(デフォルト 31)．**有効範囲: 1〜2047**
+///   (長手数詰将棋対応)．範囲外は `ValueError` を送出する．
 /// - `nodes` (int, optional): 最大ノード数(デフォルト 1,048,576 = 2^20)．
 ///   推奨: 100,000〜100,000,000．
 /// - `timeout_secs` (int, optional): 実行時間制限(秒)(デフォルト 300)．
@@ -363,11 +363,11 @@ fn solve_tsume(
     tt_gc_threshold: Option<usize>,
 ) -> PyResult<TsumeResult> {
     if let Some(d) = depth {
-        // Rust 側は depth >= 48 (PATH_CAPACITY) で panic するため，Python には
-        // PanicException でなく ValueError として返す．
-        if !(1..=47).contains(&d) {
+        // Rust 側は depth >= PATH_CAPACITY (2048) で panic するため，Python には
+        // PanicException でなく ValueError として返す (上限 2047 = 長手数詰将棋対応)．
+        if !(1..=2047).contains(&d) {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "depth must be in 1..=47, got {d}"
+                "depth must be in 1..=2047, got {d}"
             )));
         }
     }
