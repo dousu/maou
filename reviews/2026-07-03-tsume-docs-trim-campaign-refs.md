@@ -2,7 +2,7 @@
 title: 設計ドキュメントから campaign 内部参照を除去 (user 直接編集)
 status: applied
 approved_by: user (2026-07-03 直接編集 + コミット指示)
-applied_in: (docs コミット SHA を applied 化時に記入)
+applied_in: 39f8fc3
 ---
 
 # 設計ドキュメントから campaign 内部参照を除去
