@@ -1,361 +1,106 @@
 # 閾値制御
 
+df-pn の効率は「どの部分木にどれだけの探索予算 (閾値) を配るか」で決まる．本節は子へ渡す
+閾値の計算 (1+ε)，巡回グラフでの完全性保証 (TCA)，値のスケール (PN_UNIT) を扱う．
+
 ### 3.1 1+ε トリック (Pawlewicz & Lew 2007)
 
 **出典:** Pawlewicz & Lew, "Improving Depth-First PN-Search: 1+ε Trick" (CG 2007)
 
-標準 df-pn では子 c1 の pn 閾値を `min(parent_th, pn2 + 1)` で設定する
-(`pn2` は2番目に小さい pn)．c1 の pn が pn2 を1超えた瞬間に
-他の子に切り替わり，seesaw effect(スラッシング)が発生する．
+標準 df-pn は最有望子 c1 に `min(parent_th, second_best + 1)` の閾値を与える
+(second_best = 2 番目に良い子の φ)．c1 の φ が second_best を 1 超えた瞬間に別の子へ
+切り替わり，seesaw effect (スラッシング) が起きる．1+ε トリックは切替の余裕を増やして
+1 訪問あたりの探索を深くする．
+
+**実装:** `front_pn_dn_thresholds` (`search/expansion.rs`)．φ/δ 統一で次を計算する:
 
 ```
-  Standard df-pn threshold (seesaw effect):
+(thφ, thδ) = (thpn, thdn) if OR else (thdn, thpn)
 
-  OR node (pn_th=100)
-   |
-   +-- c1: pn=10  <-- selected (min pn)
-   +-- c2: pn=11  (pn2 = 11)
-   |
-   child_pn_th = min(100, 11+1) = 12
-   --> c1 explores until pn reaches 12, then switches to c2
-   --> c2 explores until pn reaches 13, then back to c1
-   --> rapid switching = thrashing
-
-  1+epsilon trick:
-
-  OR node (pn_th=100)
-   |
-   +-- c1: pn=10  <-- selected
-   +-- c2: pn=11  (pn2 = 11)
-   |
-   epsilon = 11/4 + 1 = 3
-   child_pn_th = min(100, 11+3) = 14
-   --> c1 gets 4 more units of exploration before switching
-   --> deeper search per visit, less thrashing
+child_thφ   = min(thφ, second_φ + second_φ/8 + 1)   // 1+ε 子 φ 閾値 (ε=1/8)
+child_thδ   = new_thdelta_for_best_move(thδ)          // 残り δ 予算を best child に配分
 ```
 
-1+ε トリックは `+1` を乗算型に変更:
+子 φ 予算はノード内の 1+ε (ε=1/8, ×1.125) を採用する．標準式 `second_φ + 1` より
+子の切替が減り閾値反復の再展開が減る (採用時の測定: 39te full 最小化 nodes −29%・
+wall −13%，29te −25%; 最短手数・canonical PV・全 tests 不変)．**閾値は df-pn の効率のみに
+作用し健全性に影響しない** (健全性は STRICT verify が担保する;
+[loop-ghi §7.5](loop-ghi.md))．なお ε をさらに緩める (`second+second/8+4` 等) と
+nodes は減るが verify/do_move 増で wall が悪化する (過緩和)．
+
+`new_thdelta_for_best_move` は親の δ 予算から兄弟の δ 寄与を差し引いて best child に与える:
 
 ```
-pn_threshold(c1) = min(parent_th, ceil(pn2 * (1 + ε)))
+delta_except_best = sum_delta_except_best                      // 兄弟の δ 総和 (sum_mask 内)
+if 未展開手が多い: delta_except_best += ((moves - idx) / 8).max(1)   // 未展開ペナルティ
+if best が sum_mask 対象: delta_except_best += max_delta_except_best  // max 集約分を戻す
+child_thδ = max(0, thδ - delta_except_best)
 ```
 
-pn が小さい時は小さな増分(細かい制御)，pn が大きい時は大きな増分(深い探索を許容)．
+- `sum_delta_except_best` / `max_delta_except_best` は §[4.1](proof-disproof-numbers.md) の δ 集約
+  (sum_mask による sum / max の使い分け) を反映する．
+- 乗算的な 1+ε は **ノード内 (ε=1/8, 上式)** と **root の閾値成長 (§3.4, 各反復 1.7×)** の
+  2 箇所で働く．root 側が深い探索への指数的余裕を，ノード内側が子切替 (seesaw) の抑制を担う．
 
-**実装:** solver.rs (child threshold computation)
-
-```
-// v0.22.0: 自然精度 epsilon (§3.5 方針A + v0.21.1 で /3 に増加)
-epsilon = second_best / 3 + PN_UNIT
-sibling_based = second_best + epsilon ≈ second_best * 4/3 + PN_UNIT
-```
-
-OR ノード: `child_pn_th = min(eff_pn_th, second_best + epsilon)`
-AND ノード: `child_dn_th = min(eff_dn_th, second_best + epsilon)`
-
-PN\_UNIT=16 では `second_best = 3S = 48` のとき `epsilon = 16 + 16 = 32`，
-`sibling_based = 80`(5.0S)となり，PN\_UNIT=1 の 4S に対し ~25% の閾値余裕が
-各 OR/AND レベルで得られる．12 レベルの累積で `1.25^12 ≈ 15 倍` の余裕．
-
-**Depth-adaptive epsilon (v0.24.41, v0.24.60 改訂):**
-
-パラメータグリッドサーチ(16 構成)により，epsilon 除数の最適値が
-depth に依存することを発見した:
-
-| depth | eps\_denom | 根拠 |
-|-------|-----------|------|
-| < 19 | 3 | ply 24 (depth=17) で 367K ノードが最適．他値は全て budget cap(1M) |
-| ≥ 19 | 2 | ply 22 (depth=19) を 10M 予算で初めて解ける(8.1M Mate(17))．eps=3 では Unknown |
-
-```rust
-let eps_denom = if self.depth >= 19 { 2 } else { 3 };
-let epsilon = second_best / eps_denom + PN_UNIT;
-```
-
-v0.24.41 では `saved_depth_for_epsilon` (TARGET depth) を使用していたが，
-v0.24.60 で以下の問題を修正:
-
-- **Cliff 問題**: TARGET depth ≥ 19 のとき全 IDS step で denom=2 が
-  適用され，depth=17 (denom=3) より非効率になる．depth=25 target では
-  depth=4 の浅い IDS step でも denom=2 が使われ，性能劣化の一因となった．
-
-- **修正**: `saved_depth_for_epsilon` を廃止し `self.depth` (現在の
-  IDS depth) を使用する．ただし v0.24.60 では **warmup 中のみ**
-  `param_epsilon_denom = 3` を強制する scoped 方式を採用:
-
-  ```rust
-  // Warmup (depth > 19 の full-depth step 直前):
-  self.param_epsilon_denom = 3;  // forced loose
-  self.mid_fallback(board);       // nested IDS at warmup_depth
-  self.param_epsilon_denom = save; // restore for full-depth
-  ```
-
-  warmup 中は denom=3 により depth=17 と同等の探索効率を得る．
-  full-depth では adaptive (saved\_depth ベース) に復元し baseline 互換．
-
-**120M backward 解析での効果:**
-
-| Ply | v0.24.33 nodes | v0.24.41 nodes | 変化 |
-|-----|---------------|---------------|------|
-| 20 | 76,683,642 | 39,118,955 | **-49%** |
-| 18 | 105,800,075 | 97,588,759 | **-7.8%** |
-| 16 | 119,400,000 | 117,080,263 | **-1.9%** |
-
-**出典との差異:**
-- 論文は `ceil(pn2 * (1 + ε))` (純粋な乗算)だが，maou\_shogi では
-  `second_best + second_best / 4 + PN_UNIT` で乗算を近似
-- `min` キャップは論文どおり適用し，全域で乗算型の性質を維持
-
-### 3.2 TCA (Kishimoto & Müller 2008; Kishimoto 2010)
+### 3.2 TCA: Threshold Controlling Algorithm (Kishimoto & Müller 2008; Kishimoto 2010)
 
 **出典:** Kishimoto & Müller, "About the Completeness of Depth-First Proof-Number Search" (2008);
 Kishimoto, "Dealing with Infinite Loops, Underestimation, and Overestimation" (AAAI 2010)
 
-巡回グラフ(DCG)上での pn/dn **過小評価**を修正するアルゴリズム．
-ループ検出により子ノードが `(INF, 0)` を返すと，兄弟ノードの pn/dn が過小評価される．
-TCA は OR ノードでループ子が存在する場合に閾値を拡張し，兄弟の深い探索を促す．
+巡回グラフ (DCG) 上で df-pn は pn/dn を**過小評価**し不完全になりうる．ループ検出により子が
+`(INF, 0)` 等を返すと兄弟の値が過小評価され，本来必要な探索が早期に打ち切られる．TCA は
+ループ子が存在する間，閾値を拡張して兄弟の深い探索を促し，完全性を回復する．
 
-df-pn は有限 DCG 上で不完全だが，TCA を加えると完全になる．
-
-**実装:** mod.rs (`TCA_EXTEND_DENOM`), solver.rs (MID ループ)
-
-- **拡張量**: `threshold / TCA_EXTEND_DENOM + 1` (`TCA_EXTEND_DENOM = 4`，約25%の加算)
-- **適用条件**: OR ノードでループ子(`path` 上の子)が存在する場合
-- AND ノードではループ子が即時反証を引き起こすため拡張不要
-
-**出典との差異:**
-- 論文は乗算的拡張(2×)を提案するが，再帰で指数的に増大する問題がある
-- maou_shogi では加算的拡張(約25%)を採用し，各レベルで独立に適用されるため膨張を抑制
-
-### 3.3 閾値フロア
-
-MID ループ内で閾値が過度に縮小するのを防ぐフロア値を設定する．
-
-**実装:** solver.rs (child threshold computation)
-
-- **PN フロア(通常)**: `pn_floor = (eff_pn_th as u64 * 2 / 3) as u32`
-  (v0.21.1 で 1/2→2/3 に引き上げ，v0.23.0 で u64 昇格によりオーバーフロー修正)
-- **PN フロア(チェーン AND)**: `pn_floor = max(DN_FLOOR, (eff_pn_th as u64 * 2 / 3) as u32)`
-- **DN フロア(OR)**: `dn_floor_or = DN_FLOOR`
-- **DN フロア(通常)**: `dn_floor = DN_FLOOR`
-
-`DN_FLOOR = 100 * PN_UNIT`（§3.5 参照）．
-
-チェーン合駒構造では閾値が深いネストで指数的に枯渇するため，
-フロアにより最低限の探索予算を保証する．
-
-チェーン AND ノードでは DN_FLOOR(=100) を PN フロアにも適用し，
-OR 親の sibling_based(2〜5)に制約されず子 OR に十分な pn 予算を
-伝播する(dn のチェーン用キャップ外しと同じ発想)．
-backward 解析で ply 24 サブ問題が 1M→397K ノードに改善(§10.2)．
-
-### 3.4 停滞検出
-
-MID ループ内で pn/dn が改善しない場合に早期終了する．
-
-**実装:** solver.rs (`ZERO_PROGRESS_LIMIT`, `STAGNATION_LIMIT`)
-
-- `ZERO_PROGRESS_LIMIT = 16`: 子 `mid()` が消費するノード数が 0 の回数が連続16回で進展なしと判定
-- `STAGNATION_LIMIT = 4`: best child の pn/dn と閾値が連続4回不変で MID ループを終了
-
-### 3.5 PN\_UNIT 統一スケーリング
-
-pn/dn の 1 単位を定数 `PN_UNIT`(mod.rs)で表現し，全てのスケーリング対象を
-明示する仕組み．PN\_UNIT=16(v0.21.0)で閾値飢餓を緩和し，
-1+ε 閾値の余裕を確保する（KomoringHeights の初期 pn=10-80 に相当）．
-PN\_UNIT=1 で従来動作と等価であり，スケーリング漏れの検証に使用する．
-
-**設計原理:**
-
-全ての pn/dn を完全にスケーリングすればソルバーの挙動は一致する．
-逆に言えば，PN\_UNIT を変更して挙動が変わるならスケーリング漏れがある．
-この原理を用いて PN\_UNIT=1 と PN\_UNIT=64 の結果を比較し，
-漏れを機械的に特定・修正した．
-
-**スケーリング対象:**
-
-| 区分 | 具体例 |
-|------|--------|
-| 初期値 | TT ミスの pn=1/dn=1，heuristic\_or\_pn/heuristic\_and\_pn 返り値 |
-| 加算定数 | edge\_cost\_or/and，sacrifice\_check\_boost，epsilon の +1，progress\_floor の +1，TCA の +1 |
-| フロア・バイアス | DN\_FLOOR，INTERPOSE\_DN\_BIAS，`.max(N)` のリテラル |
-| WPN の加算分 | `(unproven_count - 1) * PN_UNIT`（盤面カウントを pn 単位に変換） |
-| TT ミス判定 | `cpn == PN_UNIT && cdn == PN_UNIT`（heuristic 初期化の条件） |
-
-**スケーリング不要:**
-
-| 区分 | 理由 |
-|------|------|
-| 終端値 (INF, 0) | 証明/反証のセンチネル |
-| 盤面状態の比較 (safe\_escapes >= 4 等) | 手数・マス数であり pn/dn 値ではない |
-| ループカウンタ (ZERO\_PROGRESS\_LIMIT 等) | イテレーション回数 |
-
-**除算の丸め等価性:**
-
-除算を含む計算は「PN\_UNIT=1 相当に戻してから除算し再スケール」する
-(divide-at-unit-scale パターン):
+**実装:** `search_impl` + `extend_search_threshold` (`search_result.rs`)．`inc_flag` による
+TCA の実装形式は KomoringHeights で実装されている方式に基づく．`inc_flag` で制御する:
 
 ```
-// 等価パターン: PN_UNIT=1 と同じ丸めを再現(スケーリング漏れ検証用)
-let epsilon = second_best / PN_UNIT / 4 * PN_UNIT + PN_UNIT;
+// search_impl 入口:
+if expansion.does_have_old_child():        // 子が path 上の先祖を参照 (ループ/転置)
+    inc_flag += 1
+// 入口と各反復:
+if inc_flag > 0:
+    extend_search_threshold(curr, &mut thpn, &mut thdn)
+        // thpn = max(thpn, curr.pn + 1);  thdn = max(thdn, curr.dn + 1)  (INF は除外)
+
+// step_best_child: first-visit 子を展開したら対称に減算
+if is_first_visit && inc_flag > 0:
+    inc_flag -= 1     // terminal/budget で push されない子でも DEC して会計を対称に保つ
 ```
 
-例: `second_best = 3 * PN_UNIT` のとき
-- PN\_UNIT=1: `3 / 4 + 1 = 0 + 1 = 1`
-- PN\_UNIT=64 (等価): `192 / 64 / 4 * 64 + 64 = 0 + 64 = 64` (= 1 × 64) ✓
+- **inc_flag DEC の対称性が要点**: first-visit の子を展開するたびに inc_flag を 1 減らす．
+  terminal/budget で expansion が push されない子でも DEC を欠かすと，inc_flag が過剰に積もり
+  閾値を過剰拡張し，OR ノードで次手を過剰展開してしまう (探索量が膨らむ)．
+- ループ子検出 (`does_have_old_child`) は TT 経由で子が現探索パス上の局面を指すかで判定する
+  ([loop-ghi.md §7](loop-ghi.md))．
 
-適用箇所: epsilon (`/4`)，pn\_floor (`/2`)，TCA (`/TCA_EXTEND_DENOM`)，
-Deep df-pn (`/DEEP_DFPN_R`)．
+**出典との差異:** 論文の乗算的拡張 (2×) は再帰で指数膨張する問題があるため，本実装は
+「現在値 +1 まで閾値を引き上げる」加算的拡張を inc_flag のスコープ内でのみ適用する．
 
-**自然精度パターン:**
+### 3.3 PN_UNIT スケーリング
 
-divide-at-unit-scale はスケーリング漏れの検証には不可欠だが，
-PN\_UNIT > 1 の本来の利点である**除算の解像度向上**を殺してしまう．
-閾値飢餓の改善には，除算の自然精度をそのまま活かすパターンが有効:
+pn/dn の 1 単位を定数 `PN_UNIT` (`mod.rs`, 既定 16) で表現する．初期値・加算定数・フロアを
+PN_UNIT 単位で表すことで，閾値配分に解像度の余裕を持たせる (PN_UNIT=1 が素の df-pn に相当)．
 
-```
-// 自然精度パターン (v0.22.0): PN_UNIT > 1 で epsilon が増大する
-// v0.21.1 で除数を /4 → /3 に変更し閾値余裕をさらに拡大
-let epsilon = second_best / 3 + PN_UNIT;
-```
+| 区分 | 例 |
+|------|----|
+| 初期値 | `init_pn_dn_or` / `init_pn_dn_and` の base = `PN_UNIT`，加算は `PN_UNIT` 単位 ([heuristics §5.1](initial-heuristics.md)) |
+| 加算定数 | edge cost，子閾値の `+1` 等 |
+| 終端値 | `K_INFINITE_PN_DN = u64::MAX / 2 - 1` (INF センチネル)，`0` (証明/反証) はスケール対象外 |
 
-例: `second_best = 3 * PN_UNIT` のとき
+PN_UNIT を上げると中間的な初期値 (例 1.5 単位相当) を表現でき，heuristic の解像度が上がる．
+pn/dn は `PnDn = u64` で保持し，加算は INF へ向けて飽和 clamp する (`clamp_pn_dn`)．
 
-| | PN\_UNIT=1 | PN\_UNIT=16 (等価) | PN\_UNIT=16 (自然精度 /3) |
-|--|----------|------------------|---------------------|
-| second\_best | 3 | 48 | 48 |
-| epsilon | 1 | 16 | 16 + 16 = 32 |
-| sibling\_based | 4 | 64 | 80 |
-| PN\_UNIT 単位 | 4.0 | 4.0 | **5.0** |
+### 3.4 閾値成長 (反復深化)
 
-自然精度では PN\_UNIT=1 の整数切り捨て `3/4 = 0` が
-`48/4 = 12` として正確に計算され，epsilon が 75% 増加する．
-これにより子 AND に渡る pn 閾値が増大し，閾値飢餓が緩和される．
+root では `search_impl_root` を未解決の間繰り返し，毎反復で閾値を `th = max(th, ⌊val × 1.7⌋ + 1)`
+に拡大する ([search-architecture.md §2.3](search-architecture.md))．これが探索範囲を段階的に
+広げる反復深化であり，1+ε の乗算的拡大を root レベルで実現する．停滞 (val が増えない) は
+理論上起きず，打ち切りは budget / timeout が担う．
 
-heuristic\_or\_pn が S〜3S の範囲で中間値(例: 1.5S)を返す場合，
-second\_best の分布がさらに広がり，自然精度の恩恵が増す．
+### 3.5 旧アーキとの差異
 
-**使い分け:**
-
-- **等価パターン**: スケーリング漏れの検証，回帰テスト
-- **自然精度パターン**: 閾値飢餓の改善（本番運用）
-
-**pn/dn 値の全体マップ (PN\_UNIT = S):**
-
-全ての pn/dn 初期値・バイアス・フロアの相対関係を示す．
-S = PN\_UNIT（v0.21.0: 16）．
-
-*初期値(子ノード展開時に TT に格納される値):*
-
-| 値 | S 倍率 | 適用対象 | 条件 | 節 |
-|---|-------|---------|------|---|
-| S | 1 | OR 子 pn | 標準局面，逃げ場 0〜1 | §5.1 |
-| S + S/4 | 1.25 | OR 子 pn | 逃げ場=2 | §5.1 |
-| S + S/4 〜 S + S/2 | 1.25〜1.5 | OR 子 pn | 逃げ場 4〜5 | §5.1 |
-| 2S + S/4 〜 3S | 2.25〜3 | OR 子 pn | 王手少＋逃げ場多，開放空間 | §5.1 |
-| n×S + S/4 〜 n×S + e×S/2 | 〜n+e/2 | AND 子 pn | 応手数 n，逃げ場 e(0.67n〜n+e/2 に調整) | §5.1 |
-| S | 1 | AND/OR 子 dn | 全子共通 | — |
-
-*加算コスト(初期値に上乗せ):*
-
-| 値 | S 倍率 | 適用対象 | 条件 | 節 |
-|---|-------|---------|------|---|
-| 0 | 0 | pn 加算 | 成・取王手(edge\_cost\_or) / 合駒(edge\_cost\_and) | §5.2 |
-| S | 1 | pn 加算 | 近い静か王手(距離≤2) / 玉逃げ | §5.2 |
-| 2S | 2 | pn 加算 | 遠い静か王手(距離≥3) / 駒取り応手 / 全捨て駒 | §5.2, §9.3 |
-
-*閾値制御パラメータ:*
-
-| 値 | S 倍率 | 用途 | 節 |
-|---|-------|------|---|
-| ε ≈ second\_best/3 + S | ~1.33倍 | OR/AND の 1+ε 手切替 | §3.1 |
-| pn\_floor = eff\_pn\_th\*2/3 | 親の67% | AND 子 pn 閾値の最低保証 | §3.3 |
-| pn\_floor(チェーン AND) = 100S | 100 | チェーン AND 子 pn 閾値の最低保証 | §3.3 |
-| DN\_FLOOR = 100S | 100 | AND 子 dn / OR 子 dn の最低保証 | §3.3 |
-| progress\_floor = best\_pn + S | +1 | 子 pn 閾値のゼロ進捗防止 | §3.3 |
-| TCA 拡張 ≈ threshold/4 + S | +25% | ループ検出時の閾値拡張 | §3.2 |
-
-*dn バイアス(AND ノードの応手選択順序):*
-
-| 値 | S 倍率 | 適用対象 | 節 |
-|---|-------|---------|---|
-| 0 | 0 | チェーン AND: 内側ドロップ(距離1) | §8.7 |
-| (d−1)×S | 1〜5+ | チェーン AND: 外側ドロップ(距離 d) | §8.8 |
-| 8S | 8 | 非チェーン AND: ドロップ(合駒後回し) | §8.6 |
-| 8S | 8 | チェーン AND: 非ドロップ(玉逃げ後回し) | §8.6 |
-
-*WPN/CD-WPN の加算分(AND の current\_pn 計算):*
-
-| 値 | S 倍率 | 用途 | 節 |
-|---|-------|------|---|
-| (n−1)×S | n−1 | WPN: 未証明子 n 個の加算分 | §4.1 |
-| (g−1)×S | g−1 | CD-WPN: グループ数 g の加算分 | §4.2 |
-
-*Deep df-pn バイアス(TT ミス時の深い ply):*
-
-| 値 | S 倍率 | 条件 | 節 |
-|---|-------|------|---|
-| S | 1 | ply ≤ depth/2 | §5.3 |
-| S + ⌊(ply − depth/2)/4⌋×S | 1〜数倍 | ply > depth/2 | §5.3 |
-
-**相対関係の読み方:**
-
-OR 子 pn(1S〜3S)と AND 子 dn(1S)の比が探索の OR/AND バランスを決める．
-DN\_FLOOR(100S)は OR 子 pn の 33〜100 倍であり，
-dn 閾値が枯渇しにくいことを保証する一方，pn 側にはこの水準のフロアがない
-（チェーン AND を除く）．これが閾値飢餓の構造的要因である(§10.2)．
-
-INTERPOSE\_DN\_BIAS(8S)は OR 子 pn(1〜3S)の 3〜8 倍であり，
-合駒を玉逃げ・駒取りの後に探索させる効果が十分に働いている．
-
-PN\_UNIT を拡大すると，上記の全ての値が比例してスケールされる．
-改善の余地は「S 倍率が整数に丸められている箇所」にあり，
-PN\_UNIT > 1 で中間値(1.5S 等)を設定することで
-heuristic の解像度を上げられる(§10.2 方針 A)．
-
-**検証結果:**
-
-PN\_UNIT=1 と PN\_UNIT=64 で 126 テスト全通過（pass/fail 完全一致）．
-backward 解析では ply 24 まで完全一致(396,636 ノード，343,999 TT エントリ)．
-ply 22 以降の微差(TT 7 エントリ = 0.005%)は予算上限到達後の
-TT クラスタ衝突パターンのみ．
-
-**スケーリング漏れの特定に至った経緯:**
-
-| 発見した漏れ | 症状 | 特定方法 |
-|------------|------|---------|
-| WPN `(unproven_count - 1)` に PN\_UNIT 未適用 | PN\_UNIT=64 で 2 テスト FAIL | テスト結果の比較 |
-| TT ミス判定 `cpn == 1` | 同上 | 同上 |
-| depth 制限超過時の初期 pn=1u32 | ply 24 以降で探索パターン乖離 | backward 解析の diff |
-| 除算の丸め精度差 | P\*4g で 1.5%のノード数差 | 4M クラスタ TT での比較 |
-
-### 3.6 Depth-Limited Disproof 格納閾値 (v0.25.0〜v0.25.3, B-2/S-1/M-D)
-
-depth-limited disproof (dn=0, remaining < INFINITE) の WorkingTT 格納を
-`remaining < threshold` で選択的にスキップする機構．
-
-**背景**: ply 18 診断 (§10.2.6) で WorkingTT の disproof 挿入 10.25M に対し
-最終 1.27M (87% eviction) の書き込み増幅が観測され，NPS 低下の主因と判明．
-
-**パラメータ**: `DfPnSolver::param_disproof_remaining_threshold`
-- 0: スキップなし (従来動作)
-- 1〜3: `remaining < threshold` の disproof はスキップ
-- `DISPROOF_THRESHOLD_ADAPTIVE` (u16::MAX): depth-adaptive ポリシー
-
-**Depth-Adaptive ポリシー (M-D, v0.25.3)**:
-
-```
-depth ≤ 19: 0  (shallow 問題: remaining=1 スキップが致命的 — S-2 で実証)
-depth 20-22: 1 (実質 no-op: remaining=0 entry はほぼ存在しない)
-depth ≥ 23:  3 (B-2 full benefit: ply 18 NPS +54%)
-```
-
-**S-2 の知見 (§10.2.11)**: threshold=2 で ply 24 (depth=17) の rem[2] 挿入が
-180K → 5.55M (30×) に爆発．remaining=1 の leaf-level depth-limited NM は
-枝刈りの要であり，スキップすると指数爆発する．
-
-**効果**: ply 18 500M で wall time -45% (threshold=3 明示指定時)．
-adaptive default (v0.25.5) では F3 との相乗で nodes -75%．
-
----
-
+旧二エンジン期にあった depth-adaptive epsilon (denom を IDS depth で切替),
+depth-limited disproof 格納閾値,チェーン用 pn_floor 等は，深さ制限 IDS と Dual TT を前提と
+した機構であり統一 mid では廃止された．現行の horizon (深さ上限) 起因の偽反証は
+**反証の scope 化** ([loop-ghi.md §7.2](loop-ghi.md)) で健全に扱う．

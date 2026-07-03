@@ -1,5 +1,5 @@
 use crate::piece::{hand_piece_to_sfen_char, piece_from_sfen_char, piece_to_sfen_string};
-use crate::types::{Color, HAND_KINDS, Piece, PieceType, Square};
+use crate::types::{Color, Piece, PieceType, Square, HAND_KINDS};
 
 /// SFENパース時のエラー．
 #[derive(Debug, thiserror::Error)]
@@ -47,7 +47,10 @@ pub fn parse_sfen(sfen: &str) -> Result<SfenPosition, SfenError> {
     let mut squares = [Piece::EMPTY; 81];
     let rows: Vec<&str> = parts[0].split('/').collect();
     if rows.len() != 9 {
-        return Err(SfenError::InvalidBoard(format!("expected 9 rows, got {}", rows.len())));
+        return Err(SfenError::InvalidBoard(format!(
+            "expected 9 rows, got {}",
+            rows.len()
+        )));
     }
 
     // SFENの行は上(1段目=row0)から下(9段目=row8)，
@@ -57,22 +60,25 @@ pub fn parse_sfen(sfen: &str) -> Result<SfenPosition, SfenError> {
         let mut chars = row_str.chars().peekable();
         while let Some(ch) = chars.next() {
             if col >= 9 {
-                return Err(SfenError::InvalidBoard(format!("row {} has too many pieces", row)));
+                return Err(SfenError::InvalidBoard(format!(
+                    "row {} has too many pieces",
+                    row
+                )));
             }
             if ch.is_ascii_digit() {
                 col += ch.to_digit(10).unwrap() as u8;
             } else if ch == '+' {
                 // 成駒: 次の文字と組み合わせる
-                let next_ch = chars.next().ok_or_else(|| {
-                    SfenError::InvalidBoard(format!("'+' at end of row {}", row))
-                })?;
+                let next_ch = chars
+                    .next()
+                    .ok_or_else(|| SfenError::InvalidBoard(format!("'+' at end of row {}", row)))?;
                 let piece = piece_from_sfen_char(next_ch).ok_or_else(|| {
                     SfenError::InvalidBoard(format!("invalid piece: +{}", next_ch))
                 })?;
                 let pt = piece.piece_type().unwrap();
-                let promoted_pt = pt.promoted().ok_or_else(|| {
-                    SfenError::InvalidBoard(format!("cannot promote {:?}", pt))
-                })?;
+                let promoted_pt = pt
+                    .promoted()
+                    .ok_or_else(|| SfenError::InvalidBoard(format!("cannot promote {:?}", pt)))?;
                 let color = piece.color().unwrap();
                 let sq = Square::new(8 - col, row as u8);
                 squares[sq.index()] = Piece::new(color, promoted_pt);
@@ -117,9 +123,9 @@ pub fn parse_sfen(sfen: &str) -> Result<SfenPosition, SfenError> {
                         break;
                     }
                 }
-                count = num_str.parse().map_err(|_| {
-                    SfenError::InvalidHand(format!("invalid count: {}", num_str))
-                })?;
+                count = num_str
+                    .parse()
+                    .map_err(|_| SfenError::InvalidHand(format!("invalid count: {}", num_str)))?;
                 // 次の文字が駒種
                 let piece_ch = chars.next().ok_or_else(|| {
                     SfenError::InvalidHand("number at end of hand string".to_string())
@@ -174,7 +180,12 @@ fn parse_hand_piece(ch: char) -> Result<(Color, PieceType), SfenError> {
 }
 
 /// 局面をSFEN文字列に変換する．
-pub fn to_sfen(squares: &[Piece; 81], turn: Color, hand: &[[u8; HAND_KINDS]; 2], ply: u16) -> String {
+pub fn to_sfen(
+    squares: &[Piece; 81],
+    turn: Color,
+    hand: &[[u8; HAND_KINDS]; 2],
+    ply: u16,
+) -> String {
     let mut result = String::new();
 
     // 1. 盤面
@@ -244,8 +255,7 @@ pub fn to_sfen(squares: &[Piece; 81], turn: Color, hand: &[[u8; HAND_KINDS]; 2],
 }
 
 /// 平手初期局面のSFEN．
-pub const HIRATE_SFEN: &str =
-    "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
+pub const HIRATE_SFEN: &str = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
 
 #[cfg(test)]
 mod tests {

@@ -299,9 +299,15 @@ const SQUARE_BB: [Bitboard; 81] = {
     while i < 81 {
         let idx = i as u64;
         if idx < 63 {
-            table[i as usize] = Bitboard { lo: 1u64 << idx, hi: 0 };
+            table[i as usize] = Bitboard {
+                lo: 1u64 << idx,
+                hi: 0,
+            };
         } else {
-            table[i as usize] = Bitboard { lo: 0, hi: 1u64 << (idx - 63) };
+            table[i as usize] = Bitboard {
+                lo: 0,
+                hi: 1u64 << (idx - 63),
+            };
         }
         i += 1;
     }
@@ -427,5 +433,4 @@ mod tests {
         let squares: Vec<Square> = bb.into_iter().collect();
         assert_eq!(squares, vec![Square(0), Square(40), Square(80)]);
     }
-
 }

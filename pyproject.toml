@@ -136,6 +136,9 @@ dev = [
     "playwright>=1.40.0",
     "pytest-cov>=4.0.0",
     "serena-agent",
+    "matplotlib",
+    "japanize-matplotlib>=1.1.3",
+    "scipy>=1.17.1",
 ]
 
 [tool.commitizen]

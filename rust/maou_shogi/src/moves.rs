@@ -49,7 +49,13 @@ impl Move {
     /// `captured` は cshogi 互換の駒 ID (0-30)，`moving_pt` は `PieceType as u8` (0-14)．
     /// いずれも 5 ビットに収まる値であること(リリースビルドではチェックされない)．
     #[inline]
-    pub(crate) fn new_move(from: Square, to: Square, promote: bool, captured: u8, moving_pt: u8) -> Move {
+    pub(crate) fn new_move(
+        from: Square,
+        to: Square,
+        promote: bool,
+        captured: u8,
+        moving_pt: u8,
+    ) -> Move {
         debug_assert!(captured <= 30, "captured raw ID {} out of range", captured);
         debug_assert!(moving_pt <= 14, "moving_pt {} out of range", moving_pt);
         let mut v = (to.0 as u32) | ((from.0 as u32) << 7);
@@ -166,10 +172,7 @@ impl Move {
             let to_file = to.col() + 1;
             let to_rank = (b'a' + to.row()) as char;
             let promo = if self.is_promotion() { "+" } else { "" };
-            format!(
-                "{}{}{}{}{}",
-                from_file, from_rank, to_file, to_rank, promo
-            )
+            format!("{}{}{}{}{}", from_file, from_rank, to_file, to_rank, promo)
         }
     }
 

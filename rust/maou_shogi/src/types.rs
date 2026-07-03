@@ -50,14 +50,14 @@ pub enum GameResult {
 #[repr(u8)]
 pub enum PieceType {
     // 生駒
-    Pawn = 1,    // 歩
-    Lance = 2,   // 香
-    Knight = 3,  // 桂
-    Silver = 4,  // 銀
-    Bishop = 5,  // 角
-    Rook = 6,    // 飛
-    Gold = 7,    // 金
-    King = 8,    // 王
+    Pawn = 1,   // 歩
+    Lance = 2,  // 香
+    Knight = 3, // 桂
+    Silver = 4, // 銀
+    Bishop = 5, // 角
+    Rook = 6,   // 飛
+    Gold = 7,   // 金
+    King = 8,   // 王
     // 成駒
     ProPawn = 9,    // と
     ProLance = 10,  // 成香
@@ -69,7 +69,10 @@ pub enum PieceType {
 
 // is_promoted() が King < 9 <= ProPawn を前提としていることをコンパイル時に検証
 const _: () = {
-    assert!(PieceType::King as u8 == 8, "is_promoted() assumes King == 8");
+    assert!(
+        PieceType::King as u8 == 8,
+        "is_promoted() assumes King == 8"
+    );
     assert!(
         PieceType::ProPawn as u8 == 9,
         "is_promoted() assumes ProPawn == 9"
@@ -374,7 +377,12 @@ impl Square {
     /// 呼び出し元(SFENパーサー等)で事前にバリデーションすること．
     #[inline]
     pub fn new(col: u8, row: u8) -> Square {
-        debug_assert!(col < 9 && row < 9, "Square::new: col={}, row={} out of range", col, row);
+        debug_assert!(
+            col < 9 && row < 9,
+            "Square::new: col={}, row={} out of range",
+            col,
+            row
+        );
         Square(col * 9 + row)
     }
 

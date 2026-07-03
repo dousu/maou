@@ -1,4 +1,4 @@
-use crate::types::{Color, HAND_KINDS, MAX_HAND_STATES, PIECE_TYPES_NUM, PieceType, Square};
+use crate::types::{Color, PieceType, Square, HAND_KINDS, MAX_HAND_STATES, PIECE_TYPES_NUM};
 
 /// Zobristテーブルの駒ID数(14駒種 × 2色 = 28)．
 const ZOBRIST_BOARD_IDS: usize = PIECE_TYPES_NUM * 2;
@@ -62,7 +62,11 @@ impl ZobristTable {
     /// 持ち駒のハッシュ値を取得する．
     #[inline]
     pub fn hand_hash(&self, color: Color, hand_index: usize, count: usize) -> u64 {
-        debug_assert!(hand_index < HAND_KINDS, "hand_index {} out of range", hand_index);
+        debug_assert!(
+            hand_index < HAND_KINDS,
+            "hand_index {} out of range",
+            hand_index
+        );
         debug_assert!(count < MAX_HAND_STATES, "hand count {} out of range", count);
         self.hand[color.index()][hand_index][count]
     }

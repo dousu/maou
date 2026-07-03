@@ -1,138 +1,66 @@
 # 初期値ヒューリスティック
 
-### 5.1 df-pn+ ヒューリスティック初期化 (GPW 2004; KomoringHeights v0.4.0)
+標準 df-pn は全リーフを `(pn=1, dn=1)` で初期化するが，局面の特徴に基づく初期値を与えると
+最有望子の選択精度が上がり探索量が減る (df-pn+)．本節は子の seed pn/dn の計算と，展開前に
+1 手詰を即決するインライン検出を扱う．
 
-**出典:** Kaneko lab (UTokyo), "Initial pn/dn after expansion in df-pn for tsume-shogi" (GPW 2004);
-KomoringHeights v0.4.0
+### 5.1 df-pn+ 風の per-move 初期値 (GPW 2004; KomoringHeights)
 
-標準 df-pn は全リーフを `(pn=1, dn=1)` で初期化するが，
-df-pn+ では局面の特徴に基づいて初期 pn/dn を設定する．
-玉の逃げ場が少ない局面ほど pn を小さく(詰みやすい)，
-王手手段が多い局面ほど dn を大きく(反証しにくい)する．
+**出典:** Kaneko lab (UTokyo), "Initial pn/dn after expansion in df-pn for tsume-shogi" (GPW 2004)．
+df-pn+ の局面特徴に基づく初期化は KomoringHeights v0.4.0 でも実装されている．
 
-**実装:**
+**実装:** `init_pn_dn_or` / `init_pn_dn_and` (`heuristics.rs`)．加算は全て `PN_UNIT` (= U) 単位
+([threshold §3.3](threshold-control.md))．「支援」は対象マスへの攻め方/守備方の利き数で測る．
 
-#### `heuristic_or_pn` (solver.rs)
+#### OR 子 (攻め方の王手 → 守備方局面): `init_pn_dn_or`
 
-OR 子(攻め方局面)の初期 pn．王手数と玉の安全な逃げ場で調整:
+base `(pn, dn) = (U, U)` から手の性質で調整する:
 
-| 条件 | 初期 pn (S = PN\_UNIT) | v0.20.x 互換 |
-|------|----------------------|-------------|
-| 逃げ場なし | S | S |
-| 逃げ場=1 | S | S |
-| 逃げ場=2 | S + S/4 | S |
-| 王手≤2 かつ 逃げ場=3 | 2S + S/4 | 2S |
-| 王手≤2 かつ 逃げ場=4 | 2S + S/2 | 3S |
-| 王手≤2 かつ 逃げ場≥5 | 3S (キャップ) | 3S |
-| 逃げ場=4 | S + S/4 | S + S/3 |
-| 逃げ場=5 | S + S/2 | S + S/3 |
-| 逃げ場≥4，隣接≥5，圧迫0 | 3S (開放空間) | 3S |
+| 条件 | 調整 | 意図 |
+|------|------|------|
+| 受け駒の支援 ≥ 2 (王手マスが厚く受けられる) | `pn += U` | 詰みにくい → 後回し |
+| 攻め支援 + drop_bonus > 受け支援 | `dn += U` | 攻めが利く有望王手 → 優先 |
+| 金/銀を取る王手 | `dn += U` | 守備の主力を除去 → 有望 |
+| その他の駒を取る王手 | `pn += U` | — |
+| 静かな (取らない) 王手 | `pn += U` | — |
 
-v0.21.1 で S-8S の二次元スケーリングに拡張(§10.2 方針A):
-safe\_escapes(S〜4S)と num\_checks(×1.0〜×2.0)の組み合わせで S〜8S の範囲．
-KomoringHeights の pn=10-80 に相当する範囲(PN\_UNIT=16 で 16-128)．
-開放空間検出(隣接≥5，圧迫0，逃げ場≥4)は 8S に引き上げ．
+#### AND 子 (守備方の応手 → 攻め方局面): `init_pn_dn_and`
 
-#### `heuristic_and_pn` (solver.rs)
+| 応手の種類 | `(pn, dn)` | 意図 |
+|-----------|-----------|------|
+| 駒を取る応手 | `(2U, U)` | 攻め駒除去 → 攻め方不利寄り |
+| 玉移動 | `(U, U)` | — |
+| 良い逃げ (攻め支援 < 受け支援 + drop_bonus) | `(2U, U)` | 受けが成立しやすい |
+| 悪い逃げ | `(U, 2U)` | 受けが崩れやすい → 反証しやすい |
 
-AND 子(守備方局面)の初期 pn．応手数と玉の安全な逃げ場で調整:
+これらの per-move 値が **エッジコスト** (親→子遷移の手にコストを付与する DFPN-E 的アイデア,
+NeurIPS 2019) として機能し，最有望子の初期順序を決める．
 
-| 条件 | 初期 pn (S = PN\_UNIT) | v0.20.x 互換 |
-|------|----------------------|-------------|
-| 逃げ場なし | `n * 2/3 * S` | `n * 2/3 * S` |
-| 逃げ場=1 | `n * S + S/4` | `n * S` |
-| 逃げ場=2 | `n * S + S/2` | `n * S` |
-| 逃げ場=3 | `n * S + 3S/2` | `(n+1) * S` |
-| 逃げ場≥4 | `n * S + e*S/2 + S/4` | `(n + e/2) * S` |
+### 5.2 エッジコストと difficulty / ordering の役割分担
 
-n = num\_defenses, e = safe\_escapes．v0.21.0 で逃げ場 1〜2 にも
-中間値を返すことで閾値配分の精度を向上させた．
+per-move 初期値 (§5.1) は seed pn/dn にそのまま折り込まれ，pn が「難易度推定」と
+「手の良し悪し (ordering)」の二役を担う (エッジコスト folded)．全項目が同点の最終
+tie-break のみ `move_brief_eval` が別途担う
+([move-ordering-and-pv.md §9.1](move-ordering-and-pv.md))．
 
-### 5.2 DFPN-E エッジコスト型 (NeurIPS 2019)
+エッジコストを pn から外し純粋な難易度推定に分離する案 (pn の二重信号が δ-sum 算術を
+歪めうるという観察に基づく) も検討されたが，採用していない．
 
-**出典:** "Depth-First Proof-Number Search with Heuristic Edge Cost" (NeurIPS 2019)
+### 5.3 インライン 1 手詰検出 (constructive)
 
-リーフ(ノード)ではなくエッジ(親→子遷移の手)にヒューリスティックコストを付与する．
-展開済みノードではエッジコストがゼロになるため，実質的には初期 pn への加算として機能する．
+子ノードを本格展開する前に，1 手詰を即決して `pn=0` (詰み proven) を確定すれば，展開と
+再帰を丸ごと省ける．
 
-**実装:** mod.rs
+**実装:** `mate1ply` (`movegen/mate1ply.rs`)．**constructive** (詰ます手 `Move` 自体を返す):
 
-#### `edge_cost_or` (OR ノードの王手): mod.rs
+1. **玉の幾何による候補生成**: `generate_mate_candidates` が玉の周囲から詰ます手の候補
+   (王手マス・打ち駒位置) を構築する (全合法手生成を避ける)．
+2. `mate_move_in_1ply_maxdist(.., 2)` で距離 ≤ 2 の候補を検証する (健全な部分集合)．
+3. 逆王手 (攻め方が王手されている) 局面は `mate1ply_cached_near2` の別経路で扱う．
 
-| 手の種類 | コスト |
-|---------|--------|
-| 成王手 / 取王手 | 0 (最有力) |
-| 近い静か王手 (距離≤2) | 1 |
-| 遠い静か王手 (距離≥3) | 2 |
+王手手の列挙は **`CheckCache`** (`movegen/check_cache.rs`, direct-mapped 8192 エントリ・
+1 局面あたり最大 32 手) で再利用し，同一局面の王手再生成を避ける．
 
-#### `edge_cost_and` (AND ノードの応手): mod.rs
-
-| 応手の種類 | コスト |
-|-----------|--------|
-| 合駒 (drop) | 0 (攻め方が取り進んで有利) |
-| 玉の逃げ / 駒移動 | 1 |
-| 駒取り | 2 (攻め駒除去で攻め方不利) |
-
-**出典との差異:**
-- 論文のコスト関数はドメイン非依存の汎用設計だが，
-  maou_shogi では将棋の詰みに特化したドメイン知識(成/取/距離/合駒)を組み込み
-
-### 5.3 Deep df-pn (Song Zhang et al. 2017)
-
-**出典:** Song Zhang et al., "Deep df-pn and Its Efficient Implementations" (CG 2017)
-
-深い位置ほど初期 dn を高く設定し，浅い解を優先する．
-論文推奨値: `dn_init = max(1, ceil(R * depth))` (R=0.4, Othello/Hex)．
-
-**実装:** mod.rs (`DEEP_DFPN_R`), solver.rs (`look_up_pn_dn`)
-
-TT ミス時(pn=1, dn=1, source=0)に深さバイアスを適用:
-
-```
-if ply > depth / 2:
-    biased_pn = 1 + (ply - depth/2) / DEEP_DFPN_R    (DEEP_DFPN_R = 4)
-```
-
-浅い ply (depth の前半) は標準 df-pn と同じ pn=1 を維持．
-
-**出典との差異:**
-- 論文は dn にバイアスを適用するが，maou_shogi では **pn にバイアス**を適用
-- 論文の R=0.4 (小さいほど積極的) に対し，maou_shogi では `R=4` (整数除算)
-- 深い ply の未探索子の pn を上げることで，探索済みの浅い子を優先する効果
-- バイアス適用は depth の後半のみ(前半は標準 pn=1 で不詰検出を維持)
-
-### 5.4 インライン詰み検出
-
-child_init フェーズ(子ノードの TT 初回参照時)で，
-MID の再帰呼び出しなしに1手・3手の詰み/不詰を即座に判定する．
-
-**実装:** solver.rs (child init)
-
-#### AND 子ノード(OR 局面)の検出: solver.rs (child init, `or_node` ブランチ)
-
-1. `generate_defense_moves(board)` で全応手を生成
-2. 応手なし → 即詰み確定(pn=0, dn=INF)
-3. `ply + 2 < depth` なら3手詰め判定:
-   - 各応手を実行し `has_mate_in_1_with(board, checks)` で全応手に1手詰みがあるか確認
-   - 全応手に対して1手詰みが存在 → 即詰み(pn=0)
-
-#### OR 子ノード(AND 局面)の検出: solver.rs (child init, `!or_node` ブランチ)
-
-1. `generate_check_moves(board)` で全王手を生成
-2. 王手なし → 即不詰(pn=INF, dn=0)
-3. `ply + 2 < depth` なら:
-   - `has_mate_in_1_with(board, checks)` で1手詰み判定
-   - `try_capture_tt_proof(board, checks, remaining)` で TT 参照の即証明
-
-#### `has_mate_in_1_with` ヘルパー: solver.rs
-
-`board.mate_move_in_1ply(checks, us)` で1手詰みを検出．
-詰み発見時は詰み局面を TT に記録し，将来の探索で再利用可能にする．
-
-**設計判断:** 5手以上のインライン検出は MID の枝刈り(閾値制御・TT 参照)なしの
-網羅探索となり，MID 自体より非効率になるため実装しない．
-過去に実装した budget 付き N 手詰め検出(static_mate)は TT 汚染と
-探索効率の悪化を招いたため v0.20.24 で削除した．
-
----
-
+**設計判断:** 3 手以上のインライン詰み検出は，閾値制御・TT を伴わない網羅探索となり mid 本体
+より非効率になるため実装しない (mid の再帰に委ねる)．1 手詰 look-ahead は AND 親の first-visit
+子 OR に対し深さ制限なく適用される (`check_obvious_final_or_node`)．

@@ -1,10 +1,107 @@
 use crate::attack;
 use crate::bitboard::Bitboard;
 use crate::moves::Move;
-use crate::sfen::{self, HIRATE_SFEN};
 pub use crate::sfen::SfenError;
-use crate::types::{Color, HAND_KINDS, Piece, PIECE_BB_SIZE, PieceType, Square};
+use crate::sfen::{self, HIRATE_SFEN};
+use crate::types::{Color, Piece, PieceType, Square, HAND_KINDS, PIECE_BB_SIZE};
 use crate::zobrist::ZOBRIST;
+
+thread_local! {
+    /// `Board::do_move` の累積呼び出し回数 (KH `Threads.nodes_searched()` = USI `info nodes`
+    /// と同単位)．dfpn ソルバーの忠実度計測用: KH の do_move 数と直接突合する．SearchImpl 訪問数
+    /// (`v3_nodes`) とは別単位なので混同しないこと．single-thread 前提の非 atomic Cell．
+    static DO_MOVE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// mate_move_in_1ply の None ケース (開き王手/両王手) do_move 検証回数 (do_moves breakdown 用)．
+    static MATE1PLY_NONE_DM: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// `do_move` 累積カウンタを 0 にリセットする．
+#[inline]
+pub fn reset_do_move_count() {
+    DO_MOVE_COUNT.with(|c| c.set(0));
+    MATE1PLY_NONE_DM.with(|c| c.set(0));
+}
+
+/// `do_move` 累積カウンタの現在値を返す．
+#[inline]
+pub fn do_move_count() -> u64 {
+    DO_MOVE_COUNT.with(|c| c.get())
+}
+
+/// mate_move_in_1ply の None ケース do_move 回数を返す (do_moves breakdown 用)．
+#[inline]
+pub fn mate1ply_none_dm() -> u64 {
+    MATE1PLY_NONE_DM.with(|c| c.get())
+}
+
+/// fused look-ahead 経路の None (開き/両王手) do_move 検証を加算する (DMBREAK breakdown 整合用)．
+#[inline]
+pub(crate) fn bump_mate1ply_none_dm() {
+    MATE1PLY_NONE_DM.with(|c| c.set(c.get() + 1));
+}
+
+/// `EFFECT_VERIFY` 環境変数の有無を一度だけ読み込みキャッシュする．
+///
+/// 設定時は `do_move`/`undo_move` 毎に incremental 利き == フルスキャンを検査する
+/// (release テストでも有効)．`env::var` の per-call コスト (mutex/alloc) を避けるため
+/// `OnceLock` で 1 度だけ読む (default 時の overhead は relaxed bool load 1 回のみ)．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn effect_verify_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("EFFECT_VERIFY").is_ok())
+}
+
+/// 診断用: `EFFECT_SKIP_A=1` で移動駒自身の利き更新 (A) をスキップする (コスト分解用)．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn effect_skip_a() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var("EFFECT_SKIP_A").is_ok())
+}
+
+/// 診断用: `EFFECT_SKIP_B=1` で遠方利きの遮断/開放更新 (B) をスキップする (コスト分解用)．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn effect_skip_b() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var("EFFECT_SKIP_B").is_ok())
+}
+
+/// `EFFECT_MATE1PLY=1` で mate1ply の escape 判定を effect-delta 版で駆動する (既定は EscInfo)．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn effect_mate1ply_enabled() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var("EFFECT_MATE1PLY").is_ok())
+}
+
+/// `EFFECT_MATE1PLY_VERIFY=1` で effect-delta escape 判定を EscInfo 版と全候補突合 assert する．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn effect_mate1ply_verify() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| std::env::var("EFFECT_MATE1PLY_VERIFY").is_ok())
+}
+
+/// 駒 (color, pt) の遠方利き方向リスト (`long_dir` の bit 群; ステップ駒は空)．
+/// 飛/龍=縦横, 角/馬=斜め, 香=色依存の前方 1 方向．`long_dir` 維持・再構築・検証で共有する．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn piece_long_dirs(color: Color, pt: PieceType) -> &'static [usize] {
+    match pt {
+        PieceType::Rook | PieceType::Dragon => &attack::DIRS_ROOK,
+        PieceType::Bishop | PieceType::Horse => &attack::DIRS_BISHOP,
+        PieceType::Lance => {
+            if color == Color::Black {
+                std::slice::from_ref(&attack::DIR_UP)
+            } else {
+                std::slice::from_ref(&attack::DIR_DOWN)
+            }
+        }
+        _ => &[],
+    }
+}
 
 /// 将棋盤の状態．
 ///
@@ -45,6 +142,75 @@ pub struct Board {
     /// `hash` から持ち駒成分を除いたもの．position_key() を O(1) にするために
     /// インクリメンタルに維持する．盤上の駒配置と手番のみを反映する．
     pub(crate) board_hash: u64,
+    /// 各マスへの色別利き数 (YaneuraOu `board_effect` 相当)．
+    ///
+    /// `effect[color][sq]` = `color` の駒が `sq` を攻撃している枚数．
+    /// `put_piece`/`remove_piece` で incremental に更新する (遠方利きの遮断/開放を含む)．
+    /// `is_attacked_by(sq, c)` 等の局面 query を `effect[c][sq] > 0` の参照に置き換えるための土台．
+    /// dfpn は do_move より query が圧倒的多数ゆえ，利きをテーブル化すると per-op コストが下がる．
+    /// 不変条件 (incremental == フルスキャン) は `verify_effect` / `EFFECT_VERIFY` で検証する．
+    /// `effect_table` feature (default 無効) でのみ保持・維持する (無効時はゼロコスト)．
+    #[cfg(feature = "effect_table")]
+    pub(crate) effect: [[u8; 81]; 2],
+    /// 各マスへの色別「遠方利き方向」mask (YaneuraOu `long_effect`/WordBoard 相当)．
+    ///
+    /// `long_dir[color][sq]` の bit `d` (= attack::DIR_*) が 1 ⇔ `color` の遠方駒 (飛/龍/角/馬/香) が
+    /// `sq` を「進行方向 `d` で」攻撃している (その駒は `sq` から `opposite(d)` 方向にあり，利きは `sq`
+    /// より先の `d` 方向へ伸びる)．各 (sq, 方向) を攻撃する遠方駒は高々 1 枚ゆえ bit は 0/1．
+    /// mate1ply の after-move 影利き (王が抜けた先への貫通) / 遮断を do_move せず理論計算するための土台．
+    /// `put_piece`/`remove_piece` で `effect` と同時に incremental 維持する．
+    #[cfg(feature = "effect_table")]
+    pub(crate) long_dir: [[u8; 81]; 2],
+}
+
+/// 1 手詰判定 (`mate_move_in_1ply`) の per-position 文脈．
+///
+/// 全王手候補で共有する事前計算を保持し，per-candidate の全駒利きスキャンを
+/// bit 演算に置き換える．escape マスの利き情報 (`EscInfo`) は最初に必要になった
+/// 候補で lazy に計算する (候補が 1 手でも escape 検査へ到達すれば元が取れる)．
+struct Mate1plyCtx {
+    /// 開き王手候補 (攻め方 slider と受け方玉の間の唯一の攻め方駒)．
+    /// ここに無い from の盤上移動・駒打ちは第二の王手駒を生み得ない．
+    discoverers: Bitboard,
+    /// 移動前占有から受け方玉を除いた occupancy (escape 利き情報の基準)．
+    occ_nk_pre: Bitboard,
+    /// king_step & !def_occ の escape 候補マス (esc==to の捕獲ケースは別扱い)．
+    esc_sqs: [Square; 8],
+    esc_n: usize,
+    esc_info: [Option<EscInfo>; 8],
+}
+
+/// escape マス 1 つ分の攻め方利き情報 (移動前 `occ_nk_pre` 基準)．
+///
+/// per-candidate には from 除外 (`& !from`) と to による遮断 (`to ∈ between`)，
+/// from 退去による開き (`from ∈ qvis` のときのみ可能) で補正して使う．
+#[derive(Clone, Copy)]
+struct EscInfo {
+    /// esc を攻撃する攻め方 step 駒 (歩桂銀金系・玉・馬龍の step 部)．占有非依存で正確．
+    steps: Bitboard,
+    /// esc を攻撃する攻め方 slider (香・角馬・飛龍の slide 部)．
+    sliders: Bitboard,
+    /// esc から見える queen-line マス (rook|bishop rays)．from/to がここに
+    /// 無ければその着手はこの esc への利きを変えられない．
+    qvis: Bitboard,
+}
+
+/// 1 手詰検証の per-call 文脈を一度だけ構築して保持する束ね (ctx + 不変パラメータ)．
+///
+/// `mate_move_in_1ply_maxdist` (王手リスト走査) と look-ahead fused 経路 (候補列挙と検証を
+/// 1 パスに融合) が **同一の [`Board::is_checkmate_after_bb`] 呼び出し**を共有するための土台．
+/// 両経路が同じ verifier を使うため，判定 (Some/None・詰み手) は構造的に一致する．
+pub(crate) struct Mate1plyVerifier {
+    ctx: Mate1plyCtx,
+    attacker: Color,
+    defender: Color,
+    king_sq: Square,
+    king_bb: Bitboard,
+    king_step: Bitboard,
+    all_occ: Bitboard,
+    def_occ: Bitboard,
+    att_idx: usize,
+    def_idx: usize,
 }
 
 impl Board {
@@ -67,6 +233,10 @@ impl Board {
             ply: 1,
             hash: 0,
             board_hash: 0,
+            #[cfg(feature = "effect_table")]
+            effect: [[0u8; 81]; 2],
+            #[cfg(feature = "effect_table")]
+            long_dir: [[0u8; 81]; 2],
         }
     }
 
@@ -98,6 +268,10 @@ impl Board {
         // Zobrist hashを計算
         self.hash = self.compute_hash();
         self.board_hash = self.compute_board_hash();
+
+        // 利きテーブルをフルスキャンで再構築 (piece_bb を直接組み立てたため)．
+        #[cfg(feature = "effect_table")]
+        self.rebuild_effect();
 
         Ok(())
     }
@@ -479,6 +653,22 @@ impl Board {
     /// 全81マスをスキャンする代わりに，駒種ごとのbitboard演算で高速化．
     #[inline]
     pub fn is_attacked_by(&self, sq: Square, attacker_color: Color) -> bool {
+        // Stage 2: incremental effect テーブルが有効なら参照で即答する (王を含む全駒の利き数 ⇒
+        // 逆スキャンと完全一致．`verify_effect`/`EFFECT_VERIFY`/テストで等価検証済ゆえ探索不変)．
+        #[cfg(feature = "effect_table")]
+        {
+            return self.effect[attacker_color.index()][sq.index()] > 0;
+        }
+        #[cfg(not(feature = "effect_table"))]
+        {
+            self.is_attacked_by_scan(sq, attacker_color)
+        }
+    }
+
+    /// 逆射スキャンによる利き判定 (effect テーブル非使用時の本体 / 検証の ground truth)．
+    #[cfg_attr(feature = "effect_table", allow(dead_code))]
+    #[inline]
+    pub(crate) fn is_attacked_by_scan(&self, sq: Square, attacker_color: Color) -> bool {
         let occ = self.all_occupied();
         let opp = attacker_color.index();
 
@@ -563,6 +753,244 @@ impl Board {
     // ビットボードベースの1手詰め判定 (mateMoveIn1Ply 相当)
     // ============================================================
 
+    /// escape マス `esc` への攻め方利き情報を計算する (`is_checkmate_after_bb` 用)．
+    ///
+    /// `occ_nk` は移動前占有から受け方玉を除いたもの (玉貫通 X-ray)．
+    /// step 部と slider 部を分けて返す (step は占有非依存なので per-candidate
+    /// 補正が from 除外だけで済む)．qvis は slider 補正用の可視マスク．
+    fn compute_esc_info(
+        &self,
+        esc: Square,
+        defender: Color,
+        att_idx: usize,
+        occ_nk: Bitboard,
+    ) -> EscInfo {
+        let pb = &self.piece_bb[att_idx];
+        let mut steps =
+            attack::step_attacks(defender, PieceType::Pawn, esc) & pb[PieceType::Pawn as usize];
+        steps |=
+            attack::step_attacks(defender, PieceType::Knight, esc) & pb[PieceType::Knight as usize];
+        steps |=
+            attack::step_attacks(defender, PieceType::Silver, esc) & pb[PieceType::Silver as usize];
+        let gold_movers = pb[PieceType::Gold as usize]
+            | pb[PieceType::ProPawn as usize]
+            | pb[PieceType::ProLance as usize]
+            | pb[PieceType::ProKnight as usize]
+            | pb[PieceType::ProSilver as usize];
+        steps |= attack::step_attacks(defender, PieceType::Gold, esc) & gold_movers;
+        let kingish = pb[PieceType::King as usize]
+            | pb[PieceType::Horse as usize]
+            | pb[PieceType::Dragon as usize];
+        steps |= attack::step_attacks(defender, PieceType::King, esc) & kingish;
+
+        let ba = attack::bishop_attacks(esc, occ_nk);
+        let ra = attack::rook_attacks(esc, occ_nk);
+        let sliders = (attack::lance_attacks(defender, esc, occ_nk)
+            & pb[PieceType::Lance as usize])
+            | (ba & (pb[PieceType::Bishop as usize] | pb[PieceType::Horse as usize]))
+            | (ra & (pb[PieceType::Rook as usize] | pb[PieceType::Dragon as usize]));
+        EscInfo {
+            steps,
+            sliders,
+            qvis: ba | ra,
+        }
+    }
+
+    /// KH `DoesHaveMatePossibility` (typedefs.hpp:310) の忠実移植．OR node 限定の簡易不詰判定．
+    ///
+    /// `us` (攻め方) が敵玉に王手をかけられる *可能性* を **blocker 無視の over-approximation** で返す．
+    /// - `false` → 確実に王手手段なし (= 不詰確定)．
+    /// - `true`  → 不明 (実際には王手が無いこともある; KH check_candidate_bb と同じ保守性)．
+    ///
+    /// look-ahead disproof (`check_obvious_final_or_node_v4`) を KH と一致させるための判定．maou の
+    /// exact `generate_check_moves` は KH の本判定より厳密で，blocker で塞がれた王手候補を不詰と即断
+    /// (KH は defer) してしまい探索経路が乖離する．本判定を使うと KH と同じ局面で disproof を保留する．
+    pub fn does_have_mate_possibility(&self, us: Color) -> bool {
+        let them = us.opponent();
+        let king_sq = match self.king_square(them) {
+            Some(k) => k,
+            None => return false,
+        };
+        let all_occ = self.all_occupied();
+        let empty = !all_occ;
+        let us_pb = &self.piece_bb[us.index()];
+
+        // 1. 駒打ち王手 (occupancy 考慮 = KH check_squares と同じ exact)．
+        for (hi, &pr) in PieceType::HAND_PIECES.iter().enumerate() {
+            if self.hand[us.index()][hi] == 0 {
+                continue;
+            }
+            if pr == PieceType::Pawn
+                && (us_pb[PieceType::Pawn as usize] & Bitboard::file_mask(king_sq.col()))
+                    .is_not_empty()
+            {
+                continue; // 二歩
+            }
+            // 玉から見た pr の逆利き = pr を打って王手になるマス．
+            let cs = match pr {
+                PieceType::Pawn => attack::step_attacks(them, PieceType::Pawn, king_sq),
+                PieceType::Knight => attack::step_attacks(them, PieceType::Knight, king_sq),
+                PieceType::Silver => attack::step_attacks(them, PieceType::Silver, king_sq),
+                PieceType::Gold => attack::step_attacks(them, PieceType::Gold, king_sq),
+                PieceType::Lance => attack::lance_attacks(them, king_sq, all_occ),
+                PieceType::Bishop => attack::bishop_attacks(king_sq, all_occ),
+                PieceType::Rook => attack::rook_attacks(king_sq, all_occ),
+                _ => Bitboard::EMPTY,
+            };
+            if (cs & empty).is_not_empty() {
+                return true;
+            }
+        }
+
+        // 2. 盤上駒の王手候補 (blocker 無視 = KH `CheckCandidateBB`, bitboard.cpp:421-481 を忠実移植)．
+        //    成り (敵陣) による金化・馬化の augmentation を含む over-approx．
+        let king_bb = Bitboard::from_square(king_sq);
+        let not_k = !king_bb;
+        let empty_occ = Bitboard::EMPTY;
+        // enemy_field(us) = us の成りゾーン (us が敵玉に向かう側の 3 段)．
+        let ef = match us {
+            Color::Black => {
+                Bitboard::rank_mask(0) | Bitboard::rank_mask(1) | Bitboard::rank_mask(2)
+            }
+            Color::White => {
+                Bitboard::rank_mask(6) | Bitboard::rank_mask(7) | Bitboard::rank_mask(8)
+            }
+        };
+        // enemyGold = goldEffect(them, ksq) & enemy_field(us)．
+        let enemy_gold = attack::step_attacks(them, PieceType::Gold, king_sq) & ef;
+        // FOREACH(bb, step pt): ∪_{s∈bb} step_attacks(them, pt, s)．
+        let union_step = |bb: Bitboard, pt: PieceType| -> Bitboard {
+            let mut acc = Bitboard::EMPTY;
+            let mut b = bb;
+            while b.is_not_empty() {
+                acc |= attack::step_attacks(them, pt, b.pop_lsb());
+            }
+            acc
+        };
+        // FOREACH(bb, ef & silverEffect): ∪_{s∈bb} (ef & silver(them,s))．
+        let union_silver_ef = |bb: Bitboard| -> Bitboard {
+            let mut acc = Bitboard::EMPTY;
+            let mut b = bb;
+            while b.is_not_empty() {
+                acc |= ef & attack::step_attacks(them, PieceType::Silver, b.pop_lsb());
+            }
+            acc
+        };
+        // FOREACH_BR(bb, bishop): ∪_{s∈bb} bishop(s, 0)．
+        let union_bishop = |bb: Bitboard| -> Bitboard {
+            let mut acc = Bitboard::EMPTY;
+            let mut b = bb;
+            while b.is_not_empty() {
+                acc |= attack::bishop_attacks(b.pop_lsb(), empty_occ);
+            }
+            acc
+        };
+
+        // 飛・龍は無条件全域 (KH: pieces(ROOK_DRAGON))．
+        if (us_pb[PieceType::Rook as usize] | us_pb[PieceType::Dragon as usize]).is_not_empty() {
+            return true;
+        }
+        // 歩: ∪pawn(pawn_check) ∪ ∪pawn(enemyGold)．
+        let pawns = us_pb[PieceType::Pawn as usize];
+        if pawns.is_not_empty() {
+            let pawn_check = attack::step_attacks(them, PieceType::Pawn, king_sq);
+            let cand = (union_step(pawn_check, PieceType::Pawn)
+                | union_step(enemy_gold, PieceType::Pawn))
+                & not_k;
+            if (pawns & cand).is_not_empty() {
+                return true;
+            }
+        }
+        // 香: lanceStepEffect(them,ksq) + (玉が敵陣なら両隣 file の香利き)．
+        let lances = us_pb[PieceType::Lance as usize];
+        if lances.is_not_empty() {
+            let mut cand = attack::lance_attacks(them, king_sq, empty_occ);
+            if (ef & king_bb).is_not_empty() {
+                let (c, r) = (king_sq.col(), king_sq.row());
+                if c > 0 {
+                    cand |= attack::lance_attacks(them, Square::new(c - 1, r), empty_occ);
+                }
+                if c < 8 {
+                    cand |= attack::lance_attacks(them, Square::new(c + 1, r), empty_occ);
+                }
+            }
+            if (lances & cand).is_not_empty() {
+                return true;
+            }
+        }
+        // 桂: ∪knight(knight_check ∪ enemyGold)．
+        let knights = us_pb[PieceType::Knight as usize];
+        if knights.is_not_empty() {
+            let kc = attack::step_attacks(them, PieceType::Knight, king_sq);
+            let cand = union_step(kc | enemy_gold, PieceType::Knight) & not_k;
+            if (knights & cand).is_not_empty() {
+                return true;
+            }
+        }
+        // 銀: ∪silver(silver_check) ∪ ∪silver(enemyGold) ∪ ∪(ef&silver)(gold_check)．
+        let silvers = us_pb[PieceType::Silver as usize];
+        if silvers.is_not_empty() {
+            let sc = attack::step_attacks(them, PieceType::Silver, king_sq);
+            let gc = attack::step_attacks(them, PieceType::Gold, king_sq);
+            let cand = (union_step(sc, PieceType::Silver)
+                | union_step(enemy_gold, PieceType::Silver)
+                | union_silver_ef(gc))
+                & not_k;
+            if (silvers & cand).is_not_empty() {
+                return true;
+            }
+        }
+        // 金系 (金/と/成香/成桂/成銀): ∪gold(gold_check)．
+        let golds = us_pb[PieceType::Gold as usize]
+            | us_pb[PieceType::ProPawn as usize]
+            | us_pb[PieceType::ProLance as usize]
+            | us_pb[PieceType::ProKnight as usize]
+            | us_pb[PieceType::ProSilver as usize];
+        if golds.is_not_empty() {
+            let gc = attack::step_attacks(them, PieceType::Gold, king_sq);
+            let cand = union_step(gc, PieceType::Gold) & not_k;
+            if (golds & cand).is_not_empty() {
+                return true;
+            }
+        }
+        // 角: ∪bishop(bishop_check) ∪ ∪bishop(king8&ef) ∪ ∪(ef&bishop)(king8)．
+        let bishops = us_pb[PieceType::Bishop as usize];
+        if bishops.is_not_empty() {
+            let king8 = attack::step_attacks(them, PieceType::King, king_sq);
+            let bc = attack::bishop_attacks(king_sq, empty_occ);
+            let mut cand = union_bishop(bc) | union_bishop(king8 & ef);
+            let mut b = king8;
+            while b.is_not_empty() {
+                cand |= ef & attack::bishop_attacks(b.pop_lsb(), empty_occ);
+            }
+            cand &= not_k;
+            if (bishops & cand).is_not_empty() {
+                return true;
+            }
+        }
+        // 馬 (KH: ROOK slot に horse 候補を格納): ∪horse(horse_check)．
+        let horses = us_pb[PieceType::Horse as usize];
+        if horses.is_not_empty() {
+            let hc = attack::horse_attacks(them, king_sq, empty_occ);
+            let mut cand = Bitboard::EMPTY;
+            let mut b = hc;
+            while b.is_not_empty() {
+                cand |= attack::horse_attacks(them, b.pop_lsb(), empty_occ);
+            }
+            cand &= not_k;
+            if (horses & cand).is_not_empty() {
+                return true;
+            }
+        }
+
+        // 3. 開き王手候補 (KH: blockers_for_king(them) & pieces(us))．
+        if self.compute_discoverers(us, king_sq).is_not_empty() {
+            return true;
+        }
+
+        false
+    }
+
     /// ビットボード演算のみで1手詰めを判定する(do_move/undo_move 不要)．
     ///
     /// cshogi の `mateMoveIn1Ply()` に相当する高速版．
@@ -574,40 +1002,176 @@ impl Board {
     /// 1. 玉に逃げ場がないか(ビットボード利き計算)
     /// 2. 王手駒を取り返せないか(ピン判定含む)
     /// 3. 合い駒が効かないか(飛び駒の王手のみ)
-    pub fn mate_move_in_1ply(
-        &self,
+    pub fn mate_move_in_1ply(&mut self, checks: &[Move], attacker: Color) -> Option<Move> {
+        self.mate_move_in_1ply_maxdist(checks, attacker, u8::MAX)
+    }
+
+    /// `mate_move_in_1ply` の「王手の着手先が玉から Chebyshev 距離 `max_cheby` 以内」のみを検査する版．
+    ///
+    /// 詰将棋 look-ahead 用の最適化: 実測 (MATE1PLY_CAND 差分解析, 39te) で **全 1 手詰の着手先は
+    /// 玉から Chebyshev 距離 ≤2** (dist1=94.8% / dist2=5.2% / dist≥3=0%) と確定しており，`max_cheby=2`
+    /// で full scan と **完全に同一の Some/None および同一の詰み手** を返す (miss=0, diffmove=0,
+    /// bug=0 over 184,096 mates + 2.74M no-mates = node 不変)．距離 >2 の候補 (遠方飛び直接王手の
+    /// 28.5% + 遠方開き王手) は検証 (`is_checkmate_after_bb`) も None-branch の do_move fallback も省ける．
+    /// soundness は per-candidate verify で保証されるため，仮に距離 >max_cheby の真の詰みがあっても
+    /// (本データでは皆無) 見落とすだけで偽詰みは生じない (= sound; ノードが展開され深さ 1 で詰む)．
+    /// `max_cheby=u8::MAX` は無制限 = 従来の `mate_move_in_1ply` と完全等価．
+    pub(crate) fn mate_move_in_1ply_maxdist(
+        &mut self,
         checks: &[Move],
         attacker: Color,
+        max_cheby: u8,
     ) -> Option<Move> {
-        let defender = attacker.opponent();
-        let king_sq = self.king_square(defender)?;
-        let all_occ = self.all_occupied();
-        let att_idx = attacker.index();
-        let def_idx = defender.index();
-        let att_occ = self.occupied[att_idx];
-        let def_occ = self.occupied[def_idx];
-        let king_bb = Bitboard::from_square(king_sq);
-
-        // 玉の移動先候補(ステップ利き)
-        let king_step = attack::step_attacks(defender, PieceType::King, king_sq);
-
-        // 攻め方と玉の間にいる守備駒(ピン候補) - 王手駒の捕獲可否判定に使用
-        let pinned = self.compute_pinned(defender, king_sq);
+        if checks.is_empty() {
+            return None;
+        }
+        let mut v = match self.mate1ply_verifier(attacker) {
+            Some(v) => v,
+            None => return None,
+        };
+        let kc = v.king_sq.col() as i32;
+        let kr = v.king_sq.row() as i32;
+        let defender = v.defender;
 
         for &m in checks {
-            if self.is_checkmate_after_bb(
-                m, attacker, defender, king_sq, king_bb, king_step,
-                all_occ, att_occ, def_occ, att_idx, def_idx, &pinned,
-            ) {
-                return Some(m);
+            // 着手先が玉から遠い候補は 1 手詰になり得ない (実測 dist≥3 の詰み皆無) ため検査を省く．
+            if max_cheby != u8::MAX {
+                let to = m.to_sq();
+                let d = (to.col() as i32 - kc)
+                    .abs()
+                    .max((to.row() as i32 - kr).abs());
+                if d > max_cheby as i32 {
+                    continue;
+                }
+            }
+            match self.mate1ply_check(&mut v, m) {
+                Some(true) => return Some(m),
+                Some(false) => {}
+                None => {
+                    // 開き王手 / 両王手 / 非王手: ビットボード判定の前提外なので do_move +
+                    // 合法手生成で確定検証する (正確だが低速; これらの手は稀)．
+                    MATE1PLY_NONE_DM.with(|c| c.set(c.get() + 1));
+                    let captured = self.do_move(m);
+                    let mated =
+                        self.is_in_check(defender) && !crate::movegen::has_any_legal_move(self);
+                    self.undo_move(m, captured);
+                    if mated {
+                        return Some(m);
+                    }
+                }
             }
         }
         None
     }
 
-    /// 指定した王手手を指した後に詰みになるかビットボードで判定する．
+    /// 1 手詰検証の per-call 文脈 ([`Mate1plyVerifier`]) を構築する (受け方玉が無ければ `None`)．
+    /// `mate_move_in_1ply_maxdist` と look-ahead fused 経路が共有する (= 同一判定)．
+    pub(crate) fn mate1ply_verifier(&self, attacker: Color) -> Option<Mate1plyVerifier> {
+        let defender = attacker.opponent();
+        let king_sq = self.king_square(defender)?;
+        let all_occ = self.all_occupied();
+        let att_idx = attacker.index();
+        let def_idx = defender.index();
+        let def_occ = self.occupied[def_idx];
+        let king_bb = Bitboard::from_square(king_sq);
+        let king_step = attack::step_attacks(defender, PieceType::King, king_sq);
+        let mut ctx = Mate1plyCtx {
+            discoverers: self.compute_discoverers(attacker, king_sq),
+            occ_nk_pre: all_occ & !king_bb,
+            esc_sqs: [king_sq; 8],
+            esc_n: 0,
+            esc_info: [None; 8],
+        };
+        for esc in king_step & !def_occ {
+            ctx.esc_sqs[ctx.esc_n] = esc;
+            ctx.esc_n += 1;
+        }
+        Some(Mate1plyVerifier {
+            ctx,
+            attacker,
+            defender,
+            king_sq,
+            king_bb,
+            king_step,
+            all_occ,
+            def_occ,
+            att_idx,
+            def_idx,
+        })
+    }
+
+    /// 王手候補 `m` を `verifier` で 1 手詰判定する (盤面は変更しない)．
+    /// 戻り: `Some(true)`=詰み / `Some(false)`=不詰 / `None`=開き・両王手 (呼出側 do_move 検証)．
+    #[inline]
+    pub(crate) fn mate1ply_check(&self, verifier: &mut Mate1plyVerifier, m: Move) -> Option<bool> {
+        self.is_checkmate_after_bb(
+            m,
+            verifier.attacker,
+            verifier.defender,
+            verifier.king_sq,
+            verifier.king_bb,
+            verifier.king_step,
+            verifier.all_occ,
+            verifier.def_occ,
+            verifier.att_idx,
+            verifier.def_idx,
+            &mut verifier.ctx,
+        )
+    }
+
+    /// 歩打ち `pawn_drop` (手番側 = 攻め方が打つ) が打ち歩詰めかをビットボード演算のみで判定する
+    /// (do_move 不要)．歩打ちは**単一の直接接触王手**なので開き王手/両王手 (`is_checkmate_after_bb`
+    /// が `None` を返すケース) は生じず，常に `Some(true/false)` を返せる (= 検証済み 1 手詰判定の再利用)．
     ///
-    /// 盤面を変更せず，ビットボード演算のみで判定する．
+    /// 戻り値: `Some(true)` = 打ち歩詰め (詰む = 反則手), `Some(false)` = 詰まない (合法), `None` =
+    /// (理論上起きない) 開き/両王手で bitboard 確定不可 → 呼び出し側が do_move で検証する．
+    /// 玉がない (片玉) なら `Some(false)` (詰みようがない)．`board` は変更しない．
+    pub(crate) fn is_pawn_drop_mate_bb(&self, pawn_drop: Move) -> Option<bool> {
+        let attacker = self.turn;
+        let defender = attacker.opponent();
+        let king_sq = match self.king_square(defender) {
+            Some(k) => k,
+            None => return Some(false),
+        };
+        let all_occ = self.all_occupied();
+        let def_occ = self.occupied[defender.index()];
+        let king_bb = Bitboard::from_square(king_sq);
+        let king_step = attack::step_attacks(defender, PieceType::King, king_sq);
+        let mut ctx = Mate1plyCtx {
+            discoverers: self.compute_discoverers(attacker, king_sq),
+            occ_nk_pre: all_occ & !king_bb,
+            esc_sqs: [king_sq; 8],
+            esc_n: 0,
+            esc_info: [None; 8],
+        };
+        for esc in king_step & !def_occ {
+            ctx.esc_sqs[ctx.esc_n] = esc;
+            ctx.esc_n += 1;
+        }
+        self.is_checkmate_after_bb(
+            pawn_drop,
+            attacker,
+            defender,
+            king_sq,
+            king_bb,
+            king_step,
+            all_occ,
+            def_occ,
+            attacker.index(),
+            defender.index(),
+            &mut ctx,
+        )
+    }
+
+    /// 指定した王手手を指した後に詰みになるかビットボード演算のみで判定する．
+    ///
+    /// 戻り値:
+    /// - `Some(true)`  = 単一の直接王手で詰み (ビットボードで確定)．
+    /// - `Some(false)` = 単一の直接王手で詰みでない / 非王手 (ビットボードで確定)．
+    /// - `None`        = 開き王手 (discovered) / 両王手 (double check)．真の王手駒が
+    ///                   to_sq 以外にあり捕獲・合駒判定がこの関数の前提 (動いた駒=唯一の王手駒)
+    ///                   を満たさないため，呼び出し側 (`mate_move_in_1ply`) が do_move + 合法手
+    ///                   生成で確定検証する．盤面は変更しない．
     #[allow(clippy::too_many_arguments)]
     fn is_checkmate_after_bb(
         &self,
@@ -618,12 +1182,11 @@ impl Board {
         king_bb: Bitboard,
         king_step: Bitboard,
         all_occ: Bitboard,
-        _att_occ: Bitboard,
         def_occ: Bitboard,
         att_idx: usize,
         def_idx: usize,
-        pinned: &Bitboard,
-    ) -> bool {
+        ctx: &mut Mate1plyCtx,
+    ) -> Option<bool> {
         let to_sq = m.to_sq();
         let to_bb = Bitboard::from_square(to_sq);
 
@@ -650,47 +1213,146 @@ impl Board {
         // 守備側の占有(駒取りの場合は to_sq が除去される)
         let def_occ_after = def_occ & !to_bb;
 
-        // === 1. 玉の逃げ場チェック ===
         // 玉を除去した占有(X-ray: 飛び駒が玉を貫通)
         let occ_no_king = occ_after & !king_bb;
-
-        // 玉の移動先候補: 味方駒がいないマス
-        let king_targets = king_step & !def_occ_after;
 
         // 王手駒の利きを計算(玉を除いた占有で)
         let checker_attacks = attack::piece_attacks(attacker, checker_pt, to_sq, occ_no_king);
 
-        // 各逃げ先が安全かチェック
-        for esc_sq in king_targets {
-            if esc_sq == to_sq {
-                // 玉が王手駒を取る場合: 王手駒を除去した状態でチェック
-                let occ_esc = occ_no_king & !to_bb;
-                if !self.is_sq_attacked_after_move(
-                    esc_sq, attacker, occ_esc, att_idx, def_idx,
-                    from_opt, to_sq, true,
-                ) {
-                    return false; // 玉が王手駒を取って逃げられる
+        // === 0. 単一直接王手の確定 ===
+        // この判定は「動いた駒 (to_sq) が唯一の王手駒 = 単一の直接王手」を前提とする．
+        // 第二の王手駒 (開き王手) は from が discoverers のときだけ生じ得る:
+        //  - 駒打ちは盤上の駒を動かさず，to への配置は利きを遮るだけで開きを生まない．
+        //  - 盤上移動でも from が攻め方 slider の唯一の遮蔽駒でなければ from 退去で
+        //    玉への新しい利きは生じない (着手前に受け方玉へ王手が無いことは局面の合法性が保証)．
+        // よって discoverers 外の手は玉マスへの全駒利きスキャンを省略できる (結果は同値)．
+        let direct_check = checker_attacks.contains(king_sq);
+        let other_checker = match from_opt {
+            Some(from) if ctx.discoverers.contains(from) => self.is_sq_attacked_after_move(
+                king_sq,
+                attacker,
+                occ_no_king,
+                att_idx,
+                def_idx,
+                from_opt,
+                to_sq,
+                false,
+            ),
+            _ => false,
+        };
+        if other_checker {
+            // 開き王手 / 両王手: 捕獲・合駒判定の前提外 → 呼び出し側が do_move 検証
+            return None;
+        }
+        if !direct_check {
+            // 王手でない手は詰みでない (従来の None → do_move 検証と同値; 検証を省略)
+            return Some(false);
+        }
+
+        // === 1. 玉の逃げ場チェック ===
+        // 各 escape マスの攻め方利きは per-position の EscInfo (occ_nk_pre 基準) を
+        // from/to で補正して判定する．step 利きは占有非依存なので from 除外だけで正確．
+        // slider 利きは to による遮断 (to ∈ between) と from 退去による開き
+        // (from ∈ qvis のときのみ可能) を補正する．
+        let from_mask = match from_opt {
+            Some(f) => !Bitboard::from_square(f),
+            None => Bitboard::ALL,
+        };
+        for slot in 0..ctx.esc_n {
+            let esc = ctx.esc_sqs[slot];
+            if esc == to_sq {
+                continue; // 玉が王手駒を取るケースは下で別扱い
+            }
+            if checker_attacks.contains(esc) {
+                continue; // 王手駒の利きに入っている → 逃げられない
+            }
+            // esc が王手後に攻め方の利きを受けるか (false = 安全な逃げ場あり)．
+            let attacked = self.escape_attacked_after(
+                esc,
+                slot,
+                defender,
+                attacker,
+                att_idx,
+                def_idx,
+                king_sq,
+                from_opt,
+                to_sq,
+                from_mask,
+                occ_no_king,
+                all_occ,
+                ctx,
+            );
+            if !attacked {
+                return Some(false); // 安全な逃げ場がある
+            }
+        }
+
+        // 玉が王手駒を取るケース (to が玉の隣接マスのとき; def_occ_after は to を含まない
+        // ため to は常に king_targets 相当に入る)．王手駒を除いた状態で to への利きを確認する．
+        // to への既存 slider 利きは終点の占有に依らず有効なので EscInfo がそのまま使える．
+        if king_step.contains(to_sq) {
+            let mut info_opt = None;
+            for slot in 0..ctx.esc_n {
+                if ctx.esc_sqs[slot] == to_sq {
+                    info_opt = Some(match ctx.esc_info[slot] {
+                        Some(i) => i,
+                        None => {
+                            let i = self.compute_esc_info(to_sq, defender, att_idx, ctx.occ_nk_pre);
+                            ctx.esc_info[slot] = Some(i);
+                            i
+                        }
+                    });
+                    break;
                 }
-            } else if checker_attacks.contains(esc_sq) {
-                // 王手駒の利きに入っている → 逃げられない(他の駒も確認不要)
-                continue;
-            } else {
-                // 他の攻め方駒の利きがあるか確認
-                if !self.is_sq_attacked_after_move(
-                    esc_sq, attacker, occ_no_king, att_idx, def_idx,
-                    from_opt, to_sq, false,
-                ) {
-                    return false; // 安全な逃げ場がある
+            }
+            // to が受け方駒のマス (捕獲) の場合は esc_sqs に無いので ad hoc 計算
+            let info = info_opt
+                .unwrap_or_else(|| self.compute_esc_info(to_sq, defender, att_idx, ctx.occ_nk_pre));
+            let covered = (info.steps & from_mask).is_not_empty()
+                || (info.sliders & from_mask).is_not_empty();
+            if !covered {
+                match from_opt {
+                    Some(f) if info.qvis.contains(f) => {
+                        let occ_esc = occ_no_king & !to_bb;
+                        if !self.is_sq_attacked_after_move(
+                            to_sq, attacker, occ_esc, att_idx, def_idx, from_opt, to_sq, true,
+                        ) {
+                            return Some(false); // 玉が王手駒を取って逃げられる
+                        }
+                    }
+                    _ => return Some(false), // 玉が王手駒を取って逃げられる
                 }
             }
         }
 
+        // === ピンの再計算 (移動後配置) ===
+        // 移動**前**の盤面の pin は使わない: 王手駒自身が pinner だった場合 (例: 1e の龍が
+        // 1f の金を file 1 に pin していた状態から 1e2f と王手)，移動後は pin が解除され
+        // 金は横移動で王手駒を取り返せる．移動前 pin を使うとこの防御を見落とし**偽 1 手詰**
+        // になる (39te 偽証明 @17.9M nodes の真因, 2026-06-11)．移動後の攻め方 slider
+        // 配置 (from 除去・to 追加, 成り考慮) で pin を再計算する．
+        let pinned_after = self.compute_pinned_after_bb(
+            defender,
+            king_sq,
+            occ_after,
+            def_occ_after,
+            from_opt,
+            to_sq,
+            checker_pt,
+        );
+
         // === 2. 王手駒の捕獲チェック(玉以外) ===
         // ピンされていない守備駒で王手駒を取れるか
         if self.can_capture_checker_bb(
-            to_sq, king_sq, defender, occ_after, def_occ, def_idx, pinned,
+            to_sq,
+            king_sq,
+            defender,
+            occ_after,
+            def_occ,
+            def_idx,
+            &pinned_after,
         ) {
-            return false;
+            return Some(false);
         }
 
         // === 3. 合い駒チェック(飛び駒の王手のみ) ===
@@ -698,15 +1360,306 @@ impl Board {
             let between = attack::between_bb(to_sq, king_sq);
             if between.is_not_empty()
                 && self.can_interpose_bb(
-                    &between, king_sq, defender, occ_after, def_occ,
-                    def_idx, att_idx, pinned, from_opt,
+                    &between,
+                    king_sq,
+                    defender,
+                    occ_after,
+                    def_occ,
+                    def_idx,
+                    att_idx,
+                    &pinned_after,
+                    from_opt,
                 )
             {
-                return false;
+                return Some(false);
             }
         }
 
-        true // 詰み!
+        Some(true) // 詰み!
+    }
+
+    /// escape マス `esc` が王手手 (from→to) 適用後に攻め方の利きを受けるか (true=受ける=逃げ不可)．
+    ///
+    /// 既定は EscInfo 版 (per-position キャッシュ; canonical の本体)．`effect_table` feature 有効かつ
+    /// `EFFECT_MATE1PLY=1` のとき effect 版 (`occ_no_king` ray-walk) で駆動し，`EFFECT_MATE1PLY_VERIFY=1`
+    /// で両者を全候補突合 assert する (KH 忠実化の差分検証)．
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    fn escape_attacked_after(
+        &self,
+        esc: Square,
+        slot: usize,
+        defender: Color,
+        attacker: Color,
+        att_idx: usize,
+        def_idx: usize,
+        king_sq: Square,
+        from_opt: Option<Square>,
+        to_sq: Square,
+        from_mask: Bitboard,
+        occ_no_king: Bitboard,
+        all_occ: Bitboard,
+        ctx: &mut Mate1plyCtx,
+    ) -> bool {
+        #[cfg(feature = "effect_table")]
+        {
+            if effect_mate1ply_enabled() {
+                let eff = self.escape_attacked_after_eff(
+                    esc,
+                    attacker,
+                    att_idx,
+                    def_idx,
+                    king_sq,
+                    from_opt,
+                    to_sq,
+                    from_mask,
+                    occ_no_king,
+                );
+                if effect_mate1ply_verify() {
+                    let gt = self.escape_attacked_after_escinfo(
+                        esc,
+                        slot,
+                        defender,
+                        attacker,
+                        att_idx,
+                        def_idx,
+                        from_opt,
+                        to_sq,
+                        from_mask,
+                        occ_no_king,
+                        ctx,
+                    );
+                    assert_eq!(
+                        eff, gt,
+                        "escape eff != escinfo: esc={esc:?} from={from_opt:?} to={to_sq:?} king={king_sq:?}"
+                    );
+                }
+                return eff;
+            }
+        }
+        let _ = (king_sq, all_occ); // effect 版でのみ使う引数 (escinfo 経路では未使用)
+        self.escape_attacked_after_escinfo(
+            esc,
+            slot,
+            defender,
+            attacker,
+            att_idx,
+            def_idx,
+            from_opt,
+            to_sq,
+            from_mask,
+            occ_no_king,
+            ctx,
+        )
+    }
+
+    /// EscInfo (per-position キャッシュ + from/to 補正) に基づく escape 利き判定 (ground truth)．
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    fn escape_attacked_after_escinfo(
+        &self,
+        esc: Square,
+        slot: usize,
+        defender: Color,
+        attacker: Color,
+        att_idx: usize,
+        def_idx: usize,
+        from_opt: Option<Square>,
+        to_sq: Square,
+        from_mask: Bitboard,
+        occ_no_king: Bitboard,
+        ctx: &mut Mate1plyCtx,
+    ) -> bool {
+        let info = match ctx.esc_info[slot] {
+            Some(i) => i,
+            None => {
+                let i = self.compute_esc_info(esc, defender, att_idx, ctx.occ_nk_pre);
+                ctx.esc_info[slot] = Some(i);
+                i
+            }
+        };
+        if (info.steps & from_mask).is_not_empty() {
+            return true; // step 駒が利いている (占有非依存で正確)
+        }
+        let surv = info.sliders & from_mask;
+        let mut covered = false;
+        if surv.is_not_empty() {
+            if !info.qvis.contains(to_sq) {
+                covered = true; // to は esc へのどの ray 上にもない → 遮断は起き得ない
+            } else {
+                for s in surv {
+                    if !attack::between_bb(s, esc).contains(to_sq) {
+                        covered = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if covered {
+            return true;
+        }
+        // 既存利きなし (または全て to に遮られた)．残るは from 退去による開き利きのみで，
+        // それは from が esc から slider-visible のときしか起き得ない．
+        match from_opt {
+            Some(f) if info.qvis.contains(f) => self.is_sq_attacked_after_move(
+                esc,
+                attacker,
+                occ_no_king,
+                att_idx,
+                def_idx,
+                from_opt,
+                to_sq,
+                false,
+            ),
+            _ => false,
+        }
+    }
+
+    /// KH 忠実 effect 版 escape 利き判定: `occ_no_king` (王手後・玉除去) 上で直接評価する．
+    ///
+    /// step 利きは占有非依存ゆえ from 除外で正確．slider 利きは `occ_no_king` (from 除去・to 追加・
+    /// 玉除去を内包) 上で 8 方向を `RAY_MASKS`+bit-scan で辿り (PEXT 不使用)，esc の各方向最近接駒が
+    /// 攻め方 slider なら利きあり．occ_no_king が遮断/開放/影利きを自然に内包するため pre-move からの
+    /// delta 補正が不要 = KH `effected_to` (board_effect + 影利き) と同値を after-move occ で直接得る．
+    /// 注: `self.squares` は pre-move ゆえ ray-walk が返すマスは from(除去済で現れない)/to(=王手駒,
+    /// checker_attacks で処理済) を除けば未移動駒＝squares 有効．
+    #[cfg(feature = "effect_table")]
+    #[allow(clippy::too_many_arguments)]
+    #[inline]
+    fn escape_attacked_after_eff(
+        &self,
+        esc: Square,
+        attacker: Color,
+        att_idx: usize,
+        _def_idx: usize,
+        _king_sq: Square,
+        from_opt: Option<Square>,
+        to_sq: Square,
+        from_mask: Bitboard,
+        occ_no_king: Bitboard,
+    ) -> bool {
+        // === step 攻め (占有非依存; from 除外) ===
+        let defender = attacker.opponent();
+        let pb = &self.piece_bb[att_idx];
+        let mut steps =
+            attack::step_attacks(defender, PieceType::Pawn, esc) & pb[PieceType::Pawn as usize];
+        steps |=
+            attack::step_attacks(defender, PieceType::Knight, esc) & pb[PieceType::Knight as usize];
+        steps |=
+            attack::step_attacks(defender, PieceType::Silver, esc) & pb[PieceType::Silver as usize];
+        let gold_movers = pb[PieceType::Gold as usize]
+            | pb[PieceType::ProPawn as usize]
+            | pb[PieceType::ProLance as usize]
+            | pb[PieceType::ProKnight as usize]
+            | pb[PieceType::ProSilver as usize];
+        steps |= attack::step_attacks(defender, PieceType::Gold, esc) & gold_movers;
+        let kingish = pb[PieceType::King as usize]
+            | pb[PieceType::Horse as usize]
+            | pb[PieceType::Dragon as usize];
+        steps |= attack::step_attacks(defender, PieceType::King, esc) & kingish;
+        if (steps & from_mask).is_not_empty() {
+            return true;
+        }
+        // === slider 攻め: occ_no_king (after-move) 上で 8 方向 ray-walk ===
+        for d in 0..8usize {
+            let Some(ss) = attack::ray_first_blocker(d, esc, occ_no_king) else {
+                continue;
+            };
+            if ss == to_sq || Some(ss) == from_opt {
+                continue; // to=王手駒(checker_attacks 処理済) / from=除去済 (occ_no_king に無いはずだが保険)
+            }
+            let piece = self.squares[ss.index()];
+            // ss は occ_no_king 由来かつ未移動駒ゆえ squares 有効・非空．
+            if unsafe { piece.color_index_unchecked() } != att_idx {
+                continue; // 受け方の駒 = 遮蔽するだけ
+            }
+            // d 方向の最近接駒が opposite(d) へスライドして esc に届く slider か (effect_update_blocking と同規則)．
+            let pt = piece.piece_type().unwrap();
+            let hit = match pt {
+                PieceType::Rook | PieceType::Dragon => attack::dir_is_orthogonal(d),
+                PieceType::Bishop | PieceType::Horse => !attack::dir_is_orthogonal(d),
+                PieceType::Lance => {
+                    (d == attack::DIR_DOWN && attacker == Color::Black)
+                        || (d == attack::DIR_UP && attacker == Color::White)
+                }
+                _ => false,
+            };
+            if hit {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 王手候補手を適用した**後**の配置における守備側の pin を計算する．
+    ///
+    /// `compute_pinned` の移動後版: 攻め方 slider 集合を from 除去・to 追加
+    /// (成りで駒種が変わる場合は移動後の駒種 `checker_pt` で判定) に調整し，
+    /// `occ_after` / `def_occ_after` でスキャンする．`is_checkmate_after_bb` の
+    /// 捕獲・合い駒判定はこちらを使う (移動前 pin は pinner 自身が動くケースで偽 pin になる)．
+    #[allow(clippy::too_many_arguments)]
+    fn compute_pinned_after_bb(
+        &self,
+        defender: Color,
+        king_sq: Square,
+        occ_after: Bitboard,
+        def_occ_after: Bitboard,
+        from_opt: Option<Square>,
+        to_sq: Square,
+        checker_pt: PieceType,
+    ) -> Bitboard {
+        let attacker = defender.opponent();
+        let ai = attacker.index();
+        let from_mask = from_opt
+            .map(Bitboard::from_square)
+            .unwrap_or(Bitboard::EMPTY);
+        let to_bb = Bitboard::from_square(to_sq);
+        let mut pinned = Bitboard::EMPTY;
+
+        // 飛・龍によるピン(縦横)
+        let mut rook_like = (self.piece_bb[ai][PieceType::Rook as usize]
+            | self.piece_bb[ai][PieceType::Dragon as usize])
+            & !from_mask;
+        if matches!(checker_pt, PieceType::Rook | PieceType::Dragon) {
+            rook_like |= to_bb;
+        }
+        let rook_pinners = attack::rook_attacks(king_sq, Bitboard::EMPTY) & rook_like;
+        for pinner_sq in rook_pinners {
+            let blockers = attack::between_bb(king_sq, pinner_sq) & occ_after;
+            if blockers.count() == 1 {
+                pinned |= blockers & def_occ_after;
+            }
+        }
+
+        // 角・馬によるピン(斜め)
+        let mut bishop_like = (self.piece_bb[ai][PieceType::Bishop as usize]
+            | self.piece_bb[ai][PieceType::Horse as usize])
+            & !from_mask;
+        if matches!(checker_pt, PieceType::Bishop | PieceType::Horse) {
+            bishop_like |= to_bb;
+        }
+        let bishop_pinners = attack::bishop_attacks(king_sq, Bitboard::EMPTY) & bishop_like;
+        for pinner_sq in bishop_pinners {
+            let blockers = attack::between_bb(king_sq, pinner_sq) & occ_after;
+            if blockers.count() == 1 {
+                pinned |= blockers & def_occ_after;
+            }
+        }
+
+        // 香によるピン
+        let mut lance_like = self.piece_bb[ai][PieceType::Lance as usize] & !from_mask;
+        if checker_pt == PieceType::Lance {
+            lance_like |= to_bb;
+        }
+        let lance_pinners = attack::lance_attacks(defender, king_sq, Bitboard::EMPTY) & lance_like;
+        for pinner_sq in lance_pinners {
+            let blockers = attack::between_bb(king_sq, pinner_sq) & occ_after;
+            if blockers.count() == 1 {
+                pinned |= blockers & def_occ_after;
+            }
+        }
+
+        pinned
     }
 
     /// 飛び駒かどうか判定する．
@@ -840,7 +1793,7 @@ impl Board {
     fn can_capture_checker_bb(
         &self,
         checker_sq: Square,
-        _king_sq: Square,
+        king_sq: Square,
         defender: Color,
         occ: Bitboard,
         _def_occ: Bitboard,
@@ -849,10 +1802,17 @@ impl Board {
     ) -> bool {
         let attacker = defender.opponent();
 
+        // ピンされた駒でも，王手駒がそのピン軸(玉とその駒を通る直線)上にあれば取れる
+        // (取った後も玉とピン駒の間を遮り続けるため合法)．王手駒に利く駒が玉・ピン駒と
+        // 一直線上にあれば，その取り返しはピン軸に沿うので合法．
+        // 例: 香で縦ピンされた金が，同じ筋に打たれた歩(王手駒)を取る場合．
+        let pin_ray = attack::line_through(king_sq, checker_sq);
+        let eligible = !*pinned | (*pinned & pin_ray);
+
         // 歩
         if (attack::step_attacks(attacker, PieceType::Pawn, checker_sq)
             & self.piece_bb[def_idx][PieceType::Pawn as usize]
-            & !*pinned)
+            & eligible)
             .is_not_empty()
         {
             return true;
@@ -860,7 +1820,7 @@ impl Board {
         // 桂
         if (attack::step_attacks(attacker, PieceType::Knight, checker_sq)
             & self.piece_bb[def_idx][PieceType::Knight as usize]
-            & !*pinned)
+            & eligible)
             .is_not_empty()
         {
             return true;
@@ -868,7 +1828,7 @@ impl Board {
         // 銀
         if (attack::step_attacks(attacker, PieceType::Silver, checker_sq)
             & self.piece_bb[def_idx][PieceType::Silver as usize]
-            & !*pinned)
+            & eligible)
             .is_not_empty()
         {
             return true;
@@ -879,7 +1839,7 @@ impl Board {
             | self.piece_bb[def_idx][PieceType::ProLance as usize]
             | self.piece_bb[def_idx][PieceType::ProKnight as usize]
             | self.piece_bb[def_idx][PieceType::ProSilver as usize])
-            & !*pinned;
+            & eligible;
         if (attack::step_attacks(attacker, PieceType::Gold, checker_sq) & gold_movers)
             .is_not_empty()
         {
@@ -888,7 +1848,7 @@ impl Board {
         // 馬・龍(ステップ部分) - 玉は除外(玉での取り返しは逃げ場チェックで処理済み)
         let step_pieces = (self.piece_bb[def_idx][PieceType::Horse as usize]
             | self.piece_bb[def_idx][PieceType::Dragon as usize])
-            & !*pinned;
+            & eligible;
         let king_step = attack::step_attacks(attacker, PieceType::King, checker_sq);
         if (king_step & step_pieces).is_not_empty() {
             return true;
@@ -896,7 +1856,7 @@ impl Board {
         // 香
         if (attack::lance_attacks(attacker, checker_sq, occ)
             & self.piece_bb[def_idx][PieceType::Lance as usize]
-            & !*pinned)
+            & eligible)
             .is_not_empty()
         {
             return true;
@@ -905,7 +1865,7 @@ impl Board {
         if (attack::bishop_attacks(checker_sq, occ)
             & (self.piece_bb[def_idx][PieceType::Bishop as usize]
                 | self.piece_bb[def_idx][PieceType::Horse as usize])
-            & !*pinned)
+            & eligible)
             .is_not_empty()
         {
             return true;
@@ -914,7 +1874,7 @@ impl Board {
         if (attack::rook_attacks(checker_sq, occ)
             & (self.piece_bb[def_idx][PieceType::Rook as usize]
                 | self.piece_bb[def_idx][PieceType::Dragon as usize])
-            & !*pinned)
+            & eligible)
             .is_not_empty()
         {
             return true;
@@ -964,8 +1924,7 @@ impl Board {
                     }
                     // 二歩チェック
                     if pt == PieceType::Pawn {
-                        let our_pawns =
-                            self.piece_bb[defender.index()][PieceType::Pawn as usize];
+                        let our_pawns = self.piece_bb[defender.index()][PieceType::Pawn as usize];
                         let file = Bitboard::file_mask(to.col());
                         if (our_pawns & file).is_not_empty() {
                             continue;
@@ -1034,7 +1993,7 @@ impl Board {
                     | self.piece_bb[def_idx][PieceType::Horse as usize])
                 & !*pinned
                 & !Bitboard::from_square(king_sq))
-                .is_not_empty()
+            .is_not_empty()
             {
                 return true;
             }
@@ -1044,7 +2003,7 @@ impl Board {
                     | self.piece_bb[def_idx][PieceType::Dragon as usize])
                 & !*pinned
                 & !Bitboard::from_square(king_sq))
-                .is_not_empty()
+            .is_not_empty()
             {
                 return true;
             }
@@ -1066,6 +2025,9 @@ impl Board {
         // Safety: piece が空でないことは debug_assert で検証済み
         let ci = unsafe { piece.color_index_unchecked() };
         let pt = unsafe { piece.piece_type_raw_unchecked() };
+        // 利きテーブル incremental 更新 (bb 変更前: occ_before を読むため; feature off 時は no-op)．
+        self.effect_on_put(sq, piece);
+        // --- 盤面を変更 ---
         self.squares[sq.index()] = piece;
         self.piece_bb[ci][pt as usize].set(sq);
         self.occupied[ci].set(sq);
@@ -1087,6 +2049,9 @@ impl Board {
         // Safety: piece が空でないことは debug_assert で検証済み
         let ci = unsafe { piece.color_index_unchecked() };
         let pt = unsafe { piece.piece_type_raw_unchecked() };
+        // 利きテーブル incremental 更新 (bb 変更前: occ_before を読むため; feature off 時は no-op)．
+        self.effect_on_remove(sq, piece);
+        // --- 盤面を変更 ---
         self.squares[sq.index()] = Piece::EMPTY;
         self.piece_bb[ci][pt as usize].clear(sq);
         self.occupied[ci].clear(sq);
@@ -1097,9 +2062,428 @@ impl Board {
         piece
     }
 
+    /// `put_piece(sq, piece)` に伴う利きテーブルの incremental 更新 (bb 変更前に呼ぶ)．
+    ///
+    /// `sq` が空→占有になることで，`sq` を貫通していた遠方利きは `sq` より先で遮断される．
+    /// 置いた駒自身の利きも加算する．`effect_table` feature 無効時は no-op (ゼロコスト)．
+    #[cfg(feature = "effect_table")]
+    #[inline]
+    fn effect_on_put(&mut self, sq: Square, piece: Piece) {
+        let occ_before = self.all_occ; // sq は空
+                                       // (B) sq が占有化 → sq を貫通していた遠方利きを sq で遮断する (-1)．
+        if !effect_skip_b() {
+            self.effect_update_blocking(sq, occ_before, false);
+        }
+        // (A) 置いた駒自身の利きを加算 (occ_after = sq を含む)．
+        if !effect_skip_a() {
+            let mut occ_after = occ_before;
+            occ_after.set(sq);
+            // piece は非空 (put_piece の debug_assert 済) ゆえ color()/piece_type() は Some．
+            let color = piece.color().unwrap();
+            let pt = piece.piece_type().unwrap();
+            self.add_piece_effect(color, pt, sq, occ_after, true);
+            self.add_piece_long_dir(color, pt, sq, occ_after, true);
+        }
+    }
+
+    /// `effect_table` feature 無効時の `effect_on_put` no-op 版 (完全にインライン消去される)．
+    #[cfg(not(feature = "effect_table"))]
+    #[inline(always)]
+    fn effect_on_put(&mut self, _sq: Square, _piece: Piece) {}
+
+    /// `remove_piece(sq)` に伴う利きテーブルの incremental 更新 (bb 変更前に呼ぶ)．
+    ///
+    /// `sq` が占有→空になることで，`sq` で遮断されていた遠方利きが `sq` より先へ開放される．
+    /// 除去する駒自身の利きも減算する．`effect_table` feature 無効時は no-op (ゼロコスト)．
+    #[cfg(feature = "effect_table")]
+    #[inline]
+    fn effect_on_remove(&mut self, sq: Square, piece: Piece) {
+        let occ_before = self.all_occ; // sq は占有
+                                       // (A) 除去する駒自身の利きを減算 (occ_before, sq を含む)．
+        if !effect_skip_a() {
+            let color = piece.color().unwrap();
+            let pt = piece.piece_type().unwrap();
+            self.add_piece_effect(color, pt, sq, occ_before, false);
+            self.add_piece_long_dir(color, pt, sq, occ_before, false);
+        }
+        // (B) sq が空化 → sq で遮断されていた遠方利きを sq の先へ開放する (+1)．
+        if !effect_skip_b() {
+            self.effect_update_blocking(sq, occ_before, true);
+        }
+    }
+
+    /// `effect_table` feature 無効時の `effect_on_remove` no-op 版 (完全にインライン消去される)．
+    #[cfg(not(feature = "effect_table"))]
+    #[inline(always)]
+    fn effect_on_remove(&mut self, _sq: Square, _piece: Piece) {}
+
+    /// 1 駒 (color, pt, sq) の利き (指定 `occ` で計算) を `effect` に ±1 する内部ヘルパ．
+    #[cfg(feature = "effect_table")]
+    #[inline]
+    fn add_piece_effect(
+        &mut self,
+        color: Color,
+        pt: PieceType,
+        sq: Square,
+        occ: Bitboard,
+        add: bool,
+    ) {
+        let ci = color.index();
+        let att = attack::piece_attacks(color, pt, sq, occ);
+        for t in att {
+            let e = &mut self.effect[ci][t.index()];
+            if add {
+                *e += 1;
+            } else {
+                *e -= 1;
+            }
+        }
+    }
+
+    /// 1 駒 (color, pt, sq) の**遠方利き方向**を `long_dir` に反映する内部ヘルパ．
+    ///
+    /// 飛/龍/角/馬/香 の各遠方方向 `dd` について `ray_attack(dd, sq, occ)` の各マス `t` の
+    /// `long_dir[ci][t]` bit `dd` を set (`add`) / clear (`!add`) する (ステップ部は long でない)．
+    /// 各 (マス, 方向) を攻撃する遠方駒は高々 1 枚ゆえ bit set/clear で過不足なし．
+    #[cfg(feature = "effect_table")]
+    #[inline]
+    fn add_piece_long_dir(
+        &mut self,
+        color: Color,
+        pt: PieceType,
+        sq: Square,
+        occ: Bitboard,
+        add: bool,
+    ) {
+        let ci = color.index();
+        for &dd in piece_long_dirs(color, pt) {
+            let bit = 1u8 << dd;
+            for t in attack::ray_attack(dd, sq, occ) {
+                if add {
+                    self.long_dir[ci][t.index()] |= bit;
+                } else {
+                    self.long_dir[ci][t.index()] &= !bit;
+                }
+            }
+        }
+    }
+
+    /// occ 変更マス `sq` を貫通する遠方利きの増減を `effect` に反映する (direction-aware)．
+    ///
+    /// `sq` の 8 方向それぞれで最近接駒 1 つだけを調べ，それが「opposite(d) 方向へスライドして
+    /// `sq` に届く」slider なら，`sq` の先 (opposite(d) 方向) のセグメントだけを更新する
+    /// (各方向の最近接 slider は高々 1 枚)．`opening=true` (remove: `sq` が空化) は +1，
+    /// `false` (put: `sq` が占有化) は -1．`occ` は変更前の占有 (`sq` は射線の起点ゆえ各レイに
+    /// 含まれず，どちらのケースでも blocker 探索に使える)．
+    ///
+    /// PEXT を使わず RAY_MASKS + bit-scan のみで計算するため，影響 slider ごとに sliding 利きを
+    /// 再計算していた旧方式 (per do_move ~500ns) より per do_move コストを大幅に削減する．
+    #[cfg(feature = "effect_table")]
+    #[inline]
+    fn effect_update_blocking(&mut self, sq: Square, occ: Bitboard, opening: bool) {
+        for d in 0..8usize {
+            let Some(p_sq) = attack::ray_first_blocker(d, sq, occ) else {
+                continue;
+            };
+            let piece = self.squares[p_sq.index()];
+            // p_sq は occ 由来ゆえ必ず駒がある．
+            let pt = piece.piece_type().unwrap();
+            // d 方向の最近接駒が opposite(d) 方向へスライドして sq に届く slider か判定する．
+            let is_source = match pt {
+                PieceType::Rook | PieceType::Dragon => attack::dir_is_orthogonal(d),
+                PieceType::Bishop | PieceType::Horse => !attack::dir_is_orthogonal(d),
+                // Black 香は上(N), White 香は下(S)へスライド．sq に届くには香が sq の
+                // 反対側にいる (d=DOWN なら Black 香, d=UP なら White 香)．
+                PieceType::Lance => {
+                    (d == attack::DIR_DOWN && piece.color() == Some(Color::Black))
+                        || (d == attack::DIR_UP && piece.color() == Some(Color::White))
+                }
+                _ => false,
+            };
+            if !is_source {
+                continue;
+            }
+            let ci = piece.color().unwrap().index();
+            // sq の先 (opposite(d) 方向) のセグメント = 影響を受けるマス (sq は含まない)．
+            // P_d はこのセグメントを進行方向 opposite(d) で攻撃する ⇒ long_dir の bit も同方向．
+            let seg_dir = attack::DIR_OPPOSITE[d];
+            let bit = 1u8 << seg_dir;
+            let segment = attack::ray_attack(seg_dir, sq, occ);
+            if opening {
+                for t in segment {
+                    self.effect[ci][t.index()] += 1;
+                    self.long_dir[ci][t.index()] |= bit;
+                }
+            } else {
+                for t in segment {
+                    self.effect[ci][t.index()] -= 1;
+                    self.long_dir[ci][t.index()] &= !bit;
+                }
+            }
+        }
+    }
+
+    /// 利きテーブル全体をフルスキャンで再計算する (初期化/検証用)．
+    #[cfg(feature = "effect_table")]
+    pub(crate) fn rebuild_effect(&mut self) {
+        self.effect = [[0u8; 81]; 2];
+        self.long_dir = [[0u8; 81]; 2];
+        let occ = self.all_occ;
+        for sq_idx in 0..81u8 {
+            let piece = self.squares[sq_idx as usize];
+            if piece.is_empty() {
+                continue;
+            }
+            let color = piece.color().unwrap();
+            let pt = piece.piece_type().unwrap();
+            let ci = color.index();
+            let sq = Square(sq_idx);
+            let att = attack::piece_attacks(color, pt, sq, occ);
+            for t in att {
+                self.effect[ci][t.index()] += 1;
+            }
+            // 遠方利き方向 (long_dir) もフルスキャンで再構築する．
+            self.add_piece_long_dir(color, pt, sq, occ, true);
+        }
+    }
+
+    /// incremental に維持している `effect` がフルスキャン再計算と一致するか検証する．
+    ///
+    /// 利きは詰み判定の土台ゆえ不整合 = 偽詰みの危険がある．`EFFECT_VERIFY` 環境変数を
+    /// 設定すると `do_move`/`undo_move` 毎に本検査が走る (release でも有効)．
+    #[cfg(feature = "effect_table")]
+    pub(crate) fn verify_effect(&self) -> bool {
+        let mut exp_eff = [[0u8; 81]; 2];
+        let mut exp_dir = [[0u8; 81]; 2];
+        let occ = self.all_occ;
+        for sq_idx in 0..81u8 {
+            let piece = self.squares[sq_idx as usize];
+            if piece.is_empty() {
+                continue;
+            }
+            let color = piece.color().unwrap();
+            let pt = piece.piece_type().unwrap();
+            let ci = color.index();
+            let sq = Square(sq_idx);
+            let att = attack::piece_attacks(color, pt, sq, occ);
+            for t in att {
+                exp_eff[ci][t.index()] += 1;
+            }
+            for &dd in piece_long_dirs(color, pt) {
+                let bit = 1u8 << dd;
+                for t in attack::ray_attack(dd, sq, occ) {
+                    exp_dir[ci][t.index()] |= bit;
+                }
+            }
+        }
+        exp_eff == self.effect && exp_dir == self.long_dir
+    }
+
+    /// 指定マスへの指定色の利き数を返す (incremental effect テーブル参照)．
+    ///
+    /// `> 0` であれば `is_attacked_by(sq, color)` と等価 (純粋な高速化用の参照)．
+    #[cfg(feature = "effect_table")]
+    #[inline]
+    pub fn effect_count(&self, color: Color, sq: Square) -> u8 {
+        self.effect[color.index()][sq.index()]
+    }
+
+    /// `do_move(m)` 後の zobrist hash を盤面を変異させずに計算する．
+    ///
+    /// `do_move`/`put_piece`/`remove_piece` が適用する XOR 列と完全同一の
+    /// 演算を行うため，結果は `do_move(m)` 直後の `self.hash` と bit 一致する．
+    /// dfpn の子局面 TT lookup 用 (per-child do/undo の排除)．
+    /// `m` は本局面の合法 (疑似合法) 手であること．
+    #[inline]
+    pub fn hash_after(&self, m: Move) -> u64 {
+        let mut h = self.hash;
+        let ti = self.turn.index();
+        if m.is_drop() {
+            let pt = m.drop_piece_type().unwrap();
+            let to = m.to_sq();
+            let hi = pt.hand_index().unwrap();
+            let cnt = self.hand[ti][hi] as usize;
+            debug_assert!(cnt > 0);
+            h ^= ZOBRIST.hand_hash(self.turn, hi, cnt);
+            if cnt > 1 {
+                h ^= ZOBRIST.hand_hash(self.turn, hi, cnt - 1);
+            }
+            h ^= ZOBRIST.board_hash_raw(ti, pt as usize, to);
+        } else {
+            let from = m.from_sq();
+            let to = m.to_sq();
+            let moving = self.squares[from.index()];
+            debug_assert!(!moving.is_empty());
+            // Safety: moving が空でないことは debug_assert で検証済み
+            let pt_raw = unsafe { moving.piece_type_raw_unchecked() };
+            h ^= ZOBRIST.board_hash_raw(ti, pt_raw as usize, from);
+            let cap = self.squares[to.index()];
+            if !cap.is_empty() {
+                // Safety: cap が空でないことは検証済み
+                let cap_ci = unsafe { cap.color_index_unchecked() };
+                let cap_raw = unsafe { cap.piece_type_raw_unchecked() };
+                h ^= ZOBRIST.board_hash_raw(cap_ci, cap_raw as usize, to);
+                let cap_hand_pt = cap.piece_type().unwrap().captured_to_hand();
+                if let Some(hi) = cap_hand_pt.hand_index() {
+                    let cnt = self.hand[ti][hi] as usize;
+                    if cnt > 0 {
+                        h ^= ZOBRIST.hand_hash(self.turn, hi, cnt);
+                    }
+                    h ^= ZOBRIST.hand_hash(self.turn, hi, cnt + 1);
+                }
+            }
+            let new_pt_raw = if m.is_promotion() {
+                PieceType::from_u8(pt_raw)
+                    .expect("Move contains invalid PieceType")
+                    .promoted()
+                    .expect("cannot promote this piece") as u8
+            } else {
+                pt_raw
+            };
+            h ^= ZOBRIST.board_hash_raw(ti, new_pt_raw as usize, to);
+        }
+        h ^ ZOBRIST.turn_hash()
+    }
+
+    /// `do_move(m)` 後の盤面のみ zobrist hash (`board_hash`) を盤面を変異させずに計算する．
+    ///
+    /// `hash_after` の持ち駒項を除いた版 (結果は `do_move(m)` 直後の
+    /// `self.board_hash` と bit 一致)．dfpn の position_key 用．
+    #[inline]
+    pub fn board_hash_after(&self, m: Move) -> u64 {
+        let mut h = self.board_hash;
+        let ti = self.turn.index();
+        if m.is_drop() {
+            let pt = m.drop_piece_type().unwrap();
+            h ^= ZOBRIST.board_hash_raw(ti, pt as usize, m.to_sq());
+        } else {
+            let from = m.from_sq();
+            let to = m.to_sq();
+            let moving = self.squares[from.index()];
+            debug_assert!(!moving.is_empty());
+            // Safety: moving が空でないことは debug_assert で検証済み
+            let pt_raw = unsafe { moving.piece_type_raw_unchecked() };
+            h ^= ZOBRIST.board_hash_raw(ti, pt_raw as usize, from);
+            let cap = self.squares[to.index()];
+            if !cap.is_empty() {
+                // Safety: cap が空でないことは検証済み
+                let cap_ci = unsafe { cap.color_index_unchecked() };
+                let cap_raw = unsafe { cap.piece_type_raw_unchecked() };
+                h ^= ZOBRIST.board_hash_raw(cap_ci, cap_raw as usize, to);
+            }
+            let new_pt_raw = if m.is_promotion() {
+                PieceType::from_u8(pt_raw)
+                    .expect("Move contains invalid PieceType")
+                    .promoted()
+                    .expect("cannot promote this piece") as u8
+            } else {
+                pt_raw
+            };
+            h ^= ZOBRIST.board_hash_raw(ti, new_pt_raw as usize, to);
+        }
+        h ^ ZOBRIST.turn_hash()
+    }
+
+    /// `hash_after` と `board_hash_after` を 1 回の走査でまとめて計算する
+    /// (戻り値 = `(full_hash, board_hash)`)．両者は盤上駒の XOR 項 (from/to/捕獲/成り) が
+    /// 完全に同一で，差は持ち駒項のみ (full のみ加算)．child loop では子ごとに full hash
+    /// (千日手判定) と position-only hash (TT key / dominance) の両方が必要なため，個別に
+    /// 呼ぶと squares 読み出し・駒種 decode・成り判定が二重に走る (39te で 20.2M children ×2)．
+    /// 本関数は盤上駒 delta を 1 度だけ算出して両 accumulator に適用する (結果は
+    /// `hash_after`/`board_hash_after` と bit 一致; XOR は可換なので順序非依存)．
+    #[inline]
+    pub fn hashes_after(&self, m: Move) -> (u64, u64) {
+        let mut hf = self.hash;
+        let mut hb = self.board_hash;
+        let ti = self.turn.index();
+        if m.is_drop() {
+            let pt = m.drop_piece_type().unwrap();
+            let to = m.to_sq();
+            let hi = pt.hand_index().unwrap();
+            let cnt = self.hand[ti][hi] as usize;
+            debug_assert!(cnt > 0);
+            hf ^= ZOBRIST.hand_hash(self.turn, hi, cnt);
+            if cnt > 1 {
+                hf ^= ZOBRIST.hand_hash(self.turn, hi, cnt - 1);
+            }
+            let bd = ZOBRIST.board_hash_raw(ti, pt as usize, to);
+            hf ^= bd;
+            hb ^= bd;
+        } else {
+            let from = m.from_sq();
+            let to = m.to_sq();
+            let moving = self.squares[from.index()];
+            debug_assert!(!moving.is_empty());
+            // Safety: moving が空でないことは debug_assert で検証済み
+            let pt_raw = unsafe { moving.piece_type_raw_unchecked() };
+            let bd_from = ZOBRIST.board_hash_raw(ti, pt_raw as usize, from);
+            hf ^= bd_from;
+            hb ^= bd_from;
+            let cap = self.squares[to.index()];
+            if !cap.is_empty() {
+                // Safety: cap が空でないことは検証済み
+                let cap_ci = unsafe { cap.color_index_unchecked() };
+                let cap_raw = unsafe { cap.piece_type_raw_unchecked() };
+                let bd_cap = ZOBRIST.board_hash_raw(cap_ci, cap_raw as usize, to);
+                hf ^= bd_cap;
+                hb ^= bd_cap;
+                let cap_hand_pt = cap.piece_type().unwrap().captured_to_hand();
+                if let Some(hi) = cap_hand_pt.hand_index() {
+                    let cnt = self.hand[ti][hi] as usize;
+                    if cnt > 0 {
+                        hf ^= ZOBRIST.hand_hash(self.turn, hi, cnt);
+                    }
+                    hf ^= ZOBRIST.hand_hash(self.turn, hi, cnt + 1);
+                }
+            }
+            let new_pt_raw = if m.is_promotion() {
+                PieceType::from_u8(pt_raw)
+                    .expect("Move contains invalid PieceType")
+                    .promoted()
+                    .expect("cannot promote this piece") as u8
+            } else {
+                pt_raw
+            };
+            let bd_to = ZOBRIST.board_hash_raw(ti, new_pt_raw as usize, to);
+            hf ^= bd_to;
+            hb ^= bd_to;
+        }
+        let t = ZOBRIST.turn_hash();
+        (hf ^ t, hb ^ t)
+    }
+
+    /// `do_move(m)` 後の `color` 側持ち駒を，盤を変更せず incremental に返す
+    /// (KH `Node::OrHandAfter` 相当)．`do_move` の hand 更新ロジックを忠実に再現する:
+    /// 手番側 (`self.turn`) のみが駒打ちで -1 / 駒取りで +1 し，相手側の持ち駒は不変．
+    /// dfpn の子局面 seeding で per-child `do_move` を回避するための O(1) ヘルパ．
+    #[inline]
+    pub fn hand_after(&self, m: Move, color: Color) -> [u8; HAND_KINDS] {
+        let mut h = self.hand[color.index()];
+        // 相手の手は `color` 側 (= 攻め方) の持ち駒を変えない．
+        if color != self.turn {
+            return h;
+        }
+        if m.is_drop() {
+            // 駒打ち: 打った駒種を 1 つ減らす．
+            let hi = m.drop_piece_type().unwrap().hand_index().unwrap();
+            h[hi] -= 1;
+        } else {
+            // 駒取り: 取った駒の非成り駒種を 1 つ増やす (王は持ち駒にならない)．
+            let cap = self.squares[m.to_sq().index()];
+            if !cap.is_empty() {
+                let cap_hand_pt = cap.piece_type().unwrap().captured_to_hand();
+                if let Some(hi) = cap_hand_pt.hand_index() {
+                    h[hi] += 1;
+                }
+            }
+        }
+        h
+    }
+
     /// 手を実行する(取った駒を返す)．
     #[inline]
     pub fn do_move(&mut self, m: Move) -> Piece {
+        DO_MOVE_COUNT.with(|c| c.set(c.get().wrapping_add(1)));
         let captured;
 
         if m.is_drop() {
@@ -1111,10 +2495,12 @@ impl Board {
             // 持ち駒から減らす
             let hi = pt.hand_index().unwrap();
             debug_assert!(self.hand[self.turn.index()][hi] > 0);
-            self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+            self.hash ^=
+                ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
             self.hand[self.turn.index()][hi] -= 1;
             if self.hand[self.turn.index()][hi] > 0 {
-                self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                self.hash ^=
+                    ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
             }
 
             self.put_piece(to, piece);
@@ -1137,10 +2523,15 @@ impl Board {
                 // 疑似合法手の検証中に発生しうる)
                 if let Some(hi) = cap_hand_pt.hand_index() {
                     if self.hand[self.turn.index()][hi] > 0 {
-                        self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                        self.hash ^= ZOBRIST.hand_hash(
+                            self.turn,
+                            hi,
+                            self.hand[self.turn.index()][hi] as usize,
+                        );
                     }
                     self.hand[self.turn.index()][hi] += 1;
-                    self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                    self.hash ^=
+                        ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
                 }
                 captured = cap;
             } else {
@@ -1164,6 +2555,14 @@ impl Board {
         self.turn = self.turn.opponent();
         self.ply += 1;
 
+        #[cfg(feature = "effect_table")]
+        if effect_verify_enabled() {
+            assert!(
+                self.verify_effect(),
+                "incremental effect desync after do_move {:?}",
+                m
+            );
+        }
         captured
     }
 
@@ -1193,10 +2592,12 @@ impl Board {
             // 持ち駒に戻す
             let hi = pt.hand_index().unwrap();
             if self.hand[self.turn.index()][hi] > 0 {
-                self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                self.hash ^=
+                    ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
             }
             self.hand[self.turn.index()][hi] += 1;
-            self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+            self.hash ^=
+                ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
         } else {
             let from = m.from_sq();
             let to = m.to_sq();
@@ -1223,13 +2624,27 @@ impl Board {
                 // 持ち駒から取った駒を除去(王は持ち駒にならない)
                 let cap_hand_pt = cap_pt.captured_to_hand();
                 if let Some(hi) = cap_hand_pt.hand_index() {
-                    self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                    self.hash ^=
+                        ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
                     self.hand[self.turn.index()][hi] -= 1;
                     if self.hand[self.turn.index()][hi] > 0 {
-                        self.hash ^= ZOBRIST.hand_hash(self.turn, hi, self.hand[self.turn.index()][hi] as usize);
+                        self.hash ^= ZOBRIST.hand_hash(
+                            self.turn,
+                            hi,
+                            self.hand[self.turn.index()][hi] as usize,
+                        );
                     }
                 }
             }
+        }
+
+        #[cfg(feature = "effect_table")]
+        if effect_verify_enabled() {
+            assert!(
+                self.verify_effect(),
+                "incremental effect desync after undo_move {:?}",
+                m
+            );
         }
     }
 
@@ -1339,9 +2754,8 @@ impl Board {
         for (i, &max) in PieceType::MAX_HAND_COUNT.iter().enumerate() {
             let hand_total = self.hand[0][i] as u32 + self.hand[1][i] as u32;
             let base_pt = PieceType::HAND_PIECES[i];
-            let mut on_board = (self.piece_bb[0][base_pt as usize]
-                | self.piece_bb[1][base_pt as usize])
-                .count();
+            let mut on_board =
+                (self.piece_bb[0][base_pt as usize] | self.piece_bb[1][base_pt as usize]).count();
             // 成駒も盤上枚数に含める
             if let Some(promoted) = base_pt.promoted() {
                 on_board += (self.piece_bb[0][promoted as usize]
@@ -1415,7 +2829,13 @@ impl Board {
             }
             let moving_pt = moving_piece.piece_type()? as u8;
             let captured = self.squares[to.index()].0;
-            Some(Move::new_move(from, to, m16.is_promotion(), captured, moving_pt))
+            Some(Move::new_move(
+                from,
+                to,
+                m16.is_promotion(),
+                captured,
+                moving_pt,
+            ))
         }
     }
 }
@@ -1599,18 +3019,66 @@ mod tests {
         assert_eq!(board.hash, original_hash);
     }
 
+    /// incremental に維持する利きテーブル (`effect`) が，全 do_move/undo_move 後に
+    /// フルスキャン再計算 (`verify_effect`) と一致することを多局面 DFS で検証する．
+    ///
+    /// 駒打ち・捕獲・成り・遠方利きの遮断/開放を網羅するため，遠方駒・成駒・持駒が
+    /// 豊富な 39te 局面を含める．utility の soundness 土台 (利き不整合 = 偽詰みの危険)．
+    #[cfg(feature = "effect_table")]
+    #[test]
+    fn test_effect_incremental_matches_fullscan() {
+        use crate::movegen::generate_legal_moves;
+
+        // 各局面で do/undo を再帰的に行い，各局面で incremental == フルスキャンを検証する DFS．
+        fn dfs(board: &mut Board, depth: u32, budget: &mut u32) {
+            if depth == 0 || *budget == 0 {
+                return;
+            }
+            let moves = generate_legal_moves(board);
+            for m in moves {
+                if *budget == 0 {
+                    break;
+                }
+                *budget -= 1;
+                let captured = board.do_move(m);
+                assert!(
+                    board.verify_effect(),
+                    "incremental effect != fullscan after do_move {m:?}"
+                );
+                dfs(board, depth - 1, budget);
+                board.undo_move(m, captured);
+                assert!(
+                    board.verify_effect(),
+                    "incremental effect != fullscan after undo_move {m:?}"
+                );
+            }
+        }
+
+        let sfens = [
+            HIRATE_SFEN,
+            "4k4/9/9/9/9/9/9/9/4K4 b R 1",
+            // 39te: 遠方駒・成駒・持駒が多く遮断/開放と駒打ちが頻発する局面．
+            "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1",
+        ];
+
+        for sfen in sfens {
+            let mut board = Board::empty();
+            board.set_sfen(sfen).unwrap();
+            // set_sfen 直後 (rebuild_effect) の整合性．
+            assert!(board.verify_effect(), "rebuild_effect mismatch for {sfen}");
+            let mut budget = 6000u32;
+            dfs(&mut board, 4, &mut budget);
+        }
+    }
+
     #[test]
     fn test_is_in_check() {
         // 王手がかかっている局面を設定
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/9/9/9/9/9/9/9/4K3R b - 1")
-            .unwrap();
+        board.set_sfen("4k4/9/9/9/9/9/9/9/4K3R b - 1").unwrap();
         // 先手の飛車(1九=col8,row8)は後手の玉(5一=col4,row0)に利いていない(別の行)
         // → 別の局面にする
-        board
-            .set_sfen("4k4/9/9/9/9/9/9/9/4K4 b R 1")
-            .unwrap();
+        board.set_sfen("4k4/9/9/9/9/9/9/9/4K4 b R 1").unwrap();
         assert!(!board.is_in_check(Color::White));
     }
 
@@ -1618,9 +3086,7 @@ mod tests {
     fn test_single_king_tsume() {
         // 片玉局面(詰将棋): 攻め方に玉がない
         let mut board = Board::empty();
-        board
-            .set_sfen("4k4/9/4G4/9/9/9/9/9/9 b G 1")
-            .unwrap();
+        board.set_sfen("4k4/9/4G4/9/9/9/9/9/9 b G 1").unwrap();
         assert!(board.is_ok());
         assert_eq!(board.king_square(Color::Black), None);
         assert!(board.king_square(Color::White).is_some());
@@ -1670,6 +3136,9 @@ mod tests {
         assert!(output.contains("金2"), "should show 2 golds");
         assert!(output.contains("歩3"), "should show 3 pawns");
         // 後手: 角1銀1
-        assert!(output.contains("後手の持駒：角 銀"), "should show bishop and silver");
+        assert!(
+            output.contains("後手の持駒：角 銀"),
+            "should show bishop and silver"
+        );
     }
 }

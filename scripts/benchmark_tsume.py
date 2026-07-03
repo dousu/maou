@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Benchmark script: maou DfPn vs cshogi DfPn for tsume-shogi problems."""
+"""Benchmark script: maou DfPn vs cshogi DfPn for tsume-shogi problems.
+
+注意: `maturin develop` は既定で dev プロファイル (pyproject の [tool.maturin]
+profile = "dev") でビルドされ，release 比 ~6 倍遅い．計測時は
+`uv run maturin develop --release` でビルドし直すこと (配布 wheel は CI が
+--release でビルドするため影響しない)．
+"""
 
 import time
 
@@ -8,35 +14,36 @@ from cshogi import DfPn
 
 from maou._rust.maou_shogi import solve_tsume
 
-# 攻め方の玉を9九に配置(cshogiは片玉SFENの合法手生成にバグがあるため)
+# 攻め方の玉を9九に配置(cshogiは片玉SFENの合法手生成にバグがあるため)．
+# キーは maou の無駄合い抜き最短手数 (ユーザ確認済; Rust dfpn::tests と一致)．
 PROBLEMS = {
-    "tsume1_9te": (
+    "tsume_9te_a": (
         "6s2/6l2/9/6BBk/9/9/9/9/K8 b RPr4g3s4n3l17p 1",
         31,
     ),
-    "tsume2_11te": (
-        "4+P2kl/7s1/5R3/7B1/9/9/9/9/K8 b GNrb3g3s3n3l17p 1",
-        31,
-    ),
-    "tsume5_17te": (
-        "9/5Pk2/9/8R/8B/9/9/9/K8 b 2Srb4g2s4n4l17p 1",
-        31,
-    ),
-    "tsume3_7te": (
+    "tsume_9te_b": (
         "7nl/9/7kp/4r1N2/8P/6LG+p/9/9/K8 b R2b3g4s2n2l15p 1",
         31,
     ),
-    "tsume4_5te": (
+    "tsume_11te_a": (
+        "4+P2kl/7s1/5R3/7B1/9/9/9/9/K8 b GNrb3g3s3n3l17p 1",
+        31,
+    ),
+    "tsume_11te_b": (
         "7nk/9/5R3/8p/6P2/9/9/9/K8 b SNPr2b4g3s2n4l15p 1",
         31,
     ),
-    "tsume6_29te": (
+    "tsume_17te": (
+        "9/5Pk2/9/8R/8B/9/9/9/K8 b 2Srb4g2s4n4l17p 1",
+        31,
+    ),
+    "tsume_29te": (
         "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1",
         31,
     ),
-    "tsume7_39te": (
+    "tsume_39te": (
         "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1",
-        63,
+        47,  # depth 上限は 47 (PATH_CAPACITY)
     ),
 }
 
@@ -72,12 +79,19 @@ def main() -> None:
         result = solve_tsume(sfen, depth=depth, nodes=max_nodes)
         maou_ms = (time.perf_counter() - t0) * 1000
         maou_nodes = result.nodes_searched
-        maou_n_moves = len(result.moves) if result.status == "checkmate" else 0
+        maou_n_moves = (
+            len(result.moves)
+            if result.status == "checkmate"
+            else 0
+        )
 
         # --- maou (find_shortest=false) ---
         t0 = time.perf_counter()
         result_fast = solve_tsume(
-            sfen, depth=depth, nodes=max_nodes, find_shortest=False
+            sfen,
+            depth=depth,
+            nodes=max_nodes,
+            find_shortest=False,
         )
         maou_fast_ms = (time.perf_counter() - t0) * 1000
         maou_fast_nodes = result_fast.nodes_searched
@@ -103,7 +117,11 @@ def main() -> None:
                 cshogi_moves_list.append(cshogi.move_to_usi(m))
         cshogi_n_moves = len(cshogi_moves_list)
 
-        ratio = maou_ms / cshogi_ms if cshogi_ms > 0 else float("inf")
+        ratio = (
+            maou_ms / cshogi_ms
+            if cshogi_ms > 0
+            else float("inf")
+        )
 
         print(
             f"{name:<14} {maou_ms:>9.2f} {cshogi_ms:>9.2f} {ratio:>6.1f}x"
@@ -113,7 +131,9 @@ def main() -> None:
             f" {maou_n_moves:>5} {cshogi_n_moves:>5}"
         )
         ratio_fast = (
-            maou_fast_ms / cshogi_ms if cshogi_ms > 0 else float("inf")
+            maou_fast_ms / cshogi_ms
+            if cshogi_ms > 0
+            else float("inf")
         )
         print(
             f"  (no shortest) {maou_fast_ms:>9.2f} {'':>9} {ratio_fast:>6.1f}x"
@@ -125,7 +145,10 @@ def main() -> None:
 
         if result.status == "checkmate":
             print(f"  maou  : {' '.join(result.moves)}")
-        if result_fast.status == "checkmate" and result_fast.moves != result.moves:
+        if (
+            result_fast.status == "checkmate"
+            and result_fast.moves != result.moves
+        ):
             print(f"  maou-f: {' '.join(result_fast.moves)}")
         if found:
             print(f"  cshogi: {' '.join(cshogi_moves_list)}")

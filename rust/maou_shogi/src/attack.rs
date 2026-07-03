@@ -1,5 +1,5 @@
 use crate::bitboard::Bitboard;
-use crate::types::{Color, PIECE_BB_SIZE, PieceType, Square};
+use crate::types::{Color, PieceType, Square, PIECE_BB_SIZE};
 
 /// 駒の利きを計算する．
 ///
@@ -52,10 +52,8 @@ fn init_step_attacks() -> [[[Bitboard; 81]; PIECE_BB_SIZE]; 2] {
         );
 
         // 金(と金,成香,成桂,成銀も同じ): 前後左右+斜め前2方向
-        let gold_dirs_black: [(i8, i8); 6] =
-            [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (0, 1)];
-        let gold_dirs_white: [(i8, i8); 6] =
-            [(-1, 1), (0, 1), (1, 1), (-1, 0), (1, 0), (0, -1)];
+        let gold_dirs_black: [(i8, i8); 6] = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (0, 1)];
+        let gold_dirs_white: [(i8, i8); 6] = [(-1, 1), (0, 1), (1, 1), (-1, 0), (1, 0), (0, -1)];
 
         for &pt in &[
             PieceType::Gold,
@@ -64,16 +62,8 @@ fn init_step_attacks() -> [[[Bitboard; 81]; PIECE_BB_SIZE]; 2] {
             PieceType::ProKnight,
             PieceType::ProSilver,
         ] {
-            add_step(
-                &mut table[0][pt as usize],
-                sq,
-                &gold_dirs_black,
-            );
-            add_step(
-                &mut table[1][pt as usize],
-                sq,
-                &gold_dirs_white,
-            );
+            add_step(&mut table[0][pt as usize], sq, &gold_dirs_black);
+            add_step(&mut table[1][pt as usize], sq, &gold_dirs_white);
         }
 
         // 王: 全8方向
@@ -93,29 +83,13 @@ fn init_step_attacks() -> [[[Bitboard; 81]; PIECE_BB_SIZE]; 2] {
 
         // 馬(成角): 斜め走りは別途処理，前後左右1マスのステップ部分のみ
         let horse_step: [(i8, i8); 4] = [(0, -1), (0, 1), (-1, 0), (1, 0)];
-        add_step(
-            &mut table[0][PieceType::Horse as usize],
-            sq,
-            &horse_step,
-        );
-        add_step(
-            &mut table[1][PieceType::Horse as usize],
-            sq,
-            &horse_step,
-        );
+        add_step(&mut table[0][PieceType::Horse as usize], sq, &horse_step);
+        add_step(&mut table[1][PieceType::Horse as usize], sq, &horse_step);
 
         // 龍(成飛): 前後左右走りは別途処理，斜め1マスのステップ部分のみ
         let dragon_step: [(i8, i8); 4] = [(-1, -1), (1, -1), (-1, 1), (1, 1)];
-        add_step(
-            &mut table[0][PieceType::Dragon as usize],
-            sq,
-            &dragon_step,
-        );
-        add_step(
-            &mut table[1][PieceType::Dragon as usize],
-            sq,
-            &dragon_step,
-        );
+        add_step(&mut table[0][PieceType::Dragon as usize], sq, &dragon_step);
+        add_step(&mut table[1][PieceType::Dragon as usize], sq, &dragon_step);
     }
 
     table
@@ -212,6 +186,77 @@ fn ray_attack_negative(dir: usize, sq: Square, occupied: Bitboard) -> Bitboard {
     }
 }
 
+// ------------------------------------------------------------
+// incremental effect (利き) テーブル用の方向ヘルパ (effect_table feature)
+//
+// PEXT を使わず RAY_MASKS + bit-scan のみでスライド利きを 1 方向ずつ扱う．
+// do_move/undo_move あたりの利き更新を「各方向の最近接駒 1 つ」に縮約する土台．
+// ------------------------------------------------------------
+
+/// 各方向の反対方向 (N↔S, W↔E, NW↔SE, NE↔SW)．
+#[cfg(feature = "effect_table")]
+pub(crate) const DIR_OPPOSITE: [usize; 8] =
+    [DIR_S, DIR_N, DIR_E, DIR_W, DIR_SE, DIR_SW, DIR_NE, DIR_NW];
+
+/// 飛・龍の遠方利き方向 (縦横 4 方向)．
+#[cfg(feature = "effect_table")]
+pub(crate) const DIRS_ROOK: [usize; 4] = [DIR_N, DIR_S, DIR_W, DIR_E];
+/// 角・馬の遠方利き方向 (斜め 4 方向)．
+#[cfg(feature = "effect_table")]
+pub(crate) const DIRS_BISHOP: [usize; 4] = [DIR_NW, DIR_NE, DIR_SW, DIR_SE];
+
+/// 上方向 (N) のレイ方向インデックス (香の色判定用)．
+#[cfg(feature = "effect_table")]
+pub(crate) const DIR_UP: usize = DIR_N;
+/// 下方向 (S) のレイ方向インデックス (香の色判定用)．
+#[cfg(feature = "effect_table")]
+pub(crate) const DIR_DOWN: usize = DIR_S;
+
+/// 方向 `dir` が縦横 (飛・龍の軸) か．false なら斜め (角・馬の軸)．
+#[cfg(feature = "effect_table")]
+#[inline]
+pub(crate) fn dir_is_orthogonal(dir: usize) -> bool {
+    dir < DIR_NW
+}
+
+/// `dir` がマス番号増加方向 (lsb で最近接) か．false なら減少方向 (msb)．
+#[cfg(feature = "effect_table")]
+#[inline]
+fn dir_is_positive(dir: usize) -> bool {
+    matches!(dir, DIR_S | DIR_E | DIR_NE | DIR_SE)
+}
+
+/// `sq` から `dir` 方向で最初に `occupied` にぶつかる駒のマス (なければ None)．
+#[cfg(feature = "effect_table")]
+#[inline]
+pub(crate) fn ray_first_blocker(dir: usize, sq: Square, occupied: Bitboard) -> Option<Square> {
+    let blockers = RAY_MASKS[dir][sq.index()] & occupied;
+    if dir_is_positive(dir) {
+        blockers.lsb()
+    } else {
+        blockers.msb()
+    }
+}
+
+/// `sq` から `dir` 方向のスライド利き (最初の駒まで, その駒を含む; 起点 `sq` は含まない)．
+///
+/// `RAY_MASKS` と bit-scan のみで計算する (PEXT 不使用)．
+#[cfg(feature = "effect_table")]
+#[inline]
+pub(crate) fn ray_attack(dir: usize, sq: Square, occupied: Bitboard) -> Bitboard {
+    let ray = RAY_MASKS[dir][sq.index()];
+    let blockers = ray & occupied;
+    let first = if dir_is_positive(dir) {
+        blockers.lsb()
+    } else {
+        blockers.msb()
+    };
+    match first {
+        Some(f) => ray ^ RAY_MASKS[dir][f.index()],
+        None => ray,
+    }
+}
+
 // ============================================================
 // PEXT ベースのスライド利きテーブル
 // ============================================================
@@ -255,9 +300,55 @@ struct PextTable {
     attacks: Vec<Bitboard>,
 }
 
+/// HW pext (BMI2) を `asm!` で直接発行する．
+///
+/// `#[target_feature(enable = "bmi2")]` fn は feature 境界を越えてインライン
+/// 展開されず，全 slider lookup が関数 call になっていた (PMP leaf ~7%)．
+/// `asm!` は target_feature を要求しないため `#[inline(always)]` が効き，
+/// 呼び出し側に展開される．BMI2 非対応 CPU では #UD になるため，必ず
+/// `is_x86_feature_detected!("bmi2")` 確認後のみ呼ぶこと (lookup 内で gate)．
+#[cfg(all(target_arch = "x86_64", not(target_feature = "bmi2")))]
+#[inline(always)]
+fn pext_hw(src: u64, mask: u64) -> u64 {
+    let r: u64;
+    unsafe {
+        std::arch::asm!(
+            "pext {r}, {s}, {m}",
+            r = lateout(reg) r,
+            s = in(reg) src,
+            m = in(reg) mask,
+            options(pure, nomem, nostack),
+        );
+    }
+    r
+}
+
 impl PextTable {
     #[inline(always)]
     fn lookup(&self, sq: Square, occ: Bitboard) -> Bitboard {
+        // コンパイル時に bmi2 が無効でも，実行時検出で HW pext へ dispatch する
+        // (検出結果は std_detect が cache するため per-call コストは予測可能な
+        // branch 1 つ; asm 直接発行なので call 境界もない)．
+        // SW fallback は mask bit 数 (≤14) に比例するループで，dfpn 探索の
+        // hot path では支配的コストになる (Zen3 実測 leaf 33%)．
+        // 注意: Zen1/Zen2 の HW pext はマイクロコードで遅い既知問題があるが，
+        // 本プロジェクトの実行環境 (Zen3+/Haswell+) では HW 優先が常に有利．
+        #[cfg(all(target_arch = "x86_64", not(target_feature = "bmi2")))]
+        {
+            if std::arch::is_x86_feature_detected!("bmi2") {
+                let e = unsafe { self.entries.get_unchecked(sq.index()) };
+                let lo_idx = pext_hw(occ.lo, e.mask_lo) as usize;
+                let hi_idx = pext_hw(occ.hi, e.mask_hi) as usize;
+                let idx = lo_idx | (hi_idx << e.lo_popcount);
+                return unsafe { *self.attacks.get_unchecked(e.offset as usize + idx) };
+            }
+        }
+        self.lookup_generic(sq, occ)
+    }
+
+    /// コンパイル時 target_feature に従う従来版 (bmi2 有効ビルドでは HW pext に解決)．
+    #[inline(always)]
+    fn lookup_generic(&self, sq: Square, occ: Bitboard) -> Bitboard {
         let e = unsafe { self.entries.get_unchecked(sq.index()) };
         let lo_idx = pext(occ.lo, e.mask_lo) as usize;
         let hi_idx = pext(occ.hi, e.mask_hi) as usize;
@@ -271,7 +362,12 @@ fn init_pext_table(
     mask_fn: impl Fn(Square) -> Bitboard,
     attack_fn: impl Fn(Square, Bitboard) -> Bitboard,
 ) -> PextTable {
-    let dummy = PextEntry { mask_lo: 0, mask_hi: 0, lo_popcount: 0, offset: 0 };
+    let dummy = PextEntry {
+        mask_lo: 0,
+        mask_hi: 0,
+        lo_popcount: 0,
+        offset: 0,
+    };
     // Safety: PextEntry is Copy-like (all primitives)
     let mut entries: [PextEntry; 81] = unsafe { std::mem::zeroed() };
     let _ = dummy; // suppress unused
@@ -564,7 +660,11 @@ pub fn line_through(sq1: Square, sq2: Square) -> Bitboard {
     } else if dr == 0 {
         DIR_W
     } else if adc == adr {
-        if (dc > 0) == (dr > 0) { DIR_SE } else { DIR_NE }
+        if (dc > 0) == (dr > 0) {
+            DIR_SE
+        } else {
+            DIR_NE
+        }
     } else {
         return Bitboard::EMPTY;
     };
@@ -663,7 +763,11 @@ mod tests {
                 }
                 let pext_b = PEXT_LANCE_BLACK.lookup(sq, occ);
                 let ray_b = ray_attack_negative(DIR_N, sq, occ);
-                assert_eq!(pext_b, ray_b, "lance black mismatch at sq={}, occ={:?}", sq_idx, occ);
+                assert_eq!(
+                    pext_b, ray_b,
+                    "lance black mismatch at sq={}, occ={:?}",
+                    sq_idx, occ
+                );
 
                 let pext_w = PEXT_LANCE_WHITE.lookup(sq, occ);
                 let ray_w = ray_attack_positive(DIR_S, sq, occ);

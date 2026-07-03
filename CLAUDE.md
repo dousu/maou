@@ -61,6 +61,60 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 - MUST remove `docs/commands/<command-name>.md` when removing a CLI command
 - MUST follow the existing documentation format (Overview + CLI options tables)
 
+## Repository-Centric Memory Architecture (MUST)
+
+Long-term memory lives in the repository, not in the conversation.
+Full spec: [docs/memory-architecture.md](docs/memory-architecture.md).
+
+### Files
+
+| Path | Role | Committed |
+|---|---|---|
+| `reviews/YYYY-MM-DD-<title>.md` | Proposals + audit trail. `status:` in frontmatter. | yes |
+| `scratchpad/current.md` | Authoritative current state. | no (`.gitignore`d) |
+| `scratchpad/compass.md` | Always-loaded binding layer. Fixed sections: VETOES → TRIPWIRES → North-star → Invariants[scope] → REFUTED → 環境リファレンス. ≤ ~9KB. | no (`.gitignore`d) |
+| `worklog/YYYY-MM-DD-HHMMSS.md` | One file per checkpoint, JST, immutable. | no (`.gitignore`d) |
+| `~/.claude/.../memory/` (auto-memory) | `feedback_*.md` process rules ONLY (advisory). NOT campaign state; no new `project_*.md`. | n/a (per-machine) |
+| `.claude/commands/checkpoint-context.md` | The only writer. | yes |
+| `.claude/commands/resume-context.md` | Read-only resume. | yes |
+
+### MUST rules
+
+- MUST NOT edit `CLAUDE.md` / `docs/` without an **approved** `reviews/*.md`
+  proposal. Draft it `status: pending`; **on user approval in
+  `/checkpoint-context` step 5, the model applies the edit itself and
+  commits** (approval is the safeguard against *silent* edits).
+- MUST treat `worklog/*.md` as immutable. Each `/checkpoint-context`
+  creates a **new** file — never edit a previous one.
+- MUST preserve failed attempts, reasoning, and uncertainty in every
+  checkpoint entry. Do not over-summarize.
+- MUST run `/resume-context` at the start of any session inheriting
+  cleared context, before acting.
+- MUST run `/checkpoint-context` before any context reset, long break,
+  or handoff.
+- MUST use JST (`Asia/Tokyo`) for all timestamps and filenames.
+- MUST load `scratchpad/compass.md` at `/resume-context` and treat its
+  Invariants as binding guardrails (evaluate values against the SHA for
+  staleness).
+- MUST curate `scratchpad/compass.md` at every `/checkpoint-context`:
+  update North-star numbers (or write "unchanged"), add new do-not-redo
+  conclusions, delete/edit overturned invariants, and evict when over the
+  size cap (≤ ~9KB byte cap, env-reference 込). Never append-only.
+- MUST refuse `/checkpoint-context` on an uncommitted `src/`/`rust/` tree
+  (dirty-tree gate — commit + pre-commit + version bump first). Only an
+  explicit `--allow-dirty` overrides.
+- MUST keep campaign do-not-redo conclusions in `scratchpad/compass.md`
+  (binding) ONLY; MUST NOT mirror them into `~/.claude` auto-memory (a
+  "background, may-be-outdated" channel — mirroring licenses
+  re-litigation). Auto-memory holds only the `feedback_*.md` process rules;
+  MUST NOT author new `project_*.md`.
+- MUST file a `reviews/*.md` ONLY for committed durable-doc targets
+  (`CLAUDE.md` / `docs/`); `rust/`/`src/` algorithmic tuning + lever
+  rejections go to `worklog/` + `compass.md`, never `reviews/`.
+- MUST surface `compass.md` § 🚫 VETOES and § 🚦 TRIPWIRES FIRST and
+  verbatim (Confirmed-binding) at `/resume-context`, and commit every
+  `reviews/` `status:` transition immediately (audit trail).
+
 ## Code Exploration Policy (MUST)
 
 コードベースの調査・探索には，MUST use `Task` tool with `subagent_type=Explore`.
@@ -114,6 +168,34 @@ SHOULD prefer Serena tools for token efficiency:
 - SHOULD write regression tests for bug fixes
 - Test path: `src/maou/{layer}/{module}/file.py` → `tests/maou/{layer}/{module}/test_file.py`
 
+### 重いテスト (Rust dfpn) — release ビルド必須
+
+doc コメントに `**[SLOW]**` フラグがついている Rust テストは全て `#[ignore]` 属性を持ち，
+debug ビルドでは release 比約 6 倍遅く，ノード/時間制限を超過してテストが失敗する場合がある．
+これらのテストを実行する際は MUST `--release --ignored` フラグを付けること:
+
+```bash
+cargo test --release -p maou_shogi -- <test_name> --nocapture --ignored
+```
+
+現在 `[SLOW]` フラグがついている主なテスト (`rust/maou_shogi/src/dfpn/tests.rs`):
+
+| テスト名 | バジェット | 備考 |
+|---|---|---|
+| `test_29te` | - | mid 1te/3te/29te canonical (396,516 nodes (find_shortest 総数) / mate-29 / STRICT Some(29)) |
+| `test_39te_measure` | 30M nodes (default) | 39te canonical (17,545,528 nodes / mate-39 / STRICT Some(39) / canonical PV) |
+| `test_counter_check_example` | - | 逆王手詰将棋 mate-7 健全性 |
+| `test_counter_check_diagnostic` | - | 診断用ログ出力 |
+| `test_no_checkmate_counter_check_probe` | 10M nodes | ノード予算プローブ |
+
+dfpn テストは各々が大きな置換表 (TT) を alloc するため，**MUST `--test-threads=1`** で実行すること．
+default の並列実行は memory 制約 DevContainer (8GB) で OOM → `signal: 15 SIGTERM` となり，
+assertion failure でなくプロセス kill として現れる (コード回帰と誤認しやすい)．
+
+```bash
+cargo test --release -p maou_shogi -- --test-threads=1
+```
+
 ## Quick Reference
 
 ### Common Commands
@@ -129,6 +211,11 @@ uv sync --extra cuda --extra visualize     # Full development
 uv run pytest                              # Run tests
 uv run maturin develop                     # Build Rust extension
 uv run maou --help                         # CLI help
+
+# Rust tests
+cargo test -p maou_shogi                                          # 通常テスト (debug)
+cargo test --release -p maou_shogi -- <test_name> --nocapture     # [SLOW] テスト (release 必須)
+cargo test --release -p maou_shogi -- --ignored --nocapture       # #[ignore] テスト (release 必須)
 ```
 
 ### Japanese Writing Rules (日本語記述規則)
