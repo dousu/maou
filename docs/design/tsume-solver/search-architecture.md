@@ -2,8 +2,6 @@
 
 統一探索本体 `mid` (実体は `search/mod.rs` の `search_impl` / `search_impl_root`) は，
 df-pn を φ/δ に統一した深さ優先探索を，root で閾値を段階的に拡大しながら実行する単一エンジンである．
-旧版にあった二エンジン構成 (Best-First PNS + IDS-dfpn) ・Frontier Variant ・warmup は
-v3.0.0 の統一で全廃された (記録は git 履歴)．
 
 ### 2.1 Df-Pn (Nagai 2002)
 

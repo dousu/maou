@@ -103,12 +103,7 @@ df-pn は探索木を明示的に保持しないため，詰み証明後に **TT
 - `build_expansion` は非終端ノードを `len < 1手` で **budget-limited disproven** にする (予算切れ
   cutoff)．DEPTH_MAX 探索では len が高位飽和し発火しないので first-mate 挙動は不変．
 
-**正解の oracle はユーザ**: 詰将棋の最短手数/正解 PV は **ユーザが絶対的参照点**である．KH は
-詰将棋において参照点ではない (MinLength 余詰は**無駄合いを手数に数える**ため現実の最短と乖離する;
-[aigoma §8.2](aigoma-optimization.md))．maou が既知手順と異なる解を出したら，採用前に SFEN と現 PV
-を提示してユーザに確認する．
-
-**現状**: len 予算は**無駄合い-free len credit** ([aigoma §8.4](aigoma-optimization.md)) で
+len 予算は**無駄合い-free len credit** ([aigoma §8.4](aigoma-optimization.md)) で
 無駄合い抜き手数に一致させている (これを欠くと無駄合い込み raw ply の予算で短い詰みを偽
 disproof する)．29te 最短 29 手 / **39te 最短 39 手** / post-2c3d 31 手を user oracle と一致で
 confirm する (canonical anchor: 29te 396,516 / 39te 17,545,528 nodes; `tests.rs` が assert)．
