@@ -2,7 +2,7 @@
 title: 長手数詰将棋対応 (千日手テーブル GC / depth 上限 2047) を設計docへ反映
 status: applied
 approved_by: user (2026-07-03 指示: 正式機能化 + 設計doc 反映)
-applied_in: (docs コミット SHA を applied 化時に記入)
+applied_in: cd18976 (code) + 8b51216 (docs)
 ---
 
 # 長手数詰将棋対応を設計ドキュメントへ反映
