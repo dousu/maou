@@ -1,8 +1,3 @@
-// verbose feature 無効時に verbose_eprintln! 内でのみ使われる変数の
-// unused 警告を抑制する．verbose 有効時はマクロが eprintln! に展開され
-// 変数が実際に使用されるため警告は出ない．
-#![allow(unused_variables, unused_assignments)]
-
 use super::api::*;
 use super::solver::*;
 use super::*;
@@ -14,7 +9,7 @@ use crate::types::{PieceType, Square};
 ///
 /// 以下を確認する:
 /// 1. 結果が `Checkmate`．
-/// 2. PV 手数が最短手数 `expected_len` と一致 (oracle = KH MinLength / maou find_shortest 確定)．
+/// 2. PV 手数が既知の最短手数 `expected_len` と一致 (最短手数の絶対 oracle は user 確認値)．
 /// 3. PV を replay した終局面が真の詰み (`in_check && legal==0`)．
 ///
 /// **別解は許容**する: 同一最短手数の sound な PV であればどれでも pass する (exact PV は問わない)．
@@ -849,8 +844,7 @@ fn test_29te() {
                     "default は canonical mate-29 を返すべき: {}",
                     moves.len()
                 );
-                // find_shortest 総ノード数 (子 φ 予算 2nd+2nd/8+1 化後の canonical; 旧式
-                // 2nd+1 では 531,296)．
+                // find_shortest 総ノード数 (canonical anchor)．
                 assert_eq!(
                     nodes_searched, 396_516,
                     "29te の探索ノード数が canonical (396,516) から乖離: {nodes_searched}"
@@ -868,10 +862,9 @@ fn test_29te() {
 ///   9c3c 1c1d 3c2c 1d1e P*1f 1e1f P*1g 1f1g 5g6f 1g1h 2c2g 1h1i 8g8i S*6i 8i6i 6h6i+
 ///   S*2h 1i2i 2h3g 2i3i 2g2h 3i4i 2h4h
 ///
-/// **[FIXED]** 案A (無駄合い-free len budget; 透過中合い drop を len から credit) 導入により
-/// find_shortest が真の最短 **39 手** へ収束するようになった (旧: len-budget が無駄合い込み raw ply を
-/// 数え len=37 以下を偽 disproof → root 43 へ過大評価)．STRICT-VERIFY Some(39)・PV は上記正解と一致．
-/// perf: 無駄合いを正しく展開するため node 数増 (旧 4.27M→24.8M)．collapse 最適化は follow-up．
+/// find_shortest は無駄合い-free len budget (透過中合い drop を len から credit) により
+/// 真の最短 **39 手** へ収束する (これを欠くと len-budget が無駄合い込み raw ply を数え，
+/// len=37 以下を偽 disproof して root を過大評価する)．STRICT-VERIFY Some(39)・PV は上記正解と一致．
 /// SFEN/BUDGET/SECS env で上書き可．
 #[test]
 #[ignore]
@@ -929,12 +922,12 @@ fn test_39te_measure() {
                 assert_eq!(
                     moves.len(),
                     39,
-                    "39te は真の最短 39 手を返すべき (案A 修正後): {}",
+                    "39te は真の最短 39 手を返すべき: {}",
                     moves.len()
                 );
                 assert_eq!(
                     nodes_searched, 17_545_528,
-                    "39te の探索ノード数が canonical (17,545,528; 子 φ 予算 2nd+2nd/8+1) から乖離"
+                    "39te の探索ノード数が canonical (17,545,528) から乖離"
                 );
             }
         }
@@ -997,160 +990,6 @@ fn test_39te_divergence_probe() {
             .move_from_usi(line[k])
             .unwrap_or_else(|| panic!("invalid USI: {}", line[k]));
         board.do_move(m);
-    }
-}
-
-/// [DIAG] post-2c3d (Bug2 clean repro) の真 17 手 line を 1 手ずつ進め，攻め方手番の各局面で
-/// find_shortest 解が期待値 (17 - k) と一致するか確認する．最初の OVER で divergence を局所化する．
-#[test]
-#[ignore]
-fn test_post2c3d_divergence_probe() {
-    let sfen = "9/3+N1P3/+R5p2/6k2/8N/5+B3/1R2S4/3p5/9 b NPb4g3sn4l14p 9";
-    // Branch A (即 4d5c 逃げ) oracle line — total 29 (post-2c3d から 21 手)．user KIF 由来．
-    let default_line = "8g8d P*4d 8d4d 3d4d 9c8d 4d5c 8d6d 5c4b P*4c 4b4c N*3e 4c4b 6d4d 4b3a 4f6d 3a2a P*2b 2a2b 3e2c+ 2b1a 4d1d";
-    let line_str = std::env::var("MOVES").unwrap_or_else(|_| default_line.to_string());
-    let line: Vec<&str> = line_str.split_whitespace().collect();
-    let total = line.len();
-    let probe_max: usize = std::env::var("PROBE_MAX")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(total);
-    let budget: u64 = std::env::var("BUDGET")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(15_000_000);
-    let mut board = Board::new();
-    board.set_sfen(sfen).unwrap();
-    for k in 0..total {
-        if k % 2 == 0 && k <= probe_max {
-            let expected = (total - k) as i64;
-            let sub_sfen = board.sfen();
-            let mut b = Board::new();
-            b.set_sfen(&sub_sfen).unwrap();
-            let mut s = DfPnSolver::with_timeout(47, budget, 32767, 60);
-            let got = match s.solve_impl(&mut b) {
-                TsumeResult::Checkmate { moves, .. } => moves.len() as i64,
-                _ => -1,
-            };
-            let flag = if got == expected {
-                "OK"
-            } else if got > expected {
-                "OVER"
-            } else {
-                "UNDER/UNSOLVED"
-            };
-            eprintln!(
-                "[probe2c3d] k={k:2} expected={expected:2} got={got:3} nodes={:>9} [{flag}] sfen={sub_sfen}",
-                s.nodes,
-            );
-        }
-        let m = board
-            .move_from_usi(line[k])
-            .unwrap_or_else(|| panic!("invalid USI: {}", line[k]));
-        board.do_move(m);
-    }
-}
-
-/// [DIAG] OR-node (攻め方手番) の各王手手 M について，全防御 D に対する孫局面を find_shortest で
-/// 解き，value(M)=2+max_D(孫手数) を出す．最短 M が真の詰み手順．maou の find_shortest が
-/// どの M を過小に避け / どの孫を過大評価するかを局面+手の粒度で可視化する．env CHILDSFEN で局面指定．
-#[test]
-#[ignore]
-fn test_children_probe() {
-    let sfen = std::env::var("CHILDSFEN").expect("set CHILDSFEN");
-    let budget: u64 = std::env::var("BUDGET")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(4_000_000);
-    let mut board = Board::new();
-    board.set_sfen(&sfen).unwrap();
-    let all_moves = crate::movegen::generate_legal_moves(&mut board);
-    // 攻め方は王手のみ (tsume)．do_move 後に防御側が王手されている手だけ残す．
-    let atk_moves: Vec<_> = all_moves
-        .into_iter()
-        .filter(|&m| {
-            let mut b1 = board.clone();
-            b1.do_move(m);
-            b1.is_in_check(b1.turn())
-        })
-        .collect();
-    eprintln!(
-        "[children] root sfen={sfen} ({} checking moves)",
-        atk_moves.len()
-    );
-    let mut best = i64::MAX;
-    let mut best_m = String::new();
-    for m in atk_moves {
-        let mut b1 = board.clone();
-        b1.do_move(m);
-        let def_moves = crate::movegen::generate_legal_moves(&mut b1);
-        if def_moves.is_empty() {
-            // M で即詰み (defender 受けなし)．
-            eprintln!("[children] M={:<7} -> value=1 (mate-in-1)", m.to_usi());
-            if 1 < best {
-                best = 1;
-                best_m = m.to_usi();
-            }
-            continue;
-        }
-        let mut max_gc = 0i64;
-        let mut refuted: Option<String> = None;
-        let mut worst_d = String::new();
-        for d in def_moves {
-            let mut b2 = b1.clone();
-            b2.do_move(d);
-            let mut s = DfPnSolver::with_timeout(47, budget, 32767, 30);
-            match s.solve_impl(&mut b2) {
-                TsumeResult::Checkmate { moves, .. } => {
-                    let v = moves.len() as i64;
-                    if v > max_gc {
-                        max_gc = v;
-                        worst_d = d.to_usi();
-                    }
-                }
-                _ => {
-                    refuted = Some(d.to_usi());
-                    break;
-                }
-            }
-        }
-        match refuted {
-            Some(d) => eprintln!(
-                "[children] M={:<7} -> REFUTED (defender {d} escapes)",
-                m.to_usi()
-            ),
-            None => {
-                let val = 2 + max_gc;
-                eprintln!(
-                    "[children] M={:<7} -> value={:>3} (worst defense {worst_d} -> grandchild {max_gc})",
-                    m.to_usi(), val
-                );
-                if val < best {
-                    best = val;
-                    best_m = m.to_usi();
-                }
-            }
-        }
-    }
-    eprintln!("[children] BEST: M={best_m} value={best} (= true shortest if grandchildren solved correctly)");
-}
-
-/// [DIAG] 手順を env MOVES (space 区切り USI) で与え，post-2c3d から進めて各局面の SFEN を印字．
-#[test]
-#[ignore]
-fn test_dump_sfen() {
-    let sfen = std::env::var("STARTSFEN")
-        .unwrap_or_else(|_| "9/3+N1P3/+R5p2/6k2/8N/5+B3/1R2S4/3p5/9 b NPb4g3sn4l14p 9".to_string());
-    let moves = std::env::var("MOVES").unwrap_or_default();
-    let mut board = Board::new();
-    board.set_sfen(&sfen).unwrap();
-    eprintln!("[dump] start: {}", board.sfen());
-    for (i, mv) in moves.split_whitespace().enumerate() {
-        let m = board
-            .move_from_usi(mv)
-            .unwrap_or_else(|| panic!("invalid USI: {mv}"));
-        board.do_move(m);
-        eprintln!("[dump] after {:>2} {:<6}: {}", i + 1, mv, board.sfen());
     }
 }
 
@@ -1519,94 +1358,6 @@ fn test_gold_interposition_is_legal_defense() {
     );
 }
 
-/// ply 22 偽証明: 最終局面の合駒生成と between_bb を診断．
-#[test]
-#[ignore]
-fn test_tsume_39te_ply22_ids_depth_diagnosis() {
-    // 最終局面: 飛車 8e から玉 1e への王手
-    let final_sfen = "9/3+N1P3/7+R1/9/1R6k/9/8P/3S5/9 w 2b4g3s3n4l16p 30";
-
-    let mut final_board = Board::new();
-    final_board.set_sfen(final_sfen).unwrap();
-
-    let defender = final_board.turn(); // White
-    let attacker = defender.opponent(); // Black
-    let king_sq = final_board.king_square(defender).unwrap();
-    verbose_eprintln!(
-        "King square: {:?} (col={}, row={})",
-        king_sq,
-        king_sq.col(),
-        king_sq.row()
-    );
-
-    // compute_checkers_at
-    let checkers = final_board.compute_checkers_at(king_sq, attacker);
-    verbose_eprintln!("Checkers: count={}", checkers.count());
-    for sq in checkers {
-        verbose_eprintln!("  checker at {:?} (col={}, row={})", sq, sq.col(), sq.row());
-    }
-
-    // find_sliding_checker
-    let mut solver = DfPnSolver::default_solver();
-    let sliding = solver.find_sliding_checker(&final_board, king_sq, attacker);
-    verbose_eprintln!(
-        "find_sliding_checker: {:?}",
-        sliding.map(|s| format!("col={}, row={}", s.col(), s.row()))
-    );
-
-    // checker_sq
-    let checker_sq = checkers.lsb().unwrap();
-
-    // between_bb
-    let between = attack::between_bb(checker_sq, king_sq);
-    verbose_eprintln!(
-        "between_bb({:?}, {:?}): count={}",
-        checker_sq,
-        king_sq,
-        between.count()
-    );
-    for sq in between {
-        verbose_eprintln!("  between: col={}, row={}", sq.col(), sq.row());
-    }
-
-    // compute_futile_and_chain_squares
-    let (futile, chain) = solver.compute_futile_and_chain_squares(
-        &final_board,
-        &between,
-        king_sq,
-        checker_sq,
-        defender,
-        attacker,
-    );
-    verbose_eprintln!("futile: count={}", futile.count());
-    for sq in futile {
-        verbose_eprintln!("  futile: col={}, row={}", sq.col(), sq.row());
-    }
-    verbose_eprintln!("chain: count={}", chain.count());
-    for sq in chain {
-        verbose_eprintln!("  chain: col={}, row={}", sq.col(), sq.row());
-    }
-
-    // generate_defense_moves
-    let defenses = solver.generate_defense_moves_inner(&mut final_board, false);
-    verbose_eprintln!("generate_defense_moves: {} moves", defenses.len());
-    for d in &defenses {
-        verbose_eprintln!("  {}", d.to_usi());
-    }
-
-    // 比較: generate_legal_moves
-    let legal = movegen::generate_legal_moves(&mut final_board);
-    verbose_eprintln!("generate_legal_moves: {} moves", legal.len());
-
-    // between_bb が空なら合駒生成がスキップされる → バグの原因
-    assert!(
-        between.count() > 0,
-        "between_bb is empty for checker={:?} king={:?}, blocking moves will be skipped!",
-        checker_sq,
-        king_sq
-    );
-}
-
 /// 無駄合い判定テスト: 飛車の王手に対して合駒で詰みが回避できる局面．
 ///
 /// 飛車が横(rank)方向に王手しているが，玉の逃げ道が飛び駒の取り進みで
@@ -1862,128 +1613,6 @@ fn test_chuai_position_after_block() {
     );
 }
 
-/// 39手詰め正解 PV 上の各局面における分岐数・手生成数を診断する．
-///
-/// PV を1手ずつ進めながら，各局面で:
-/// - OR ノード(攻め方): generate_check_moves の手数
-/// - AND ノード(守備方): generate_defense_moves の手数
-/// を出力し，探索がどこでノードを浪費しているかを特定する．
-#[test]
-#[ignore]
-fn test_tsume_39te_pv_trace() {
-    let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
-    let pv_usi = [
-        "7b6b",  // 1. ６二成桂
-        "5b4c",  // 2. ４三玉
-        "8b9c",  // 3. ９三龍
-        "4c3d",  // 4. ３四玉
-        "1b2c",  // 5. ２三銀
-        "3d2c",  // 6. 同玉
-        "N*1e",  // 7. １五桂打
-        "2c3b",  // 8. ３二玉
-        "N*2d",  // 9. ２四桂打
-        "3b2b",  // 10. ２二玉
-        "2d1b+", // 11. １二桂成
-        "2b3b",  // 12. ３二玉
-        "1b2b",  // 13. ２二成桂
-        "3b2b",  // 14. 同玉
-        "4f1c",  // 15. １三馬
-        "2b1c",  // 16. 同玉
-        "9c3c",  // 17. ３三龍
-        "1c1d",  // 18. １四玉
-        "3c2c",  // 19. ２三龍
-        "1d1e",  // 20. １五玉
-        "P*1f",  // 21. １六歩打
-        "1e1f",  // 22. 同玉
-        "P*1g",  // 23. １七歩打
-        "1f1g",  // 24. 同玉
-        "5g6f",  // 25. ６六銀
-        "1g1h",  // 26. １八玉
-        "2c2g",  // 27. ２七龍
-        "1h1i",  // 28. １九玉
-        "8g8i",  // 29. ８九飛
-        "S*6i",  // 30. ６九銀打
-        "8i6i",  // 31. 同飛
-        "6h6i+", // 32. 同歩成
-        "S*2h",  // 33. ２八銀打
-        "1i2i",  // 34. ２九玉
-        "2h3g",  // 35. ３七銀
-        "2i3i",  // 36. ３九玉
-        "2g2h",  // 37. ２八龍
-        "3i4i",  // 38. ４九玉
-        "2h4h",  // 39. ４八龍
-    ];
-
-    let mut board = Board::new();
-    board.set_sfen(sfen).unwrap();
-    let mut solver = DfPnSolver::default_solver();
-
-    verbose_eprintln!(
-        "\n{:>3} {:>6} {:>5} {:>5} {:>6} {:<12} {}",
-        "Ply",
-        "Node",
-        "Moves",
-        "Drops",
-        "Total",
-        "PV Move",
-        "Sample moves (first 10)"
-    );
-    verbose_eprintln!("{}", "-".repeat(90));
-
-    for (i, &usi) in pv_usi.iter().enumerate() {
-        let ply = i + 1;
-        let is_or = (ply % 2) == 1; // 奇数手=攻め方(OR), 偶数手=守備方(AND)
-
-        let moves = if is_or {
-            solver.generate_check_moves(&mut board)
-        } else {
-            solver.generate_defense_moves_inner(&mut board, false)
-        };
-
-        // ドロップ手のカウント
-        let drop_count = moves.iter().filter(|m| m.is_drop()).count();
-        let move_count = moves.len() - drop_count;
-
-        // 正解手が手リストに含まれているか確認
-        let expected_move = board
-            .move_from_usi(usi)
-            .unwrap_or_else(|| panic!("Invalid USI at ply {}: {}", ply, usi));
-        let found = moves.iter().any(|m| *m == expected_move);
-
-        // サンプル表示(ply 4 は全手, それ以外は先頭10手)
-        let limit = if ply == 4 { moves.len() } else { 10 };
-        let sample: Vec<String> = moves.iter().take(limit).map(|m| m.to_usi()).collect();
-
-        let node_type = if is_or { "OR" } else { "AND" };
-        let mark = if !found { " *** MISSING ***" } else { "" };
-
-        verbose_eprintln!(
-            "{:>3} {:>6} {:>5} {:>5} {:>6} {:<12} [{}]{}",
-            ply,
-            node_type,
-            move_count,
-            drop_count,
-            moves.len(),
-            usi,
-            sample.join(", "),
-            mark
-        );
-
-        // 手を適用して次の局面へ
-        board.do_move(expected_move);
-    }
-
-    // 最終局面が詰みかチェック
-    let final_defenses = solver.generate_defense_moves_inner(&mut board, false);
-    verbose_eprintln!("\n最終局面(39手目後)の回避手数: {}", final_defenses.len());
-    if final_defenses.is_empty() {
-        verbose_eprintln!("→ 詰み!");
-    } else {
-        let sample: Vec<String> = final_defenses.iter().take(10).map(|m| m.to_usi()).collect();
-        verbose_eprintln!("→ 回避手あり: [{}]", sample.join(", "));
-    }
-}
-
 /// counter_check 不詭め局面の移動木診断．
 ///
 /// 先手の全王手手ごとに「後手の応手数」と「中合いチェーン情報」を出力し，
@@ -2131,115 +1760,4 @@ fn test_no_checkmate_counter_check_probe() {
         }
     }
     eprintln!("Still not solved at 10M");
-}
-
-/// 診断補助: mate15 サブ局面 (ply24 prefix 後) の SFEN を印字する．
-#[test]
-#[ignore]
-fn test_print_mate15_subposition_sfen() {
-    let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
-    let prefix_pv = [
-        "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c", "N*1e", "2c3b", "N*2d", "3b2b", "2d1b+",
-        "2b3b", "1b2b", "3b2b", "4f1c", "2b1c", "9c3c", "1c1d", "3c2c", "1d1e", "P*1f", "1e1f",
-        "P*1g", "1f1g",
-    ];
-    let mut board = Board::new();
-    board.set_sfen(sfen).unwrap();
-    for usi in &prefix_pv {
-        let m = board.move_from_usi(usi).unwrap();
-        board.do_move(m);
-    }
-    eprintln!("MATE15_SUBPOS_SFEN={}", board.sfen());
-}
-
-/// **[SLOW]** primitive micro-bench．
-///
-/// 39te root に PV プレフィックスを適用した同一局面群 (OR/AND 混在) で
-/// 王手生成 / 応手生成 / do+undo / 1 手詰判定 の ns/op を計測し，
-/// per-node コストを primitive 単位に分解する．
-/// 実行: `cargo test --release -p maou_shogi -- bench_primitives --ignored --nocapture`
-#[test]
-#[ignore]
-fn bench_primitives() {
-    use std::hint::black_box;
-    let sfen = "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1";
-    let pv = [
-        "7b6b", "5b4c", "8b9c", "4c3d", "1b2c", "3d2c", "N*1e", "2c1d", "8g8d", "P*7d", "8d7d",
-        "P*5d", "7d5d",
-    ];
-    let prefixes: [usize; 6] = [0, 1, 2, 3, 12, 13];
-    let mut solver = DfPnSolver::new(3, 1_000_000, 32767);
-    for &k in &prefixes {
-        let mut b = Board::empty();
-        b.set_sfen(sfen).unwrap();
-        for usi in pv.iter().take(k) {
-            let m = b.move_from_usi(usi).expect("pv move");
-            b.do_move(m);
-        }
-        let or_node = (k % 2) == 0; // root = 先手 (攻め方) 手番 = OR
-        if or_node {
-            let n = 200_000u32;
-            let t = std::time::Instant::now();
-            let mut acc = 0u64;
-            for _ in 0..n {
-                let mv = solver.generate_check_moves(&mut b);
-                acc += black_box(mv.len() as u64);
-            }
-            let e = t.elapsed().as_nanos() as f64 / n as f64;
-            eprintln!(
-                "BENCH k={k:2} or=1 gen_checks   {e:9.1} ns/op (moves={})",
-                acc / n as u64
-            );
-
-            // 1 手詰 (checks 前提)．gen+mate 合算も併記する
-            // (王手生成と 1 手詰判定の合算コストの可視化)．
-            let checks = solver.generate_check_moves(&mut b);
-            let turn = b.turn;
-            let t = std::time::Instant::now();
-            let mut hits = 0u64;
-            for _ in 0..n {
-                if black_box(b.mate_move_in_1ply(checks.as_slice(), turn)).is_some() {
-                    hits += 1;
-                }
-            }
-            let e = t.elapsed().as_nanos() as f64 / n as f64;
-            eprintln!(
-                "BENCH k={k:2} or=1 mate1ply     {e:9.1} ns/op (mate={})",
-                hits > 0
-            );
-
-            let t = std::time::Instant::now();
-            for _ in 0..n {
-                let cks = solver.generate_check_moves(&mut b);
-                black_box(b.mate_move_in_1ply(cks.as_slice(), turn));
-            }
-            let e = t.elapsed().as_nanos() as f64 / n as f64;
-            eprintln!("BENCH k={k:2} or=1 gen+mate1ply {e:9.1} ns/op");
-        } else {
-            let n = 200_000u32;
-            let t = std::time::Instant::now();
-            let mut acc = 0u64;
-            for _ in 0..n {
-                let mv = solver.generate_defense_moves_inner(&mut b, false);
-                acc += black_box(mv.len() as u64);
-            }
-            let e = t.elapsed().as_nanos() as f64 / n as f64;
-            eprintln!(
-                "BENCH k={k:2} or=0 gen_evasions {e:9.1} ns/op (moves={})",
-                acc / n as u64
-            );
-        }
-        // do+undo (合法手の先頭)
-        let legal = movegen::generate_legal_moves(&mut b);
-        if let Some(&m) = legal.first() {
-            let n = 1_000_000u32;
-            let t = std::time::Instant::now();
-            for _ in 0..n {
-                let cap = b.do_move(black_box(m));
-                b.undo_move(m, cap);
-            }
-            let e = t.elapsed().as_nanos() as f64 / n as f64;
-            eprintln!("BENCH k={k:2} do+undo      {e:9.1} ns/op ({})", m.to_usi());
-        }
-    }
 }

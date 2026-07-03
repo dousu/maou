@@ -22,14 +22,15 @@
 //!
 //! ## 使い方
 //!
-//! ```ignore
-//! let dml = DelayedMoveList::build_with_types(&moves, /*or_node=*/false, &[], false);
+//! ```text
+//! let dml = DelayedMoveList::build_with_types(
+//!     prev_buf, next_buf, &moves, or_node, &raw_pts, us_black);
 //! for (i, m) in moves.iter().enumerate() {
-//!     // prev チェイン上に未解決手があればスキップ
-//!     if dml.has_unresolved_prev(i, |j| !child_is_final[j]) {
+//!     // prev チェイン上に未解決 (非 final) の手があればスキップ
+//!     if dml.has_unresolved_prev(i, |j| child_is_final[j]) {
 //!         continue;
 //!     }
-//!     // ...explore moves[i]...
+//!     // ...moves[i] を展開...
 //! }
 //! ```
 
@@ -155,7 +156,6 @@ impl DelayedMoveList {
 
     /// `i_raw` の直後に展開すべき手の index．無ければ `None`．
     #[inline(always)]
-    #[allow(dead_code)] // 将来の next chain walking 用に保持
     pub(crate) fn next(&self, i_raw: usize) -> Option<usize> {
         let n = self.next[i_raw];
         if n == 0 {

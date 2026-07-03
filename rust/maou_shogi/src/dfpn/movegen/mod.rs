@@ -319,7 +319,7 @@ impl DfPnSolver {
         (futile, chain)
     }
 
-    /// [案A] find_shortest の len 予算を無駄合い-free 化する: AND node (受け方手番・飛び駒王手中) で
+    /// find_shortest の len 予算を無駄合い-free 化する: AND node (受け方手番・飛び駒王手中) で
     /// **透過的に取り返される中合いマス (chain)** を返す．これらへの合駒 drop は無駄合いゆえ len を
     /// 減じない (child len = `len.add(1)` → 攻め方の取り返し `len.sub(1)` と相殺し pair cost 0)．
     /// 非 AND / 非王手 / 非飛び駒王手 / 間マス無しでは空 bitboard (= 全 drop が通常 decrement)．

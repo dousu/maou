@@ -100,27 +100,6 @@ fn drop_gives_check(
     atk.contains(atk_king)
 }
 
-/// `SEL` env (process 内 1 回読み)．ply 0-7 初出ノードの sort 済子リスト (move/pn/dn) を
-/// sfen 付きで dump する診断用．
-fn sel_enabled() -> bool {
-    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("SEL").is_ok())
-}
-
-/// proof/disproof hand を hand-set 極小化する (cross-hand TT 再利用を効かせる)．常時 ON．
-pub(super) fn handset_enabled() -> bool {
-    true
-}
-
-/// `FULLPROOFHAND` 診断 gate (process 内 1 回読み)．proof (詰み) hand の hand-set 極小化のみを
-/// 無効化し full `attacker_hand` で格納する (disproof 側は handset のまま)．proof 極小化を切ると
-/// cross-hand proof 再利用が抑止され re-Emplace へ反転する (= proof generalization の影響を切り分ける
-/// 制御実験用)．通常探索では使わない (node 退行する)．
-pub(super) fn full_proof_hand_enabled() -> bool {
-    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("FULLPROOFHAND").is_ok())
-}
-
 /// look-ahead 不詰判定に `does_have_mate_possibility` (blocker 無視 over-approx) を使う．
 /// **default ON** (`NODHMP` で opt-out)．exact `!has_checks` だと blocker で塞がれた王手候補を
 /// 即 disproof してしまうが (例: 王手0 でも香の成り候補がある局面)，over-approx は詰みの可能性が
@@ -138,42 +117,6 @@ pub(super) fn near2_enabled() -> bool {
     *C.get_or_init(|| std::env::var("NONEAR2").is_err())
 }
 
-/// `INTROSORT` 実験 (process 内 1 回読み)．idx ソートに introsort (`std_sort`) を使う．
-/// default OFF = stable sort (movegen 順保持)．
-pub(super) fn introsort_enabled() -> bool {
-    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("INTROSORT").is_ok())
-}
-
-/// `TRACE` env (process 内 1 回読み)．各 build の best 子 (idx[0]) の move/pn/dn を sfen 付きで
-/// chronological dump する診断用．
-fn trace_enabled() -> bool {
-    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("TRACE").is_ok())
-}
-
-/// `NODE` env: 指定 sfen prefix に一致するノードの sort 済子リストを dump する診断用 (process 内 1 回読み)．
-fn node_prefix() -> Option<String> {
-    static C: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    C.get_or_init(|| std::env::var("NODE").ok().filter(|s| !s.is_empty()))
-        .clone()
-}
-
-/// `TH` env: 指定 sfen prefix に一致するノードが受け取った thpn/thdn を dump する診断用．
-fn th_prefix() -> Option<String> {
-    static C: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    C.get_or_init(|| std::env::var("TH").ok().filter(|s| !s.is_empty()))
-        .clone()
-}
-
-/// `THX` env: 指定 sfen prefix に一致するノードの探索ループを per-iteration dump する診断用
-/// (inc_flag/threshold/best/curr の追跡)．
-fn thx_prefix() -> Option<String> {
-    static C: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    C.get_or_init(|| std::env::var("THX").ok().filter(|s| !s.is_empty()))
-        .clone()
-}
-
 /// `HAND` env: 指定 sfen prefix のノードの final 結果 (proof/disproof hand) を dump する診断用．
 pub(super) fn hand_prefix() -> Option<String> {
     static C: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
@@ -189,62 +132,6 @@ fn seed_prefix() -> &'static Option<String> {
     C.get_or_init(|| std::env::var("SEED").ok().filter(|s| !s.is_empty()))
 }
 
-/// `INC` env: 指定 sfen prefix のノードを起点に active-window を開き，window 内の探索ループの
-/// ENTER / INC(does_have_old_child) / DEC(first_visit) / EXIT(clamp=min(inc,orig_inc)) を逐次 dump する．
-/// TCA `inc_flag` の累積収支を localize するための診断 (process 内 1 回読み)．
-fn inc_prefix() -> Option<String> {
-    static C: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    C.get_or_init(|| std::env::var("INC").ok().filter(|s| !s.is_empty()))
-        .clone()
-}
-
-#[inline]
-fn inc_active() -> bool {
-    INC_ACTIVE.with(|c| c.get())
-}
-
-/// window が未 active かつ board.sfen() が INC prefix 一致なら window を開く (このノードが opener)．
-fn inc_open_window(board: &Board) -> bool {
-    if let Some(p) = inc_prefix() {
-        if !inc_active() && board.sfen().starts_with(p.as_str()) {
-            INC_ACTIVE.with(|c| c.set(true));
-            INC_CNT.with(|c| c.set(0));
-            return true;
-        }
-    }
-    false
-}
-
-/// opener のみ window を閉じる (nested 呼び出しは false で素通り)．
-#[inline]
-fn inc_close_window(opened: bool) {
-    if opened {
-        INC_ACTIVE.with(|c| c.set(false));
-    }
-}
-
-/// window active 時のみ dump (暴走防止に 4000 行 cap)．
-#[inline]
-fn inc_log(s: &str) {
-    if inc_active() {
-        let n = INC_CNT.with(|c| {
-            let v = c.get();
-            c.set(v + 1);
-            v
-        });
-        if n < 4000 {
-            eprintln!("{}", s);
-        }
-    }
-}
-
-/// `NOSMRESET` env: build-time sum_mask reset を無効化 (Full のまま from_parts) して
-/// 旧挙動 (update_best_child の reset のみ) と切り分ける診断用 (process 内 1 回読み)．
-fn no_sum_mask_reset() -> bool {
-    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *C.get_or_init(|| std::env::var("NOSMRESET").is_ok())
-}
-
 /// `NODAG` env: EliminateDoubleCount (DAG 二重カウント抑止) を無効化する診断用 (process 内 1 回読み)．
 fn no_dag() -> bool {
     static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -252,16 +139,6 @@ fn no_dag() -> bool {
 }
 
 thread_local! {
-    /// ply 0-7 の dump 済 bitmask (solve 毎に reset)．
-    static SEL_DUMPED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-    /// RAW (sort/DML 前の raw movegen 順) の ply 0-7 dump 済 bitmask．
-    static RAW_DUMPED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-    /// TRACE の chronological build カウンタ (solve 毎に reset)．
-    static TRACE_CNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    /// INC: inc_flag origin window が active か (opener が set/reset)．
-    static INC_ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// INC: window 内 dump 行カウンタ (cap 用; window open 毎に reset)．
-    static INC_CNT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     /// do_moves per-site breakdown (DMBREAK 報告用; solve 毎に reset)．
     /// [0]=step_best_child(再帰) [1]=eliminate_double_count(DAG) [2]=look-ahead [3]=proof-hand(1手詰).
     static DM_SITE: std::cell::Cell<[u64; 4]> = const { std::cell::Cell::new([0; 4]) };
@@ -302,7 +179,7 @@ fn dm_bump(idx: usize) {
     });
 }
 
-/// [diag/一時] SPROF env: find_shortest の pass 別に反証構造 (node 種別/終端原因/子構成/
+/// [diag] SPROF env: find_shortest の pass 別に反証構造 (node 種別/終端原因/子構成/
 /// 残 len 分布) を集計する．off 時は OnceLock bool 分岐のみで実質ゼロコスト．
 #[derive(Clone, Copy)]
 struct Sprof {
@@ -357,20 +234,20 @@ impl Sprof {
 
 thread_local! {
     static SPROF: std::cell::RefCell<Sprof> = const { std::cell::RefCell::new(Sprof::ZERO) };
-    /// [diag/一時] build 回数 per distinct node (full hash key; pass 毎 reset)．
+    /// [diag] build 回数 per distinct node (full hash key; pass 毎 reset)．
     static SPROF_SEEN: std::cell::RefCell<rustc_hash::FxHashMap<u64, u32>> =
         std::cell::RefCell::new(rustc_hash::FxHashMap::default());
-    /// [diag/一時] build 回数 per distinct (node, path_key) (pass 毎 reset)．
+    /// [diag] build 回数 per distinct (node, path_key) (pass 毎 reset)．
     /// 同一 path 経由の rebuild = path-keyed expansion cache の捕捉上限．
     static SPROF_SEEN_PATH: std::cell::RefCell<rustc_hash::FxHashMap<(u64, u64), u32>> =
         std::cell::RefCell::new(rustc_hash::FxHashMap::default());
-    /// [diag/一時] stack level 別「pop 済み子 (= 親健在なら stash 到達可能)」hash 集合．
+    /// [diag] stack level 別「pop 済み子 (= 親健在なら stash 到達可能)」hash 集合．
     /// level L のノードが pop されたら set[L+1] (その子らの stash) は無効化 (clear)．
     static SPROF_POPPED: std::cell::RefCell<Vec<rustc_hash::FxHashSet<u64>>> =
         std::cell::RefCell::new(Vec::new());
 }
 
-/// [diag/一時] 子 pop 時に記録: level `cidx` の hash を stash 到達可能集合へ，子自身の
+/// [diag] 子 pop 時に記録: level `cidx` の hash を stash 到達可能集合へ，子自身の
 /// stash (level cidx+1) は無効化．
 fn sprof_stash_pop(cidx: usize, hash: u64) {
     if !sprof_enabled() {
@@ -386,7 +263,7 @@ fn sprof_stash_pop(cidx: usize, hash: u64) {
     });
 }
 
-/// [diag/一時] emplace 直前に判定: この (level, hash) は stash 到達可能な rebuild か．
+/// [diag] emplace 直前に判定: この (level, hash) は stash 到達可能な rebuild か．
 fn sprof_stash_check(level: usize, hash: u64) {
     if !sprof_enabled() {
         return;
@@ -630,9 +507,6 @@ impl DfPnSolver {
         self.dag_fires = 0;
         self.dom_path.clear();
         self.dom_fires = 0;
-        SEL_DUMPED.with(|c| c.set(0));
-        RAW_DUMPED.with(|c| c.set(0));
-        TRACE_CNT.with(|c| c.set(0));
         DM_SITE.with(|c| c.set([0; 4]));
         PROF_NS.with(|c| c.set([0; 12]));
         PROF_CNT.with(|c| c.set([0; 12]));
@@ -641,8 +515,6 @@ impl DfPnSolver {
         crate::board::reset_do_move_count();
         super::movegen::mate1ply::reset_mate_cand_stats();
         super::movegen::mate1ply::reset_mate1ply_stats();
-        // path dominance (劣位局面の刈り込み)．常時 ON．
-        self.params.path_dominance = true;
         self.timed_out = false;
         self.start_time = std::time::Instant::now();
 
@@ -1001,14 +873,13 @@ impl DfPnSolver {
             Ok(e) => e,
             Err(terminal) => return Err(terminal),
         };
-        self.dump_node_diag(&exp, board, depth);
         self.expansion_stack.push(exp);
         let my = self.expansion_stack.len() - 1;
         self.expansion_stack[my].set_key_hand_pair((super::position_key(board), attacker_hand));
         Ok(())
     }
 
-    /// [案A] 子局面へ渡す len 予算．透過中合い (chain マス) drop は無駄合いゆえ len を減じず `add(1)`
+    /// 子局面へ渡す len 予算．透過中合い (chain マス) drop は無駄合いゆえ len を減じず `add(1)`
     /// (直後の攻め方取り返し `sub(1)` と相殺 → 合駒+取り返し pair の len コスト 0 = 無駄合い-free)．
     /// `len == DEPTH_MAX` (first-mate) では credit せず → canonical anchor / first-mate 挙動 不変．
     #[inline]
@@ -1042,7 +913,7 @@ impl DfPnSolver {
     ) {
         let attacker_hand = board.hand[self.attacker.index()];
         let best_move = self.expansion_stack[my].best_move();
-        // [案A] best_move が透過中合い drop なら子 len を credit．board は do_move 前 (親局面)．
+        // best_move が透過中合い drop なら子 len を credit．board は do_move 前 (親局面)．
         let child_len = Self::child_len(
             &self.transparent_interposition_squares(board),
             best_move,
@@ -1050,23 +921,6 @@ impl DfPnSolver {
         );
         let is_first = self.expansion_stack[my].front_is_first_visit();
         let (cthpn, cthdn) = self.expansion_stack[my].front_pn_dn_thresholds(thpn, thdn);
-        if inc_active() {
-            inc_log(&format!(
-                "INC STEP d={} best={} first={} inc={} cth=({},{})",
-                depth,
-                best_move.to_usi(),
-                is_first as i32,
-                *inc_flag,
-                cthpn,
-                cthdn
-            ));
-        }
-        if thx_prefix()
-            .map(|p| board.sfen().starts_with(p.as_str()))
-            .unwrap_or(false)
-        {
-            eprintln!("THX {}", self.expansion_stack[my].thx_breakdown(thpn, thdn));
-        }
         let best_raw = self.expansion_stack[my].front_raw();
         let child_query = self.expansion_stack[my].query_at(best_raw);
         // best child へ伝播する sum_mask (δ 集約方式の親→子伝播)．
@@ -1092,12 +946,6 @@ impl DfPnSolver {
             Err(terminal) => {
                 if is_first && *inc_flag > 0 {
                     *inc_flag -= 1;
-                    inc_log(&format!(
-                        "INC DEC d={} best={} -> inc={} (first_visit/terminal)",
-                        depth,
-                        best_move.to_usi(),
-                        *inc_flag
-                    ));
                 }
                 terminal
             }
@@ -1106,12 +954,6 @@ impl DfPnSolver {
                 let r = if is_first {
                     if *inc_flag > 0 {
                         *inc_flag -= 1;
-                        inc_log(&format!(
-                            "INC DEC d={} best={} -> inc={} (first_visit)",
-                            depth,
-                            best_move.to_usi(),
-                            *inc_flag
-                        ));
                     }
                     // 子 expansion の集約済 CurrentResult で exceed 判定 (flat seed でない)．
                     let cur = self.expansion_stack[cidx].current_result(board, (depth + 1) as i32);
@@ -1178,29 +1020,6 @@ impl DfPnSolver {
         inc_flag: &mut u32,
     ) -> SearchResult {
         let my = self.expansion_stack.len() - 1;
-        // INC: inc_flag origin window (opener が active 化; nested は素通り)．
-        let inc_opened = inc_open_window(board);
-        if inc_active() {
-            inc_log(&format!(
-                "INC ENTER d={} inc_in={} dhoc={} th=({},{}) sfen={}",
-                depth,
-                *inc_flag,
-                self.expansion_stack[my].does_have_old_child() as i32,
-                thpn,
-                thdn,
-                board.sfen()
-            ));
-        }
-        // TH: 受領 thpn/thdn dump (threshold 追跡用診断)．
-        if let Some(prefix) = th_prefix() {
-            let sfen = board.sfen();
-            if sfen.starts_with(prefix.as_str()) {
-                eprintln!(
-                    "TH depth={} thpn={} thdn={} sfen={}",
-                    depth, thpn, thdn, sfen
-                );
-            }
-        }
         // DAG 二重カウント抑止 (EliminateDoubleCount)．
         if !no_dag() {
             let __dag = prof_enabled().then(std::time::Instant::now);
@@ -1210,36 +1029,23 @@ impl DfPnSolver {
             }
         }
 
-        // THX: 探索ループの per-iteration dump (inc_flag/threshold 追跡用診断)．
-        let khthx_here = thx_prefix()
-            .map(|p| board.sfen().starts_with(p.as_str()))
-            .unwrap_or(false);
-        if khthx_here {
-            eprintln!("THX enter depth={} th=({},{})", depth, thpn, thdn);
-        }
-
         let orig_thpn = thpn;
         let orig_thdn = thdn;
         let orig_inc = *inc_flag;
 
         let mut curr = self.expansion_stack[my].current_result(board, depth as i32);
         if curr.is_final() {
-            if inc_active() {
-                inc_log(&format!("INC EXIT-curfinal d={} inc={}", depth, *inc_flag));
-            }
-            inc_close_window(inc_opened);
             return curr; // 親 (step_best_child) が Pop する．
         }
         if self.expansion_stack[my].does_have_old_child() {
             *inc_flag += 1;
-            inc_log(&format!("INC INC d={} -> inc={} (dhoc)", depth, *inc_flag));
         }
         if *inc_flag > 0 {
             extend_search_threshold(curr, &mut thpn, &mut thdn);
         }
 
         self.path_depths.insert(board.hash, depth);
-        if self.params.path_dominance {
+        {
             let attacker_hand = board.hand[self.attacker.index()];
             self.dom_path
                 .push(super::position_key(board), attacker_hand, depth);
@@ -1249,65 +1055,21 @@ impl DfPnSolver {
             if self.nodes >= self.max_nodes || self.timed_out {
                 break;
             }
-            if khthx_here {
-                eprintln!(
-                    "THX best={} first={}",
-                    self.expansion_stack[my].best_move().to_usi(),
-                    self.expansion_stack[my].front_is_first_visit() as i32
-                );
-            }
             self.step_best_child(tt, board, my, depth, len, path_key, thpn, thdn, inc_flag);
             curr = self.expansion_stack[my].current_result(board, depth as i32);
-            if khthx_here {
-                eprintln!(
-                    "THXR -> curr pn={} dn={} inc={} (th={},{})",
-                    curr.pn(),
-                    curr.dn(),
-                    *inc_flag,
-                    thpn,
-                    thdn
-                );
-            }
 
             thpn = orig_thpn;
             thdn = orig_thdn;
             if *inc_flag > 0 {
                 extend_search_threshold(curr, &mut thpn, &mut thdn);
             } else if *inc_flag == 0 && orig_inc > 0 {
-                if khthx_here {
-                    eprintln!("THX break (inc==0 && orig_inc>0)");
-                }
                 break;
             }
         }
-        if khthx_here {
-            eprintln!(
-                "THX exit depth={} curr=(pn{},dn{}) inc={}",
-                depth,
-                curr.pn(),
-                curr.dn(),
-                *inc_flag
-            );
-        }
 
         self.path_depths.remove(&board.hash);
-        if self.params.path_dominance {
-            self.dom_path.pop(super::position_key(board));
-        }
-        let pre_clamp = *inc_flag;
+        self.dom_path.pop(super::position_key(board));
         *inc_flag = (*inc_flag).min(orig_inc);
-        if inc_active() {
-            inc_log(&format!(
-                "INC EXIT d={} pre={} orig={} -> inc={} curr=(pn{},dn{})",
-                depth,
-                pre_clamp,
-                orig_inc,
-                *inc_flag,
-                curr.pn(),
-                curr.dn()
-            ));
-        }
-        inc_close_window(inc_opened);
         curr
     }
 
@@ -1371,72 +1133,6 @@ impl DfPnSolver {
         curr
     }
 
-    /// TRACE / NODE / SEL の chronological / 子リスト診断 dump (env-gated)．search_impl と
-    /// 持続 root build の双方から呼ぶ．
-    fn dump_node_diag(&self, exp: &LocalExpansion, board: &Board, depth: u32) {
-        let oc = if board.turn == self.attacker { 1 } else { 0 };
-        if trace_enabled() {
-            let cnt = TRACE_CNT.with(|c| {
-                let v = c.get() + 1;
-                c.set(v);
-                v
-            });
-            if cnt <= 20000 {
-                if let Some((m, pn, dn, _ev, _am)) = exp.trace_children().first() {
-                    eprintln!(
-                        "TRACE {} ply={} or={} best={} bpn={} bdn={} sfen={}",
-                        cnt,
-                        depth,
-                        oc,
-                        m.to_usi(),
-                        pn,
-                        dn,
-                        board.sfen()
-                    );
-                }
-            }
-        }
-        if let Some(prefix) = node_prefix() {
-            let sfen = board.sfen();
-            if sfen.starts_with(prefix.as_str()) {
-                eprintln!("NODE ply={} or={} sfen={}", depth, oc, sfen);
-                for (k, (m, pn, dn, ev, am)) in exp.trace_children().iter().enumerate() {
-                    eprintln!(
-                        "NODE   {} {} pn={} dn={} ev={} am={}",
-                        k,
-                        m.to_usi(),
-                        pn,
-                        dn,
-                        ev,
-                        am
-                    );
-                }
-            }
-        }
-        if sel_enabled() && depth <= 7 {
-            let bit = 1u8 << depth;
-            let already = SEL_DUMPED.with(|c| {
-                let v = c.get();
-                c.set(v | bit);
-                v & bit != 0
-            });
-            if !already {
-                eprintln!("SEL ply={} or={} sfen={}", depth, oc, board.sfen());
-                for (k, (m, pn, dn, ev, am)) in exp.trace_children().iter().enumerate() {
-                    eprintln!(
-                        "SEL   {} {} pn={} dn={} ev={} am={}",
-                        k,
-                        m.to_usi(),
-                        pn,
-                        dn,
-                        ev,
-                        am
-                    );
-                }
-            }
-        }
-    }
-
     /// `LocalExpansion` の構築: movegen + 各子 seed (TT LookUp) + 千日手判定．
     /// `Err(result)` = 終局 (合法手なし) の即時結果．`Ok(exp)` = 展開済ノード．
     fn build_expansion(
@@ -1484,21 +1180,11 @@ impl DfPnSolver {
         if moves.is_empty() {
             // OR (王手なし) = 不詰 disproven / AND (受けなし=詰み) = proven (詰み完了 len 0)．
             // 終端 hand: OR=disproof hand (remove_if(MAX)) / AND=proof hand (add_if(空))．
-            let attacker_hand = board.hand[attacker.index()];
-            let use_handset = handset_enabled();
             let r = if or_node {
-                let hand = if use_handset {
-                    super::proof_hand::disproof_hand_terminal_or(board)
-                } else {
-                    attacker_hand
-                };
+                let hand = super::proof_hand::disproof_hand_terminal_or(board);
                 SearchResult::make_final(false, hand, DEPTH_MAX_MATE_LEN, 1)
             } else {
-                let hand = if use_handset {
-                    super::proof_hand::proof_hand_terminal_and(board)
-                } else {
-                    attacker_hand
-                };
+                let hand = super::proof_hand::proof_hand_terminal_and(board);
                 SearchResult::make_final(true, hand, ZERO_MATE_LEN, 1)
             };
             sprof(|s| {
@@ -1544,21 +1230,6 @@ impl DfPnSolver {
             moves.sort_by_key(|&m| check_order_key(m, discoverers, def_king));
         } else {
             moves.sort_by_key(|&m| evasion_order_key(board, m));
-        }
-
-        // RAW: build 時点の raw movegen 順 (sort/DML 前) を ply 0-7 初出で dump する診断用．
-        if sel_enabled() && depth <= 7 {
-            let bit = 1u8 << depth;
-            let already = RAW_DUMPED.with(|c| {
-                let v = c.get();
-                c.set(v | bit);
-                v & bit != 0
-            });
-            if !already {
-                let oc = if or_node { 1 } else { 0 };
-                let raw: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
-                eprintln!("RAW ply={} or={} raw={}", depth, oc, raw.join(" "));
-            }
         }
 
         // DelayedMoveList: 同マス合駒/成不成ペアを双方向 chain 化し，prev が未 final の手は idx から
@@ -1635,7 +1306,7 @@ impl DfPnSolver {
         // 親から渡された sum_mask を起点に，非 final 子のうち sum 集約に適さない手 (is_sum_delta_node が
         // false) / δ が `K_FORCE_SUM_PN_DN` 以上の手を max 集約へ落とす．
         let mut cur_sum_mask = sum_mask;
-        // [案A] 透過中合いマス (AND node のみ非空)．子 len credit 判定に使う (loop 不変ゆえ 1 回算出)．
+        // 透過中合いマス (AND node のみ非空)．子 len credit 判定に使う (loop 不変ゆえ 1 回算出)．
         let chain_sqs = self.transparent_interposition_squares(board);
 
         for (i, &m) in moves.iter().enumerate() {
@@ -1655,7 +1326,7 @@ impl DfPnSolver {
             if let Some(t) = __seed_t {
                 prof_add(8, t.elapsed().as_nanos() as u64);
             }
-            // [案A] 子 len 予算 (透過中合い drop は credit)．seed/look-ahead 双方で同一値を使う．
+            // 子 len 予算 (透過中合い drop は credit)．seed/look-ahead 双方で同一値を使う．
             let cl = Self::child_len(&chain_sqs, m, len);
 
             // 子 key/hand を **do_move せず** incremental に算出する (per-child do_move を回避し
@@ -1738,8 +1409,7 @@ impl DfPnSolver {
             // look-ahead で final 化する前の seed の δ で判定する．
             // [PROF idx11=sm_dml] cl_rest 内訳: sum_mask reset (is_sum_delta_node) + DML skip 判定．
             let __sd_t = prof_enabled().then(std::time::Instant::now);
-            if !no_sum_mask_reset()
-                && !r.is_final()
+            if !r.is_final()
                 && (!is_sum_delta_node(board, m, or_node) || r.delta(or_node) >= K_FORCE_SUM_PN_DN)
             {
                 cur_sum_mask.reset(i);
@@ -1843,7 +1513,7 @@ impl DfPnSolver {
             dml_next,
             1,
         );
-        __exp.set_chain_sqs(chain_sqs); // [案A] AND-proven mate_len 集計用
+        __exp.set_chain_sqs(chain_sqs); // AND-proven mate_len 集計用
         if let Some(t) = __fp_t {
             prof_add(7, t.elapsed().as_nanos() as u64);
         }
@@ -1855,15 +1525,13 @@ impl DfPnSolver {
     /// - 王手手段なし (`!does_have_mate_possibility`) → disproven (不詰確定)．
     /// - 1 手詰あり → proven (mate-1)．
     ///
-    /// proof/disproof hand は **full attacker_hand** (= 子 OR node の手番側持駒) を使う．hand-set
-    /// 極小化は cross-hand TT 有効時に偽証明 (mate-39) を生むため不使用 (sound 優先)．
+    /// proof/disproof hand は terminal hand-set (disproof=remove_if(MAX) /
+    /// proof=add_if(空) + `before_hand`) で計算する (cross-hand TT 再利用を効かせる)．
     fn check_obvious_final_or_node(
         &self,
         board: &mut Board,
         child_len: MateLen,
     ) -> Option<SearchResult> {
-        let or_hand = board.hand[board.turn.index()];
-        let use_handset = handset_enabled();
         // 不詰判定に `does_have_mate_possibility` (blocker 無視の over-approx) を使う．exact
         // `!has_checks` は blocker で塞がれた王手候補を即不詰断定してしまい，詰みの可能性が残る局面を
         // 早期に disproof してしまう．over-approx はそうした局面を defer する (sound)．
@@ -1892,11 +1560,7 @@ impl DfPnSolver {
         if no_mate {
             // 攻め方に王手手段なし → 詰み不可能 → 不詰 (final<false>, kDepthMaxMateLen)．
             // disproof hand = remove_if(MAX)．
-            let hand = if use_handset {
-                super::proof_hand::disproof_hand_terminal_or(board)
-            } else {
-                or_hand
-            };
+            let hand = super::proof_hand::disproof_hand_terminal_or(board);
             Some(SearchResult::make_final(false, hand, DEPTH_MAX_MATE_LEN, 1))
         } else if let Some(mate_move) = mm_opt {
             // 1 手詰 → 詰み proven (mate-1)．**ただし子の len 予算 `child_len` が mate-1 を許す
@@ -1909,14 +1573,12 @@ impl DfPnSolver {
                 return None;
             }
             // proof hand = before_hand(mate_move, 詰み局面の proof hand)．
-            let hand = if use_handset {
+            let hand = {
                 let cap = board.do_move(mate_move);
-                dm_bump(3); // 1手詰 proof-hand 計算 (handset 時のみ)
+                dm_bump(3); // 1手詰 proof-hand 計算
                 let proof_after = super::proof_hand::proof_hand_terminal_and(board);
                 board.undo_move(mate_move, cap);
                 super::proof_hand::before_hand(board, mate_move, proof_after)
-            } else {
-                or_hand
             };
             // [diag] MATE: look-ahead 1 手詰の手と proof hand を dump (HAND prefix gate)．
             if let Some(prefix) = hand_prefix() {

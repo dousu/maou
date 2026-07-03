@@ -94,7 +94,7 @@ impl DfPnSolver {
             return self.mate1ply_cached_near2(board);
         }
         if m1_fused_disabled() {
-            // 旧 2-pass 経路 (A/B・回帰診断用; 既定は fused)．`generate_mate_candidates` で候補を
+            // 2-pass 参照経路 (A/B・回帰診断用; 既定は fused)．`generate_mate_candidates` で候補を
             // ArrayVec に実体化してから `mate_move_in_1ply_maxdist` で走査する．
             let candidates = self.generate_mate_candidates(board);
             let kh = board.mate_move_in_1ply_maxdist(candidates.as_slice(), turn, u8::MAX);
@@ -104,11 +104,10 @@ impl DfPnSolver {
             return kh;
         }
         // 既定: 候補列挙と検証を 1 パスに融合した経路 (ArrayVec 実体化を回避; 最初の詰みで短絡)．
-        // 計測 (39te, 12 round interleave): 2-pass 比 paired median -0.3s (11/12 round 高速化)，
-        // count 不変 (39te 4,272,957 / 29te 9,288 / 161 lib test, STRICT Some 全維持)．
+        // 2-pass 参照経路と探索完全一致 (count 不変) で，実体化を省く分わずかに速い．
         let fused = self.mate1ply_fused(board, turn);
         if m1_fused_verify() {
-            // 従来 2-pass と Some/None・詰み手まで完全一致を assert (= node 不変の構造保証)．
+            // 2-pass 参照経路と Some/None・詰み手まで完全一致を assert (= node 不変の構造保証)．
             let candidates = self.generate_mate_candidates(board);
             let orig = board.mate_move_in_1ply_maxdist(candidates.as_slice(), turn, u8::MAX);
             assert_eq!(
@@ -126,7 +125,7 @@ impl DfPnSolver {
     /// 候補列挙と 1 手詰検証を 1 パスに融合した look-ahead (zero-collect, first-mate 短絡)．
     ///
     /// [`DfPnSolver::for_each_mate_candidate`] が生成した各候補を即 [`Board::mate1ply_check`] で
-    /// 検証し，最初の真の 1 手詰でその手を返す (= 従来 2-pass の `generate_mate_candidates` +
+    /// 検証し，最初の真の 1 手詰でその手を返す (= 2-pass 参照経路の `generate_mate_candidates` +
     /// `mate_move_in_1ply_maxdist(u8::MAX)` と **同一順序・同一判定**)．ビットボードで確定しない
     /// 開き/両王手候補 (`None`) は &mut do_move が要るため buffer し，for_each (= &Board 借用) 終了後
     /// に生成順で解決する (buffer の None は全て最初のビットボード詰みより前に位置するため，先に
@@ -232,14 +231,14 @@ pub(crate) fn mate1ply_verify() -> bool {
     *C.get_or_init(|| std::env::var("MATE1PLY_VERIFY").is_ok())
 }
 
-/// `M1_FUSED_DISABLE=1`: look-ahead 1 手詰を旧 2-pass 経路に戻す (default は融合経路
+/// `M1_FUSED_DISABLE=1`: look-ahead 1 手詰を2-pass 参照経路を使う (default は融合経路
 /// [`DfPnSolver::mate1ply_fused`])．A/B 計測・回帰診断用の escape hatch．
 fn m1_fused_disabled() -> bool {
     static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *C.get_or_init(|| std::env::var("M1_FUSED_DISABLE").is_ok())
 }
 
-/// `M1_FUSED_VERIFY=1`: 融合経路の結果を従来 2-pass と毎 look-ahead 突合 assert する
+/// `M1_FUSED_VERIFY=1`: 融合経路の結果を2-pass 参照経路と毎 look-ahead 突合 assert する
 /// (default OFF; 重い; count 不変の構造保証)．
 fn m1_fused_verify() -> bool {
     static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
