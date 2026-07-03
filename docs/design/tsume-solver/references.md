@@ -19,8 +19,7 @@
 
 > 旧版で参照していた WPN (Ueda 2008) / VPN (Saito 2006) / SNDA (Kishimoto 2010) / Deep df-pn
 > (Song Zhang 2017) は，統一 mid のコードには対応機構が無い (二重計数は δ-sum + DAG + cross-hand
-> で扱う; [proof-disproof-numbers.md §4.4](proof-disproof-numbers.md))．prior art として
-> [legacy/](legacy/README.md) の記述で参照される．
+> で扱う; [proof-disproof-numbers.md §4.4](proof-disproof-numbers.md))．prior art としてのみ挙げる．
 
 ### 既存ソルバー
 
@@ -53,6 +52,6 @@
 
 | 節目 | 内容 |
 |------|------|
-| 初期 (v0.x) | df-pn + 持ち駒優越を基盤に，二エンジン構成 (Best-First PNS + IDS-dfpn) + Dual TT + Frontier Variant + warmup を発展させた (記録は [legacy/](legacy/README.md)) |
+| 初期 (v0.x) | df-pn + 持ち駒優越を基盤に，二エンジン構成 (Best-First PNS + IDS-dfpn) + Dual TT + Frontier Variant + warmup を発展させた (記録は git 履歴) |
 | 統一 (v3.0.0) | 二エンジンを廃し**統一 `mid` 一本**へ再構築 (φ/δ 統一・len-aware 単一 TT・cross-hand・二重計数除去・DML・反復深化 root loop) |
 | 整理 (v3.1.x) | 純粋技術名へのリネーム + モジュール file-split (search/ movegen/ tt/ ネスト，god-object 分解) |

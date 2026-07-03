@@ -26,7 +26,7 @@
 - 玉との位置関係を反映 (玉に迫る手を優先)．
 
 旧版にあった Killer move・捨て駒ブースト・TT Best Move 動的手順改善は統一 mid では
-廃止された (記録は [legacy/](legacy/README.md))．
+廃止された (記録は git 履歴)．
 
 ---
 

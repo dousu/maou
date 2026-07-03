@@ -1,9 +1,7 @@
 # 最適化案の評価
 
 本節は，採用しないことを**方針として確定**した最適化案を記録する．個々の探索パラメータ
-(lever) の採否計測の経緯は [legacy/optimization-proposals.md](legacy/optimization-proposals.md)
-および [legacy/benchmarks.md](legacy/benchmarks.md) に保全されている (旧二エンジン期の記録だが
-将来 mid で再検討しうる方法論を含む)．
+(lever) の採否計測の経緯は git 履歴と `worklog/` に残る．
 
 ## 11.1 並列 df-pn — 採用しない (binding)
 
@@ -31,10 +29,10 @@ Pawlewicz & Hayward, "Scalable Parallel DFPN Search" (CG 2014)
 ビルドホストの CPU 命令に最適化する `target-cpu=native` は wheel 可搬性を壊すため採用しない
 (§11.1-1 と同じ binding 制約)．SIMD 等の HW 命令は runtime gate 経由でのみ用いる．
 
-## 11.3 旧二エンジン期の採否記録 (legacy)
+## 11.3 旧二エンジン期の採否記録
 
 History Heuristic・lazy move generation・PNS 予算適応配分・Frontier Variant・各種 TT 圧縮など，
-旧アーキで評価された最適化案の採否とベンチマークは [legacy/optimization-proposals.md](legacy/optimization-proposals.md)
-に残す．これらは旧二エンジン構成 (PNS + IDS-dfpn + Dual TT) を前提とするため，統一 mid への
-適用は**未検証の候補**として扱い，採用検討時は `scratchpad/compass.md` の §🚦 TRIPWIRES
-(PRE-LEVER / METRIC-PROVENANCE 等) を discharge すること．
+旧アーキで評価された最適化案の採否とベンチマークの記録は git 履歴に残る．これらは旧二エンジン
+構成 (PNS + IDS-dfpn + Dual TT) を前提とするため，統一 mid への適用は**未検証の候補**として
+扱い，採用検討時は `scratchpad/compass.md` の §🚦 TRIPWIRES (PRE-LEVER / METRIC-PROVENANCE 等)
+を discharge すること．

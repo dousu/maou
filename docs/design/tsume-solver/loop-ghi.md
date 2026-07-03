@@ -35,7 +35,7 @@ soundness バグ**になる (より深く探索すれば詰む局面を「不詰
   その動作モードは存在しない．
 
 旧版の depth-limited disproof 格納閾値や refutable disproof エントリは，この scope 化に統合・
-代替された (記録は [legacy/](legacy/README.md))．
+代替された (記録は git 履歴)．
 
 ### 7.3 visit-history dominance (maou 独自)
 

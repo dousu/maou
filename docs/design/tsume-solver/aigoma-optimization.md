@@ -65,9 +65,8 @@ futile skip は常時有効である．この filter を欠くと無駄合いが
 (move-ordering-and-pv.md))．
 
 同様に，同一マスへの異種合駒間で取り進み後の局面の証明/反証を転用する cross-deduction も
-評価されたが，deep AND fan-out の主因を削らないため採用していない (現行コードに機構は無い)．
-これらの lever の採否計測の経緯は [legacy/benchmarks.md](legacy/benchmarks.md) に保全されて
-いる (将来 mid で再検討しうる方法論)．
+評価されたが，deep AND fan-out の主因を削らないため採用していない (現行コードに機構は無く，
+採否計測の経緯は git 履歴に残る)．
 
 ### 8.3 持ち駒越境・dominance との連携
 
@@ -78,8 +77,7 @@ futile skip は常時有効である．この filter を欠くと無駄合いが
 
 旧版の Futile/Chain 3 分類・チェーンドロップ 3 カテゴリ制限・cross_deduce neighbor_scan・
 reverse disproof sharing・refutable disproof は，二エンジン期に Dual TT 上で開発された機構で
-あり統一 mid では DML + 持ち駒越境 + dominance に整理・代替された (記録は
-[legacy/](legacy/README.md))．
+あり統一 mid では DML + 持ち駒越境 + dominance に整理・代替された (記録は git 履歴)．
 
 ### 8.4 無駄合い-free len budget — find_shortest 探索側
 
