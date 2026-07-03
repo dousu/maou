@@ -64,8 +64,8 @@ loop:
     result = search_impl_root(tt, board, thpn, thdn)
     if result.pn == 0 || result.dn == 0: break        // 詰み or 不詰 確定
     if result.pn >= INF || result.dn >= INF: break
-    thpn = max(thpn, ceil(result.pn * 1.7)) + 1, clamp ≤ cap
-    thdn = max(thdn, ceil(result.dn * 1.7)) + 1, clamp ≤ cap
+    thpn = max(thpn, ⌊result.pn × 1.7⌋ + 1), clamp ≤ cap
+    thdn = max(thdn, ⌊result.dn × 1.7⌋ + 1), clamp ≤ cap
 ```
 
 - **root expansion 持続**: root のノード展開 (`emplace`) は反復間で `expansion_stack[0]` に
@@ -121,7 +121,7 @@ flowchart TD
 
 ### 2.6 旧アーキとの差異
 
-| 旧 (二エンジン期，~v0.55) | 現行 (統一 mid，3.1.x) |
+| 旧 (二エンジン期，~v0.55) | 現行 (統一 mid) |
 |---|---|
 | Phase 1 Best-First PNS (arena) + Phase 2 IDS-dfpn | **単一 `mid` 再帰** (`search_impl`) |
 | 深さ制限 IDS (depth 2→4→8→…) | **閾値成長による反復深化** (root 1.7×) |

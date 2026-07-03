@@ -25,9 +25,7 @@
 - 駒価値を反映 (価値の高い駒を動かす手を優先)．
 - 玉との位置関係を反映 (玉に迫る手を優先)．
 
-エッジコスト ([heuristics §5.2](initial-heuristics.md)) を pn から分離する
-`decouple_edge_cost` モードでも，この tie-break は同じ順序を維持する (難易度推定と手順選好の
-分離)．旧版にあった Killer move・捨て駒ブースト・TT Best Move 動的手順改善は統一 mid では
+旧版にあった Killer move・捨て駒ブースト・TT Best Move 動的手順改善は統一 mid では
 廃止された (記録は [legacy/](legacy/README.md))．
 
 ---
@@ -48,26 +46,26 @@ df-pn は探索木を明示的に保持しないため，詰み証明後に **TT
 - **OR ノード** (攻め方): まず `mate1ply` を試し ([heuristics §5.3](initial-heuristics.md))，
   無ければ王手を列挙して TT-proven の子を候補化し再帰検証する．1 つでも詰む王手があれば
   proven．候補の子 key/hand は do_move せず incremental に算出し (`hashes_after`/`hand_after`)，
-  query 一括構築 + prefetch で TT の DRAM latency を隠す (探索の child loop と同手法; 3.4.6)．
+  query 一括構築 + prefetch で TT の DRAM latency を隠す (探索の child loop と同手法)．
 - **AND ノード** (守備方): 全合法応手を列挙し，**全てが詰みに至る**ことを要求する (最長抵抗)．
   無駄合いの除外 (手数集計のみ) は [aigoma §8.2](aigoma-optimization.md)．
 - **memo** (`FxHashMap<u64, Option<u16>>`): 局面ごとに検証結果を記録し再検証を避ける．
   **経路依存の None (千日手拒否・budget 枯渇由来) は memo しない** — dep 伝播で依存が自
-  subtree 内に閉じた None のみ cache する (verify 内 GHI の根治, 3.4.3;
+  subtree 内に閉じた None のみ cache する (verify 内 GHI 対策;
   [loop-ghi §7.5](loop-ghi.md))．Some は構成的に経路非依存で常に memo する．
 - 予算 (既定 80M call) 内で詰み手数 `Option<u16>` を返す．None = 未完/不健全 → `Unknown`．
 
-**2-tier fast/full (3.4.6)**: verify は「証明 DAG 閉包の全 replay」ゆえ全候補検証は高価
-(39te で全体 wall の ~31% を占めていた)．そこで 2 段構成にする:
+**2-tier fast/full**: verify は「証明 DAG 閉包の全 replay」ゆえ全候補検証は高価
+(導入前は 39te で全体 wall の ~31% を占めていた)．そこで 2 段構成にする:
 
 1. **fast tier**: OR ノードで TT len 昇順の**最初に検証成功した候補**を採用して打ち切る．
    どの検証済 child でも詰みの証明になるため **soundness は全候補検証と同一**．非保証なのは
    PV の最短選択のみ．
 2. **full fallback**: fast の PV 長が search の最短 claim (`mate_len`) を超えた場合のみ，
-   全候補から最短を選ぶ従来動作で再検証し最短性を保全する (canonical 問題では fast で常に
+   全候補から最短を選ぶ動作で再検証し最短性を保全する (canonical 問題では fast で常に
    一致し fallback は発火しない)．
 
-測定 (39te, 2026-07-02): verify wall 24.5s → 6.6s，全体 87.6s → ~70s．ログは
+導入時の測定 (39te): verify wall 24.5s → 6.6s．ログは
 `STRICT VERIFY Some(d) (..., wall=…, tier=fast|full-fallback)` で tier を報告する．
 
 この STRICT 検証は，canonical テストの健全性ゲート (偽証明 = 即停止) の基盤である．
@@ -96,11 +94,11 @@ df-pn は探索木を明示的に保持しないため，詰み証明後に **TT
 3. loop guard: `shorter.pn()==0 && shorter.len() < d` のときのみ採用する (非厳密短縮・len 境界の
    偽結果による oscillation を防ぐ)．
 
-**len 予算の強制 (3.2.0; 重要)**: len-bounded 探索は **len 予算を超える proof を返してはならない**．
+**len 予算の強制 (重要)**: len-bounded 探索は **len 予算を超える proof を返してはならない**．
 これを欠くと余詰の `len=d-2` 探索が予算超過の偽 proof (例: len=53 探索が mate_len=55) を返し収束
 しない．3 点で予算を強制する:
-- `MateLen::sub` は下限 0 で saturate (旧 `wrapping_sub` は 0 未満で u32::MAX≒∞へ wrap し予算が
-  消失していた)．
+- `MateLen::sub` は下限 0 で saturate する (`wrapping_sub` だと 0 未満で u32::MAX≒∞へ wrap し
+  予算が消失する)．
 - look-ahead (`check_obvious_final_or_node`) は子の budget が mate-1 を許す場合のみ proven を seed．
 - `build_expansion` は非終端ノードを `len < 1手` で **budget-limited disproven** にする (予算切れ
   cutoff)．DEPTH_MAX 探索では len が高位飽和し発火しないので first-mate 挙動は不変．
@@ -110,9 +108,9 @@ df-pn は探索木を明示的に保持しないため，詰み証明後に **TT
 [aigoma §8.2](aigoma-optimization.md))．maou が既知手順と異なる解を出したら，採用前に SFEN と現 PV
 を提示してユーザに確認する．
 
-**現状 (3.4.x)**: 旧 3.2.0 の「39te が len=43 で false-disproof する」問題は len 予算の units
-バグと診断され，**無駄合い-free len credit (案A, 3.4.0; [aigoma §8.4](aigoma-optimization.md))
-で根治**した．29te 最短 29 手 / **39te 最短 39 手** / post-2c3d 31 手を user oracle と一致で
-confirm する (canonical anchor: 29te 396,516 / 39te 17,545,528 nodes @3.4.4)．
+**現状**: len 予算は**無駄合い-free len credit** ([aigoma §8.4](aigoma-optimization.md)) で
+無駄合い抜き手数に一致させている (これを欠くと無駄合い込み raw ply の予算で短い詰みを偽
+disproof する)．29te 最短 29 手 / **39te 最短 39 手** / post-2c3d 31 手を user oracle と一致で
+confirm する (canonical anchor: 29te 396,516 / 39te 17,545,528 nodes; `tests.rs` が assert)．
 `test_39te_divergence_probe` が分岐局面の残手数を再帰確認して局所化する診断方法論を提供する．
 `find_shortest=false` では最初に見つかった手順 (最短保証なし; ノード数削減) を返す．

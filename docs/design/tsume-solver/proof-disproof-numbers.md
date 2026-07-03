@@ -48,10 +48,6 @@ for child in children_except_best:
 
 発火回数は診断カウンタ `dag_fires` で計測する (root 終了時の `[dfpn] … dag=` 行)．
 
-> **note:** `Params::use_dag_correction` (既定 off) は，これとは別の **path-aware な追加 DAG
-> 補正** (runtime `parent_map` で child の最初の親を記録し path 一致を判定する実験的機構) を
-> 指す opt-in flag であり，本節の常時有効な `eliminate_double_count` とは異なる．
-
 ### 4.3 cross-hand 集約 (持ち駒越境)
 
 **出典:** 親エントリの cross-hand 参照 (`look_up_parent`) と証明駒・反証駒の活用は

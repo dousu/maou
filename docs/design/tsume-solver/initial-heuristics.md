@@ -36,17 +36,15 @@ base `(pn, dn) = (U, U)` から手の性質で調整する:
 これらの per-move 値が **エッジコスト** (親→子遷移の手にコストを付与する DFPN-E 的アイデア,
 NeurIPS 2019) として機能し，最有望子の初期順序を決める．
 
-### 5.2 エッジコストと difficulty / ordering の分離
+### 5.2 エッジコストと difficulty / ordering の役割分担
 
-既定では per-move 初期値 (§5.1) が seed pn/dn にそのまま折り込まれ，pn が「難易度推定」と
-「手の良し悪し (ordering)」の二役を担う．`Params::decouple_edge_cost` (既定 off) を有効にすると:
+per-move 初期値 (§5.1) は seed pn/dn にそのまま折り込まれ，pn が「難易度推定」と
+「手の良し悪し (ordering)」の二役を担う (エッジコスト folded)．全項目が同点の最終
+tie-break のみ `move_brief_eval` が別途担う
+([move-ordering-and-pv.md §9.1](move-ordering-and-pv.md))．
 
-- seed pn/dn は `init_pn_dn_*` の **純粋な難易度推定**のみとする (エッジコストを pn から外す)．
-- 手の良し悪しは `move_brief_eval` の **tie-break** に分離する
-  ([move-ordering-and-pv.md §9.1](move-ordering-and-pv.md))．
-
-エッジコストを pn に折り込むと pn が二重信号となり δ-sum 算術を歪めうる，という観察に基づく
-切り分けオプションである (既定 off = エッジコスト folded)．
+エッジコストを pn から外し純粋な難易度推定に分離する案 (pn の二重信号が δ-sum 算術を
+歪めうるという観察に基づく) も検討されたが，採用していない．
 
 ### 5.3 インライン 1 手詰検出 (constructive)
 
@@ -64,5 +62,5 @@ NeurIPS 2019) として機能し，最有望子の初期順序を決める．
 1 局面あたり最大 32 手) で再利用し，同一局面の王手再生成を避ける．
 
 **設計判断:** 3 手以上のインライン詰み検出は，閾値制御・TT を伴わない網羅探索となり mid 本体
-より非効率になるため実装しない (mid の再帰に委ねる)．`Params::obvious_final_max_depth` は浅い
-AND 親で子 OR の 1 手詰を即 proven 化する適用上限を制御する．
+より非効率になるため実装しない (mid の再帰に委ねる)．1 手詰 look-ahead は AND 親の first-visit
+子 OR に対し深さ制限なく適用される (`check_obvious_final_or_node`)．
