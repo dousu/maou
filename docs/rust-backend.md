@@ -419,7 +419,7 @@ match result {
 | `depth` | 31 | 最大探索手数．**上限 47** (超えると Python は `ValueError`，Rust はパニック) |
 | `nodes` | 1,048,576 (2^20) | 探索ノード数上限．TT サイズはこれに比例して確保される (上限 2^23 エントリ × 64B ≈ 512MB) |
 | `timeout_secs` | 300 | 時間制限 (秒)．探索中は GIL を解放するが Ctrl-C は効かないため，中断制御はこれと `nodes` で行う |
-| `find_shortest` | `true` | `false` にすると最初に見つかった詰み手順を返す (高速だが最短とは限らない) |
+| `find_shortest` | `true` | `true` は**最短を確定できた場合のみ** `checkmate`，budget/timeout で確定できなければ `unknown`．`false` は最初の詰みを発見時点で返す (予算を使い切らず高速; 最短保証なし)．早いレスポンス重視なら `false` |
 | `pv_nodes_per_child` | 1,024 | PV 復元予算．`checkmate_no_pv` が返る場合に増やす |
 | `tt_gc_threshold` | 0 (無効) | TT ポジション数がこれを超えると GC．超長手数問題の OOM 対策 |
 
