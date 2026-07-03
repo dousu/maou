@@ -1,8 +1,8 @@
 ---
 title: 詰将棋ソルバー Python バインディング整理 + legacy ドキュメント削除
-status: approved
+status: applied
 approved_by: user (2026-07-03 指示: python 呼び出し周りの調査整理 + legacy docs 削除)
-applied_in: (適用コミット SHA を applied 化時に記入)
+applied_in: 662c6a5 (code) + ff29ede (docs)
 ---
 
 # 詰将棋ソルバー Python バインディング整理 + legacy ドキュメント削除
