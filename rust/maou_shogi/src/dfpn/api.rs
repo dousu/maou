@@ -19,9 +19,8 @@ impl DfPnSolver {
 /// # 引数
 ///
 /// - `sfen`: 局面の SFEN 文字列．
-/// - `depth`: 最大探索手数(`None` でデフォルト 31)．
+/// - `depth`: 最大探索手数(`None` でデフォルト 31; 上限 47)．
 /// - `nodes`: 最大ノード数(`None` でデフォルト 1,048,576)．
-/// - `draw_ply`: 引き分け手数(`None` でデフォルト 32767)．
 ///
 /// # 戻り値
 ///
@@ -33,7 +32,7 @@ impl DfPnSolver {
 /// use maou_shogi::dfpn::{solve_tsume, TsumeResult};
 ///
 /// // 後手玉 1一，先手金 2三，先手持ち駒: 金．G*1b (または G*2b) の 1 手詰．
-/// let result = solve_tsume("8k/9/7G1/9/9/9/9/9/9 b G 1", Some(3), Some(100_000), None).unwrap();
+/// let result = solve_tsume("8k/9/7G1/9/9/9/9/9/9 b G 1", Some(3), Some(100_000)).unwrap();
 /// match result {
 ///     TsumeResult::Checkmate { moves, .. } => assert_eq!(moves.len(), 1),
 ///     other => panic!("expected Checkmate, got {other:?}"),
@@ -43,9 +42,8 @@ pub fn solve_tsume(
     sfen: &str,
     depth: Option<u32>,
     nodes: Option<u64>,
-    draw_ply: Option<u32>,
 ) -> Result<TsumeResult, crate::board::SfenError> {
-    solve_tsume_with_timeout(sfen, depth, nodes, draw_ply, None, None, None, None)
+    solve_tsume_with_timeout(sfen, depth, nodes, None, None, None, None)
 }
 
 /// タイムアウト指定付きで詰将棋を解く便利関数．
@@ -69,7 +67,6 @@ pub fn solve_tsume_with_timeout(
     sfen: &str,
     depth: Option<u32>,
     nodes: Option<u64>,
-    draw_ply: Option<u32>,
     timeout_secs: Option<u64>,
     find_shortest: Option<bool>,
     pv_nodes_per_child: Option<u64>,
@@ -81,7 +78,6 @@ pub fn solve_tsume_with_timeout(
     let mut solver = DfPnSolver::with_timeout(
         depth.unwrap_or(31),
         nodes.unwrap_or(1_048_576),
-        draw_ply.unwrap_or(32767),
         timeout_secs.unwrap_or(300),
     );
     solver.set_find_shortest(find_shortest.unwrap_or(true));

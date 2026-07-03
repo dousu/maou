@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Benchmark script: maou DfPn vs cshogi DfPn for tsume-shogi problems."""
+"""Benchmark script: maou DfPn vs cshogi DfPn for tsume-shogi problems.
+
+注意: `maturin develop` は既定で dev プロファイル (pyproject の [tool.maturin]
+profile = "dev") でビルドされ，release 比 ~6 倍遅い．計測時は
+`uv run maturin develop --release` でビルドし直すこと (配布 wheel は CI が
+--release でビルドするため影響しない)．
+"""
 
 import time
 
@@ -36,7 +42,7 @@ PROBLEMS = {
     ),
     "tsume7_39te": (
         "9/1+R+N1kP2S/6pn1/9/9/5+B3/1R2S4/3p5/9 b NPb4g2sn4l14p 1",
-        63,
+        47,  # depth 上限は 47 (PATH_CAPACITY)
     ),
 }
 

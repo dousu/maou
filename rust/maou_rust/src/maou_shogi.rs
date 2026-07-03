@@ -321,47 +321,64 @@ impl TsumeResult {
 ///   - `moves`: 詰みの場合は手順(USI形式のリスト)
 ///   - `nodes_searched`: 探索ノード数
 ///
+/// デフォルト値は Rust 側 `maou_shogi::dfpn::solve_tsume_with_timeout` に一元化
+/// されており，`None` (未指定) がそのまま委譲される．
+///
 /// # 引数
 ///
-/// - `sfen` (str): 局面のSFEN文字列．
-/// - `depth` (int, optional): 最大探索手数(デフォルト 31)．範囲: 1〜数百程度．
+/// - `sfen` (str): 局面のSFEN文字列．不正な場合は `ValueError`．
+/// - `depth` (int, optional): 最大探索手数(デフォルト 31)．**有効範囲: 1〜47**．
+///   範囲外は `ValueError` を送出する．
 /// - `nodes` (int, optional): 最大ノード数(デフォルト 1,048,576 = 2^20)．
-///   u64 範囲(0〜2^64-1)．推奨: 100,000〜100,000,000．
-/// - `draw_ply` (int, optional): 引き分け手数(デフォルト 32767)．
+///   推奨: 100,000〜100,000,000．
 /// - `timeout_secs` (int, optional): 実行時間制限(秒)(デフォルト 300)．
-/// - `find_shortest` (bool, optional): 最短手数探索を行うか(デフォルト true)．
-///   false にすると追加探索をスキップし高速化するが，
+/// - `find_shortest` (bool, optional): 最短手数探索を行うか(デフォルト True)．
+///   False にすると最短手数を確定させる再探索をスキップし高速化するが，
 ///   返される手順が最短とは限らない．
 /// - `pv_nodes_per_child` (int, optional): PV 復元時の1子あたりノード予算(デフォルト 1024)．
 ///   長手数の詰将棋で `checkmate_no_pv` が返る場合に増やすと効果的．
 /// - `tt_gc_threshold` (int, optional): TT GC 閾値(デフォルト 0 = 無効)．
 ///   TT のポジション数がこの値を超えると GC を実行し，メモリ使用量を抑制する．
 ///   超長手数問題で OOM を防ぐ場合に設定する．
+///
+/// # 注意
+///
+/// - メモリ: 置換表は `nodes` に比例して確保される (上限 2^23 エントリ × 64B ≈ 512MB)．
+/// - 探索中は GIL を解放するが Python シグナルは処理しない — Ctrl-C (KeyboardInterrupt)
+///   は探索が返るまで効かない．中断制御は `nodes` / `timeout_secs` で行うこと．
 #[pyfunction]
-#[pyo3(signature = (sfen, depth=31, nodes=1048576, draw_ply=32767, timeout_secs=300, find_shortest=true, pv_nodes_per_child=1024, tt_gc_threshold=0))]
+#[pyo3(signature = (sfen, depth=None, nodes=None, timeout_secs=None, find_shortest=None, pv_nodes_per_child=None, tt_gc_threshold=None))]
+#[allow(clippy::too_many_arguments)]
 fn solve_tsume(
     py: Python<'_>,
     sfen: &str,
-    depth: u32,
-    nodes: u64,
-    draw_ply: u32,
-    timeout_secs: u64,
-    find_shortest: bool,
-    pv_nodes_per_child: u64,
-    tt_gc_threshold: usize,
+    depth: Option<u32>,
+    nodes: Option<u64>,
+    timeout_secs: Option<u64>,
+    find_shortest: Option<bool>,
+    pv_nodes_per_child: Option<u64>,
+    tt_gc_threshold: Option<usize>,
 ) -> PyResult<TsumeResult> {
+    if let Some(d) = depth {
+        // Rust 側は depth >= 48 (PATH_CAPACITY) で panic するため，Python には
+        // PanicException でなく ValueError として返す．
+        if !(1..=47).contains(&d) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "depth must be in 1..=47, got {d}"
+            )));
+        }
+    }
     let sfen_owned = sfen.to_owned();
     let result = py
         .detach(move || {
             dfpn::solve_tsume_with_timeout(
                 &sfen_owned,
-                Some(depth),
-                Some(nodes),
-                Some(draw_ply),
-                Some(timeout_secs),
-                Some(find_shortest),
-                Some(pv_nodes_per_child),
-                Some(tt_gc_threshold),
+                depth,
+                nodes,
+                timeout_secs,
+                find_shortest,
+                pv_nodes_per_child,
+                tt_gc_threshold,
             )
         })
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;

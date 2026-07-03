@@ -17,7 +17,7 @@ use crate::types::{PieceType, Square};
 fn assert_shortest_mate(sfen: &str, depth: u32, max_nodes: u64, expected_len: usize) {
     let mut board = Board::new();
     board.set_sfen(sfen).unwrap();
-    let mut solver = DfPnSolver::new(depth, max_nodes, 32767);
+    let mut solver = DfPnSolver::new(depth, max_nodes);
     match solver.solve_impl(&mut board) {
         TsumeResult::Checkmate { moves, .. } => {
             let usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
@@ -51,7 +51,7 @@ fn assert_shortest_mate(sfen: &str, depth: u32, max_nodes: u64, expected_len: us
 fn assert_shortest_mate_pv(sfen: &str, depth: u32, max_nodes: u64, acceptable_pvs: &[&[&str]]) {
     let mut board = Board::new();
     board.set_sfen(sfen).unwrap();
-    let mut solver = DfPnSolver::new(depth, max_nodes, 32767);
+    let mut solver = DfPnSolver::new(depth, max_nodes);
     match solver.solve_impl(&mut board) {
         TsumeResult::Checkmate { moves, .. } => {
             let usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
@@ -161,7 +161,7 @@ fn test_no_checkmate() {
     let mut board = Board::empty();
     board.set_sfen(sfen).unwrap();
 
-    let mut solver = DfPnSolver::new(5, 100_000, 32767);
+    let mut solver = DfPnSolver::new(5, 100_000);
     let result = solver.solve_impl(&mut board);
 
     match &result {
@@ -173,7 +173,7 @@ fn test_no_checkmate() {
 /// solve_tsume 便利関数のテスト．
 #[test]
 fn test_solve_tsume_convenience() {
-    let result = solve_tsume("8k/9/7G1/9/9/9/9/9/9 b G 1", Some(3), Some(100_000), None).unwrap();
+    let result = solve_tsume("8k/9/7G1/9/9/9/9/9/9 b G 1", Some(3), Some(100_000)).unwrap();
 
     match &result {
         TsumeResult::Checkmate { moves, .. } => {
@@ -235,7 +235,7 @@ fn test_timeout() {
     let mut board = Board::empty();
     board.set_sfen(sfen).unwrap();
 
-    let mut solver = DfPnSolver::with_timeout(31, u64::MAX, 32767, 0);
+    let mut solver = DfPnSolver::with_timeout(31, u64::MAX, 0);
     // timeout=0 なので即タイムアウト(ただし最初の1024ノードは走る)
     let result = solver.solve_impl(&mut board);
 
@@ -304,7 +304,7 @@ fn test_tsume_3_ryu_2a_not_checkmate() {
     let cap = board.do_move(p2c);
 
     // 先手番(攻め方)から探索して詰みがないことを検証
-    let mut solver = DfPnSolver::new(15, 100_000, 32767);
+    let mut solver = DfPnSolver::new(15, 100_000);
     let result = solver.solve_impl(&mut board);
     assert!(
         !matches!(result, TsumeResult::Checkmate { .. }),
@@ -637,7 +637,7 @@ fn test_does_have_mate_possibility() {
     for (sfen, expected, label) in cases {
         let mut b = Board::new();
         b.set_sfen(sfen).unwrap();
-        let s = DfPnSolver::with_timeout(31, 1_000, 32767, 5);
+        let s = DfPnSolver::with_timeout(31, 1_000, 5);
         let checks = s.generate_check_moves(&mut b);
         let dhmp = b.does_have_mate_possibility(b.turn);
         // soundness: 実王手があれば DHMP は必ず true．
@@ -694,7 +694,7 @@ fn test_mate_move_in_1ply_no_false_mate() {
     for (sfen, label) in cases {
         let mut b = Board::new();
         b.set_sfen(sfen).unwrap();
-        let s = DfPnSolver::with_timeout(31, 1_000, 32767, 5);
+        let s = DfPnSolver::with_timeout(31, 1_000, 5);
         let checks = s.generate_check_moves(&mut b);
         // 真の 1 手詰の有無を generate_legal_moves で確定する (ground truth)．
         let mut real_mate1 = false;
@@ -734,7 +734,7 @@ fn test_counter_check_example() {
         b.is_in_check(b.turn),
         "テスト前提: 攻め方が王手されている逆王手局面のはず"
     );
-    let mut s = DfPnSolver::with_timeout(31, 5_000_000, 32767, 60);
+    let mut s = DfPnSolver::with_timeout(31, 5_000_000, 60);
     match s.solve_impl(&mut b) {
         TsumeResult::Checkmate { moves, .. } => {
             // 終局面が真の詰みか検証 (false mate 検出)．
@@ -770,7 +770,7 @@ fn test_29te() {
     {
         let mut b = Board::empty();
         b.set_sfen("8k/9/7G1/9/9/9/9/9/9 b G 1").unwrap();
-        let mut s = DfPnSolver::with_timeout(3, 1_000_000, 32767, 30);
+        let mut s = DfPnSolver::with_timeout(3, 1_000_000, 30);
         match s.solve_impl(&mut b) {
             TsumeResult::Checkmate {
                 moves,
@@ -788,7 +788,7 @@ fn test_29te() {
     {
         let mut b = Board::empty();
         b.set_sfen("8k/9/6R2/9/9/9/9/9/9 b G 1").unwrap();
-        let mut s = DfPnSolver::with_timeout(7, 1_000_000, 32767, 30);
+        let mut s = DfPnSolver::with_timeout(7, 1_000_000, 30);
         match s.solve_impl(&mut b) {
             TsumeResult::Checkmate {
                 moves,
@@ -810,7 +810,7 @@ fn test_29te() {
         let sfen = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
         let mut b = Board::new();
         b.set_sfen(sfen).unwrap();
-        let mut s = DfPnSolver::with_timeout(31, 5_000_000, 32767, 120);
+        let mut s = DfPnSolver::with_timeout(31, 5_000_000, 120);
         match s.solve_impl(&mut b) {
             TsumeResult::Checkmate {
                 moves,
@@ -885,7 +885,7 @@ fn test_39te_measure() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(600);
-    let mut s = DfPnSolver::with_timeout(47, budget, 32767, secs);
+    let mut s = DfPnSolver::with_timeout(47, budget, secs);
     let t0 = std::time::Instant::now();
     let result = s.solve_impl(&mut b);
     let elapsed = t0.elapsed();
@@ -969,7 +969,7 @@ fn test_39te_divergence_probe() {
             let sub_sfen = board.sfen();
             let mut b = Board::new();
             b.set_sfen(&sub_sfen).unwrap();
-            let mut s = DfPnSolver::with_timeout(47, 15_000_000, 32767, 30);
+            let mut s = DfPnSolver::with_timeout(47, 15_000_000, 30);
             let got = match s.solve_impl(&mut b) {
                 TsumeResult::Checkmate { moves, .. } => moves.len() as i64,
                 _ => -1,
@@ -1005,7 +1005,7 @@ fn test_tsume_1te_gote() {
     let mut board = Board::empty();
     board.set_sfen(sfen).unwrap();
 
-    let mut solver = DfPnSolver::new(3, 100_000, 32767);
+    let mut solver = DfPnSolver::new(3, 100_000);
     let result = solver.solve_impl(&mut board);
 
     match &result {
@@ -1041,8 +1041,7 @@ fn test_tsume_3te_gote() {
     board.set_sfen(sfen).unwrap();
 
     let result =
-        solve_tsume_with_timeout(sfen, Some(7), Some(1_048_576), None, None, None, None, None)
-            .unwrap();
+        solve_tsume_with_timeout(sfen, Some(7), Some(1_048_576), None, None, None, None).unwrap();
 
     let expected = ["7g9g+", "9i8i", "G*8h"];
 
@@ -1078,7 +1077,7 @@ fn test_tsume_3te_gote() {
 #[test]
 fn test_tsume_uchifuzume_rook_no_promote() {
     let sfen = "5R3/6pk1/6N2/6P2/7p1/7N1/9/9/9 b N2Pr2b4g4sn4l13p 1";
-    let result = solve_tsume(sfen, Some(31), Some(5_000_000), None).unwrap();
+    let result = solve_tsume(sfen, Some(31), Some(5_000_000)).unwrap();
 
     match &result {
         TsumeResult::Checkmate { moves, .. } => {
@@ -1124,7 +1123,7 @@ fn test_uchifuzume_promoted_rook_fails() {
     board.do_move(promote_move);
 
     // 龍の局面からは詰まないことを検証
-    let mut solver = DfPnSolver::new(31, 2_000_000, 32767);
+    let mut solver = DfPnSolver::new(31, 2_000_000);
     let result = solver.solve_impl(&mut board);
     assert!(
         !matches!(result, TsumeResult::Checkmate { .. }),
@@ -1144,7 +1143,7 @@ fn test_uchifuzume_promoted_rook_fails() {
 #[test]
 fn test_no_checkmate_perpetual_check() {
     let sfen = "6G2/6+B1k/8p/9/6PP1/9/9/9/9 b 2rb3g4s4n4l15p 1";
-    let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+    let result = solve_tsume(sfen, Some(31), Some(2_000_000)).unwrap();
 
     match &result {
         TsumeResult::NoCheckmate { .. } => {}
@@ -1170,7 +1169,7 @@ fn test_counter_check_move_generation_unit() {
     let mut board = crate::board::Board::empty();
     board.set_sfen(sfen).expect("valid SFEN");
 
-    let mut solver = DfPnSolver::new(31, 1, 32767);
+    let mut solver = DfPnSolver::new(31, 1);
     let moves = solver.generate_defense_moves_inner(&mut board, false);
 
     // 3d2c = 後手銀 3四→2三 (竜を取り，先手玉2四への逆王手)
@@ -1195,7 +1194,7 @@ fn test_counter_check_move_generation_unit() {
 #[test]
 fn test_no_checkmate_counter_check() {
     let sfen = "7l1/5n1k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s3n2l17p 1";
-    let result = solve_tsume(sfen, Some(31), Some(3_000_000), None).unwrap();
+    let result = solve_tsume(sfen, Some(31), Some(3_000_000)).unwrap();
 
     match &result {
         TsumeResult::NoCheckmate { .. } => {}
@@ -1218,7 +1217,7 @@ fn test_no_checkmate_counter_check() {
 #[test]
 fn test_checkmate_with_counter_check_avoidance() {
     let sfen = "7l1/7k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s4n2l17p 1";
-    let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+    let result = solve_tsume(sfen, Some(31), Some(2_000_000)).unwrap();
 
     match &result {
         TsumeResult::Checkmate { moves, .. } => {
@@ -1261,7 +1260,7 @@ fn test_checkmate_with_counter_check_avoidance() {
 #[test]
 fn test_no_checkmate_uchifuzume_only() {
     let sfen = "7nk/9/8G/9/9/9/9/9/9 b P2r2b3g4s3n4l17p 1";
-    let result = solve_tsume(sfen, Some(31), Some(100_000), None).unwrap();
+    let result = solve_tsume(sfen, Some(31), Some(100_000)).unwrap();
 
     match &result {
         TsumeResult::NoCheckmate { .. } => {}
@@ -1283,7 +1282,7 @@ fn test_no_checkmate_uchifuzume_only() {
 #[test]
 fn test_no_checkmate_gold_interposition() {
     let sfen = "7gk/8p/5P2s/7P1/9/9/9/9/9 b BN2rb3g3s3n4l15p 1";
-    let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+    let result = solve_tsume(sfen, Some(31), Some(2_000_000)).unwrap();
 
     match &result {
         TsumeResult::NoCheckmate { .. } => {}
@@ -1302,7 +1301,7 @@ fn test_no_checkmate_gold_interposition() {
 #[test]
 fn test_tsume_9te_with_silver() {
     let sfen = "7gk/8p/5P2s/7P1/9/9/9/9/9 b BSN2rb3g2s3n4l15p 1";
-    let result = solve_tsume(sfen, Some(31), Some(2_000_000), None).unwrap();
+    let result = solve_tsume(sfen, Some(31), Some(2_000_000)).unwrap();
 
     match &result {
         TsumeResult::Checkmate { moves, .. } => {
@@ -1482,7 +1481,6 @@ fn test_pv_follows_longest_defense() {
         Some(31),
         Some(2_000_000),
         None,
-        None,
         Some(true), // find_shortest = true
         None,
         None,
@@ -1517,7 +1515,7 @@ fn test_no_checkmate_gote() {
     let mut board = Board::empty();
     board.set_sfen(sfen).unwrap();
 
-    let mut solver = DfPnSolver::new(5, 100_000, 32767);
+    let mut solver = DfPnSolver::new(5, 100_000);
     let result = solver.solve_impl(&mut board);
 
     match &result {
@@ -1542,7 +1540,7 @@ fn test_chuai_no_checkmate() {
         .stack_size(32 * 1024 * 1024)
         .spawn(|| {
             let sfen = "9/3+N1P3/2+R3p2/8k/8N/5+B3/4S4/1R1p5/9 b NPb4g3sn4l14p 1";
-            solve_tsume(sfen, Some(31), Some(10_000), None).unwrap()
+            solve_tsume(sfen, Some(31), Some(10_000)).unwrap()
         })
         .unwrap()
         .join()
@@ -1604,7 +1602,7 @@ fn test_chuai_position_after_block() {
     // 中合いが発生した後の局面(不詰み)
     // デバッグビルドでの実行時間制約のため予算を抑制する．
     let sfen = "9/3+N1P3/2+R3p2/1Rp5k/8N/5+B3/4S4/3p5/9 b NPb4g3sn4l13p 1";
-    let result = solve_tsume(sfen, Some(31), Some(10_000), None).unwrap();
+    let result = solve_tsume(sfen, Some(31), Some(10_000)).unwrap();
 
     assert!(
         !matches!(result, TsumeResult::Checkmate { .. }),
@@ -1729,7 +1727,7 @@ fn test_counter_check_diagnostic() {
                     let sub_sfen = board.sfen();
                     board.undo_move(*def_m, cap2);
 
-                    let sub_result = solve_tsume(&sub_sfen, Some(31), Some(50_000), None)
+                    let sub_result = solve_tsume(&sub_sfen, Some(31), Some(50_000))
                         .map(|r| format!("{:?}", r))
                         .unwrap_or_else(|e| format!("Err({:?})", e));
                     writeln!(out, "      50K結果: {}", sub_result).unwrap();
@@ -1752,7 +1750,7 @@ fn test_counter_check_diagnostic() {
 fn test_no_checkmate_counter_check_probe() {
     let sfen = "7l1/5n1k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s3n2l17p 1";
     for budget in [3_000_000u64, 5_000_000, 10_000_000] {
-        let result = solve_tsume(sfen, Some(31), Some(budget), None).unwrap();
+        let result = solve_tsume(sfen, Some(31), Some(budget)).unwrap();
         eprintln!("budget={}: {:?}", budget, result);
         if let TsumeResult::NoCheckmate { nodes_searched } = &result {
             eprintln!("  → solved at {} nodes", nodes_searched);

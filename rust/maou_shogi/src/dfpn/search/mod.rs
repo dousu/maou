@@ -1105,10 +1105,8 @@ impl DfPnSolver {
 
         // 子探索中 root を path に積む (子が repetition/inferior 判定で参照)．
         self.path_depths.insert(board.hash, 0);
-        if self.params.path_dominance {
-            self.dom_path
-                .push(super::position_key(board), attacker_hand, 0);
-        }
+        self.dom_path
+            .push(super::position_key(board), attacker_hand, 0);
 
         while curr.pn() < thpn && curr.dn() < thdn {
             if self.nodes >= self.max_nodes || self.timed_out {
@@ -1127,9 +1125,7 @@ impl DfPnSolver {
         }
 
         self.path_depths.remove(&board.hash);
-        if self.params.path_dominance {
-            self.dom_path.pop(super::position_key(board));
-        }
+        self.dom_path.pop(super::position_key(board));
         curr
     }
 
@@ -1354,11 +1350,7 @@ impl DfPnSolver {
             // [PROF idx10=pathcheck] cl_other 内訳: dominance find_dominator + 千日手 path_depths.get
             // (両方 path stack の O(depth) 逆順走査)．path_depths.get は dom miss 時のみ評価で探索不変．
             let __pc_t = prof_enabled().then(std::time::Instant::now);
-            let dom_depth = if self.params.path_dominance {
-                self.dom_path.find_dominator(ch_pos, &child_hand)
-            } else {
-                None
-            };
+            let dom_depth = self.dom_path.find_dominator(ch_pos, &child_hand);
             let rep_ply = if dom_depth.is_none() {
                 self.path_depths.get(&ch_full).copied()
             } else {

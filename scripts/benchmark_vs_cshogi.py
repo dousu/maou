@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Comprehensive benchmark: maou_shogi (Rust/PyO3) vs cshogi (C/Cython).
 
+注意: `maturin develop` は既定で dev プロファイルでビルドされ release 比 ~6 倍遅い．
+計測時は `uv run maturin develop --release` でビルドし直すこと．
+
 Measures:
   1. Legal move generation
   2. do_move / undo_move (push/pop)

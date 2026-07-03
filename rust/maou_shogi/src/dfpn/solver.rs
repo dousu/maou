@@ -30,14 +30,6 @@ pub enum TsumeResult {
     Unknown { nodes_searched: u64 },
 }
 
-/// 探索の opt-in 挙動フラグ．
-pub(super) struct Params {
-    /// mid path dominance の別形式 (`V4_DOM` env で opt-in; default off)．
-    /// 現状の実装は node 増となるため既定では無効化されている．
-    /// (常時有効の visit-history dominance とは別機構．)
-    pub(super) path_dominance: bool,
-}
-
 /// Df-Pn ソルバー．
 ///
 /// 統一探索本体 (`search/mod.rs` の `solve_impl`) を駆動する．
@@ -95,19 +87,17 @@ pub struct DfPnSolver {
     pub(super) dom_path: super::path_stack::DomPathStack,
     /// mid dominance pruning 発火数 (診断用)．
     pub(super) dom_fires: u64,
-    /// 探索の opt-in 挙動フラグ．
-    pub(super) params: Params,
 }
 
 impl DfPnSolver {
     /// 新しいソルバーを生成する(タイムアウト 300 秒)．
-    pub fn new(depth: u32, max_nodes: u64, draw_ply: u32) -> Self {
-        Self::with_timeout(depth, max_nodes, draw_ply, 300)
+    pub fn new(depth: u32, max_nodes: u64) -> Self {
+        Self::with_timeout(depth, max_nodes, 300)
     }
 
     /// デフォルトパラメータでソルバーを生成する．
     pub fn default_solver() -> Self {
-        Self::new(31, 1_048_576, 32767)
+        Self::new(31, 1_048_576)
     }
 
     /// タイムアウト指定付きでソルバーを生成する．
@@ -115,7 +105,7 @@ impl DfPnSolver {
     /// # Panics
     ///
     /// `depth >= PATH_CAPACITY`(48)の場合パニックする．
-    pub fn with_timeout(depth: u32, max_nodes: u64, _draw_ply: u32, timeout_secs: u64) -> Self {
+    pub fn with_timeout(depth: u32, max_nodes: u64, timeout_secs: u64) -> Self {
         assert!(
             (depth as usize) < PATH_CAPACITY,
             "depth {} exceeds path capacity {}",
@@ -140,9 +130,6 @@ impl DfPnSolver {
             start_time: Instant::now(),
             timed_out: false,
             attacker: Color::Black,
-            params: Params {
-                path_dominance: false,
-            },
         }
     }
 
