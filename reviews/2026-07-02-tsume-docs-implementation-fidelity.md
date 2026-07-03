@@ -1,8 +1,8 @@
 ---
 title: 詰将棋ソルバー設計ドキュメントの実装忠実化 (dead-flag 参照の除去・stale 記述の更新)
-status: approved
+status: applied
 approved_by: user (/goal directive, 2026-07-02)
-applied_in: (docs commit SHA を applied 化時に記入)
+applied_in: 8b853cd
 ---
 
 # 詰将棋ソルバー設計ドキュメントの実装忠実化
