@@ -2,7 +2,7 @@
 
 use crate::board::Board;
 
-use super::solver::{DfPnSolver, TsumeResult};
+use super::solver::{DfPnSolver, SearchReport, TsumeResult};
 
 impl DfPnSolver {
     /// 探索ノード数を返す．
@@ -74,6 +74,42 @@ pub fn solve_tsume_with_timeout(
     pv_nodes_per_child: Option<u64>,
     tt_gc_threshold: Option<usize>,
 ) -> Result<TsumeResult, crate::board::SfenError> {
+    solve_tsume_report_with_timeout(
+        sfen,
+        depth,
+        nodes,
+        timeout_secs,
+        find_shortest,
+        pv_nodes_per_child,
+        tt_gc_threshold,
+        None,
+    )
+    .map(|report| report.result)
+}
+
+/// [`solve_tsume_with_timeout`] と同一の探索を行い，結果に加えて診断メタデータ
+/// ([`SearchReport`]) を返す．
+///
+/// `unknown` の内訳判断 (最小性未確定 / ノード切れ / タイムアウト / 偽証明) や
+/// 「予算/時間を追加すれば現実的に解けるか」の見積り (root pn/dn の推移，検出済み
+/// 詰み手数) に使う．
+///
+/// # 引数 (追加分)
+///
+/// - `collect_progress`: `Some(true)` で root 反復深化の各段階の pn/dn/nodes/経過時間を
+///   [`SearchReport::progress`] に記録する (既定 `None` = 記録せず，Vec 確保もしないため
+///   探索性能に影響しない)．
+#[allow(clippy::too_many_arguments)]
+pub fn solve_tsume_report_with_timeout(
+    sfen: &str,
+    depth: Option<u32>,
+    nodes: Option<u64>,
+    timeout_secs: Option<u64>,
+    find_shortest: Option<bool>,
+    pv_nodes_per_child: Option<u64>,
+    tt_gc_threshold: Option<usize>,
+    collect_progress: Option<bool>,
+) -> Result<SearchReport, crate::board::SfenError> {
     let mut board = Board::empty();
     board.set_sfen(sfen)?;
 
@@ -89,6 +125,78 @@ pub fn solve_tsume_with_timeout(
     if let Some(gc) = tt_gc_threshold {
         solver.set_tt_gc_threshold(gc);
     }
+    solver.set_collect_progress(collect_progress.unwrap_or(false));
 
-    Ok(solver.solve(&mut board))
+    Ok(solver.solve_report(&mut board))
+}
+
+#[cfg(test)]
+mod report_tests {
+    use super::*;
+    use crate::dfpn::StopReason;
+
+    // 後手玉 1一，先手金 2三，先手持ち駒: 金．1 手詰 (自明に最短)．
+    const MATE_1TE: &str = "8k/9/7G1/9/9/9/9/9/9 b G 1";
+
+    #[test]
+    fn report_solved_1te_carries_metadata() {
+        let report = solve_tsume_report_with_timeout(
+            MATE_1TE,
+            Some(3),
+            Some(100_000),
+            None,
+            Some(true),
+            None,
+            None,
+            Some(true),
+        )
+        .unwrap();
+        assert!(matches!(report.result, TsumeResult::Checkmate { .. }));
+        assert_eq!(report.stop_reason, StopReason::Solved);
+        assert_eq!(report.mate_len_found, Some(1));
+        assert!(report.shortest_confirmed);
+        // 詰み証明ゆえ root_pn=0．
+        assert_eq!(report.root_pn, 0);
+        // collect_progress=true → root 反復が最低 1 点は記録される．
+        assert!(!report.progress.is_empty());
+        assert!(report.progress[0].nodes > 0);
+    }
+
+    #[test]
+    fn report_progress_empty_when_not_collected() {
+        // collect_progress 未指定 (既定 false) では progress は空 (アロケーション無し)．
+        let report = solve_tsume_report_with_timeout(
+            MATE_1TE,
+            Some(3),
+            Some(100_000),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(report.progress.is_empty());
+        assert_eq!(report.stop_reason, StopReason::Solved);
+    }
+
+    #[test]
+    fn report_no_mate_is_disproven() {
+        // 玉のみ (攻め方に王手手段なし) → 不詰 (dn=0)．
+        let report = solve_tsume_report_with_timeout(
+            "4k4/9/9/9/9/9/9/9/4K4 b - 1",
+            Some(31),
+            Some(100_000),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(report.result, TsumeResult::NoCheckmate { .. }));
+        assert_eq!(report.stop_reason, StopReason::Disproven);
+        assert_eq!(report.root_dn, 0);
+        assert_eq!(report.mate_len_found, None);
+    }
 }

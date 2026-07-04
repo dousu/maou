@@ -258,11 +258,56 @@ fn move_drop_hand_piece(m: u32) -> u8 {
     moves::move_drop_hand_piece(Move::from_raw_u32(m))
 }
 
-/// 詰将棋の探索結果．
+/// 探索進捗のスナップショット．
+///
+/// `solve_tsume(..., collect_progress=True)` のとき `TsumeResult.progress` に
+/// リストで入る．root 反復深化の各段階の pn/dn を記録するので，`pn` が 0 へ
+/// 下降していれば詰みに接近 (予算追加が有効)，`dn` が 0 へ下降していれば不詰に接近と
+/// 外挿判断できる．
+///
+/// - `nodes`: この時点の累積探索ノード数．
+/// - `elapsed_ms`: 探索開始からの経過時間(ミリ秒)．
+/// - `pn`: root の証明数(0 = 詰み証明; 約 9.2e18 は ∞ を表す)．
+/// - `dn`: root の反証数(0 = 不詰証明)．
+/// - `mate_len`: この反復で探索している mate-length 上限．
+#[pyclass(frozen, skip_from_py_object)]
+#[derive(Clone)]
+struct TsumeProgressSample {
+    #[pyo3(get)]
+    nodes: u64,
+    #[pyo3(get)]
+    elapsed_ms: u64,
+    #[pyo3(get)]
+    pn: u64,
+    #[pyo3(get)]
+    dn: u64,
+    #[pyo3(get)]
+    mate_len: u32,
+}
+
+#[pymethods]
+impl TsumeProgressSample {
+    fn __repr__(&self) -> String {
+        format!(
+            "TsumeProgressSample(nodes={}, elapsed_ms={}, pn={}, dn={}, mate_len={})",
+            self.nodes, self.elapsed_ms, self.pn, self.dn, self.mate_len
+        )
+    }
+}
+
+/// 詰将棋の探索結果 + 診断メタデータ．
 ///
 /// - `status`: `"checkmate"` / `"checkmate_no_pv"` / `"no_checkmate"` / `"unknown"` のいずれか．
 /// - `moves`: 詰みの場合は手順(USI形式のリスト)．それ以外は空リスト．
 /// - `nodes_searched`: 探索ノード数．
+/// - `root_pn` / `root_dn`: 停止時の root 証明数/反証数(詰み時 pn=0，不詰時 dn=0)．
+/// - `elapsed_ms`: 探索開始から結果確定までの経過時間(ミリ秒)．
+/// - `mate_len_found`: 詰みが検証された手数(`int` | `None`)．`status=="unknown"` でも
+///   詰みが見つかっていれば入り，「≤この手数の詰みが存在」を意味する．
+/// - `shortest_confirmed`: find_shortest で最短手数を確定できたか(`bool`)．
+/// - `stop_reason`: 停止理由(`"solved"` / `"disproven"` / `"minimality_unconfirmed"` /
+///   `"nodes_exhausted"` / `"timeout"` / `"false_proof"` / `"inconclusive"`)．
+/// - `progress`: 進捗トラジェクトリ(`collect_progress=True` 時のみ; 既定は空リスト)．
 #[pyclass(frozen)]
 struct TsumeResult {
     #[pyo3(get)]
@@ -271,6 +316,20 @@ struct TsumeResult {
     moves: Vec<String>,
     #[pyo3(get)]
     nodes_searched: u64,
+    #[pyo3(get)]
+    root_pn: u64,
+    #[pyo3(get)]
+    root_dn: u64,
+    #[pyo3(get)]
+    elapsed_ms: u64,
+    #[pyo3(get)]
+    mate_len_found: Option<u32>,
+    #[pyo3(get)]
+    shortest_confirmed: bool,
+    #[pyo3(get)]
+    stop_reason: String,
+    #[pyo3(get)]
+    progress: Vec<TsumeProgressSample>,
 }
 
 #[pymethods]
@@ -278,13 +337,19 @@ impl TsumeResult {
     fn __repr__(&self) -> String {
         if self.status == "checkmate" {
             format!(
-                "TsumeResult(status='checkmate', moves={:?}, nodes_searched={})",
-                self.moves, self.nodes_searched
+                "TsumeResult(status='checkmate', moves={:?}, mate_len_found={:?}, nodes_searched={}, elapsed_ms={})",
+                self.moves, self.mate_len_found, self.nodes_searched, self.elapsed_ms
             )
         } else {
             format!(
-                "TsumeResult(status='{}', nodes_searched={})",
-                self.status, self.nodes_searched
+                "TsumeResult(status='{}', stop_reason='{}', mate_len_found={:?}, root_pn={}, root_dn={}, nodes_searched={}, elapsed_ms={})",
+                self.status,
+                self.stop_reason,
+                self.mate_len_found,
+                self.root_pn,
+                self.root_dn,
+                self.nodes_searched,
+                self.elapsed_ms
             )
         }
     }
@@ -320,8 +385,26 @@ impl TsumeResult {
 ///   - `status`: `"checkmate"` / `"checkmate_no_pv"` / `"no_checkmate"` / `"unknown"`
 ///   - `moves`: 詰みの場合は手順(USI形式のリスト)
 ///   - `nodes_searched`: 探索ノード数
+///   - `root_pn` / `root_dn`: 停止時の root 証明数/反証数(詰み時 pn=0，不詰時 dn=0)．
+///     `unknown` 時に「詰みへ接近しているか(pn 小)／不詰へ接近しているか(dn 小)」を示す．
+///   - `elapsed_ms`: 探索開始から結果確定までの経過時間(ミリ秒)．
+///   - `mate_len_found`: 詰みが検証された手数(`int` | `None`)．`status=="unknown"` でも
+///     詰みが見つかっていれば入り，「≤この手数の詰みが存在(最短だけ未確定)」を意味する．
+///   - `shortest_confirmed`: find_shortest で最短手数を確定できたか(`bool`)．
+///   - `stop_reason`: 停止理由(`"solved"` / `"disproven"` / `"minimality_unconfirmed"` /
+///     `"nodes_exhausted"` / `"timeout"` / `"false_proof"` / `"inconclusive"`)．`unknown` の
+///     内訳を機械可読に区別する．
+///   - `progress`: 進捗トラジェクトリ(`collect_progress=True` 時のみ; 既定は空リスト)．
 ///
-/// デフォルト値は Rust 側 `maou_shogi::dfpn::solve_tsume_with_timeout` に一元化
+/// # unknown の扱い方 (予算追加の判断)
+///
+/// - `stop_reason=="minimality_unconfirmed"`: 詰み自体は検証済(`mate_len_found` に手数)．
+///   予算を増やせば `checkmate` になる最有力ケース．
+/// - `stop_reason in ("nodes_exhausted","timeout")` かつ `mate_len_found is None`:
+///   `collect_progress=True` で `progress` の `pn` が 0 へ下降中なら予算追加が有効，
+///   `pn`/`dn` とも横ばい/増加なら現行スケールでは非現実的と外挿判断できる．
+///
+/// デフォルト値は Rust 側 `maou_shogi::dfpn::solve_tsume_report_with_timeout` に一元化
 /// されており，`None` (未指定) がそのまま委譲される．
 ///
 /// # 引数
@@ -343,6 +426,11 @@ impl TsumeResult {
 /// - `tt_gc_threshold` (int, optional): TT GC 閾値(デフォルト 0 = 無効)．
 ///   TT のポジション数がこの値を超えると GC を実行し，メモリ使用量を抑制する．
 ///   超長手数問題で OOM を防ぐ場合に設定する．
+/// - `collect_progress` (bool, optional): 進捗トラジェクトリを記録するか(デフォルト False)．
+///   True で root 反復深化の各段階の pn/dn/nodes/経過時間を `progress` に記録する
+///   (per-node ではなく反復単位ゆえ低コスト; False では Vec 確保もせず性能に影響しない)．
+///   Colab 等で native stderr のログが見えない環境でも，純 Python でトラジェクトリを
+///   参照できる (`for s in result.progress: ...`)．
 ///
 /// # 注意
 ///
@@ -350,7 +438,7 @@ impl TsumeResult {
 /// - 探索中は GIL を解放するが Python シグナルは処理しない — Ctrl-C (KeyboardInterrupt)
 ///   は探索が返るまで効かない．中断制御は `nodes` / `timeout_secs` で行うこと．
 #[pyfunction]
-#[pyo3(signature = (sfen, depth=None, nodes=None, timeout_secs=None, find_shortest=None, pv_nodes_per_child=None, tt_gc_threshold=None))]
+#[pyo3(signature = (sfen, depth=None, nodes=None, timeout_secs=None, find_shortest=None, pv_nodes_per_child=None, tt_gc_threshold=None, collect_progress=None))]
 #[allow(clippy::too_many_arguments)]
 fn solve_tsume(
     py: Python<'_>,
@@ -361,6 +449,7 @@ fn solve_tsume(
     find_shortest: Option<bool>,
     pv_nodes_per_child: Option<u64>,
     tt_gc_threshold: Option<usize>,
+    collect_progress: Option<bool>,
 ) -> PyResult<TsumeResult> {
     if let Some(d) = depth {
         // Rust 側は depth >= PATH_CAPACITY (2048) で panic するため，Python には
@@ -372,9 +461,9 @@ fn solve_tsume(
         }
     }
     let sfen_owned = sfen.to_owned();
-    let result = py
+    let report = py
         .detach(move || {
-            dfpn::solve_tsume_with_timeout(
+            dfpn::solve_tsume_report_with_timeout(
                 &sfen_owned,
                 depth,
                 nodes,
@@ -382,35 +471,49 @@ fn solve_tsume(
                 find_shortest,
                 pv_nodes_per_child,
                 tt_gc_threshold,
+                collect_progress,
             )
         })
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
-    match result {
-        dfpn::TsumeResult::Checkmate {
-            moves,
-            nodes_searched,
-        } => Ok(TsumeResult {
-            status: "checkmate".to_string(),
-            moves: moves.iter().map(|m| m.to_usi()).collect(),
-            nodes_searched,
-        }),
-        dfpn::TsumeResult::CheckmateNoPv { nodes_searched } => Ok(TsumeResult {
-            status: "checkmate_no_pv".to_string(),
-            moves: Vec::new(),
-            nodes_searched,
-        }),
-        dfpn::TsumeResult::NoCheckmate { nodes_searched } => Ok(TsumeResult {
-            status: "no_checkmate".to_string(),
-            moves: Vec::new(),
-            nodes_searched,
-        }),
-        dfpn::TsumeResult::Unknown { nodes_searched } => Ok(TsumeResult {
-            status: "unknown".to_string(),
-            moves: Vec::new(),
-            nodes_searched,
-        }),
-    }
+    let (status, moves): (String, Vec<String>) = match &report.result {
+        dfpn::TsumeResult::Checkmate { moves, .. } => (
+            "checkmate".to_string(),
+            moves.iter().map(|m| m.to_usi()).collect(),
+        ),
+        dfpn::TsumeResult::CheckmateNoPv { .. } => ("checkmate_no_pv".to_string(), Vec::new()),
+        dfpn::TsumeResult::NoCheckmate { .. } => ("no_checkmate".to_string(), Vec::new()),
+        dfpn::TsumeResult::Unknown { .. } => ("unknown".to_string(), Vec::new()),
+    };
+    let nodes_searched = match &report.result {
+        dfpn::TsumeResult::Checkmate { nodes_searched, .. }
+        | dfpn::TsumeResult::CheckmateNoPv { nodes_searched }
+        | dfpn::TsumeResult::NoCheckmate { nodes_searched }
+        | dfpn::TsumeResult::Unknown { nodes_searched } => *nodes_searched,
+    };
+    let progress = report
+        .progress
+        .iter()
+        .map(|s| TsumeProgressSample {
+            nodes: s.nodes,
+            elapsed_ms: s.elapsed_ms,
+            pn: s.pn,
+            dn: s.dn,
+            mate_len: s.mate_len,
+        })
+        .collect();
+    Ok(TsumeResult {
+        status,
+        moves,
+        nodes_searched,
+        root_pn: report.root_pn,
+        root_dn: report.root_dn,
+        elapsed_ms: report.elapsed_ms,
+        mate_len_found: report.mate_len_found,
+        shortest_confirmed: report.shortest_confirmed,
+        stop_reason: report.stop_reason.as_str().to_string(),
+        progress,
+    })
 }
 
 /// Create maou_shogi submodule
@@ -419,6 +522,7 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
 
     m.add_class::<PyBoard>()?;
     m.add_class::<TsumeResult>()?;
+    m.add_class::<TsumeProgressSample>()?;
     m.add_function(wrap_pyfunction!(move16, &m)?)?;
     m.add_function(wrap_pyfunction!(move_to, &m)?)?;
     m.add_function(wrap_pyfunction!(move_from, &m)?)?;

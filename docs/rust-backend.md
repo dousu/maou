@@ -370,6 +370,7 @@ result = solve_tsume(
     find_shortest=True,      # 最短手数探索の有無
     pv_nodes_per_child=1024, # PV 復元時の 1 子あたりノード予算
     tt_gc_threshold=0,       # TT GC 閾値 (0 = 無効)
+    collect_progress=False,  # pn/dn 進捗トラジェクトリを記録するか
 )
 
 # TsumeResult のプロパティ
@@ -378,12 +379,51 @@ result.moves           # 詰み手順 (USI 形式の文字列リスト)
 result.nodes_searched  # 探索ノード数
 bool(result)           # status == "checkmate" のとき True (checkmate_no_pv は False)
 result.is_proven       # 詰み証明済なら True (checkmate_no_pv も True)
+
+# 診断メタデータ (探索終了時に 1 回だけ構築; per-node コスト無し)
+result.root_pn         # 停止時 root 証明数 (詰み時 0; 小さいほど詰みに接近)
+result.root_dn         # 停止時 root 反証数 (不詰時 0; 小さいほど不詰に接近)
+result.elapsed_ms      # 探索開始〜結果確定の経過時間 (ミリ秒)
+result.mate_len_found  # 検証済み詰み手数 (int | None); unknown でも詰みがあれば入る
+result.shortest_confirmed  # 最短手数を確定できたか (bool)
+result.stop_reason     # "solved"|"disproven"|"minimality_unconfirmed"
+                       #   |"nodes_exhausted"|"timeout"|"false_proof"|"inconclusive"
+result.progress        # 進捗サンプルのリスト (collect_progress=True 時のみ; 既定は [])
+                       #   各要素: .nodes .elapsed_ms .pn .dn .mate_len
 ```
+
+##### unknown の扱い方 (「予算追加で解けるか」の判断)
+
+`find_shortest=True` は最短を確定できないと `unknown` を返すが，`stop_reason` と
+`mate_len_found` でその内訳と可解性を判断できる:
+
+- `stop_reason == "minimality_unconfirmed"`: **詰み自体は検証済** (`mate_len_found` に
+  手数)．最短性 (より短い詰みが無いこと) だけが未確定なので，予算を増やせば `checkmate`
+  になる最有力ケース．
+- `stop_reason in ("nodes_exhausted", "timeout")` かつ `mate_len_found is None`:
+  詰みも不詰も未証明．`collect_progress=True` で得た `progress` の `pn` が 0 へ下降中なら
+  予算追加が有効，`pn`/`dn` とも横ばい/増加なら現行スケールでは非現実的と外挿判断できる．
+
+```python
+r = solve_tsume(sfen, nodes=20_000_000, find_shortest=True, collect_progress=True)
+if r.status == "unknown":
+    print(r.stop_reason, r.mate_len_found)
+    for s in r.progress:          # pn/dn の推移 (純 Python; native stderr 捕捉は不要)
+        print(s.nodes, s.pn, s.dn, s.mate_len)
+```
+
+> **Note (Google Colab)**: dfpn の進捗ログ (`SHORTEN=1` 等) は native の stderr
+> (`eprintln!`) へ出るため，Jupyter/Colab の cell には表示されない (fd 2 が Python 層に
+> 捕捉されない)．`collect_progress=True` の `result.progress` は返り値経由なので，この
+> 環境でも fd 捕捉なしで pn/dn の推移を観測できる．
 
 #### Rust API
 
 ```rust
-use maou_shogi::dfpn::{solve_tsume, solve_tsume_with_timeout, DfPnSolver, TsumeResult};
+use maou_shogi::dfpn::{
+    solve_tsume, solve_tsume_report_with_timeout, solve_tsume_with_timeout, DfPnSolver,
+    SearchReport, StopReason, TsumeResult,
+};
 
 // 便利関数 (デフォルトパラメータ)
 let result = solve_tsume(sfen, None, None)?;
@@ -410,6 +450,16 @@ match result {
     TsumeResult::NoCheckmate { nodes_searched }       => { /* 不詰 */ }
     TsumeResult::Unknown { nodes_searched }            => { /* 探索打ち切り */ }
 }
+
+// 診断メタデータ付き (root pn/dn・stop_reason・mate_len_found・progress)．
+// solver.solve_report(&mut board) / SearchReport でも取得できる．
+let report = solve_tsume_report_with_timeout(
+    sfen, Some(31), Some(5_000_000), Some(60),
+    Some(true), None, None,
+    Some(true),      // collect_progress
+)?;
+// report.result (= 上記 TsumeResult) + report.root_pn/root_dn/elapsed_ms/
+// mate_len_found/shortest_confirmed/stop_reason (StopReason)/progress (Vec<ProgressSample>)
 ```
 
 #### パラメータガイド
@@ -422,6 +472,7 @@ match result {
 | `find_shortest` | `true` | `true` は**最短を確定できた場合のみ** `checkmate`，budget/timeout で確定できなければ `unknown`．`false` は最初の詰みを発見時点で返す (予算を使い切らず高速; 最短保証なし)．早いレスポンス重視なら `false` |
 | `pv_nodes_per_child` | 1,024 | PV 復元予算．`checkmate_no_pv` が返る場合に増やす |
 | `tt_gc_threshold` | 0 (無効) | TT ポジション数がこれを超えると GC．超長手数問題の OOM 対策 |
+| `collect_progress` | `False` | `True` で root 反復深化の各段階の pn/dn/nodes/経過時間を `result.progress` に記録 (反復単位ゆえ低コスト; `False` では Vec 確保もせず性能に影響しない)．`unknown` の可解性判断・Colab での進捗観測に使う |
 
 #### 性能計測時の注意
 
