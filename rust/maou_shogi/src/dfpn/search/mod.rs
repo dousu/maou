@@ -35,7 +35,7 @@ use super::path_key::path_key_after;
 use super::search_result::{
     extend_search_threshold, BitSet64, Hand, PnDn, SearchResult, K_INFINITE_PN_DN,
 };
-use super::solver::{DfPnSolver, TsumeResult};
+use super::solver::{DfPnSolver, ProgressSample, SearchReport, StopReason, TsumeResult};
 use super::tt::TranspositionTable;
 use crate::board::Board;
 use expansion::{BranchRootEdge, LocalExpansion, K_ANCESTOR_SEARCH_THRESHOLD};
@@ -498,7 +498,14 @@ impl BufPool {
 
 impl DfPnSolver {
     /// mid 探索の root (反復深化 + 診断)．production `solve()` の唯一の engine．
+    /// 詰将棋を解き [`TsumeResult`] のみ返す (診断メタデータは捨てる)．
+    /// メタデータが必要な場合は [`Self::solve_report_impl`] を使う．
     pub(super) fn solve_impl(&mut self, board: &mut Board) -> TsumeResult {
+        self.solve_report_impl(board).result
+    }
+
+    /// 詰将棋を解き，結果 + 診断メタデータ ([`SearchReport`]) を構築して返す (探索本体)．
+    pub(super) fn solve_report_impl(&mut self, board: &mut Board) -> SearchReport {
         self.attacker = board.turn;
         self.nodes = 0;
         self.path_depths.clear();
@@ -507,6 +514,7 @@ impl DfPnSolver {
         self.dag_fires = 0;
         self.dom_path.clear();
         self.dom_fires = 0;
+        self.progress.clear();
         DM_SITE.with(|c| c.set([0; 4]));
         PROF_NS.with(|c| c.set([0; 12]));
         PROF_CNT.with(|c| c.set([0; 12]));
@@ -688,7 +696,10 @@ impl DfPnSolver {
             row("glue(do_move/setresult/recursion)", glue, 0);
         }
 
-        if last.pn() == 0 {
+        // root pn/dn を停止時点で退避 (SearchReport 用; 詰み時 pn=0 / 不詰時 dn=0)．
+        let root_pn = last.pn();
+        let root_dn = last.dn();
+        let (result, mate_len_found, stop_reason) = if last.pn() == 0 {
             // STRICT PV replay: proven 証明木を実際に replay し，OR は proven child を，
             // AND は **全合法防御** を列挙して詰みに帰着するか厳密検証する (TT pn/dn を信用しない)．
             // Some(d) = sound mate-d / None = 偽証明 or 不完全 (budget 枯渇は別表示)．
@@ -752,13 +763,19 @@ impl DfPnSolver {
                 Some(d) if self.find_shortest && !shortest_confirmed => {
                     // find_shortest=true だが budget/timeout で最小性を証明しきれなかった
                     // (len=d-2 の不詰を確認できていない) → 非最小の詰みを返さず Unknown．
+                    // ただし「≤d 手の詰みは検証済」を mate_len_found=Some(d) で伝える
+                    // (予算追加で Solved になる最有力ケース)．
                     eprintln!(
                         "[dfpn] find_shortest 未確定 (最小性 unproven; verify Some({}), budget/timeout) → Unknown",
                         d
                     );
-                    TsumeResult::Unknown {
-                        nodes_searched: self.nodes,
-                    }
+                    (
+                        TsumeResult::Unknown {
+                            nodes_searched: self.nodes,
+                        },
+                        Some(d as u32),
+                        StopReason::MinimalityUnconfirmed,
+                    )
                 }
                 Some(d) => {
                     eprintln!(
@@ -770,34 +787,72 @@ impl DfPnSolver {
                         tier
                     );
                     // PV は pv_choice (verify が記録した無駄合い除外後の最適手) を辿って復元済．
-                    TsumeResult::Checkmate {
-                        moves: pv,
-                        nodes_searched: self.nodes,
-                    }
+                    (
+                        TsumeResult::Checkmate {
+                            moves: pv,
+                            nodes_searched: self.nodes,
+                        },
+                        Some(d as u32),
+                        StopReason::Solved,
+                    )
                 }
                 None => {
-                    if budget == 0 {
+                    let reason = if budget == 0 {
                         eprintln!(
                             "[dfpn] STRICT VERIFY INCONCLUSIVE (budget exhausted) → Unknown (偽詰み回避)"
                         );
+                        StopReason::Inconclusive
                     } else {
                         eprintln!(
                             "[dfpn] STRICT VERIFY None (偽証明/不完全) → Unknown (偽詰み回避)"
                         );
-                    }
-                    TsumeResult::Unknown {
-                        nodes_searched: self.nodes,
-                    }
+                        StopReason::FalseProof
+                    };
+                    (
+                        TsumeResult::Unknown {
+                            nodes_searched: self.nodes,
+                        },
+                        None,
+                        reason,
+                    )
                 }
             }
         } else if last.dn() == 0 {
-            TsumeResult::NoCheckmate {
-                nodes_searched: self.nodes,
-            }
+            (
+                TsumeResult::NoCheckmate {
+                    nodes_searched: self.nodes,
+                },
+                None,
+                StopReason::Disproven,
+            )
         } else {
-            TsumeResult::Unknown {
-                nodes_searched: self.nodes,
-            }
+            // pn≠0 かつ dn≠0 の未解決 unknown．停止契機で内訳を区別する．
+            let reason = if self.timed_out {
+                StopReason::Timeout
+            } else if self.nodes >= self.max_nodes {
+                StopReason::NodesExhausted
+            } else {
+                StopReason::Inconclusive
+            };
+            (
+                TsumeResult::Unknown {
+                    nodes_searched: self.nodes,
+                },
+                None,
+                reason,
+            )
+        };
+        // 診断メタデータを 1 回だけ組み立てて返す (per-node コスト無し)．
+        let elapsed_ms = self.start_time.elapsed().as_millis() as u64;
+        SearchReport {
+            result,
+            root_pn,
+            root_dn,
+            elapsed_ms,
+            mate_len_found,
+            shortest_confirmed,
+            stop_reason,
+            progress: std::mem::take(&mut self.progress),
         }
     }
 
@@ -828,6 +883,17 @@ impl DfPnSolver {
                         break;
                     }
                     result = self.search_impl_root(tt, board, thpn, thdn, len);
+                    // 進捗トラジェクトリ: root 反復ごとに pn/dn/nodes/経過時間を記録
+                    // (collect_progress 時のみ; per-node ではなく反復単位ゆえ低コスト)．
+                    if self.collect_progress {
+                        self.progress.push(ProgressSample {
+                            nodes: self.nodes,
+                            elapsed_ms: self.start_time.elapsed().as_millis() as u64,
+                            pn: result.pn(),
+                            dn: result.dn(),
+                            mate_len: len.len(),
+                        });
+                    }
                     // ROOT: root 反復ごとの th と結果を dump する診断用．
                     if std::env::var("ROOT").is_ok() {
                         eprintln!(

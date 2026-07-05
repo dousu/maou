@@ -35,6 +35,90 @@ pub enum TsumeResult {
     Unknown { nodes_searched: u64 },
 }
 
+/// 探索の停止理由．[`SearchReport::stop_reason`] で返され，`unknown` の内訳
+/// (予算/時間切れ・最小性未確定・偽証明) を機械可読に区別する．
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    /// 詰みを返した (find_shortest=true なら最短確定，false なら最初の詰み)．
+    Solved,
+    /// 不詰を証明した (dn==0)．
+    Disproven,
+    /// 詰みは検証済 (Some(d)) だが，find_shortest の最小性 (len=d-2 の不詰) を
+    /// 予算/時間内に証明しきれなかった → 非最小の詰みを返さず unknown．
+    /// 予算を増やせば [`StopReason::Solved`] になる可能性が高い．
+    MinimalityUnconfirmed,
+    /// ノード上限に達し未解決 (pn≠0 かつ dn≠0)．予算追加の余地あり．
+    NodesExhausted,
+    /// タイムアウトで未解決 (pn≠0 かつ dn≠0)．時間追加の余地あり．
+    Timeout,
+    /// STRICT verify が偽証明/不完全と判定 → 偽詰み回避のため unknown．
+    FalseProof,
+    /// 上記以外の未解決 (閾値 cap 到達等，稀)．
+    Inconclusive,
+}
+
+impl StopReason {
+    /// Python バインディング等向けの snake_case 文字列表現．
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StopReason::Solved => "solved",
+            StopReason::Disproven => "disproven",
+            StopReason::MinimalityUnconfirmed => "minimality_unconfirmed",
+            StopReason::NodesExhausted => "nodes_exhausted",
+            StopReason::Timeout => "timeout",
+            StopReason::FalseProof => "false_proof",
+            StopReason::Inconclusive => "inconclusive",
+        }
+    }
+}
+
+/// 探索進捗のスナップショット．
+///
+/// `collect_progress=true` のとき，root 反復深化ループの各イテレーションで
+/// 1 点ずつ記録される (初回 DEPTH_MAX 探索および find_shortest の各短縮探索を含む)．
+/// pn が 0 へ下降しているか (詰みに接近)／dn が 0 へ下降しているか (不詰に接近) で，
+/// 予算追加の有効性を外挿判断できる．
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgressSample {
+    /// この時点の累積探索ノード数 (emplace 呼び出し回数)．
+    pub nodes: u64,
+    /// 探索開始からの経過時間 (ミリ秒)．
+    pub elapsed_ms: u64,
+    /// root の証明数 (0 = 詰み証明)．K_INFINITE_PN_DN (≈9.2e18) は ∞ を表す．
+    pub pn: u64,
+    /// root の反証数 (0 = 不詰証明)．
+    pub dn: u64,
+    /// この反復で探索している mate-length 上限 (初回は DEPTH_MAX，短縮探索では d-2)．
+    pub mate_len: u32,
+}
+
+/// 詰将棋探索の結果 + 診断メタデータ．
+///
+/// [`TsumeResult`] (結果本体) に加え，`unknown` の内訳判断や「予算/時間を追加すれば
+/// 現実的に解けるか」の見積りに必要な情報 (root pn/dn・経過時間・検出済み詰み手数・
+/// 停止理由・進捗トラジェクトリ) を持つ．探索終了時に 1 回だけ構築されるため
+/// per-node コストは無い ([`DfPnSolver::solve_report`] で取得)．
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchReport {
+    /// 結果本体 (詰み手順を含む)．
+    pub result: TsumeResult,
+    /// 停止時の root 証明数 (詰み時は 0)．
+    pub root_pn: u64,
+    /// 停止時の root 反証数 (不詰時は 0)．
+    pub root_dn: u64,
+    /// 探索開始から結果確定までの経過時間 (ミリ秒，verify フェーズ込み)．
+    pub elapsed_ms: u64,
+    /// 詰みが検証された場合の手数 Some(d)．`unknown` (最小性未確定) でも詰みが
+    /// 見つかっていれば Some(d) が入り「≤d 手の詰みが存在する」ことを意味する．
+    pub mate_len_found: Option<u32>,
+    /// find_shortest で最短手数を確定できたか (find_shortest=false では常に false)．
+    pub shortest_confirmed: bool,
+    /// 停止理由 (unknown の内訳を区別する)．
+    pub stop_reason: StopReason,
+    /// 進捗トラジェクトリ (`collect_progress=true` 時のみ記録; 既定は空)．
+    pub progress: Vec<ProgressSample>,
+}
+
 /// Df-Pn ソルバー．
 ///
 /// 統一探索本体 (`search/mod.rs` の `solve_impl`) を駆動する．
@@ -94,6 +178,10 @@ pub struct DfPnSolver {
     pub(super) dom_path: super::path_stack::DomPathStack,
     /// mid dominance pruning 発火数 (診断用)．
     pub(super) dom_fires: u64,
+    /// 進捗トラジェクトリを記録するか (既定: false)．
+    pub(super) collect_progress: bool,
+    /// 進捗トラジェクトリ (collect_progress=true 時に root 反復ごとに push)．
+    pub(super) progress: Vec<ProgressSample>,
 }
 
 impl DfPnSolver {
@@ -137,6 +225,8 @@ impl DfPnSolver {
             start_time: Instant::now(),
             timed_out: false,
             attacker: Color::Black,
+            collect_progress: false,
+            progress: Vec::new(),
         }
     }
 
@@ -167,6 +257,17 @@ impl DfPnSolver {
         self
     }
 
+    /// 進捗トラジェクトリ収集の有無を設定する．
+    ///
+    /// `true` にすると root 反復深化ループの各イテレーションで pn/dn/nodes/経過時間を
+    /// [`SearchReport::progress`] に記録する ([`DfPnSolver::solve_report`] で取得)．
+    /// per-node ではなく反復単位ゆえ低コスト．既定は false (記録せず，Vec の確保も
+    /// 行わないため探索性能に影響しない)．
+    pub fn set_collect_progress(&mut self, v: bool) -> &mut Self {
+        self.collect_progress = v;
+        self
+    }
+
     /// タイムアウトしたかどうかを返す．
     #[inline]
     pub(super) fn is_timed_out(&self) -> bool {
@@ -183,5 +284,15 @@ impl DfPnSolver {
     /// を返す (false NoMate を出さない)．
     pub fn solve(&mut self, board: &mut Board) -> TsumeResult {
         self.solve_impl(board)
+    }
+
+    /// 詰将棋を解き，結果 + 診断メタデータ ([`SearchReport`]) を返す．
+    ///
+    /// [`solve`](Self::solve) と同一の探索を行うが，`unknown` の内訳判断や
+    /// 「予算/時間を追加すれば解けるか」の見積りに使う情報 (root pn/dn・経過時間・
+    /// 検出済み詰み手数・停止理由・進捗トラジェクトリ) を付随して返す．追加コストは
+    /// 探索終了時の 1 回だけで per-node 性能には影響しない．
+    pub fn solve_report(&mut self, board: &mut Board) -> SearchReport {
+        self.solve_report_impl(board)
     }
 }
