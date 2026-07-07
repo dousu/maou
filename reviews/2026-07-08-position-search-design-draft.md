@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in:
+applied_in: dffb9c8
 date: 2026-07-08
 target: [docs/design/position-search/index.md, CLAUDE.md]
 risk: low
