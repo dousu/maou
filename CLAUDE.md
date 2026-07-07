@@ -45,6 +45,7 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
   - `rust/maou_rust/Cargo.toml` for `maou_rust` crate (PyO3 bindings)
   - `rust/maou_io/Cargo.toml` for `maou_io` crate
   - `rust/maou_index/Cargo.toml` for `maou_index` crate
+  - `rust/maou_search/Cargo.toml` for `maou_search` crate
 - MUST follow semantic versioning independently per crate: `fix:` → patch, `feat:` → minor, breaking change → major
 - MUST NOT push changes to `rust/<crate>/` without a corresponding version bump in that crate's `Cargo.toml`
 - Rust crate versions are independent of the Python package version in `pyproject.toml`

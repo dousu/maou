@@ -303,6 +303,12 @@ rust/
 │       ├── schema.rs
 │       └── error.rs
 ├── maou_index/             # インデックスクレート
+├── maou_search/            # MCTS 1局面探索エンジンクレート (pure Rust)
+│   └── src/
+│       ├── lib.rs
+│       ├── evaluator.rs    # Evaluator trait (NN 推論の抽象境界) + MockEvaluator
+│       ├── tree.rs         # 固定容量ノードプール + lock-free 統計
+│       └── search.rs       # PUCT 探索本体 (バッチ収集 + virtual loss)
 └── maou_shogi/             # 将棋エンジンクレート
     └── src/
         ├── lib.rs
