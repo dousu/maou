@@ -307,6 +307,11 @@ impl TsumeProgressSample {
 /// - `shortest_confirmed`: find_shortest で最短手数を確定できたか(`bool`)．
 /// - `stop_reason`: 停止理由(`"solved"` / `"disproven"` / `"minimality_unconfirmed"` /
 ///   `"nodes_exhausted"` / `"timeout"` / `"false_proof"` / `"inconclusive"`)．
+/// - `best_mate`: `find_shortest=True` が予算/時間切れで最短を確定できず `status=="unknown"`
+///   (`stop_reason=="minimality_unconfirmed"`) に終わったとき，そこまでに見つけた検証済みの
+///   詰み手順(USI形式のリスト)．`mate_len_found` と同じ手数で「≤その手数の詰みが存在する」
+///   ことの手順つき裏付けになる(**最短である保証はない**)．`checkmate` 時は空リスト
+///   (最短確定手順は `moves` 側)．
 /// - `progress`: 進捗トラジェクトリ(`collect_progress=True` 時のみ; 既定は空リスト)．
 #[pyclass(frozen)]
 struct TsumeResult {
@@ -329,6 +334,8 @@ struct TsumeResult {
     #[pyo3(get)]
     stop_reason: String,
     #[pyo3(get)]
+    best_mate: Vec<String>,
+    #[pyo3(get)]
     progress: Vec<TsumeProgressSample>,
 }
 
@@ -342,10 +349,11 @@ impl TsumeResult {
             )
         } else {
             format!(
-                "TsumeResult(status='{}', stop_reason='{}', mate_len_found={:?}, root_pn={}, root_dn={}, nodes_searched={}, elapsed_ms={})",
+                "TsumeResult(status='{}', stop_reason='{}', mate_len_found={:?}, best_mate={:?}, root_pn={}, root_dn={}, nodes_searched={}, elapsed_ms={})",
                 self.status,
                 self.stop_reason,
                 self.mate_len_found,
+                self.best_mate,
                 self.root_pn,
                 self.root_dn,
                 self.nodes_searched,
@@ -394,12 +402,16 @@ impl TsumeResult {
 ///   - `stop_reason`: 停止理由(`"solved"` / `"disproven"` / `"minimality_unconfirmed"` /
 ///     `"nodes_exhausted"` / `"timeout"` / `"false_proof"` / `"inconclusive"`)．`unknown` の
 ///     内訳を機械可読に区別する．
+///   - `best_mate`: `unknown` (`minimality_unconfirmed`) でもそこまでに見つけた検証済みの
+///     詰み手順(USI形式のリスト)．最短だけ未確定で打ち切っても手順の成果を残す
+///     (**最短保証なし**; `checkmate` 時は空で手順は `moves` 側)．
 ///   - `progress`: 進捗トラジェクトリ(`collect_progress=True` 時のみ; 既定は空リスト)．
 ///
 /// # unknown の扱い方 (予算追加の判断)
 ///
-/// - `stop_reason=="minimality_unconfirmed"`: 詰み自体は検証済(`mate_len_found` に手数)．
-///   予算を増やせば `checkmate` になる最有力ケース．
+/// - `stop_reason=="minimality_unconfirmed"`: 詰み自体は検証済(`mate_len_found` に手数，
+///   `best_mate` に手順)．予算を増やせば `checkmate` になる最有力ケース．大きなリソースを
+///   費した末に最短を確定しきれなくても，`best_mate` で詰み手順そのものは回収できる．
 /// - `stop_reason in ("nodes_exhausted","timeout")` かつ `mate_len_found is None`:
 ///   `collect_progress=True` で `progress` の `pn` が 0 へ下降中なら予算追加が有効，
 ///   `pn`/`dn` とも横ばい/増加なら現行スケールでは非現実的と外挿判断できる．
@@ -502,6 +514,8 @@ fn solve_tsume(
             mate_len: s.mate_len,
         })
         .collect();
+    // best_mate: unknown (最小性未確定) でも残った検証済み詰み手順 (USI 形式)．
+    let best_mate: Vec<String> = report.best_mate.iter().map(|m| m.to_usi()).collect();
     Ok(TsumeResult {
         status,
         moves,
@@ -512,6 +526,7 @@ fn solve_tsume(
         mate_len_found: report.mate_len_found,
         shortest_confirmed: report.shortest_confirmed,
         stop_reason: report.stop_reason.as_str().to_string(),
+        best_mate,
         progress,
     })
 }

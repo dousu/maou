@@ -699,7 +699,7 @@ impl DfPnSolver {
         // root pn/dn を停止時点で退避 (SearchReport 用; 詰み時 pn=0 / 不詰時 dn=0)．
         let root_pn = last.pn();
         let root_dn = last.dn();
-        let (result, mate_len_found, stop_reason) = if last.pn() == 0 {
+        let (result, mate_len_found, stop_reason, best_mate) = if last.pn() == 0 {
             // STRICT PV replay: proven 証明木を実際に replay し，OR は proven child を，
             // AND は **全合法防御** を列挙して詰みに帰着するか厳密検証する (TT pn/dn を信用しない)．
             // Some(d) = sound mate-d / None = 偽証明 or 不完全 (budget 枯渇は別表示)．
@@ -763,11 +763,14 @@ impl DfPnSolver {
                 Some(d) if self.find_shortest && !shortest_confirmed => {
                     // find_shortest=true だが budget/timeout で最小性を証明しきれなかった
                     // (len=d-2 の不詰を確認できていない) → 非最小の詰みを返さず Unknown．
-                    // ただし「≤d 手の詰みは検証済」を mate_len_found=Some(d) で伝える
-                    // (予算追加で Solved になる最有力ケース)．
+                    // ただし「≤d 手の詰みは検証済」を mate_len_found=Some(d) で伝え，そこまでに
+                    // 見つけた最短 (= verify 済) の詰み手順 `pv` を best_mate に残す (大きなリソースを
+                    // 費した探索の成果を最低限保持; 最短であることは未保証)．予算追加で Solved になる
+                    // 最有力ケース．
                     eprintln!(
-                        "[dfpn] find_shortest 未確定 (最小性 unproven; verify Some({}), budget/timeout) → Unknown",
-                        d
+                        "[dfpn] find_shortest 未確定 (最小性 unproven; verify Some({}), budget/timeout) → Unknown (best_mate={} 手を保持)",
+                        d,
+                        pv.len()
                     );
                     (
                         TsumeResult::Unknown {
@@ -775,6 +778,7 @@ impl DfPnSolver {
                         },
                         Some(d as u32),
                         StopReason::MinimalityUnconfirmed,
+                        pv,
                     )
                 }
                 Some(d) => {
@@ -787,6 +791,7 @@ impl DfPnSolver {
                         tier
                     );
                     // PV は pv_choice (verify が記録した無駄合い除外後の最適手) を辿って復元済．
+                    // 最短確定手順は result 側の moves に入るため best_mate は空．
                     (
                         TsumeResult::Checkmate {
                             moves: pv,
@@ -794,6 +799,7 @@ impl DfPnSolver {
                         },
                         Some(d as u32),
                         StopReason::Solved,
+                        Vec::new(),
                     )
                 }
                 None => {
@@ -814,6 +820,7 @@ impl DfPnSolver {
                         },
                         None,
                         reason,
+                        Vec::new(),
                     )
                 }
             }
@@ -824,6 +831,7 @@ impl DfPnSolver {
                 },
                 None,
                 StopReason::Disproven,
+                Vec::new(),
             )
         } else {
             // pn≠0 かつ dn≠0 の未解決 unknown．停止契機で内訳を区別する．
@@ -840,6 +848,7 @@ impl DfPnSolver {
                 },
                 None,
                 reason,
+                Vec::new(),
             )
         };
         // 診断メタデータを 1 回だけ組み立てて返す (per-node コスト無し)．
@@ -853,6 +862,7 @@ impl DfPnSolver {
             shortest_confirmed,
             stop_reason,
             progress: std::mem::take(&mut self.progress),
+            best_mate,
         }
     }
 
