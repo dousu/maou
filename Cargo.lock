@@ -1687,6 +1687,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "maou_search"
+version = "0.1.0"
+dependencies = [
+ "maou_shogi",
+]
+
+[[package]]
 name = "maou_shogi"
 version = "5.4.0"
 dependencies = [

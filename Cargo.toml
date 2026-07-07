@@ -1,5 +1,11 @@
 [workspace]
-members = ["rust/maou_io", "rust/maou_rust", "rust/maou_index", "rust/maou_shogi"]
+members = [
+    "rust/maou_io",
+    "rust/maou_rust",
+    "rust/maou_index",
+    "rust/maou_shogi",
+    "rust/maou_search",
+]
 resolver = "2"
 
 [workspace.dependencies]

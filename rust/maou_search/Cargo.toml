@@ -1,0 +1,11 @@
+[package]
+name = "maou_search"
+version = "0.1.0"
+edition = "2021"
+description = "MCTS-based single-position search engine for shogi (pure Rust, batched evaluation)"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+maou_shogi = { path = "../maou_shogi" }
