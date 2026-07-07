@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in:
+applied_in: 7259c3d
 date: 2026-07-08
 target: [docs/rust-backend.md]
 risk: low
