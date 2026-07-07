@@ -117,6 +117,15 @@ pub struct SearchReport {
     pub stop_reason: StopReason,
     /// 進捗トラジェクトリ (`collect_progress=true` 時のみ記録; 既定は空)．
     pub progress: Vec<ProgressSample>,
+    /// find_shortest=true が最小性未確定 (`StopReason::MinimalityUnconfirmed` の unknown) で
+    /// 終わったが，探索中に STRICT verify 済みの詰み手順が得られている場合の「暫定最短」手順．
+    ///
+    /// 予算/時間切れで最短だけ確定できなくても，そこまでに見つけた最短の詰み手順を残すことで
+    /// 大きなリソースを費した探索の成果を最低限保持する (`mate_len_found = Some(d)` に対応し
+    /// `best_mate.len() == d`; 「≤d 手の詰みが存在する」ことの constructive proof)．**最短である
+    /// ことは保証しない**．`result` が [`TsumeResult::Checkmate`] の場合 (最短確定手順は
+    /// `result` 側の `moves` に入る) や，詰みが得られなかった場合は空．
+    pub best_mate: Vec<Move>,
 }
 
 /// Df-Pn ソルバー．

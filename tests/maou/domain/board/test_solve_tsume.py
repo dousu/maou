@@ -40,6 +40,8 @@ class TestSolveTsumeBasic:
         assert result.shortest_confirmed is True
         assert result.root_pn == 0  # 詰み証明ゆえ pn=0
         assert result.elapsed_ms >= 0
+        # checkmate 時は手順は moves 側; best_mate は空．
+        assert result.best_mate == []
         # collect_progress 未指定 → progress は空 (アロケーション無し)．
         assert result.progress == []
 
@@ -89,6 +91,7 @@ class TestSolveTsumeFindShortestSemantics:
             find_shortest=True,
         )
         assert result.status == "unknown"
+        # 最短確定手順 (moves) は未確定ゆえ空．
         assert result.moves == []
         # unknown でも「詰み自体は検証済 (最短だけ未確定)」を伝える．
         # 予算追加で solved になる最有力ケース．
@@ -99,6 +102,12 @@ class TestSolveTsumeFindShortestSemantics:
         )  # 詰将棋の手数は奇数
         assert result.mate_len_found >= 29
         assert result.shortest_confirmed is False
+        # 予算切れで最短だけ未確定でも，そこまでに見つけた検証済み詰み手順を best_mate に
+        # 残す (大きなリソースを費した探索の成果を最低限保持する)．手数は mate_len_found と一致．
+        assert len(result.best_mate) == result.mate_len_found
+        assert all(
+            isinstance(m, str) and m for m in result.best_mate
+        )
 
     def test_find_shortest_checkmate_when_budget_sufficient(
         self,
@@ -116,6 +125,8 @@ class TestSolveTsumeFindShortestSemantics:
         assert result.stop_reason == "solved"
         assert result.mate_len_found == 29
         assert result.shortest_confirmed is True
+        # checkmate 時は手順は moves 側にあり，best_mate は空 (重複させない)．
+        assert result.best_mate == []
 
     def test_find_first_returns_early_without_exhausting_budget(
         self,

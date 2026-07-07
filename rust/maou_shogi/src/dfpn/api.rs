@@ -137,6 +137,10 @@ mod report_tests {
 
     // 後手玉 1一，先手金 2三，先手持ち駒: 金．1 手詰 (自明に最短)．
     const MATE_1TE: &str = "8k/9/7G1/9/9/9/9/9/9 b G 1";
+    // 29 手詰 canonical．first-mate(31 手) は ~7K node で見つかるが，最短 29 手の確定には
+    // ~396K node 必要．予算 50K では最小性を証明できず MinimalityUnconfirmed の unknown．
+    const MATE_29TE: &str =
+        "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
 
     #[test]
     fn report_solved_1te_carries_metadata() {
@@ -178,6 +182,40 @@ mod report_tests {
         .unwrap();
         assert!(report.progress.is_empty());
         assert_eq!(report.stop_reason, StopReason::Solved);
+    }
+
+    #[test]
+    fn report_minimality_unconfirmed_carries_best_mate() {
+        // find_shortest=true・予算 50K では最小性を証明できず MinimalityUnconfirmed の unknown．
+        // このとき，そこまでに STRICT verify 済みの詰み手順を best_mate に残す (大きなリソースを
+        // 費した探索の成果を最低限保持する)．
+        let report = solve_tsume_report_with_timeout(
+            MATE_29TE,
+            Some(31),
+            Some(50_000),
+            None,
+            Some(true), // find_shortest
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(matches!(report.result, TsumeResult::Unknown { .. }));
+        assert_eq!(report.stop_reason, StopReason::MinimalityUnconfirmed);
+        assert!(!report.shortest_confirmed);
+        // 詰み自体は検証済 → mate_len_found=Some(d) かつ best_mate.len()==d の詰み手順が残る．
+        let d = report
+            .mate_len_found
+            .expect("mate_len_found should be Some");
+        assert_eq!(d % 2, 1, "詰将棋の手数は奇数");
+        assert!(d >= 29);
+        assert_eq!(
+            report.best_mate.len(),
+            d as usize,
+            "best_mate は mate_len_found と同じ手数の詰み手順"
+        );
+        // 攻め方 (root 手番) から始まり，全手が合法な非 NONE 手であること．
+        assert!(report.best_mate.iter().all(|m| m.raw_u32() != 0));
     }
 
     #[test]
