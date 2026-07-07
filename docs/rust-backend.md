@@ -299,10 +299,16 @@ rust/
 ├── maou_io/                # Arrow IPC I/O クレート
 │   └── src/
 │       ├── lib.rs
-│       ├── arrow_io.rs
+│       ├── arrow_io.rs     # feather (Arrow IPC + LZ4) の読み書き・マージ
 │       ├── schema.rs
+│       ├── sparse_array.rs # move label 配列の sparse 圧縮・マージ
 │       └── error.rs
 ├── maou_index/             # インデックスクレート
+│   └── src/
+│       ├── lib.rs
+│       ├── index.rs        # ArrayType / インデックス本体
+│       ├── path_scanner.rs # データファイル走査
+│       └── error.rs
 ├── maou_search/            # MCTS 1局面探索エンジンクレート (pure Rust)
 │   └── src/
 │       ├── lib.rs
@@ -312,13 +318,33 @@ rust/
 └── maou_shogi/             # 将棋エンジンクレート
     └── src/
         ├── lib.rs
-        ├── board.rs        # 盤面表現 (Bitboard + Mailbox)
+        ├── board.rs        # 盤面表現 (Bitboard + Mailbox)，do_move/undo_move，hash_after
+        ├── bitboard.rs     # 81 マス Bitboard
+        ├── attack.rs       # 利きテーブル (PEXT ベース，BMI2 は runtime gate)
         ├── movegen.rs      # 合法手生成
-        ├── moves.rs        # Move エンコーディング
+        ├── moves.rs        # Move エンコーディング (cshogi 互換 16-bit + 拡張)
+        ├── piece.rs        # 駒の内部実装 (cshogi 互換変換のみ公開)
+        ├── position.rs     # Board + 履歴 (千日手・連続王手の千日手検出)
+        ├── sfen.rs         # SFEN パーサ (内部実装，SfenError のみ公開)
         ├── types.rs        # PieceType, Square 等
+        ├── zobrist.rs      # Zobrist ハッシュテーブル
         ├── feature.rs      # 特徴量抽出 (104×9×9)
         ├── hcp.rs          # HuffmanCodedPos
-        └── dfpn.rs         # 詰将棋ソルバー (Df-Pn アルゴリズム)
+        └── dfpn/           # 詰将棋ソルバー (Df-Pn アルゴリズム)
+            ├── mod.rs
+            ├── api.rs            # solve_tsume* 公開 API
+            ├── solver.rs         # DfPnSolver / TsumeResult / SearchReport
+            ├── search/           # 探索本体 (mod.rs, expansion.rs, pv.rs)
+            ├── movegen/          # 王手・回避手生成 (mod.rs, mate1ply.rs,
+            │                     #   check_cache.rs, delayed_move_list.rs)
+            ├── tt/               # 置換表 (mod.rs, entry.rs)
+            ├── heuristics.rs     # df-pn+ / DFPN-E 初期 pn/dn 推定
+            ├── mate_len.rs       # 詰み手数境界
+            ├── path_key.rs       # 経路ハッシュ
+            ├── path_stack.rs     # 千日手検出用パススタック
+            ├── proof_hand.rs     # 証明駒
+            ├── search_result.rs  # 結果型
+            └── tests.rs
 ```
 
 ## maou_shogi モジュール
