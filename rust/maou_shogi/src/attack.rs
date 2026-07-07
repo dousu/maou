@@ -1,11 +1,11 @@
+//! 駒の利きを計算する．
+//!
+//! 近接駒(歩,桂,銀,金,王,成駒のステップ部分)は事前計算テーブルから取得．
+//! 飛び駒(香,角,飛,馬,龍)はPEXTベースのルックアップテーブルで計算する．
+//! BMI2非対応環境ではソフトウェアPEXTにフォールバックする．
+
 use crate::bitboard::Bitboard;
 use crate::types::{Color, PieceType, Square, PIECE_BB_SIZE};
-
-/// 駒の利きを計算する．
-///
-/// 近接駒(歩,桂,銀,金,王,成駒のステップ部分)は事前計算テーブルから取得．
-/// 飛び駒(香,角,飛,馬,龍)はPEXTベースのルックアップテーブルで計算する．
-/// BMI2非対応環境ではソフトウェアPEXTにフォールバックする．
 
 /// 近接駒(飛び駒以外)の利きテーブル．
 /// step_attacks[color][piece_type][square]
@@ -102,7 +102,7 @@ fn add_step(table: &mut [Bitboard; 81], sq: Square, dirs: &[(i8, i8)]) {
     for &(dc, dr) in dirs {
         let nc = col + dc;
         let nr = row + dr;
-        if nc >= 0 && nc < 9 && nr >= 0 && nr < 9 {
+        if (0..9).contains(&nc) && (0..9).contains(&nr) {
             bb.set(Square::new(nc as u8, nr as u8));
         }
     }
@@ -155,7 +155,7 @@ fn init_ray_masks() -> [[Bitboard; 81]; 8] {
             let mut bb = Bitboard::EMPTY;
             let mut c = col + dc;
             let mut r = row + dr;
-            while c >= 0 && c < 9 && r >= 0 && r < 9 {
+            while (0..9).contains(&c) && (0..9).contains(&r) {
                 bb.set(Square::new(c as u8, r as u8));
                 c += dc;
                 r += dr;
@@ -390,9 +390,9 @@ fn init_pext_table(
         let size = 1usize << n;
         for idx in 0..size {
             let mut occ = Bitboard::EMPTY;
-            for bit in 0..n {
+            for (bit, &mask_sq) in mask_squares.iter().enumerate().take(n) {
                 if idx & (1 << bit) != 0 {
-                    occ.set(mask_squares[bit]);
+                    occ.set(mask_sq);
                 }
             }
             attacks.push(attack_fn(sq, occ));
@@ -579,7 +579,7 @@ fn compute_between_bb(sq1: Square, sq2: Square) -> Bitboard {
     let mut c = c1 + dc;
     let mut r = r1 + dr;
     while (c, r) != (c2, r2) {
-        if c < 0 || c >= 9 || r < 0 || r >= 9 {
+        if !(0..9).contains(&c) || !(0..9).contains(&r) {
             return Bitboard::EMPTY;
         }
         bb.set(Square::new(c as u8, r as u8));
@@ -822,22 +822,22 @@ mod tests {
                     if bit != 0 {
                         let nc = col + d;
                         let nr = row + d;
-                        if nc >= 0 && nc < 9 && nr >= 0 && nr < 9 {
+                        if (0..9).contains(&nc) && (0..9).contains(&nr) {
                             occ.set(Square::new(nc as u8, nr as u8));
                         }
                         let nc = col - d;
                         let nr = row - d;
-                        if nc >= 0 && nc < 9 && nr >= 0 && nr < 9 {
+                        if (0..9).contains(&nc) && (0..9).contains(&nr) {
                             occ.set(Square::new(nc as u8, nr as u8));
                         }
                         let nc = col + d;
                         let nr = row - d;
-                        if nc >= 0 && nc < 9 && nr >= 0 && nr < 9 {
+                        if (0..9).contains(&nc) && (0..9).contains(&nr) {
                             occ.set(Square::new(nc as u8, nr as u8));
                         }
                         let nc = col - d;
                         let nr = row + d;
-                        if nc >= 0 && nc < 9 && nr >= 0 && nr < 9 {
+                        if (0..9).contains(&nc) && (0..9).contains(&nr) {
                             occ.set(Square::new(nc as u8, nr as u8));
                         }
                     }

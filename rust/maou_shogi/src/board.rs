@@ -499,7 +499,7 @@ impl Board {
             Some(esq) => {
                 let mut m = Bitboard::EMPTY;
                 m.set(esq);
-                occ = occ & !m;
+                occ &= !m;
                 !m
             }
             None => !Bitboard::EMPTY,
@@ -1025,10 +1025,7 @@ impl Board {
         if checks.is_empty() {
             return None;
         }
-        let mut v = match self.mate1ply_verifier(attacker) {
-            Some(v) => v,
-            None => return None,
-        };
+        let mut v = self.mate1ply_verifier(attacker)?;
         let kc = v.king_sq.col() as i32;
         let kr = v.king_sq.row() as i32;
         let defender = v.defender;
@@ -1169,9 +1166,9 @@ impl Board {
     /// - `Some(true)`  = 単一の直接王手で詰み (ビットボードで確定)．
     /// - `Some(false)` = 単一の直接王手で詰みでない / 非王手 (ビットボードで確定)．
     /// - `None`        = 開き王手 (discovered) / 両王手 (double check)．真の王手駒が
-    ///                   to_sq 以外にあり捕獲・合駒判定がこの関数の前提 (動いた駒=唯一の王手駒)
-    ///                   を満たさないため，呼び出し側 (`mate_move_in_1ply`) が do_move + 合法手
-    ///                   生成で確定検証する．盤面は変更しない．
+    ///   to_sq 以外にあり捕獲・合駒判定がこの関数の前提 (動いた駒=唯一の王手駒)
+    ///   を満たさないため，呼び出し側 (`mate_move_in_1ply`) が do_move + 合法手
+    ///   生成で確定検証する．盤面は変更しない．
     #[allow(clippy::too_many_arguments)]
     fn is_checkmate_after_bb(
         &self,
@@ -2690,8 +2687,8 @@ impl Board {
     /// 盤面の駒配列(81要素)をcshogi互換IDで返す．
     pub fn pieces(&self) -> [u8; 81] {
         let mut result = [0u8; 81];
-        for i in 0..81 {
-            result[i] = self.squares[i].0;
+        for (dst, piece) in result.iter_mut().zip(self.squares.iter()) {
+            *dst = piece.0;
         }
         result
     }

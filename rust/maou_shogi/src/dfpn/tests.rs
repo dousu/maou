@@ -283,7 +283,7 @@ fn test_tsume_9te_b_ryu_2a_not_checkmate() {
     for usi in &moves_usi {
         let m = board
             .move_from_usi(usi)
-            .expect(&format!("invalid USI: {}", usi));
+            .unwrap_or_else(|| panic!("invalid USI: {}", usi));
         board.do_move(m);
     }
 
@@ -963,7 +963,7 @@ fn test_39te_divergence_probe() {
         .unwrap_or(total);
     let mut board = Board::new();
     board.set_sfen(sfen).unwrap();
-    for k in 0..total {
+    for (k, &usi) in line.iter().enumerate() {
         if k % 2 == 0 && k <= probe_max {
             let expected = (total - k) as i64;
             let sub_sfen = board.sfen();
@@ -987,8 +987,8 @@ fn test_39te_divergence_probe() {
             );
         }
         let m = board
-            .move_from_usi(line[k])
-            .unwrap_or_else(|| panic!("invalid USI: {}", line[k]));
+            .move_from_usi(usi)
+            .unwrap_or_else(|| panic!("invalid USI: {usi}"));
         board.do_move(m);
     }
 }
@@ -1622,7 +1622,7 @@ fn test_counter_check_diagnostic() {
     let out_path = "/tmp/counter_check_diagnostic.log";
     let sfen = "7l1/5n1k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s3n2l17p 1";
 
-    let _result = std::thread::Builder::new()
+    std::thread::Builder::new()
         .stack_size(32 * 1024 * 1024)
         .spawn(move || {
             let mut out = std::fs::File::create(out_path).unwrap();

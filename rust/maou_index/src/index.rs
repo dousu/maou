@@ -21,6 +21,8 @@ pub struct RecordLocation {
 }
 
 /// データ型の種類．
+// HCPE はフォーマット名 (huffman coded packed entry) の定着表記のため大文字を維持する．
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArrayType {
     HCPE,
@@ -68,10 +70,7 @@ pub struct DataIndex {
 
 impl DataIndex {
     /// 新しいインデックスを作成．
-    pub fn new(
-        array_type: ArrayType,
-        file_paths: Vec<PathBuf>,
-    ) -> Self {
+    pub fn new(array_type: ArrayType, file_paths: Vec<PathBuf>) -> Self {
         Self {
             id_index: HashMap::new(),
             id_sorted_index: BTreeMap::new(),
@@ -83,12 +82,7 @@ impl DataIndex {
     }
 
     /// レコードをインデックスに追加．
-    pub fn add_record(
-        &mut self,
-        id: String,
-        eval: i16,
-        location: RecordLocation,
-    ) {
+    pub fn add_record(&mut self, id: String, eval: i16, location: RecordLocation) {
         // IDインデックスに追加
         self.id_index.insert(id.clone(), location);
 
@@ -96,19 +90,13 @@ impl DataIndex {
         self.id_sorted_index.insert(id, location);
 
         // 評価値インデックスに追加
-        self.eval_index
-            .entry(eval)
-            .or_insert_with(Vec::new)
-            .push(location);
+        self.eval_index.entry(eval).or_default().push(location);
 
         self.total_records += 1;
     }
 
     /// IDでレコード位置を検索（O(1)）．
-    pub fn search_by_id(
-        &self,
-        id: &str,
-    ) -> Option<RecordLocation> {
+    pub fn search_by_id(&self, id: &str) -> Option<RecordLocation> {
         self.id_index.get(id).copied()
     }
 
@@ -131,8 +119,8 @@ impl DataIndex {
         if let Some(last) = end_bytes.last_mut() {
             *last = last.saturating_add(1);
         }
-        let end_prefix = String::from_utf8(end_bytes)
-            .unwrap_or_else(|_| format!("{}\u{10ffff}", prefix));
+        let end_prefix =
+            String::from_utf8(end_bytes).unwrap_or_else(|_| format!("{}\u{10ffff}", prefix));
 
         // BTreeMapのrange queryでO(log n + k)検索
         self.id_sorted_index
@@ -150,10 +138,7 @@ impl DataIndex {
     /// # Returns
     /// IDのベクター（ソート済み）
     pub fn get_all_ids(&self, limit: Option<usize>) -> Vec<String> {
-        let ids: Vec<String> = self.id_sorted_index
-            .keys()
-            .cloned()
-            .collect();
+        let ids: Vec<String> = self.id_sorted_index.keys().cloned().collect();
 
         if let Some(max_count) = limit {
             ids.into_iter().take(max_count).collect()
@@ -192,11 +177,7 @@ impl DataIndex {
     }
 
     /// 評価値範囲内のレコード総数をカウント．
-    pub fn count_eval_range(
-        &self,
-        min_eval: Option<i16>,
-        max_eval: Option<i16>,
-    ) -> usize {
+    pub fn count_eval_range(&self, min_eval: Option<i16>, max_eval: Option<i16>) -> usize {
         let min = min_eval.unwrap_or(i16::MIN);
         let max = max_eval.unwrap_or(i16::MAX);
 
@@ -223,15 +204,9 @@ impl DataIndex {
     pub fn build_from_files(&mut self) -> Result<(), IndexError> {
         for (file_idx, file_path) in self.file_paths.clone().iter().enumerate() {
             // Featherファイルを読み込み（scan_ipcではなくread_ipcを使用してLZ4圧縮に対応）
-            let df = IpcReader::new(std::fs::File::open(file_path).map_err(
-                |e| {
-                    IndexError::BuildFailed(format!(
-                        "Failed to open {}: {}",
-                        file_path.display(),
-                        e
-                    ))
-                },
-            )?)
+            let df = IpcReader::new(std::fs::File::open(file_path).map_err(|e| {
+                IndexError::BuildFailed(format!("Failed to open {}: {}", file_path.display(), e))
+            })?)
             .finish()
             .map_err(|e| {
                 IndexError::BuildFailed(format!(
@@ -246,20 +221,12 @@ impl DataIndex {
             // IDカラムを取得
             let id_column = df
                 .column("id")
-                .map_err(|e| {
-                    IndexError::InvalidFormat(format!(
-                        "Missing 'id' column: {}",
-                        e
-                    ))
-                })?;
+                .map_err(|e| IndexError::InvalidFormat(format!("Missing 'id' column: {}", e)))?;
 
             // IDインデックスを構築
             for row_num in 0..num_rows {
                 let id_value = id_column.get(row_num).map_err(|e| {
-                    IndexError::BuildFailed(format!(
-                        "Failed to get id at row {}: {}",
-                        row_num, e
-                    ))
+                    IndexError::BuildFailed(format!("Failed to get id at row {}: {}", row_num, e))
                 })?;
 
                 let id_str = id_value.to_string();
@@ -272,16 +239,9 @@ impl DataIndex {
                 // HCPEの場合はeval値も登録
                 if matches!(self.array_type, ArrayType::HCPE) {
                     if let Ok(eval_column) = df.column("eval") {
-                        if let Ok(eval_value) = eval_column.get(row_num)
-                        {
-                            if let Ok(eval_i16) =
-                                eval_value.try_extract::<i16>()
-                            {
-                                self.add_record(
-                                    id_str,
-                                    eval_i16,
-                                    location,
-                                );
+                        if let Ok(eval_value) = eval_column.get(row_num) {
+                            if let Ok(eval_i16) = eval_value.try_extract::<i16>() {
+                                self.add_record(id_str, eval_i16, location);
                                 continue;
                             }
                         }
@@ -303,10 +263,7 @@ mod tests {
 
     #[test]
     fn test_add_and_search_by_id() {
-        let mut index = DataIndex::new(
-            ArrayType::HCPE,
-            vec![PathBuf::from("test.feather")],
-        );
+        let mut index = DataIndex::new(ArrayType::HCPE, vec![PathBuf::from("test.feather")]);
 
         let loc = RecordLocation {
             file_index: 0,
@@ -324,10 +281,7 @@ mod tests {
 
     #[test]
     fn test_search_by_eval_range() {
-        let mut index = DataIndex::new(
-            ArrayType::HCPE,
-            vec![PathBuf::from("test.feather")],
-        );
+        let mut index = DataIndex::new(ArrayType::HCPE, vec![PathBuf::from("test.feather")]);
 
         // 複数レコード追加
         for i in 0..100 {
@@ -340,24 +294,19 @@ mod tests {
         }
 
         // 範囲検索: -100 ~ 100
-        let results =
-            index.search_by_eval_range(Some(-100), Some(100), 0, 50);
+        let results = index.search_by_eval_range(Some(-100), Some(100), 0, 50);
 
         // -100 ~ 100の範囲には21件（-100, -90, ..., 90, 100）
         assert_eq!(results.len(), 21);
 
         // ページネーション: offset=10, limit=5
-        let page_results =
-            index.search_by_eval_range(Some(-100), Some(100), 10, 5);
+        let page_results = index.search_by_eval_range(Some(-100), Some(100), 10, 5);
         assert_eq!(page_results.len(), 5);
     }
 
     #[test]
     fn test_count_eval_range() {
-        let mut index = DataIndex::new(
-            ArrayType::HCPE,
-            vec![PathBuf::from("test.feather")],
-        );
+        let mut index = DataIndex::new(ArrayType::HCPE, vec![PathBuf::from("test.feather")]);
 
         for i in 0..100 {
             let loc = RecordLocation {
@@ -377,10 +326,7 @@ mod tests {
 
     #[test]
     fn test_array_type_from_str() {
-        assert_eq!(
-            ArrayType::from_str("hcpe").unwrap(),
-            ArrayType::HCPE
-        );
+        assert_eq!(ArrayType::from_str("hcpe").unwrap(), ArrayType::HCPE);
         assert_eq!(
             ArrayType::from_str("PREPROCESSING").unwrap(),
             ArrayType::Preprocessing
@@ -390,10 +336,7 @@ mod tests {
 
     #[test]
     fn test_search_id_prefix_basic() {
-        let mut index = DataIndex::new(
-            ArrayType::HCPE,
-            vec![PathBuf::from("test.feather")],
-        );
+        let mut index = DataIndex::new(ArrayType::HCPE, vec![PathBuf::from("test.feather")]);
 
         index.add_record(
             "id_100".to_string(),
@@ -437,10 +380,7 @@ mod tests {
 
     #[test]
     fn test_search_id_prefix_limit() {
-        let mut index = DataIndex::new(
-            ArrayType::HCPE,
-            vec![PathBuf::from("test.feather")],
-        );
+        let mut index = DataIndex::new(ArrayType::HCPE, vec![PathBuf::from("test.feather")]);
 
         for i in 0..100 {
             index.add_record(
@@ -460,20 +400,14 @@ mod tests {
 
     #[test]
     fn test_search_id_prefix_empty() {
-        let index = DataIndex::new(
-            ArrayType::HCPE,
-            vec![PathBuf::from("test.feather")],
-        );
+        let index = DataIndex::new(ArrayType::HCPE, vec![PathBuf::from("test.feather")]);
         let results = index.search_id_prefix("", 10);
         assert_eq!(results.len(), 0);
     }
 
     #[test]
     fn test_get_all_ids() {
-        let mut index = DataIndex::new(
-            ArrayType::HCPE,
-            vec![PathBuf::from("test.feather")],
-        );
+        let mut index = DataIndex::new(ArrayType::HCPE, vec![PathBuf::from("test.feather")]);
 
         index.add_record(
             "id_c".to_string(),

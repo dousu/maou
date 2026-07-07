@@ -199,6 +199,7 @@ impl Entry {
     }
 
     /// 未解決 (unknown) 局面の pn/dn・amount・親情報を更新する．
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn update_unknown(
         &mut self,
         depth: Depth,

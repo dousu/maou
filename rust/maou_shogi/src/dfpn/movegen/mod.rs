@@ -300,7 +300,7 @@ impl DfPnSolver {
             let mut c = king_sq.col() as i32 + step_c;
             let mut r = king_sq.row() as i32 + step_r;
             let mut has_non_futile = false;
-            while c >= 0 && c < 9 && r >= 0 && r < 9 {
+            while (0..9).contains(&c) && (0..9).contains(&r) {
                 let sq = Square::new(c as u8, r as u8);
                 if !between.contains(sq) {
                     break;
@@ -357,6 +357,7 @@ impl DfPnSolver {
     /// NOTE: 玉が `king_sq` から離れることで新たに発生する素抜き攻撃
     /// (discovered attack) は考慮していない．このため判定は保守的
     /// (futile 判定を甘くする方向)に寄る．
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn king_can_escape_after_slider_capture(
         &self,
         board: &Board,
@@ -571,16 +572,14 @@ impl DfPnSolver {
         let mut checkers = attack::rook_attacks(king_sq, occ)
             & (board.piece_bb[att][PieceType::Rook as usize]
                 | board.piece_bb[att][PieceType::Dragon as usize]);
-        checkers = checkers
-            | (attack::bishop_attacks(king_sq, occ)
-                & (board.piece_bb[att][PieceType::Bishop as usize]
-                    | board.piece_bb[att][PieceType::Horse as usize]));
+        checkers |= attack::bishop_attacks(king_sq, occ)
+            & (board.piece_bb[att][PieceType::Bishop as usize]
+                | board.piece_bb[att][PieceType::Horse as usize]);
         // 香は防御側(玉方)の前方に利く:
         // lance_attacks(defender, king_sq, occ) で玉の前方レイを取得
         let defender = attacker.opponent();
-        checkers = checkers
-            | (attack::lance_attacks(defender, king_sq, occ)
-                & board.piece_bb[att][PieceType::Lance as usize]);
+        checkers |= attack::lance_attacks(defender, king_sq, occ)
+            & board.piece_bb[att][PieceType::Lance as usize];
 
         // 単一の飛び駒のみ対象
         if checkers.count() == 1 {

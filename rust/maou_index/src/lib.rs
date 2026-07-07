@@ -30,16 +30,12 @@ impl SearchIndex {
     /// * `array_type` - データ型（"hcpe", "preprocessing", "stage1", "stage2"）
     #[new]
     #[pyo3(signature = (file_paths, array_type))]
-    pub fn new(
-        file_paths: Vec<String>,
-        array_type: String,
-    ) -> PyResult<Self> {
+    pub fn new(file_paths: Vec<String>, array_type: String) -> PyResult<Self> {
         // ArrayType解析
         let arr_type = ArrayType::from_str(&array_type)?;
 
         // PathBufに変換
-        let paths: Vec<PathBuf> =
-            file_paths.iter().map(PathBuf::from).collect();
+        let paths: Vec<PathBuf> = file_paths.iter().map(PathBuf::from).collect();
 
         // インデックス作成
         let index = DataIndex::new(arr_type, paths);
@@ -69,9 +65,7 @@ impl SearchIndex {
     /// # Returns
     /// 成功時はOk(())，エラー時はErr
     pub fn build_from_files(&mut self) -> PyResult<()> {
-        self.index
-            .build_from_files()
-            .map_err(|e| PyErr::from(e))
+        self.index.build_from_files().map_err(PyErr::from)
     }
 
     /// IDでレコードを検索．
@@ -81,10 +75,7 @@ impl SearchIndex {
     ///
     /// # Returns
     /// `(file_index, row_number)`のタプル，または`None`
-    pub fn search_by_id(
-        &self,
-        id: String,
-    ) -> Option<(u32, u32)> {
+    pub fn search_by_id(&self, id: String) -> Option<(u32, u32)> {
         self.index
             .search_by_id(&id)
             .map(|loc| (loc.file_index, loc.row_number))
@@ -124,11 +115,7 @@ impl SearchIndex {
     /// # Returns
     /// レコード数
     #[pyo3(signature = (min_eval=None, max_eval=None))]
-    pub fn count_eval_range(
-        &self,
-        min_eval: Option<i16>,
-        max_eval: Option<i16>,
-    ) -> usize {
+    pub fn count_eval_range(&self, min_eval: Option<i16>, max_eval: Option<i16>) -> usize {
         self.index.count_eval_range(min_eval, max_eval)
     }
 
@@ -214,7 +201,7 @@ impl PathScanner {
         let path = PathBuf::from(base_path);
         self.scanner
             .scan_directories(&path, max_depth)
-            .map_err(|e| PyErr::from(e))
+            .map_err(PyErr::from)
     }
 
     /// .featherファイルをスキャンしてキャッシュを構築．
@@ -230,7 +217,7 @@ impl PathScanner {
         let path = PathBuf::from(base_path);
         self.scanner
             .scan_feather_files(&path, recursive)
-            .map_err(|e| PyErr::from(e))
+            .map_err(PyErr::from)
     }
 
     /// ディレクトリパスのプレフィックス検索．

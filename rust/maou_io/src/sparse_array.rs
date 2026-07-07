@@ -5,6 +5,9 @@
 
 use crate::error::MaouIOError;
 
+/// Dual-track sparse array: (indices, label_values, win_values)．
+pub type DualSparseArray = (Vec<u16>, Vec<i32>, Vec<f32>);
+
 /// Compress a dense integer array to sparse format (indices + values).
 ///
 /// Returns a tuple of (indices, values) where indices are u16 (max 65535)
@@ -33,9 +36,10 @@ pub fn compress_sparse_array(dense: &[i32]) -> Result<(Vec<u16>, Vec<i32>), Maou
         if val != 0 {
             // Check if index fits in u16 (max 65535)
             if idx > u16::MAX as usize {
-                return Err(MaouIOError::CompressionError(
-                    format!("Index {} exceeds u16::MAX (65535)", idx)
-                ));
+                return Err(MaouIOError::CompressionError(format!(
+                    "Index {} exceeds u16::MAX (65535)",
+                    idx
+                )));
             }
             indices.push(idx as u16);
             values.push(val);
@@ -67,11 +71,17 @@ pub fn compress_sparse_array(dense: &[i32]) -> Result<(Vec<u16>, Vec<i32>), Maou
 /// let dense = expand_sparse_array(&indices, &values, 6).unwrap();
 /// assert_eq!(dense, vec![0, 5, 0, 0, 10, 0]);
 /// ```
-pub fn expand_sparse_array(indices: &[u16], values: &[i32], size: usize) -> Result<Vec<i32>, MaouIOError> {
+pub fn expand_sparse_array(
+    indices: &[u16],
+    values: &[i32],
+    size: usize,
+) -> Result<Vec<i32>, MaouIOError> {
     if indices.len() != values.len() {
-        return Err(MaouIOError::CompressionError(
-            format!("indices length ({}) != values length ({})", indices.len(), values.len())
-        ));
+        return Err(MaouIOError::CompressionError(format!(
+            "indices length ({}) != values length ({})",
+            indices.len(),
+            values.len()
+        )));
     }
 
     let mut result = vec![0i32; size];
@@ -79,9 +89,10 @@ pub fn expand_sparse_array(indices: &[u16], values: &[i32], size: usize) -> Resu
     for (idx, val) in indices.iter().zip(values.iter()) {
         let idx_usize = *idx as usize;
         if idx_usize >= size {
-            return Err(MaouIOError::CompressionError(
-                format!("Index {} out of bounds for array of size {}", idx_usize, size)
-            ));
+            return Err(MaouIOError::CompressionError(format!(
+                "Index {} out of bounds for array of size {}",
+                idx_usize, size
+            )));
         }
         result[idx_usize] = *val;
     }
@@ -127,12 +138,12 @@ pub fn add_sparse_arrays(
 ) -> Result<(Vec<u16>, Vec<i32>), MaouIOError> {
     if indices1.len() != values1.len() {
         return Err(MaouIOError::CompressionError(
-            "indices1 and values1 must have same length".to_string()
+            "indices1 and values1 must have same length".to_string(),
         ));
     }
     if indices2.len() != values2.len() {
         return Err(MaouIOError::CompressionError(
-            "indices2 and values2 must have same length".to_string()
+            "indices2 and values2 must have same length".to_string(),
         ));
     }
 
@@ -180,7 +191,7 @@ pub fn add_sparse_arrays(
 /// * `win_values2` - Second array's win count values
 ///
 /// # Returns
-/// * `(Vec<u16>, Vec<i32>, Vec<f32>)` - Merged sparse array (indices, label_values, win_values)
+/// * [`DualSparseArray`] - Merged sparse array (indices, label_values, win_values)
 pub fn add_sparse_arrays_dual(
     indices1: &[u16],
     label_values1: &[i32],
@@ -188,22 +199,22 @@ pub fn add_sparse_arrays_dual(
     indices2: &[u16],
     label_values2: &[i32],
     win_values2: &[f32],
-) -> Result<(Vec<u16>, Vec<i32>, Vec<f32>), MaouIOError> {
+) -> Result<DualSparseArray, MaouIOError> {
     if indices1.len() != label_values1.len() || indices1.len() != win_values1.len() {
-        return Err(MaouIOError::CompressionError(
-            format!(
-                "Array 1 length mismatch: indices={}, label_values={}, win_values={}",
-                indices1.len(), label_values1.len(), win_values1.len()
-            )
-        ));
+        return Err(MaouIOError::CompressionError(format!(
+            "Array 1 length mismatch: indices={}, label_values={}, win_values={}",
+            indices1.len(),
+            label_values1.len(),
+            win_values1.len()
+        )));
     }
     if indices2.len() != label_values2.len() || indices2.len() != win_values2.len() {
-        return Err(MaouIOError::CompressionError(
-            format!(
-                "Array 2 length mismatch: indices={}, label_values={}, win_values={}",
-                indices2.len(), label_values2.len(), win_values2.len()
-            )
-        ));
+        return Err(MaouIOError::CompressionError(format!(
+            "Array 2 length mismatch: indices={}, label_values={}, win_values={}",
+            indices2.len(),
+            label_values2.len(),
+            win_values2.len()
+        )));
     }
 
     use std::collections::HashMap;
@@ -289,24 +300,14 @@ mod tests {
 
     #[test]
     fn test_add_sparse_arrays_no_overlap() {
-        let (indices, values) = add_sparse_arrays(
-            &[1, 3],
-            &[5, 10],
-            &[2, 4],
-            &[7, 20],
-        ).unwrap();
+        let (indices, values) = add_sparse_arrays(&[1, 3], &[5, 10], &[2, 4], &[7, 20]).unwrap();
         assert_eq!(indices, vec![1, 2, 3, 4]);
         assert_eq!(values, vec![5, 7, 10, 20]);
     }
 
     #[test]
     fn test_add_sparse_arrays_with_overlap() {
-        let (indices, values) = add_sparse_arrays(
-            &[1, 3],
-            &[5, 10],
-            &[1, 2],
-            &[3, 7],
-        ).unwrap();
+        let (indices, values) = add_sparse_arrays(&[1, 3], &[5, 10], &[1, 2], &[3, 7]).unwrap();
         assert_eq!(indices, vec![1, 2, 3]);
         assert_eq!(values, vec![8, 7, 10]);
     }
@@ -314,24 +315,14 @@ mod tests {
     #[test]
     fn test_add_sparse_arrays_cancel_out() {
         // Values cancel out at index 1
-        let (indices, values) = add_sparse_arrays(
-            &[1, 3],
-            &[5, 10],
-            &[1, 2],
-            &[-5, 7],
-        ).unwrap();
+        let (indices, values) = add_sparse_arrays(&[1, 3], &[5, 10], &[1, 2], &[-5, 7]).unwrap();
         assert_eq!(indices, vec![2, 3]);
         assert_eq!(values, vec![7, 10]);
     }
 
     #[test]
     fn test_add_empty_arrays() {
-        let (indices, values) = add_sparse_arrays(
-            &[],
-            &[],
-            &[],
-            &[],
-        ).unwrap();
+        let (indices, values) = add_sparse_arrays(&[], &[], &[], &[]).unwrap();
         assert_eq!(indices.len(), 0);
         assert_eq!(values.len(), 0);
     }
@@ -348,9 +339,14 @@ mod tests {
     #[test]
     fn test_add_sparse_arrays_dual_no_overlap() {
         let (indices, label_values, win_values) = add_sparse_arrays_dual(
-            &[1, 3], &[5, 10], &[1.0, 2.0],
-            &[2, 4], &[7, 20], &[3.0, 4.0],
-        ).unwrap();
+            &[1, 3],
+            &[5, 10],
+            &[1.0, 2.0],
+            &[2, 4],
+            &[7, 20],
+            &[3.0, 4.0],
+        )
+        .unwrap();
         assert_eq!(indices, vec![1, 2, 3, 4]);
         assert_eq!(label_values, vec![5, 7, 10, 20]);
         assert_eq!(win_values, vec![1.0, 3.0, 2.0, 4.0]);
@@ -359,9 +355,14 @@ mod tests {
     #[test]
     fn test_add_sparse_arrays_dual_with_overlap() {
         let (indices, label_values, win_values) = add_sparse_arrays_dual(
-            &[1, 3], &[5, 10], &[1.0, 2.0],
-            &[1, 2], &[3, 7], &[0.5, 3.0],
-        ).unwrap();
+            &[1, 3],
+            &[5, 10],
+            &[1.0, 2.0],
+            &[1, 2],
+            &[3, 7],
+            &[0.5, 3.0],
+        )
+        .unwrap();
         assert_eq!(indices, vec![1, 2, 3]);
         assert_eq!(label_values, vec![8, 7, 10]);
         assert_eq!(win_values, vec![1.5, 3.0, 2.0]);
@@ -370,10 +371,8 @@ mod tests {
     #[test]
     fn test_add_sparse_arrays_dual_win_zero_kept() {
         // win_value=0 should be kept when label_value > 0
-        let (indices, label_values, win_values) = add_sparse_arrays_dual(
-            &[1, 3], &[5, 10], &[0.0, 0.0],
-            &[1], &[3], &[0.0],
-        ).unwrap();
+        let (indices, label_values, win_values) =
+            add_sparse_arrays_dual(&[1, 3], &[5, 10], &[0.0, 0.0], &[1], &[3], &[0.0]).unwrap();
         assert_eq!(indices, vec![1, 3]);
         assert_eq!(label_values, vec![8, 10]);
         assert_eq!(win_values, vec![0.0, 0.0]);
@@ -383,9 +382,14 @@ mod tests {
     fn test_add_sparse_arrays_dual_label_cancel_out() {
         // label values cancel to 0 → entry removed (win value also removed)
         let (indices, label_values, win_values) = add_sparse_arrays_dual(
-            &[1, 3], &[5, 10], &[1.0, 2.0],
-            &[1, 2], &[-5, 7], &[0.5, 3.0],
-        ).unwrap();
+            &[1, 3],
+            &[5, 10],
+            &[1.0, 2.0],
+            &[1, 2],
+            &[-5, 7],
+            &[0.5, 3.0],
+        )
+        .unwrap();
         assert_eq!(indices, vec![2, 3]);
         assert_eq!(label_values, vec![7, 10]);
         assert_eq!(win_values, vec![3.0, 2.0]);
@@ -393,10 +397,8 @@ mod tests {
 
     #[test]
     fn test_add_sparse_arrays_dual_empty() {
-        let (indices, label_values, win_values) = add_sparse_arrays_dual(
-            &[], &[], &[],
-            &[], &[], &[],
-        ).unwrap();
+        let (indices, label_values, win_values) =
+            add_sparse_arrays_dual(&[], &[], &[], &[], &[], &[]).unwrap();
         assert_eq!(indices.len(), 0);
         assert_eq!(label_values.len(), 0);
         assert_eq!(win_values.len(), 0);
@@ -404,10 +406,7 @@ mod tests {
 
     #[test]
     fn test_add_sparse_arrays_dual_mismatched_lengths() {
-        let result = add_sparse_arrays_dual(
-            &[1, 3], &[5], &[1.0, 2.0],
-            &[], &[], &[],
-        );
+        let result = add_sparse_arrays_dual(&[1, 3], &[5], &[1.0, 2.0], &[], &[], &[]);
         assert!(result.is_err());
     }
 }

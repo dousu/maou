@@ -15,10 +15,7 @@ pub fn hcpe_schema() -> Schema {
         Field::new("partitioningKey", DataType::Date32, false),
         Field::new(
             "ratings",
-            DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::UInt16, false)),
-                2,
-            ),
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::UInt16, false)), 2),
             false,
         ),
         Field::new("endgameStatus", DataType::Utf8, false),
@@ -53,26 +50,17 @@ pub fn preprocessing_schema() -> Schema {
         ),
         Field::new(
             "piecesInHand",
-            DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::UInt8, false)),
-                14,
-            ),
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::UInt8, false)), 14),
             false,
         ),
         Field::new(
             "moveLabel",
-            DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::Float32, false)),
-                1496,
-            ),
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, false)), 1496),
             false,
         ),
         Field::new(
             "moveWinRate",
-            DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::Float32, false)),
-                1496,
-            ),
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, false)), 1496),
             false,
         ),
         Field::new("bestMoveWinRate", DataType::Float32, false),

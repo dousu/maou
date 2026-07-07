@@ -45,10 +45,11 @@ pub fn save_feather(record_batch: &RecordBatch, file_path: &str) -> Result<(), M
     let writer = BufWriter::new(file);
 
     // Enable LZ4 compression for efficient storage
-    let write_options = IpcWriteOptions::default()
-        .try_with_compression(Some(CompressionType::LZ4_FRAME))?;
+    let write_options =
+        IpcWriteOptions::default().try_with_compression(Some(CompressionType::LZ4_FRAME))?;
 
-    let mut writer = FileWriter::try_new_with_options(writer, &record_batch.schema(), write_options)?;
+    let mut writer =
+        FileWriter::try_new_with_options(writer, &record_batch.schema(), write_options)?;
 
     writer.write(record_batch)?;
     writer.finish()?;
@@ -97,10 +98,7 @@ pub fn load_feather(file_path: &str) -> Result<RecordBatch, MaouIOError> {
 ///
 /// For large datasets that don't fit in a single batch．
 /// Uses LZ4_FRAME compression for efficient storage．
-pub fn save_feather_batches(
-    batches: &[RecordBatch],
-    file_path: &str,
-) -> Result<(), MaouIOError> {
+pub fn save_feather_batches(batches: &[RecordBatch], file_path: &str) -> Result<(), MaouIOError> {
     if batches.is_empty() {
         return Err(MaouIOError::SchemaError(
             "Cannot save empty batch list".to_string(),
@@ -112,8 +110,8 @@ pub fn save_feather_batches(
     let writer = BufWriter::new(file);
 
     // Enable LZ4 compression for efficient storage
-    let write_options = IpcWriteOptions::default()
-        .try_with_compression(Some(CompressionType::LZ4_FRAME))?;
+    let write_options =
+        IpcWriteOptions::default().try_with_compression(Some(CompressionType::LZ4_FRAME))?;
 
     let mut writer = FileWriter::try_new_with_options(writer, &batches[0].schema(), write_options)?;
 
@@ -134,10 +132,10 @@ pub fn load_feather_batches(file_path: &str) -> Result<Vec<RecordBatch>, MaouIOE
     let file = File::open(path)?;
     let reader = BufReader::new(file);
 
-    let mut reader = FileReader::try_new(reader, None)?;
+    let reader = FileReader::try_new(reader, None)?;
 
     let mut batches = Vec::new();
-    while let Some(batch_result) = reader.next() {
+    for batch_result in reader {
         batches.push(batch_result?);
     }
 
@@ -222,7 +220,8 @@ pub fn merge_feather_files(
         if current_rows > 0 && current_rows + batch_rows > rows_per_chunk {
             let merged = consolidate_batches(std::mem::take(&mut current_batches))?;
 
-            let chunk_path = out_path.join(format!("{}_chunk{:04}.feather", output_prefix, chunk_idx));
+            let chunk_path =
+                out_path.join(format!("{}_chunk{:04}.feather", output_prefix, chunk_idx));
             let chunk_path_str = chunk_path.to_str().ok_or_else(|| {
                 MaouIOError::IOError(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -351,7 +350,10 @@ mod tests {
 
         RecordBatch::try_new(
             Arc::new(schema),
-            vec![Arc::new(id_array) as ArrayRef, Arc::new(value_array) as ArrayRef],
+            vec![
+                Arc::new(id_array) as ArrayRef,
+                Arc::new(value_array) as ArrayRef,
+            ],
         )
         .unwrap()
     }
@@ -404,11 +406,7 @@ mod tests {
         let batch3 = create_test_batch(); // 5 rows
 
         // Save 3 batches using File format (save_feather_batches uses FileWriter)
-        save_feather_batches(
-            &[batch1, batch2, batch3],
-            file_path.to_str().unwrap(),
-        )
-        .unwrap();
+        save_feather_batches(&[batch1, batch2, batch3], file_path.to_str().unwrap()).unwrap();
 
         // load_feather must return ALL rows, not just the first batch
         let loaded = load_feather(file_path.to_str().unwrap()).unwrap();
@@ -455,7 +453,10 @@ mod tests {
         let value_array = Int32Array::from(vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
         let batch = RecordBatch::try_new(
             Arc::new(schema),
-            vec![Arc::new(id_array) as ArrayRef, Arc::new(value_array) as ArrayRef],
+            vec![
+                Arc::new(id_array) as ArrayRef,
+                Arc::new(value_array) as ArrayRef,
+            ],
         )
         .unwrap();
 
@@ -519,13 +520,8 @@ mod tests {
         }
 
         // Merge with chunk size 20 → all fit in one chunk
-        let result = merge_feather_files(
-            &file_paths,
-            output_dir.to_str().unwrap(),
-            20,
-            "test",
-        )
-        .unwrap();
+        let result =
+            merge_feather_files(&file_paths, output_dir.to_str().unwrap(), 20, "test").unwrap();
 
         assert_eq!(result.len(), 1);
         let merged = load_feather(&result[0]).unwrap();
@@ -548,13 +544,8 @@ mod tests {
 
         // Merge with chunk size 12 → should produce 3 chunks
         // (5+5=10, 5+5=10, 5=5)
-        let result = merge_feather_files(
-            &file_paths,
-            output_dir.to_str().unwrap(),
-            12,
-            "test",
-        )
-        .unwrap();
+        let result =
+            merge_feather_files(&file_paths, output_dir.to_str().unwrap(), 12, "test").unwrap();
 
         assert_eq!(result.len(), 3);
 
@@ -573,13 +564,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let output_dir = dir.path().join("merged");
 
-        let result = merge_feather_files(
-            &[],
-            output_dir.to_str().unwrap(),
-            10,
-            "test",
-        )
-        .unwrap();
+        let result = merge_feather_files(&[], output_dir.to_str().unwrap(), 10, "test").unwrap();
 
         assert!(result.is_empty());
     }
@@ -615,13 +600,8 @@ mod tests {
             file_paths.push(path.to_str().unwrap().to_string());
         }
 
-        let result = merge_feather_files(
-            &file_paths,
-            output_dir.to_str().unwrap(),
-            100,
-            "test",
-        )
-        .unwrap();
+        let result =
+            merge_feather_files(&file_paths, output_dir.to_str().unwrap(), 100, "test").unwrap();
 
         let merged = load_feather(&result[0]).unwrap();
         let original = create_test_batch();

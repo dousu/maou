@@ -326,6 +326,30 @@ impl DisproofHandSet {
     }
 }
 
+/// 持ち駒の要素ごと比較: a の全要素が b 以上なら true．
+///
+/// 証明駒の優越判定に使用: 持ち駒が多い方が有利(攻め方)．
+///
+/// SWAR (SIMD Within A Register): 7 バイトを u64 にパックし分岐なしで一括比較する．
+/// 各バイトに MSB(0x80) をセットして引き算し，MSB が全て残れば全要素 a[i] >= b[i]．
+/// 持ち駒値は 0-18 の範囲なので各バイトの MSB は常に 0 であり，
+/// (a[i] + 128) - b[i] >= 110 となるためバイト間の桁借りは発生しない．
+// SWAR パッキングは HAND_KINDS == 7 を前提とする(u64 の 7 バイトに収める)．
+const _: () = assert!(HAND_KINDS == 7, "hand_gte SWAR assumes HAND_KINDS == 7");
+
+// SWAR 比較はエンディアン非依存(両オペランドが同一バイト順序でパックされるため
+// バイト単位の加減算とマスク演算は正しく動作する)が，明示性のため LE を使用する．
+#[cfg(not(target_endian = "little"))]
+compile_error!("hand_gte SWAR is tested only on little-endian targets");
+
+#[inline(always)]
+pub(super) fn hand_gte(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> bool {
+    let a_packed = u64::from_le_bytes([a[0], a[1], a[2], a[3], a[4], a[5], a[6], 0]);
+    let b_packed = u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], 0]);
+    const H: u64 = 0x8080_8080_8080_8080;
+    ((a_packed | H) - b_packed) & H == H
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,28 +485,4 @@ mod tests {
         assert_eq!(out[0], 5, "pawn kept by nifu");
         assert_eq!(out[6], 0, "rook removed (can drop-check 1a)");
     }
-}
-
-/// 持ち駒の要素ごと比較: a の全要素が b 以上なら true．
-///
-/// 証明駒の優越判定に使用: 持ち駒が多い方が有利(攻め方)．
-///
-/// SWAR (SIMD Within A Register): 7 バイトを u64 にパックし分岐なしで一括比較する．
-/// 各バイトに MSB(0x80) をセットして引き算し，MSB が全て残れば全要素 a[i] >= b[i]．
-/// 持ち駒値は 0-18 の範囲なので各バイトの MSB は常に 0 であり，
-/// (a[i] + 128) - b[i] >= 110 となるためバイト間の桁借りは発生しない．
-// SWAR パッキングは HAND_KINDS == 7 を前提とする(u64 の 7 バイトに収める)．
-const _: () = assert!(HAND_KINDS == 7, "hand_gte SWAR assumes HAND_KINDS == 7");
-
-// SWAR 比較はエンディアン非依存(両オペランドが同一バイト順序でパックされるため
-// バイト単位の加減算とマスク演算は正しく動作する)が，明示性のため LE を使用する．
-#[cfg(not(target_endian = "little"))]
-compile_error!("hand_gte SWAR is tested only on little-endian targets");
-
-#[inline(always)]
-pub(super) fn hand_gte(a: &[u8; HAND_KINDS], b: &[u8; HAND_KINDS]) -> bool {
-    let a_packed = u64::from_le_bytes([a[0], a[1], a[2], a[3], a[4], a[5], a[6], 0]);
-    let b_packed = u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], 0]);
-    const H: u64 = 0x8080_8080_8080_8080;
-    ((a_packed | H) - b_packed) & H == H
 }

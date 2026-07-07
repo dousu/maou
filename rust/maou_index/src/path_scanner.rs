@@ -69,9 +69,10 @@ impl PathScanner {
 
         // ベースパスが存在しない場合はエラー
         if !base_path.exists() {
-            return Err(IndexError::NotFound(
-                format!("Directory not found: {}", base_path.to_string_lossy()),
-            ));
+            return Err(IndexError::NotFound(format!(
+                "Directory not found: {}",
+                base_path.to_string_lossy()
+            )));
         }
 
         // walkdirで再帰的にディレクトリを探索
@@ -110,9 +111,10 @@ impl PathScanner {
 
         // ベースパスが存在しない場合はエラー
         if !base_path.exists() {
-            return Err(IndexError::NotFound(
-                format!("Directory not found: {}", base_path.to_string_lossy()),
-            ));
+            return Err(IndexError::NotFound(format!(
+                "Directory not found: {}",
+                base_path.to_string_lossy()
+            )));
         }
 
         // walkdirで.featherファイルを探索
