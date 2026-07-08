@@ -118,8 +118,10 @@ value を経路に沿ってバックプロパゲーションする (視点は 1 
 ### 3.6 終端処理
 
 - 合法手なし = 手番側の負け (`TERMINAL_LOSS`，v=0)．将棋にステイルメイトはない．
+- 千日手 = 経路依存の終端 (`TERMINAL_DRAW` / `TERMINAL_WIN` / `TERMINAL_LOSS`，
+  §9)．木に合流が無いため判定結果をノードに焼き付けられる．
 - `max_ply` (デフォルト 512) 到達 = 引き分け v=0.5 で打ち切り
-  (千日手未検出の現状での無限降下ガード．§9 で置き換える)．
+  (千日手にならないまま伸び続ける経路の無限降下ガード)．
 
 ## 4. Evaluator 境界 (実装済み — mock + ONNX)
 
@@ -241,15 +243,31 @@ pub struct SearchLimits { pub max_playouts: Option<u64>, pub time_ms: Option<u64
 - 詰将棋ソルバーのノウハウ (証明駒/持ち駒優越，枝刈り) は，詰み確定を勝敗に
   変換できる場面で援用する (具体化は実装時)．
 
-## 9. 千日手・連続王手の千日手 (未実装 — 未決)
+## 9. 千日手・連続王手の千日手 (実装済み — v0.6.0)
 
-現状は `max_ply` ガードのみ．候補:
+経路ハッシュ方式 (dfpn の `path_stack` 方式の援用) を採用．`Position`
+(履歴付き Board) を降下に使う案は，clone コストに加え履歴管理が単一対局線
+前提 (分岐探索非対応) のため棄却した．
 
-1. `Position` (履歴付き Board) を降下に使う — 実装が単純だが clone コストが増える．
-2. dfpn の `path_stack` 方式の援用 — 経路上のハッシュ列を持ち，再出現を検出．
-   MCTS は経路が浅い (数十手) ので flat スタックの線形走査で足りる見込み．
-
-判定結果の扱い (千日手 = 引き分け 0.5，連続王手 = 王手側の負け) は将棋ルール通り．
+- 降下中に経路上の各局面の `HistoryEntry { hash, in_check }` をスタックに
+  積み，未展開の葉で「対局履歴 + 経路」を距離 4 から 2 手刻みで後方走査する
+  (`maou_search/src/repetition.rs`)．ハッシュは maou_shogi 既存実装と同じ
+  フル Zobrist (盤 + 持駒 + 手番，`Board::hash`)．
+- 分類は `Position::is_perpetual_check_move` (position.rs) と同一の
+  「王手フラグの手番 parity 別区間全称判定」を両側に一般化:
+  千日手 = 引き分け 0.5，連続王手の千日手 = 王手をかけ続けた側の負け (0/1)．
+- 実ルールの「同一局面 4 回」は待たず，経路上の最初の再出現で終端する
+  (dfpn の on-path 検出と同じ探索内近似)．
+- 木に合流 (transposition) が無く root への経路はノード毎に一意なため，
+  判定結果をノードの終端状態に焼き付けられる — 再訪は走査なしで固定値を
+  バックプロパゲーションする．
+- root より前の対局履歴は `Searcher::search_with_history` で渡す
+  (`HistoryEntry::from_board` で構築)．検出数は `SearchStats::repetitions`．
+- コスト (DevContainer mock 相対): 降下 1 手あたりの `is_in_check` +
+  葉での後方走査で 1T/2T は -4〜5%，4T は差なし (SMT の遊びに吸収)．
+  GPU 律速の実 NN では不可視の見込み (未実測)．
+- 未実装 (将来のレバー): 優越局面による一般化 — 盤面同一で持駒優越/劣位の
+  刈り込み (dfpn の `DomPathStack` / `hand_gte` 相当)．
 
 ## 10. ベンチと計測規律
 
@@ -259,8 +277,8 @@ mock 評価の `nps_bench` と ONNX 実推論の `onnx_bench` の 2 本．
 ビルド・実行・Colab GPU 計測・トラブルシューティングの詳細手順は
 **[benchmarking.md](benchmarking.md)** を参照．
 
-出力: playouts/s，衝突率，バッチ充填率，最大深さ，プール使用量，GC 回数/解放量，
-best move / PV / 上位子．
+出力: playouts/s，衝突率，バッチ充填率，最大深さ，千日手検出数，プール使用量，
+GC 回数/解放量，best move / PV / 上位子．
 
 ### 10.2 計測規律 (binding)
 
@@ -270,13 +288,17 @@ best move / PV / 上位子．
 - NPS の定義は現状 **playouts/s** (= 葉評価スループット)．実 NN 接続後に
   「NN 評価局面数/s」との使い分けを確定する (未決)．
 
-### 10.3 ベースライン (DevContainer 4C，mock 評価，相対値，2026-07-08)
+### 10.3 ベースライン (DevContainer 4C，mock 評価，相対値，2026-07-08 千日手検出込み)
 
 | 構成 | playouts/s | 衝突率 | バッチ充填 |
 |---|---|---|---|
-| 1T / batch 8 | ~397K | 0% | 100% |
-| 2T / batch 8 | ~624K | 1.1% | 96.6% |
-| 4T / batch 16 | ~775K | 5.2% | 71.2% |
+| 1T / batch 8 | ~369K | 0% | 100% |
+| 2T / batch 8 | ~597K | 0.9% | 97.2% |
+| 4T / batch 16 | ~674K | 5.1% | 71.4% |
+
+(同一セッション内の相対値．旧値 397K/624K/775K とは計測時の背景負荷が
+異なるため直接比較しない — 千日手検出の増分は同時計測で 1T/2T -4〜5%，
+4T 差なし)
 
 ## 11. マイルストーンと未決事項
 
@@ -290,7 +312,7 @@ best move / PV / 上位子．
 | visits u64 化 | ✅ 実装済み (v0.3.0) |
 | OnnxEvaluator (ort + 特徴量/ラベル Rust 移植) | ✅ 実装済み (v0.4.0，§4) |
 | AND-OR 勝敗確定伝播 | 未実装 (§8.3) |
-| 千日手検出 | 未実装 (§9) |
+| 千日手検出 | ✅ 実装済み (v0.6.0，§9) |
 | dfpn 停止フラグ + ルート並行詰み探索 | 未実装 (§8.1) |
 | PyO3 API / CLI (`maou search`) | 未実装 (docs/commands/ 義務が発生) |
 | Colab GPU 実測 | 配線検証済み (2026-07-08，極小モデル)．実モデルでの North-star 計測は未実施 |
@@ -301,11 +323,12 @@ best move / PV / 上位子．
 | # | 未決 | 決め方 |
 |---|---|---|
 | 1 | 最終手選択 (visit 最大 vs visit フィルタ + Q 最大) | 両案実装しベンチ/対局比較 (実モデル接続後) |
-| 2 | 千日手検出方式 (Position vs 経路ハッシュ) | clone コスト実測 |
-| 3 | global batch collector の要否 / ort session の Mutex 直列化解消 | 実モデルの GPU 実測 (fill % と NPS) 後 |
-| 4 | 葉詰み探索の有無と予算 | 検証フレームワークで費用対効果を実測 |
-| 5 | c_puct / fpu / batch_size / gc_keep_ratio 等の既定値 | チューニングフレームワーク |
-| 6 | NPS の定義 (playouts/s vs NN eval/s) | 実 NN 接続時に確定 |
+| 2 | global batch collector の要否 / ort session の Mutex 直列化解消 | 実モデルの GPU 実測 (fill % と NPS) 後 |
+| 3 | 葉詰み探索の有無と予算 | 検証フレームワークで費用対効果を実測 |
+| 4 | c_puct / fpu / batch_size / gc_keep_ratio 等の既定値 | チューニングフレームワーク |
+| 5 | NPS の定義 (playouts/s vs NN eval/s) | 実 NN 接続時に確定 |
+
+(旧 #2「千日手検出方式」は経路ハッシュ方式の採用で解決 — §9)
 
 ## 12. 参考
 
