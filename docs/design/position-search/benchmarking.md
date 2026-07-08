@@ -14,7 +14,8 @@ Colab GPU × 実モデルのみ)．
 主なオプション (両ベンチ共通; `--help` 参照):
 `--sfen` / `--threads` / `--batch` / `--playouts` / `--time-ms` / `--capacity` /
 `--cpuct` / `--fpu` / `--keep-ratio` / `--no-gc`．
-onnx_bench 専用: `--model PATH` (必須) / `--ort-threads` / `--cuda`．
+onnx_bench 専用: `--model PATH` (必須) / `--ort-threads` / `--cuda` /
+`--tensorrt` / `--trt-cache DIR` / `--pad N`．
 
 ## 2. テスト用 ONNX モデル
 
@@ -28,6 +29,8 @@ uv run --with onnx python rust/maou_search/tests/make_tiny_onnx.py /tmp/tiny.onn
 
 **注意**: 極小モデルの NPS は配線検証用の参考値．North-star はモデルサイズに
 依存するため，実モデル (学習パイプラインが export した .onnx) で計測すること．
+学習パイプラインは FP16 変換済みモデル (`_fp16` サフィックス) も出力しており，
+GPU 計測では **`_fp16` を使う** (A100 実測で FP32 比の大幅な NPS 向上を確認済み)．
 
 ## 3. ローカル (DevContainer) — 相対比較専用
 
@@ -104,6 +107,33 @@ os.environ["LD_LIBRARY_PATH"] = ":".join(
 (静かな CPU フォールバックで GPU 計測を誤らせないため)．CPU で動かす場合は
 `--cuda` を外す．
 
+### TensorRT EP を使う場合
+
+CUDA EP 比でカーネル融合による高速化を狙う．feature `onnx-tensorrt` で
+ビルドし，TensorRT ランタイム (libnvinfer) を pip で導入する:
+
+```python
+# TensorRT ランタイム (onnxruntime GPU バイナリが要求する 10 系)
+!pip -q install tensorrt-cu12
+import glob
+trt_libs = glob.glob("/usr/local/lib/python3*/dist-packages/tensorrt_libs")
+os.environ["LD_LIBRARY_PATH"] = ":".join(trt_libs + [os.environ["LD_LIBRARY_PATH"]])
+
+# ビルド (CUDA EP へのフォールバック用に onnx-cuda も同時に有効化)
+!cargo build --release -p maou_search \
+    --features onnx-cuda,onnx-tensorrt --example onnx_bench
+
+# 実行 (--tensorrt --cuda: TensorRT 優先，非対応ノードは CUDA へ)
+!target/release/examples/onnx_bench --model /content/model_fp16.onnx \
+    --tensorrt --cuda --threads 2 --batch 256 --time-ms 30000
+```
+
+- **初回実行はエンジンビルドで数分かかる** (`trt_cache/` にキャッシュされ，
+  2 回目以降は数秒でロード)．NPS 計測は 2 回目以降の実行で行うこと．
+- `--tensorrt` 時はバッチが探索バッチサイズへ自動 padding される
+  (`--pad N` で上書き可)．TensorRT は入力 shape ごとにエンジンを構築する
+  ため，可変バッチのまま渡すと shape の数だけビルドが走る．
+
 ## 5. トラブルシューティング
 
 ### `libonnxruntime_providers_shared.so: cannot open shared object file`
@@ -120,6 +150,14 @@ ort はビルド時に `target/<profile>/`，`target/<profile>/deps/`，
 CUDA EP は cuDNN 9 / cuBLAS 等を要求する．Colab では torch 同梱の nvidia pip
 パッケージ (`.../dist-packages/nvidia/*/lib`) にあるため，§4 セル 5 の
 `nvidia_libs` で解決する．
+
+### `libnvinfer.so.*` が見つからない / TensorRT EP の初期化失敗
+
+onnxruntime の TensorRT EP はビルド時ダウンロードされた onnxruntime バイナリと
+**同じメジャー版の TensorRT** ランタイムを要求する．`pip install tensorrt-cu12`
+(10 系) を導入し，`dist-packages/tensorrt_libs` を `LD_LIBRARY_PATH` に足す
+(§4 参照)．版不一致のエラーが出た場合はエラーメッセージの要求版に合わせて
+`tensorrt-cu12==10.x.*` を指定する．
 
 ### コピペ時のパス分断
 
@@ -140,13 +178,17 @@ CUDA EP は cuDNN 9 / cuBLAS 等を要求する．Colab では torch 同梱の n
 
 掃引の指針:
 
-- `--batch 16/32/64/128/256` × `--threads 1/2/4` を格子で計測する．
+- `--batch 128/256/512` × `--threads 2/4` を格子で計測する．
   **fill % が維持できる範囲で batch を上げる**のが基本 (fill 20% を切るような
   batch は virtual loss が探索を歪めるだけで得がない)．
 - 1 ルートからの virtual loss バッチ収集で埋められる葉数には限界があるため，
-  batch を上げるほど衝突率が上がり fill が下がる (2026-07-08 の tiny model
-  Colab 実測: 2T/batch128 で fill 17%・衝突 32%)．実モデルでは 1 推論が
-  重くなるぶん最適 batch は大きくなる方向．
+  batch を上げるほど衝突率が上がり fill が下がる (tiny model では 2T/batch128
+  で fill 17%．実モデルは 1 推論が重く供給が追いつくため同条件で fill 99%)．
+- **per-batch 時間がバッチサイズに対して線形なら GPU は既にスループット飽和**
+  しており，batch 増でも NPS は伸びない (A100/FP16/ViT-19.8M の掃引で確認．
+  この状態では per-call オーバーヘッド削減より TensorRT 等の per-item
+  推論効率が効く)．倍にして per-batch 時間が倍未満なら batch 増が有効．
+- GPU 律速時は threads 2 で十分．増やしても衝突が増えるだけで NPS は不変．
 - 現状 ort の Session::run は Mutex で直列化されている (PoC 制約)．fill が
   十分なのに NPS が伸びない場合はここが容疑者 (per-thread session /
   IoBinding が改善候補)．
