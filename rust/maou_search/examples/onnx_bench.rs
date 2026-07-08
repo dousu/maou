@@ -38,7 +38,8 @@ fn main() {
         eprintln!(
             "usage: onnx_bench --model PATH [--sfen SFEN] [--threads N] [--batch N] \
              [--playouts N] [--time-ms N] [--capacity N] [--cpuct F] [--fpu F] \
-             [--keep-ratio F] [--no-gc] [--ort-threads N] [--cuda]"
+             [--keep-ratio F] [--no-gc] [--ort-threads N] [--cuda] [--tensorrt] \
+             [--trt-cache DIR] [--pad N]"
         );
         return;
     }
@@ -68,9 +69,18 @@ fn main() {
         max_playouts: arg_value(&args, "--playouts"),
         time_ms: arg_value(&args, "--time-ms").or(Some(10000)),
     };
+    let use_tensorrt = args.iter().any(|a| a == "--tensorrt");
     let onnx_options = OnnxOptions {
         intra_threads: arg_value(&args, "--ort-threads").unwrap_or(1),
         use_cuda: args.iter().any(|a| a == "--cuda"),
+        use_tensorrt,
+        trt_engine_cache_dir: arg_value(&args, "--trt-cache"),
+        // TensorRT は shape 固定が前提のため，未指定なら探索バッチサイズに合わせる
+        pad_to: arg_value(&args, "--pad").or(if use_tensorrt {
+            Some(options.batch_size)
+        } else {
+            None
+        }),
     };
 
     #[cfg(debug_assertions)]
@@ -81,7 +91,7 @@ fn main() {
     println!("sfen: {sfen}");
     println!(
         "threads={} batch={} cpuct={} fpu={} capacity={} gc={} keep_ratio={} \
-         ort_threads={} cuda={}",
+         ort_threads={} cuda={} tensorrt={} pad={:?}",
         options.threads,
         options.batch_size,
         options.c_puct,
@@ -90,7 +100,9 @@ fn main() {
         options.gc_enabled,
         options.gc_keep_ratio,
         onnx_options.intra_threads,
-        onnx_options.use_cuda
+        onnx_options.use_cuda,
+        onnx_options.use_tensorrt,
+        onnx_options.pad_to
     );
 
     let evaluator = match OnnxEvaluator::from_file(&model, &onnx_options) {
