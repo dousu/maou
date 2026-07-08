@@ -140,8 +140,11 @@ with open("/etc/ld.so.conf.d/maou.conf", "w") as f:
     --tensorrt --cuda --threads 2 --batch 256 --time-ms 30000
 ```
 
-- **初回実行はエンジンビルドで数分かかる** (`trt_cache/` にキャッシュされ，
-  2 回目以降は数秒でロード)．NPS 計測は 2 回目以降の実行で行うこと．
+- **エンジンビルドは shape (= padding 後のバッチサイズ) ごとに初回数十秒〜
+  数分かかる** (`trt_cache/` にキャッシュされ，以後は数秒でロード)．
+  onnx_bench はロード直後に warmup 評価を 1 回行ってビルドを計測時間外に
+  済ませ，所要を `warmup_ms` として表示する (v0.5.1)．バッチサイズ掃引では
+  新しいサイズごとにビルドが走る点に注意．
 - `--tensorrt` 時はバッチが探索バッチサイズへ自動 padding される
   (`--pad N` で上書き可)．TensorRT は入力 shape ごとにエンジンを構築する
   ため，可変バッチのまま渡すと shape の数だけビルドが走る．

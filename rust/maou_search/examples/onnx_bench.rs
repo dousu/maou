@@ -20,7 +20,9 @@
 //! 注意: NPS 計測は必ず `--release` で行うこと．
 
 use maou_search::onnx::{OnnxEvaluator, OnnxOptions};
-use maou_search::{SearchLimits, SearchOptions, Searcher};
+use maou_search::{EvalItem, Evaluator, SearchLimits, SearchOptions, Searcher};
+use maou_shogi::board::Board;
+use maou_shogi::movegen::generate_legal_moves;
 
 const STARTPOS: &str = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
 
@@ -112,6 +114,24 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    // TensorRT のエンジンビルド/ロード (shape ごとに初回数十秒〜数分) を
+    // 計測時間の外で済ませる warmup 評価
+    {
+        let warmup_start = std::time::Instant::now();
+        let mut board = Board::empty();
+        if board.set_sfen(&sfen).is_ok() {
+            let moves = generate_legal_moves(&mut board);
+            if !moves.is_empty() {
+                let _ = evaluator.evaluate_batch(&[EvalItem { board, moves }]);
+            }
+        }
+        println!(
+            "warmup_ms={} (エンジンビルド/ロード込み，計測時間外)",
+            warmup_start.elapsed().as_millis()
+        );
+    }
+
     let searcher = Searcher::new(&evaluator, options.clone());
     let result = match searcher.search_sfen(&sfen, &limits) {
         Ok(r) => r,
