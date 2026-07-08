@@ -35,6 +35,15 @@
 //! 対して不変 — 初回検出でノードを終端状態に焼き付け，以後の再訪は走査なし
 //! で固定値をバックプロパゲーションする．root より前の対局履歴は
 //! [`Searcher::search_with_history`] で渡す．
+//!
+//! # AND-OR 勝敗確定伝播
+//!
+//! 詰み/千日手で確定した葉の値は [`propagate_proven`] で祖先へ連鎖的に
+//! 昇格する: いずれかの子が手番側負け確定なら親は勝ち確定 (OR)，全子が
+//! 確定済みなら親の確定値は `1 - min(子の確定値)` (AND 集約)．確定ノード
+//! ([`crate::tree::proven`]) は以後降下せず確定値で短絡し，root が確定した
+//! 時点で探索を停止する ([`StopCause::RootProven`])．dfpn 統合時は詰み
+//! 結果をこの機構に注入する．
 
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
@@ -45,7 +54,7 @@ use maou_shogi::moves::Move;
 
 use crate::evaluator::{EvalItem, Evaluator};
 use crate::repetition::{find_repetition, HistoryEntry, RepetitionOutcome};
-use crate::tree::{node_state, Edge, NodePool, NULL_NODE};
+use crate::tree::{node_state, proven, Edge, NodePool, NULL_NODE};
 
 /// ルートノードの pool index (最初の alloc で必ず 0 になる)．
 const ROOT_IDX: u32 = 0;
@@ -121,6 +130,8 @@ pub enum StopCause {
     PoolExhausted,
     /// ルート局面に合法手がない (探索不能)．
     RootTerminal,
+    /// ルートの勝敗/引き分けが AND-OR 伝播で確定した (探索継続は不要)．
+    RootProven,
 }
 
 impl StopCause {
@@ -130,6 +141,7 @@ impl StopCause {
             StopCause::TimeLimit => 2,
             StopCause::PoolExhausted => 3,
             StopCause::RootTerminal => 4,
+            StopCause::RootProven => 5,
         }
     }
 
@@ -139,6 +151,7 @@ impl StopCause {
             2 => Some(StopCause::TimeLimit),
             3 => Some(StopCause::PoolExhausted),
             4 => Some(StopCause::RootTerminal),
+            5 => Some(StopCause::RootProven),
             _ => None,
         }
     }
@@ -182,6 +195,9 @@ pub struct SearchStats {
     /// 千日手を検出してノードを終端化した回数 (終端化済みノードの再訪は
     /// 数えない)．
     pub repetitions: u64,
+    /// AND-OR 伝播で勝敗/引き分けが確定した内部ノード数 (葉の終端マークは
+    /// 含まない)．
+    pub proven_nodes: u64,
     /// 使用したノード数 (GC 実行後はその時点の残存数)．
     pub nodes_used: u32,
     /// 子ノード生成の CAS 競合で捨てられたノード数 (GC で回収される)．
@@ -198,7 +214,8 @@ pub struct SearchResult {
     /// 最有力手 (ルートに合法手がなければ `None`)．
     /// 選択基準: 訪問回数最大 → 同数なら Q 最大 → 同率なら合法手生成順で先頭．
     pub best_move: Option<Move>,
-    /// ルート手番側から見た best_move の勝率 (Q)．
+    /// ルート手番側から見た best_move の勝率 (Q)．root の勝敗が確定した
+    /// 場合 ([`StopCause::RootProven`]) は確定値 (0 / 0.5 / 1)．
     pub winrate: f64,
     /// 訪問回数最大の経路 (PV)．
     pub pv: Vec<Move>,
@@ -230,6 +247,7 @@ struct Shared<'a, E: Evaluator> {
     eval_items: AtomicU64,
     leaked_nodes: AtomicU64,
     repetitions: AtomicU64,
+    proven_nodes: AtomicU64,
     max_depth: AtomicU16,
 }
 
@@ -314,6 +332,71 @@ fn terminal_value(state: u8) -> f64 {
     }
 }
 
+/// path 末尾の確定値を AND-OR 論理で祖先へ伝播する ([`crate::tree::proven`])．
+///
+/// - いずれかの子が手番側負け確定 (値 0) → 親は勝ち確定 (OR)
+/// - 全子が確定済み → 親の確定値は `1 - min(子の確定値)` (AND 集約 —
+///   相手は親視点で最悪の子を選べる)
+///
+/// どちらも成立しなくなった時点で打ち切る．戻り値は新規に確定した
+/// ノード数．千日手由来の確定値を伝播してよい根拠は経路の一意性
+/// ([`crate::repetition`] — 判定結果がノード不変なため終端と同格に扱える)．
+fn propagate_proven(pool: &NodePool, path: &[u32]) -> u64 {
+    let mut newly = 0u64;
+    for i in (1..path.len()).rev() {
+        let Some(cv) = pool.get(path[i]).proven_value() else {
+            break;
+        };
+        let parent = pool.get(path[i - 1]);
+        let p = if cv == 0.0 {
+            proven::WIN
+        } else {
+            let mut min_cv = cv;
+            let mut all_proven = true;
+            for e in parent.edges() {
+                let c = e.child.load(Ordering::Acquire);
+                if c == NULL_NODE {
+                    all_proven = false;
+                    break;
+                }
+                match pool.get(c).proven_value() {
+                    None => {
+                        all_proven = false;
+                        break;
+                    }
+                    Some(v) => min_cv = min_cv.min(v),
+                }
+            }
+            if !all_proven {
+                break;
+            }
+            if min_cv == 0.0 {
+                proven::WIN
+            } else if min_cv == 0.5 {
+                proven::DRAW
+            } else {
+                proven::LOSS
+            }
+        };
+        if parent.try_mark_proven(p) {
+            newly += 1;
+        }
+        // 親が確定した (または既に確定していた) — さらに祖先を調べる
+    }
+    newly
+}
+
+/// 終端/確定値を祖先へ伝播し，root が確定したら探索を停止する．
+fn propagate_proven_from<E: Evaluator>(shared: &Shared<'_, E>, path: &[u32]) {
+    let newly = propagate_proven(&shared.pool, path);
+    if newly > 0 {
+        shared.proven_nodes.fetch_add(newly, Ordering::Relaxed);
+    }
+    if shared.pool.get(ROOT_IDX).proven_value().is_some() {
+        shared.set_stop(StopCause::RootProven);
+    }
+}
+
 /// ルートから PUCT で降下して評価対象の葉を 1 つ選ぶ．
 fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
     let pool = &shared.pool;
@@ -329,6 +412,13 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
 
     loop {
         let node = pool.get(idx);
+        // 確定ノード (詰み/千日手の葉，AND-OR 伝播済みの内部ノード) は
+        // 降下せず確定値をその場でバックプロパゲーションする
+        if let Some(v) = node.proven_value() {
+            shared.note_depth(path.len());
+            backprop(shared, &path, v);
+            return Selection::Backpropped;
+        }
         match node.state() {
             node_state::EXPANDED => {
                 let edges = node.edges();
@@ -409,6 +499,7 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
                     shared.repetitions.fetch_add(1, Ordering::Relaxed);
                     shared.note_depth(path.len());
                     backprop(shared, &path, terminal_value(state));
+                    propagate_proven_from(shared, &path);
                     return Selection::Backpropped;
                 }
                 if node.try_begin_expansion() {
@@ -417,6 +508,7 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
                     if moves.is_empty() {
                         node.mark_terminal(node_state::TERMINAL_LOSS);
                         backprop(shared, &path, 0.0);
+                        propagate_proven_from(shared, &path);
                         return Selection::Backpropped;
                     }
                     return Selection::Leaf {
@@ -587,6 +679,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                     avg_batch: 0.0,
                     max_depth: 0,
                     repetitions: 0,
+                    proven_nodes: 0,
                     nodes_used: 0,
                     leaked_nodes: 0,
                     gc_runs: 0,
@@ -644,6 +737,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             eval_items: AtomicU64::new(0),
             leaked_nodes: AtomicU64::new(0),
             repetitions: AtomicU64::new(0),
+            proven_nodes: AtomicU64::new(0),
             max_depth: AtomicU16::new(0),
         };
 
@@ -729,12 +823,34 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                 best_i = i;
             }
         }
+
+        // root の勝敗が確定している場合は確定値を達成する子を優先する
+        // (訪問回数最大は確定前の探索の偏りを引きずり得る)．勝ち確定なら
+        // 負け確定 (値 0) の子，引き分け確定なら値 0.5 の子．負け確定は
+        // 全子が勝ち確定なのでどれでも同じ (訪問回数最大のまま)
+        let root_proven = root_node.proven_value();
+        if let Some(rv) = root_proven {
+            if rv > 0.0 {
+                let want = 1.0 - rv;
+                let found =
+                    root_node
+                        .edges()
+                        .iter()
+                        .position(|e| match e.child.load(Ordering::Acquire) {
+                            NULL_NODE => false,
+                            c => pool.get(c).proven_value() == Some(want),
+                        });
+                if let Some(i) = found {
+                    best_i = i;
+                }
+            }
+        }
         let best = &root_children[best_i];
 
-        // PV: 訪問回数最大の辺を辿る
-        let mut pv = Vec::new();
-        let mut idx = ROOT_IDX;
-        while pv.len() < MAX_PV_LEN {
+        // PV: 先頭は best_move に一致させ，以降は訪問回数最大の辺を辿る
+        let mut pv = vec![best.mv];
+        let mut idx = root_node.edges()[best_i].child.load(Ordering::Acquire);
+        while idx != NULL_NODE && pv.len() < MAX_PV_LEN {
             let node = pool.get(idx);
             if node.state() != node_state::EXPANDED {
                 break;
@@ -777,6 +893,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             },
             max_depth: shared.max_depth.load(Ordering::Relaxed),
             repetitions: shared.repetitions.load(Ordering::Relaxed),
+            proven_nodes: shared.proven_nodes.load(Ordering::Relaxed),
             nodes_used: shared.pool.used(),
             leaked_nodes: shared.leaked_nodes.load(Ordering::Relaxed),
             gc_runs,
@@ -785,7 +902,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
 
         SearchResult {
             best_move: Some(best.mv),
-            winrate: best.q,
+            winrate: root_proven.unwrap_or(best.q),
             pv,
             root_children,
             stop: StopCause::from_u8(shared.stop_cause.load(Ordering::Acquire))
@@ -962,8 +1079,8 @@ mod tests {
     }
 
     #[test]
-    fn test_gc_mate_still_found() {
-        // GC で低訪問枝が刈られても詰み手 (最多訪問) は生き残る
+    fn test_mate_proven_with_tiny_pool() {
+        // 容量 128 でも (必要なら GC を挟みつつ) 詰みが証明され確定停止する
         let result = run(
             MATE_IN_1,
             SearchOptions {
@@ -978,12 +1095,12 @@ mod tests {
             },
             42,
         );
-        assert!(result.stats.gc_runs >= 1, "容量 128 なら GC が発動するはず");
+        assert_eq!(result.stop, StopCause::RootProven);
         assert_eq!(
             result.best_move.map(|m| m.to_usi()).as_deref(),
             Some("G*5b")
         );
-        assert!(result.winrate > 0.9);
+        assert_eq!(result.winrate, 1.0);
     }
 
     #[test]
@@ -1054,6 +1171,145 @@ mod tests {
         );
         assert_eq!(result.stop, StopCause::TimeLimit);
         assert!(result.best_move.is_some());
+    }
+
+    /// 既存ノード idx を n_children 個の子付きで展開し，子の index 列を返す．
+    fn expand_with_children(pool: &NodePool, idx: u32, n_children: usize) -> Vec<u32> {
+        let mv = Move::from_usi("7g7f").expect("正当な USI");
+        let edges: Box<[Edge]> = (0..n_children).map(|_| Edge::new(mv, 0.5)).collect();
+        let node = pool.get(idx);
+        assert!(node.try_begin_expansion());
+        node.finish_expansion(edges);
+        let mut kids = Vec::new();
+        for e in pool.get(idx).edges() {
+            let c = pool.alloc().expect("容量内");
+            e.child.store(c, Ordering::Release);
+            kids.push(c);
+        }
+        kids
+    }
+
+    #[test]
+    fn test_propagate_or_win() {
+        let pool = NodePool::new(8);
+        let root = pool.alloc().expect("容量内");
+        let kids = expand_with_children(&pool, root, 2);
+        pool.get(kids[0]).mark_terminal(node_state::TERMINAL_LOSS);
+        assert_eq!(propagate_proven(&pool, &[root, kids[0]]), 1);
+        assert_eq!(
+            pool.get(root).proven_value(),
+            Some(1.0),
+            "子の負け = 親の勝ち (OR)"
+        );
+    }
+
+    #[test]
+    fn test_propagate_and_needs_all_children() {
+        let pool = NodePool::new(8);
+        let root = pool.alloc().expect("容量内");
+        let kids = expand_with_children(&pool, root, 2);
+        pool.get(kids[0]).mark_terminal(node_state::TERMINAL_WIN);
+        assert_eq!(propagate_proven(&pool, &[root, kids[0]]), 0);
+        assert_eq!(
+            pool.get(root).proven_value(),
+            None,
+            "未確定の子が残る間は親を確定できない"
+        );
+        pool.get(kids[1]).mark_terminal(node_state::TERMINAL_WIN);
+        assert_eq!(propagate_proven(&pool, &[root, kids[1]]), 1);
+        assert_eq!(
+            pool.get(root).proven_value(),
+            Some(0.0),
+            "全子が勝ち = 親の負け (AND)"
+        );
+    }
+
+    #[test]
+    fn test_propagate_and_draw() {
+        let pool = NodePool::new(8);
+        let root = pool.alloc().expect("容量内");
+        let kids = expand_with_children(&pool, root, 2);
+        pool.get(kids[0]).mark_terminal(node_state::TERMINAL_WIN);
+        pool.get(kids[1]).mark_terminal(node_state::TERMINAL_DRAW);
+        assert_eq!(propagate_proven(&pool, &[root, kids[1]]), 1);
+        assert_eq!(
+            pool.get(root).proven_value(),
+            Some(0.5),
+            "最善の子が引き分けなら親も引き分け確定"
+        );
+    }
+
+    #[test]
+    fn test_propagate_chain() {
+        // root — mid — leaf の 2 段: leaf 負け → mid 勝ち (OR) →
+        // mid が唯一の子なので root は負け (AND)
+        let pool = NodePool::new(8);
+        let root = pool.alloc().expect("容量内");
+        let mid = expand_with_children(&pool, root, 1)[0];
+        let leaf = expand_with_children(&pool, mid, 1)[0];
+        pool.get(leaf).mark_terminal(node_state::TERMINAL_LOSS);
+        assert_eq!(propagate_proven(&pool, &[root, mid, leaf]), 2);
+        assert_eq!(pool.get(mid).proven_value(), Some(1.0));
+        assert_eq!(pool.get(root).proven_value(), Some(0.0));
+    }
+
+    #[test]
+    fn test_root_proven_win_mate_in_1() {
+        let result = run(
+            MATE_IN_1,
+            SearchOptions {
+                threads: 1,
+                batch_size: 4,
+                node_capacity: 1 << 14,
+                ..SearchOptions::default()
+            },
+            SearchLimits {
+                max_playouts: Some(3000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        assert_eq!(result.stop, StopCause::RootProven);
+        assert_eq!(result.winrate, 1.0);
+        assert_eq!(
+            result.best_move.map(|m| m.to_usi()).as_deref(),
+            Some("G*5b")
+        );
+        assert_eq!(
+            result.pv.first().map(|m| m.to_usi()).as_deref(),
+            Some("G*5b"),
+            "PV の先頭は best_move と一致する"
+        );
+        assert!(
+            result.stats.playouts < 3000,
+            "確定で早期停止するはず: {}",
+            result.stats.playouts
+        );
+        assert!(result.stats.proven_nodes >= 1);
+    }
+
+    #[test]
+    fn test_root_proven_win_mate_in_3() {
+        // dfpn テストの canonical 詰み局面 (rust/maou_shogi/src/dfpn/tests.rs)．
+        // 3 手以内の詰みが AND-OR 連鎖 (全応手の勝ち確定 → 相手ノードの
+        // 負け確定 → root の勝ち確定) で証明される
+        let result = run(
+            "8k/9/7G1/9/9/9/9/9/9 b G 1",
+            SearchOptions {
+                threads: 1,
+                batch_size: 8,
+                node_capacity: 1 << 16,
+                ..SearchOptions::default()
+            },
+            SearchLimits {
+                max_playouts: Some(200_000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        assert_eq!(result.stop, StopCause::RootProven, "{:?}", result.stats);
+        assert_eq!(result.winrate, 1.0);
+        assert!(result.stats.proven_nodes >= 1);
     }
 
     #[test]

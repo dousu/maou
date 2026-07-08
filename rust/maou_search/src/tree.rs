@@ -52,6 +52,22 @@ pub mod node_state {
     pub const TERMINAL_WIN: u8 = 5;
 }
 
+/// ノードの確定状態 (AND-OR 伝播による勝敗/引き分けの確定)．
+///
+/// [`node_state`] の終端が「葉そのものの確定」を表すのに対し，こちらは
+/// 展開済みの内部ノードに AND-OR 伝播で付く ([`crate::search`])．
+/// 値はそのノードの手番側視点．詰み探索 (dfpn) 統合時の結果注入口にもなる．
+pub mod proven {
+    /// 未確定．
+    pub const NONE: u8 = 0;
+    /// 手番側の負け確定．
+    pub const LOSS: u8 = 1;
+    /// 引き分け確定 (千日手)．
+    pub const DRAW: u8 = 2;
+    /// 手番側の勝ち確定．
+    pub const WIN: u8 = 3;
+}
+
 /// 子ノードへの辺．
 pub struct Edge {
     /// この辺に対応する指し手．
@@ -85,6 +101,8 @@ pub struct Node {
     wins_fp: AtomicU64,
     /// 展開状態 ([`node_state`])．
     state: AtomicU8,
+    /// 確定状態 ([`proven`] — AND-OR 伝播で付く，手番側視点)．
+    proven: AtomicU8,
     /// 子辺の配列 (EXPANDING の所有スレッドが一度だけ設定する)．
     edges: OnceLock<Box<[Edge]>>,
 }
@@ -95,6 +113,7 @@ impl Node {
             visits: AtomicU64::new(0),
             wins_fp: AtomicU64::new(0),
             state: AtomicU8::new(node_state::UNEXPANDED),
+            proven: AtomicU8::new(proven::NONE),
             edges: OnceLock::new(),
         }
     }
@@ -174,6 +193,49 @@ impl Node {
             "終端状態のみ"
         );
         self.state.store(state, Ordering::Release);
+    }
+
+    /// 確定値 (このノードの手番側から見た勝率) を返す．
+    ///
+    /// 終端状態 (葉の確定) と [`proven`] (AND-OR 伝播による内部ノードの確定)
+    /// のどちらで確定していても `Some` になる．未確定は `None`．
+    #[inline]
+    pub fn proven_value(&self) -> Option<f64> {
+        match self.state() {
+            node_state::TERMINAL_LOSS => return Some(0.0),
+            node_state::TERMINAL_DRAW => return Some(0.5),
+            node_state::TERMINAL_WIN => return Some(1.0),
+            _ => {}
+        }
+        match self.proven.load(Ordering::Acquire) {
+            proven::NONE => None,
+            proven::LOSS => Some(0.0),
+            proven::DRAW => Some(0.5),
+            proven::WIN => Some(1.0),
+            other => unreachable!("未知の確定状態: {other}"),
+        }
+    }
+
+    /// 確定状態を書き込む (NONE からの CAS)．新規確定なら true を返す．
+    ///
+    /// 木に合流が無く root への経路がノード毎に一意なため，各ノードの確定値は
+    /// ゲーム理論的に一意 — 複数スレッドが同時に確定させても同じ値になる
+    /// (CAS に負けた場合は既存値との一致を debug_assert で検証する)．
+    pub fn try_mark_proven(&self, p: u8) -> bool {
+        debug_assert!(
+            matches!(p, proven::LOSS | proven::DRAW | proven::WIN),
+            "確定状態のみ"
+        );
+        match self
+            .proven
+            .compare_exchange(proven::NONE, p, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => true,
+            Err(existing) => {
+                debug_assert_eq!(existing, p, "確定値はノード毎に一意のはず");
+                false
+            }
+        }
     }
 
     /// 子辺の配列を返す．state が EXPANDED になってから呼ぶこと．
