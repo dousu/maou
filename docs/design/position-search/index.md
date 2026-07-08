@@ -107,9 +107,10 @@ value を経路に沿ってバックプロパゲーションする (視点は 1 
 ### 3.5 木の表現とメモリ
 
 - **固定容量 `NodePool`** を探索開始時に一括確保し，index の単調増加で lock-free に
-  割り当てる．容量到達 = 探索停止 (GC は §7)．
-- `Node`: visits (AtomicU32) / wins (AtomicU64，**2^16 固定小数点** — [0,1] の勝率を
-  `fetch_add` だけで加算，精度 1.5e-5) / state (AtomicU8) / edges (OnceLock)．
+  割り当てる．容量到達時は GC で低訪問サブツリーを刈り取って継続する (§7)．
+- `Node`: visits (AtomicU64 — u32 は 1M NPS × 約 71 分で飽和するため) /
+  wins (AtomicU64，**2^16 固定小数点** — [0,1] の勝率を `fetch_add` だけで加算，
+  精度 1.5e-5) / state (AtomicU8) / edges (OnceLock)．
 - 局面は木に保存しない．シミュレーションごとにルート Board (~640B POD) を clone し
   `do_move` で葉まで再生成する．transposition (DAG 化) は未対応 (未決 —
   `Board::hash_after` で do_move なしに子ハッシュが取れるため将来の TT 統合は可能)．
@@ -120,7 +121,7 @@ value を経路に沿ってバックプロパゲーションする (視点は 1 
 - `max_ply` (デフォルト 512) 到達 = 引き分け v=0.5 で打ち切り
   (千日手未検出の現状での無限降下ガード．§9 で置き換える)．
 
-## 4. Evaluator 境界 (実装済み — mock のみ)
+## 4. Evaluator 境界 (実装済み — mock + ONNX)
 
 ```rust
 pub struct EvalItem  { pub board: Board, pub moves: Vec<Move> }
@@ -134,18 +135,31 @@ pub trait Evaluator: Send + Sync {
 すべて evaluator 実装側の責務**とする:
 
 - 特徴量エンコード: 現行 NN 入力は board ID `(B,9,9)` int32 + hand `(B,14)` f32
-  (Python 実装 `feature.py` の `make_board_id_positions`/`make_pieces_in_hand`)．
-  Rust 移植が必要 (`feature.rs` の 104 プレーンは legacy で現行 NN 未使用)．
-- move→policy label: 1496 ラベル (`label.py` の `make_move_label`)．Rust 移植が必要．
+  (Python 実装 `feature.py`)．**Rust 移植済み** (`maou_search/src/feature.rs`．
+  maou_shogi の 104 プレーン `feature.rs` は legacy で現行 NN 未使用)．
+- move→policy label: 1496 ラベル (`label.py` の `make_move_label`)．
+  **Rust 移植済み** (`maou_search/src/label.rs`)．
 - 出力変換: policy logits は合法手分を gather して softmax，value logit は
   sigmoid で勝率化 (評価値表示は `600 × logit` の Ponanza 換算)．
+
+移植の正しさは Python 正実装から生成した golden fixture (全 (from, to, promo)
+盤上手 + 全駒打ちの網羅ラベル表 13,689 ケース + 実局面 10 面) との一致で
+担保する (`tests/parity.rs`．fixture 再生成手順は worklog 2026-07-08 参照)．
 
 ONNX export は実装済み (`model_io.py`): 入力 `board`/`hand`，出力 `policy (B,1496)`
 logits + `value (B,1)` logit，opset 20，batch 可変．**この契約が OnnxEvaluator の
 I/F 仕様**である．
 
-現在の実装は `MockEvaluator` (zobrist hash × splitmix64 の決定論的擬似乱数) のみ．
-NN 抜きで探索コアのスループット上限とバッチ挙動を計測するために使う．
+評価器の実装は 2 つ:
+
+- `MockEvaluator` (デフォルトビルド): zobrist hash × splitmix64 の決定論的擬似乱数．
+  NN 抜きで探索コアのスループット上限とバッチ挙動を計測するために使う．
+- `OnnxEvaluator` (feature `onnx`): ONNX Runtime (ort crate) による実推論．
+  CUDA EP は feature `onnx-cuda` + 実行時 opt-in の二段構え (§2.2 の可搬性 binding
+  に従いデフォルトビルドは pure Rust のまま)．CUDA EP 初期化失敗は即エラーとし，
+  静かな CPU フォールバックで GPU 計測を誤らせない．
+  制約 (PoC): ort の `Session::run` が `&mut` 要求のため推論呼び出しを Mutex で
+  直列化している．
 
 ## 5. 予算 API と停止 (実装済み)
 
@@ -169,20 +183,28 @@ pub struct SearchLimits { pub max_playouts: Option<u64>, pub time_ms: Option<u64
 が勝る可能性もある．両案を実装しベンチ/対局で比較して確定する．
 詰み確定ノード (§8) は実装後，無条件で最優先とする．
 
-## 7. メモリ計画と GC (設計方針 — 未実装)
+## 7. メモリ計画と GC (実装済み)
 
 - 要件 (user): メモリは固定量とし，一定量に達したら GC する．**一回の削除で
   それなりの時間を空けて再度 GC が起きる**アルゴリズムを目指す (高頻度の
-  小刻み GC は避ける)．
-- 必要性は実測済み: 4T/batch16 で 2M ノードが 2.6 秒で枯渇する．
-- 候補 (未決):
-  1. 訪問数下位の subtree を一括解放して compaction (dfpn TT の amount GC の類推)．
-  2. 世代方式 (古い世代から回収)．
-  3. 対局レイヤー導入後は「ルート移動時の subtree 再利用 + 残りを解放」が主機構に
-     なる可能性があり，単発探索の GC はその補助と位置づける．
-- 制約: lock-free な index ベースの木なので，compaction は探索停止中 (または
-  world-stop 区間) に行うのが現実的．探索と並行する GC は複雑度が跳ねるため
-  第一版では stop-the-world を許容する．
+  小刻み GC は避ける)．必要性は実測済み: 4T/batch16 で 2M ノードが 2.6 秒で枯渇．
+- 採用 (v0.2.0): **stop-the-world 訪問数閾値プルーニング + in-place compaction**
+  (`NodePool::compact`)．
+  - 同期は既存の PoolExhausted 停止機構を流用: 全スレッド join 後の quiescent
+    状態でシングルスレッド実行し，`&mut` 要求で並行アクセスをコンパイル時に排除．
+  - visits の単調性 (子 ≤ 親; 訪問は経路単位で加算・巻き戻し) により
+    「visits ≥ T」集合は自動的にルート連結 — マーキング不要で，残存数が
+    `gc_keep_ratio × 容量` 以下になる最小閾値 T をヒストグラムで選ぶ．
+  - 解放された子への辺は未生成に戻り，再訪問時に再展開 (再評価) される．
+    CAS 競合でリークしたノードも毎回回収される．
+  - alloc は純粋 bump のまま (ホットパスコスト零)．
+- 棄却した候補: 並行 GC (hazard pointer 相当が必要で race リスク)，free-list 方式
+  (alloc ホットパスに競合と断片化)．
+- `gc_keep_ratio` の既定は 0.5．mock 計測では 0.25 が優位 (worklog 2026-07-08)
+  だが，実 NN では刈った枝の再評価コスト構造が変わるため実モデル接続後に
+  再チューニングする (未決)．
+- 対局レイヤー導入後は「ルート移動時の subtree 再利用 + 残りを解放」が主機構に
+  なる可能性があり，単発探索の GC はその補助と位置づける．
 
 ## 8. 詰み探索統合 (設計方針 — 未実装)
 
@@ -233,12 +255,12 @@ pub struct SearchLimits { pub max_playouts: Option<u64>, pub time_ms: Option<u64
 
 ### 10.1 ベンチ (実装済み)
 
-```bash
-cargo build --release -p maou_search --example nps_bench
-/tmp/cargo-target/release/examples/nps_bench --threads 4 --batch 16 --time-ms 5000
-```
+mock 評価の `nps_bench` と ONNX 実推論の `onnx_bench` の 2 本．
+ビルド・実行・Colab GPU 計測・トラブルシューティングの詳細手順は
+**[benchmarking.md](benchmarking.md)** を参照．
 
-出力: playouts/s，衝突率，バッチ充填率，最大深さ，プール使用量，best move / PV / 上位子．
+出力: playouts/s，衝突率，バッチ充填率，最大深さ，プール使用量，GC 回数/解放量，
+best move / PV / 上位子．
 
 ### 10.2 計測規律 (binding)
 
@@ -264,27 +286,26 @@ cargo build --release -p maou_search --example nps_bench
 |---|---|
 | MCTS コア (PUCT + virtual loss + バッチ収集) | ✅ 実装済み (maou_search v0.1.0) |
 | Evaluator trait + MockEvaluator + NPS ベンチ | ✅ 実装済み |
-| ノードプール GC | 未実装 (§7) |
+| ノードプール GC | ✅ 実装済み (v0.2.0，§7) |
+| visits u64 化 | ✅ 実装済み (v0.3.0) |
+| OnnxEvaluator (ort + 特徴量/ラベル Rust 移植) | ✅ 実装済み (v0.4.0，§4) |
 | AND-OR 勝敗確定伝播 | 未実装 (§8.3) |
 | 千日手検出 | 未実装 (§9) |
-| OnnxEvaluator (ort + 特徴量/ラベル Rust 移植) | 未実装 (§4) |
 | dfpn 停止フラグ + ルート並行詰み探索 | 未実装 (§8.1) |
 | PyO3 API / CLI (`maou search`) | 未実装 (docs/commands/ 義務が発生) |
-| Colab GPU 実測 | 未実施 (North-star 計測はこれのみ) |
+| Colab GPU 実測 | 配線検証済み (2026-07-08，極小モデル)．実モデルでの North-star 計測は未実施 |
 | モデル×探索の強さ検証フレームワーク + パラメータチューニング | 未実装 |
 
 ### 主要な未決事項
 
 | # | 未決 | 決め方 |
 |---|---|---|
-| 1 | 最終手選択 (visit 最大 vs visit フィルタ + Q 最大) | 両案実装しベンチ/対局比較 |
-| 2 | GC アルゴリズム | §7 の候補を要件 (低頻度・一括) で評価 |
-| 3 | 千日手検出方式 (Position vs 経路ハッシュ) | clone コスト実測 |
-| 4 | global batch collector の要否 | per-thread batching の GPU 実測後 |
-| 5 | 葉詰み探索の有無と予算 | 検証フレームワークで費用対効果を実測 |
-| 6 | c_puct / fpu / batch_size 等の既定値 | チューニングフレームワーク |
-| 7 | NPS の定義 (playouts/s vs NN eval/s) | 実 NN 接続時に確定 |
-| 8 | visits u32 の飽和 (1M NPS × ~71 分) | 長時間探索の要件が出た時点で u64 化 |
+| 1 | 最終手選択 (visit 最大 vs visit フィルタ + Q 最大) | 両案実装しベンチ/対局比較 (実モデル接続後) |
+| 2 | 千日手検出方式 (Position vs 経路ハッシュ) | clone コスト実測 |
+| 3 | global batch collector の要否 / ort session の Mutex 直列化解消 | 実モデルの GPU 実測 (fill % と NPS) 後 |
+| 4 | 葉詰み探索の有無と予算 | 検証フレームワークで費用対効果を実測 |
+| 5 | c_puct / fpu / batch_size / gc_keep_ratio 等の既定値 | チューニングフレームワーク |
+| 6 | NPS の定義 (playouts/s vs NN eval/s) | 実 NN 接続時に確定 |
 
 ## 12. 参考
 
