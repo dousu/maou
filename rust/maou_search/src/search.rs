@@ -25,6 +25,16 @@
 //! [`NodePool::compact`] を呼び，低訪問サブツリーを刈り取ってから探索
 //! スレッドを再起動する．GC 中の並行アクセスは `&mut` 要求により
 //! コンパイル時に排除される．
+//!
+//! # 千日手検出
+//!
+//! 降下中は経路上の各局面の (hash, 王手フラグ) を path と並行してスタックに
+//! 積み，未展開の葉に到達した時点で「対局履歴 + 経路」を後方走査して同一
+//! 局面の再出現を調べる ([`crate::repetition`])．木には合流 (transposition)
+//! が無く root への経路はノード毎に一意なので，千日手判定の結果はノードに
+//! 対して不変 — 初回検出でノードを終端状態に焼き付け，以後の再訪は走査なし
+//! で固定値をバックプロパゲーションする．root より前の対局履歴は
+//! [`Searcher::search_with_history`] で渡す．
 
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
@@ -34,6 +44,7 @@ use maou_shogi::movegen::generate_legal_moves;
 use maou_shogi::moves::Move;
 
 use crate::evaluator::{EvalItem, Evaluator};
+use crate::repetition::{find_repetition, HistoryEntry, RepetitionOutcome};
 use crate::tree::{node_state, Edge, NodePool, NULL_NODE};
 
 /// ルートノードの pool index (最初の alloc で必ず 0 になる)．
@@ -60,7 +71,7 @@ pub struct SearchOptions {
     /// 刈り取って継続する ([`SearchOptions::gc_enabled`] が false なら停止)．
     pub node_capacity: u32,
     /// 最大探索深さ．到達した経路は引き分け (0.5) として打ち切る
-    /// (千日手未検出の現状で無限降下を防ぐガード)．
+    /// (千日手にならないまま伸び続ける経路で無限に降下しないためのガード)．
     pub max_ply: u16,
     /// ノードプール GC を有効にするか．有効ならプール枯渇時に
     /// [`NodePool::compact`] で低訪問サブツリーを刈り取って探索を継続する．
@@ -168,6 +179,9 @@ pub struct SearchStats {
     pub avg_batch: f64,
     /// 到達した最大深さ．
     pub max_depth: u16,
+    /// 千日手を検出してノードを終端化した回数 (終端化済みノードの再訪は
+    /// 数えない)．
+    pub repetitions: u64,
     /// 使用したノード数 (GC 実行後はその時点の残存数)．
     pub nodes_used: u32,
     /// 子ノード生成の CAS 競合で捨てられたノード数 (GC で回収される)．
@@ -200,6 +214,10 @@ pub struct SearchResult {
 struct Shared<'a, E: Evaluator> {
     pool: NodePool,
     root_board: Board,
+    /// root 局面の (hash, 王手フラグ) — 降下スタックの初期エントリ．
+    root_entry: HistoryEntry,
+    /// root より前の対局履歴 (古い順)．千日手判定で経路の前に連結される．
+    game_history: &'a [HistoryEntry],
     evaluator: &'a E,
     opts: &'a SearchOptions,
     deadline: Option<Instant>,
@@ -211,6 +229,7 @@ struct Shared<'a, E: Evaluator> {
     eval_batches: AtomicU64,
     eval_items: AtomicU64,
     leaked_nodes: AtomicU64,
+    repetitions: AtomicU64,
     max_depth: AtomicU16,
 }
 
@@ -258,7 +277,7 @@ enum Selection {
     /// 評価すべき葉を確保した (path 末尾が葉ノード)．
     /// EvalItem は Board を含み大きいため Box で持つ．
     Leaf { path: Vec<u32>, item: Box<EvalItem> },
-    /// 終端 (詰み/最大深さ) に到達し，その場でバックプロパゲーション済み．
+    /// 終端 (詰み/千日手/最大深さ) に到達し，その場でバックプロパゲーション済み．
     Backpropped,
     /// 他スレッド評価中の葉に到達した (ロールバック済み)．
     Collision,
@@ -285,13 +304,26 @@ fn backprop<E: Evaluator>(shared: &Shared<'_, E>, path: &[u32], leaf_value: f64)
     }
 }
 
+/// 終端状態の固定評価値 (そのノードの手番側から見た勝率)．
+fn terminal_value(state: u8) -> f64 {
+    match state {
+        node_state::TERMINAL_LOSS => 0.0,
+        node_state::TERMINAL_DRAW => 0.5,
+        node_state::TERMINAL_WIN => 1.0,
+        other => unreachable!("終端状態のみ: {other}"),
+    }
+}
+
 /// ルートから PUCT で降下して評価対象の葉を 1 つ選ぶ．
 fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
     let pool = &shared.pool;
     let opts = shared.opts;
     let mut board = shared.root_board.clone();
     let mut path: Vec<u32> = Vec::with_capacity(64);
+    // path と並行して経路上の各局面の (hash, 王手フラグ) を積む (千日手判定用)
+    let mut rep_stack: Vec<HistoryEntry> = Vec::with_capacity(64);
     path.push(ROOT_IDX);
+    rep_stack.push(shared.root_entry);
     pool.get(ROOT_IDX).add_visit();
     let mut idx = ROOT_IDX;
 
@@ -352,6 +384,7 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
                 }
                 pool.get(child_idx).add_visit();
                 path.push(child_idx);
+                rep_stack.push(HistoryEntry::from_board(&board));
                 idx = child_idx;
 
                 if path.len() > opts.max_ply as usize {
@@ -361,11 +394,28 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
                 }
             }
             node_state::UNEXPANDED => {
+                // 千日手判定: 結果は経路依存だが root への経路はノード毎に
+                // 一意なので，このノードに対して不変 — 終端マークして以後の
+                // 走査を省く．判定が決定的なため複数スレッドが同時に到達
+                // しても同じ状態を store するだけで競合しない
+                // (EXPANDING を経由せず UNEXPANDED から直接遷移する)
+                if let Some(outcome) = find_repetition(shared.game_history, &rep_stack) {
+                    let state = match outcome {
+                        RepetitionOutcome::Loss => node_state::TERMINAL_LOSS,
+                        RepetitionOutcome::Draw => node_state::TERMINAL_DRAW,
+                        RepetitionOutcome::Win => node_state::TERMINAL_WIN,
+                    };
+                    node.mark_terminal(state);
+                    shared.repetitions.fetch_add(1, Ordering::Relaxed);
+                    shared.note_depth(path.len());
+                    backprop(shared, &path, terminal_value(state));
+                    return Selection::Backpropped;
+                }
                 if node.try_begin_expansion() {
                     let moves = generate_legal_moves(&mut board);
                     shared.note_depth(path.len());
                     if moves.is_empty() {
-                        node.mark_terminal_loss();
+                        node.mark_terminal(node_state::TERMINAL_LOSS);
                         backprop(shared, &path, 0.0);
                         return Selection::Backpropped;
                     }
@@ -381,9 +431,11 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
                 rollback(shared, &path);
                 return Selection::Collision;
             }
-            node_state::TERMINAL_LOSS => {
+            state @ (node_state::TERMINAL_LOSS
+            | node_state::TERMINAL_DRAW
+            | node_state::TERMINAL_WIN) => {
                 shared.note_depth(path.len());
-                backprop(shared, &path, 0.0);
+                backprop(shared, &path, terminal_value(state));
                 return Selection::Backpropped;
             }
             other => unreachable!("未知のノード状態: {other}"),
@@ -492,7 +544,26 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
     }
 
     /// 局面を探索して最有力手・評価値・統計を返す．
+    ///
+    /// root より前の対局履歴は考慮しない (探索経路内の千日手のみ検出する)．
+    /// 履歴を考慮する場合は [`Searcher::search_with_history`] を使う．
     pub fn search(&self, root_board: &Board, limits: &SearchLimits) -> SearchResult {
+        self.search_with_history(root_board, &[], limits)
+    }
+
+    /// 対局履歴 (root より前の局面列) を考慮して局面を探索する．
+    ///
+    /// `game_history` は開始局面から root の直前までの各局面を古い順に並べた
+    /// もの (root 自身は含めない)．各エントリは [`HistoryEntry::from_board`]
+    /// で作れる．探索中に履歴・経路と同一局面 (盤 + 持ち駒 + 手番) が再出現
+    /// した葉は千日手として終端評価される (連続王手の千日手は王手をかけ
+    /// 続けた側の負け — [`crate::repetition`])．
+    pub fn search_with_history(
+        &self,
+        root_board: &Board,
+        game_history: &[HistoryEntry],
+        limits: &SearchLimits,
+    ) -> SearchResult {
         let start = Instant::now();
         let opts = &self.options;
 
@@ -515,6 +586,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                     eval_items: 0,
                     avg_batch: 0.0,
                     max_depth: 0,
+                    repetitions: 0,
                     nodes_used: 0,
                     leaked_nodes: 0,
                     gc_runs: 0,
@@ -554,6 +626,8 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         let mut shared = Shared {
             pool,
             root_board: root_board.clone(),
+            root_entry: HistoryEntry::from_board(root_board),
+            game_history,
             evaluator: self.evaluator,
             opts,
             deadline: limits.time_ms.map(|ms| start + Duration::from_millis(ms)),
@@ -569,6 +643,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             eval_batches: AtomicU64::new(0),
             eval_items: AtomicU64::new(0),
             leaked_nodes: AtomicU64::new(0),
+            repetitions: AtomicU64::new(0),
             max_depth: AtomicU16::new(0),
         };
 
@@ -701,6 +776,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                 0.0
             },
             max_depth: shared.max_depth.load(Ordering::Relaxed),
+            repetitions: shared.repetitions.load(Ordering::Relaxed),
             nodes_used: shared.pool.used(),
             leaked_nodes: shared.leaked_nodes.load(Ordering::Relaxed),
             gc_runs,
@@ -977,6 +1053,105 @@ mod tests {
             0,
         );
         assert_eq!(result.stop, StopCause::TimeLimit);
+        assert!(result.best_move.is_some());
+    }
+
+    #[test]
+    fn test_repetition_detected_in_search() {
+        // 双方玉のみの隅対峙 — 王の往復で同一局面が容易に再出現する
+        let result = run(
+            "k8/9/9/9/9/9/9/9/8K b - 1",
+            SearchOptions {
+                threads: 1,
+                batch_size: 8,
+                ..SearchOptions::default()
+            },
+            SearchLimits {
+                max_playouts: Some(3000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        assert!(
+            result.stats.repetitions > 0,
+            "王の往復で千日手が検出されるはず: {:?}",
+            result.stats
+        );
+        assert!(result.best_move.is_some());
+    }
+
+    #[test]
+    fn test_perpetual_check_avoided_with_history() {
+        // 後手玉 1a，先手飛 2c．対局履歴として王手往復 1 循環 (4 手) を渡すと，
+        // root で再び 2c1c と王手する手は連続王手の千日手 (先手負け) を完成
+        // させる — 経路 + 履歴で検出され Q=0 に固定される
+        let sfen = "8k/9/7R1/9/9/9/9/9/4K4 b - 1";
+        let mut board = Board::empty();
+        board.set_sfen(sfen).expect("正当な SFEN");
+        let mut history = Vec::new();
+        for usi in ["2c1c", "1a2a", "1c2c", "2a1a"] {
+            history.push(HistoryEntry::from_board(&board));
+            let mut probe = board.clone();
+            let mv = generate_legal_moves(&mut probe)
+                .into_iter()
+                .find(|m| m.to_usi() == usi)
+                .expect("合法手のはず");
+            board.do_move(mv);
+        }
+        // board は開始局面と同一に戻っている — これを root にする
+        let evaluator = MockEvaluator::new(7);
+        let searcher = Searcher::new(
+            &evaluator,
+            SearchOptions {
+                threads: 1,
+                batch_size: 8,
+                ..SearchOptions::default()
+            },
+        );
+        let result = searcher.search_with_history(
+            &board,
+            &history,
+            &SearchLimits {
+                max_playouts: Some(2000),
+                ..SearchLimits::default()
+            },
+        );
+        assert!(result.stats.repetitions >= 1, "{:?}", result.stats);
+        let rep_child = result
+            .root_children
+            .iter()
+            .find(|c| c.mv.to_usi() == "2c1c")
+            .expect("2c1c はルートの合法手");
+        assert!(rep_child.visits > 0, "一度は訪問される");
+        assert_eq!(
+            rep_child.q, 0.0,
+            "連続王手の千日手を完成させる手は負け評価に固定される"
+        );
+        assert_ne!(
+            result.best_move.map(|m| m.to_usi()).as_deref(),
+            Some("2c1c"),
+            "千日手負けの王手は best_move に選ばれない"
+        );
+    }
+
+    #[test]
+    fn test_no_history_no_false_repetition() {
+        // 同じ局面でも履歴なしなら root 直下の王手は千日手にならない
+        // (経路内で循環が閉じるまでは通常の探索)
+        let result = run(
+            "8k/9/7R1/9/9/9/9/9/4K4 b - 1",
+            SearchOptions {
+                threads: 1,
+                batch_size: 8,
+                ..SearchOptions::default()
+            },
+            SearchLimits {
+                max_playouts: Some(50),
+                ..SearchLimits::default()
+            },
+            7,
+        );
+        // 浅い探索 (深さ 4 未満の経路が大半) では検出ゼロでも探索は正常
         assert!(result.best_move.is_some());
     }
 

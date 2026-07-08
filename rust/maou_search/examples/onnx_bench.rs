@@ -155,8 +155,8 @@ fn main() {
         100.0 * s.avg_batch / options.batch_size as f64
     );
     println!(
-        "max_depth={} nodes_used={} leaked_nodes={} gc_runs={} gc_freed_nodes={} stop={:?}",
-        s.max_depth, s.nodes_used, s.leaked_nodes, s.gc_runs, s.gc_freed_nodes, result.stop
+        "max_depth={} repetitions={} nodes_used={} leaked_nodes={} gc_runs={} gc_freed_nodes={} stop={:?}",
+        s.max_depth, s.repetitions, s.nodes_used, s.leaked_nodes, s.gc_runs, s.gc_freed_nodes, result.stop
     );
     match result.best_move {
         Some(m) => println!("bestmove={} winrate={:.4}", m.to_usi(), result.winrate),

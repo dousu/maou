@@ -14,6 +14,11 @@
 //! 遷移する．`EXPANDING` への CAS に成功したスレッドだけが評価・展開の所有権を
 //! 持ち，edges を設定してから `EXPANDED` を Release store する．他スレッドは
 //! `EXPANDING` を見たら衝突 (collision) として手を引く．
+//!
+//! 千日手による終端化のみ `UNEXPANDED → TERMINAL_*` を直接遷移する —
+//! 木に合流が無く root への経路はノード毎に一意なため判定は決定的で，
+//! 複数スレッドが同時に到達しても同じ状態を store する冪等な操作になる
+//! ([`crate::repetition`])．
 
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::OnceLock;
@@ -38,8 +43,13 @@ pub mod node_state {
     pub const EXPANDING: u8 = 1;
     /// 展開済 (edges 参照可)．
     pub const EXPANDED: u8 = 2;
-    /// 手番側に合法手がない終端 (詰まされている = 手番側の負け)．
+    /// 手番側の負け終端 (合法手なし = 詰まされている，または連続王手の
+    /// 千日手で手番側が王手をかけ続けた側)．
     pub const TERMINAL_LOSS: u8 = 3;
+    /// 引き分け終端 (千日手)．
+    pub const TERMINAL_DRAW: u8 = 4;
+    /// 手番側の勝ち終端 (相手が連続王手の千日手で負けた)．
+    pub const TERMINAL_WIN: u8 = 5;
 }
 
 /// 子ノードへの辺．
@@ -149,10 +159,21 @@ impl Node {
         self.state.store(node_state::EXPANDED, Ordering::Release);
     }
 
-    /// 合法手なし終端 (手番側の負け) としてマークする (EXPANDING の所有スレッド専用)．
-    pub fn mark_terminal_loss(&self) {
-        self.state
-            .store(node_state::TERMINAL_LOSS, Ordering::Release);
+    /// 終端状態 ([`node_state::TERMINAL_LOSS`] / [`node_state::TERMINAL_DRAW`] /
+    /// [`node_state::TERMINAL_WIN`]) としてマークする．
+    ///
+    /// 合法手なし終端 (詰み) は EXPANDING の所有スレッドが呼ぶ．千日手終端は
+    /// UNEXPANDED から直接呼ばれる (経路毎に判定が決定的なため冪等 —
+    /// [`crate::repetition`])．
+    pub fn mark_terminal(&self, state: u8) {
+        debug_assert!(
+            matches!(
+                state,
+                node_state::TERMINAL_LOSS | node_state::TERMINAL_DRAW | node_state::TERMINAL_WIN
+            ),
+            "終端状態のみ"
+        );
+        self.state.store(state, Ordering::Release);
     }
 
     /// 子辺の配列を返す．state が EXPANDED になってから呼ぶこと．

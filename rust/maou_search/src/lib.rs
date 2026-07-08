@@ -18,22 +18,29 @@
 //!   容量到達時は stop-the-world GC で低訪問サブツリーを刈り取って継続する
 //!   (無効化可．[`SearchOptions`] の `gc_enabled` / `gc_keep_ratio`)．
 //!
+//! - **千日手検出**: 対局履歴 + 探索経路のハッシュ後方走査で同一局面の
+//!   再出現を検出し，連続王手の千日手は王手をかけ続けた側の負けとして
+//!   終端評価する ([`repetition`]．語彙・判定は maou_shogi の
+//!   `Position::is_perpetual_check_move` / dfpn の on-path 検出に揃えている)．
+//!
 //! # 現時点の制限
 //!
-//! - 千日手・連続王手の千日手は未考慮 (最大深さ到達で引き分け 0.5 と扱う)．
 //! - 勝敗確定ノードの AND-OR 伝播，詰み探索 (dfpn) 統合は未実装．
+//! - 優越局面 (盤面同一で持駒優越/劣位) による千日手の一般化は未実装．
 
 pub mod evaluator;
 pub mod feature;
 pub mod label;
 #[cfg(feature = "onnx")]
 pub mod onnx;
+pub mod repetition;
 pub mod search;
 pub mod tree;
 
 pub use evaluator::{EvalItem, EvalResult, Evaluator, MockEvaluator};
 #[cfg(feature = "onnx")]
 pub use onnx::OnnxEvaluator;
+pub use repetition::{HistoryEntry, RepetitionOutcome};
 pub use search::{
     RootChildStat, SearchLimits, SearchOptions, SearchResult, SearchStats, Searcher, StopCause,
 };
