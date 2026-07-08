@@ -15,6 +15,16 @@
 //! 他スレッドが評価中 (`EXPANDING`) の葉に到達した場合は衝突として
 //! 前置 visits をロールバックし，収集を打ち切ってバッチを即時 flush する．
 //! 衝突率とバッチ充填率は [`SearchStats`] で観測できる．
+//!
+//! # ノードプール GC (stop-the-world)
+//!
+//! プール枯渇時は既存の停止機構をそのまま quiescence の同期に使う:
+//! 枯渇を検知したスレッドが停止フラグを立て，全スレッドが手持ちバッチを
+//! 評価・バックプロパゲーションしてから join する (この時点で in-flight の
+//! virtual visits は残らない)．その後シングルスレッドで
+//! [`NodePool::compact`] を呼び，低訪問サブツリーを刈り取ってから探索
+//! スレッドを再起動する．GC 中の並行アクセスは `&mut` 要求により
+//! コンパイル時に排除される．
 
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
@@ -46,11 +56,19 @@ pub struct SearchOptions {
     pub c_puct: f32,
     /// 未訪問の子に与える親視点 Q の初期値 (first play urgency)．
     pub fpu: f32,
-    /// ノードプール容量 (メモリ上限)．到達すると探索を停止する．
+    /// ノードプール容量 (メモリ上限)．到達すると GC で低訪問サブツリーを
+    /// 刈り取って継続する ([`SearchOptions::gc_enabled`] が false なら停止)．
     pub node_capacity: u32,
     /// 最大探索深さ．到達した経路は引き分け (0.5) として打ち切る
     /// (千日手未検出の現状で無限降下を防ぐガード)．
     pub max_ply: u16,
+    /// ノードプール GC を有効にするか．有効ならプール枯渇時に
+    /// [`NodePool::compact`] で低訪問サブツリーを刈り取って探索を継続する．
+    pub gc_enabled: bool,
+    /// GC 後に残すノード数のプール容量比 (0.0..=1.0)．小さいほど 1 回の GC で
+    /// 多く解放し，次の GC までの間隔が延びる (刈られたサブツリーの再展開
+    /// コストとのトレードオフ)．
+    pub gc_keep_ratio: f32,
 }
 
 impl Default for SearchOptions {
@@ -62,6 +80,8 @@ impl Default for SearchOptions {
             fpu: 0.5,
             node_capacity: 1 << 20,
             max_ply: 512,
+            gc_enabled: true,
+            gc_keep_ratio: 0.5,
         }
     }
 }
@@ -85,7 +105,8 @@ pub enum StopCause {
     PlayoutLimit,
     /// 時間上限に到達した．
     TimeLimit,
-    /// ノードプールが枯渇した．
+    /// ノードプールが枯渇した (GC 無効時．有効時は 1 ノードも解放できな
+    /// かったか，枯渇時点で予算も尽きていた場合のみこの理由で停止する)．
     PoolExhausted,
     /// ルート局面に合法手がない (探索不能)．
     RootTerminal,
@@ -147,10 +168,14 @@ pub struct SearchStats {
     pub avg_batch: f64,
     /// 到達した最大深さ．
     pub max_depth: u16,
-    /// 使用したノード数．
+    /// 使用したノード数 (GC 実行後はその時点の残存数)．
     pub nodes_used: u32,
-    /// 子ノード生成の CAS 競合で捨てられたノード数．
+    /// 子ノード生成の CAS 競合で捨てられたノード数 (GC で回収される)．
     pub leaked_nodes: u64,
+    /// 実行された GC (プール compact) の回数．
+    pub gc_runs: u64,
+    /// GC で解放されたノードの総数．
+    pub gc_freed_nodes: u64,
 }
 
 /// 探索結果．
@@ -492,6 +517,8 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                     max_depth: 0,
                     nodes_used: 0,
                     leaked_nodes: 0,
+                    gc_runs: 0,
+                    gc_freed_nodes: 0,
                 },
             };
         }
@@ -524,7 +551,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             root_node.add_visit();
         }
 
-        let shared = Shared {
+        let mut shared = Shared {
             pool,
             root_board: root_board.clone(),
             evaluator: self.evaluator,
@@ -545,17 +572,53 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             max_depth: AtomicU16::new(0),
         };
 
-        std::thread::scope(|s| {
-            for _ in 0..opts.threads.max(1) {
-                s.spawn(|| worker(&shared));
+        let gc_keep_target =
+            (f64::from(opts.node_capacity) * f64::from(opts.gc_keep_ratio.clamp(0.0, 1.0))) as u32;
+        let mut gc_runs = 0u64;
+        let mut gc_freed_nodes = 0u64;
+        loop {
+            std::thread::scope(|s| {
+                for _ in 0..opts.threads.max(1) {
+                    s.spawn(|| worker(&shared));
+                }
+            });
+            // GC で継続するのはプール枯渇による停止のみ (時間/playout は予算終了)
+            if !opts.gc_enabled
+                || StopCause::from_u8(shared.stop_cause.load(Ordering::Acquire))
+                    != Some(StopCause::PoolExhausted)
+            {
+                break;
             }
-        });
+            // 枯渇時点で予算も尽きていれば GC せずに終了する
+            if shared.playouts.load(Ordering::Relaxed) >= shared.max_playouts {
+                break;
+            }
+            if shared.deadline.is_some_and(|d| Instant::now() >= d) {
+                break;
+            }
+            // 全スレッド join 済み = quiescent なので排他参照で compact できる
+            let gc = shared.pool.compact(gc_keep_target);
+            if gc.freed == 0 {
+                // 1 ノードも解放できない場合は再起動しても即枯渇する
+                break;
+            }
+            gc_runs += 1;
+            gc_freed_nodes += u64::from(gc.freed);
+            shared.stop_cause.store(CAUSE_NONE, Ordering::Relaxed);
+            shared.stop.store(false, Ordering::Release);
+        }
 
-        self.collect_result(&shared, start)
+        self.collect_result(&shared, start, gc_runs, gc_freed_nodes)
     }
 
     /// 探索終了後の木からベストムーブ・PV・統計を集計する．
-    fn collect_result(&self, shared: &Shared<'_, E>, start: Instant) -> SearchResult {
+    fn collect_result(
+        &self,
+        shared: &Shared<'_, E>,
+        start: Instant,
+        gc_runs: u64,
+        gc_freed_nodes: u64,
+    ) -> SearchResult {
         let pool = &shared.pool;
         let root_node = pool.get(ROOT_IDX);
         let root_children: Vec<RootChildStat> = root_node
@@ -640,6 +703,8 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             max_depth: shared.max_depth.load(Ordering::Relaxed),
             nodes_used: shared.pool.used(),
             leaked_nodes: shared.leaked_nodes.load(Ordering::Relaxed),
+            gc_runs,
+            gc_freed_nodes,
         };
 
         SearchResult {
@@ -777,13 +842,14 @@ mod tests {
     }
 
     #[test]
-    fn test_pool_exhaustion_stops_search() {
+    fn test_pool_exhaustion_stops_search_when_gc_disabled() {
         let result = run(
             STARTPOS,
             SearchOptions {
                 threads: 2,
                 batch_size: 8,
                 node_capacity: 128,
+                gc_enabled: false,
                 ..SearchOptions::default()
             },
             SearchLimits {
@@ -794,7 +860,109 @@ mod tests {
         );
         assert_eq!(result.stop, StopCause::PoolExhausted);
         assert!(result.stats.nodes_used <= 128);
+        assert_eq!(result.stats.gc_runs, 0);
         assert!(result.best_move.is_some());
+    }
+
+    #[test]
+    fn test_gc_continues_past_pool_capacity() {
+        // 容量 512 では GC なしなら 20,000 playout に到達する前に必ず枯渇する
+        let result = run(
+            STARTPOS,
+            SearchOptions {
+                threads: 1,
+                batch_size: 8,
+                node_capacity: 512,
+                ..SearchOptions::default()
+            },
+            SearchLimits {
+                max_playouts: Some(20_000),
+                ..SearchLimits::default()
+            },
+            0,
+        );
+        assert_eq!(result.stop, StopCause::PlayoutLimit);
+        assert!(result.stats.gc_runs >= 1, "GC が発動しているはず");
+        assert!(result.stats.playouts >= 20_000);
+        assert!(result.stats.nodes_used <= 512);
+        assert!(result.stats.gc_freed_nodes > 0);
+        assert!(result.best_move.is_some());
+    }
+
+    #[test]
+    fn test_gc_mate_still_found() {
+        // GC で低訪問枝が刈られても詰み手 (最多訪問) は生き残る
+        let result = run(
+            MATE_IN_1,
+            SearchOptions {
+                threads: 1,
+                batch_size: 4,
+                node_capacity: 128,
+                ..SearchOptions::default()
+            },
+            SearchLimits {
+                max_playouts: Some(10_000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        assert!(result.stats.gc_runs >= 1, "容量 128 なら GC が発動するはず");
+        assert_eq!(
+            result.best_move.map(|m| m.to_usi()).as_deref(),
+            Some("G*5b")
+        );
+        assert!(result.winrate > 0.9);
+    }
+
+    #[test]
+    fn test_gc_deterministic_single_thread() {
+        let opts = SearchOptions {
+            threads: 1,
+            batch_size: 8,
+            node_capacity: 512,
+            ..SearchOptions::default()
+        };
+        let limits = SearchLimits {
+            max_playouts: Some(10_000),
+            ..SearchLimits::default()
+        };
+        let a = run(STARTPOS, opts.clone(), limits.clone(), 123);
+        let b = run(STARTPOS, opts, limits, 123);
+        assert!(a.stats.gc_runs >= 1, "GC 経路を通っているはず");
+        assert_eq!(a.stats.gc_runs, b.stats.gc_runs);
+        assert_eq!(
+            a.best_move.map(|m| m.to_usi()),
+            b.best_move.map(|m| m.to_usi())
+        );
+        let visits_a: Vec<u32> = a.root_children.iter().map(|c| c.visits).collect();
+        let visits_b: Vec<u32> = b.root_children.iter().map(|c| c.visits).collect();
+        assert_eq!(
+            visits_a, visits_b,
+            "GC を挟んでも単一スレッドなら再現される"
+        );
+    }
+
+    #[test]
+    fn test_gc_multithread_smoke() {
+        let result = run(
+            STARTPOS,
+            SearchOptions {
+                threads: 4,
+                batch_size: 16,
+                node_capacity: 4096,
+                ..SearchOptions::default()
+            },
+            SearchLimits {
+                max_playouts: Some(50_000),
+                ..SearchLimits::default()
+            },
+            0,
+        );
+        assert_eq!(result.stop, StopCause::PlayoutLimit);
+        assert!(result.stats.gc_runs >= 1);
+        assert!(result.stats.nodes_used <= 4096);
+        let best = result.best_move.expect("合法手がある");
+        assert!(result.root_children.iter().any(|c| c.mv == best));
     }
 
     #[test]

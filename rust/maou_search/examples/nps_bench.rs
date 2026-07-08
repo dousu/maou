@@ -30,7 +30,7 @@ fn main() {
         eprintln!(
             "usage: nps_bench [--sfen SFEN] [--threads N] [--batch N] \
              [--playouts N] [--time-ms N] [--capacity N] [--cpuct F] \
-             [--fpu F] [--seed N]"
+             [--fpu F] [--seed N] [--keep-ratio F] [--no-gc]"
         );
         return;
     }
@@ -48,6 +48,8 @@ fn main() {
         c_puct: arg_value(&args, "--cpuct").unwrap_or(1.5),
         fpu: arg_value(&args, "--fpu").unwrap_or(0.5),
         node_capacity: arg_value(&args, "--capacity").unwrap_or(1 << 21),
+        gc_enabled: !args.iter().any(|a| a == "--no-gc"),
+        gc_keep_ratio: arg_value(&args, "--keep-ratio").unwrap_or(0.5),
         ..SearchOptions::default()
     };
     let limits = SearchLimits {
@@ -62,8 +64,14 @@ fn main() {
     println!("=== maou_search NPS bench (MockEvaluator) ===");
     println!("sfen: {sfen}");
     println!(
-        "threads={} batch={} cpuct={} fpu={} capacity={} seed={seed}",
-        options.threads, options.batch_size, options.c_puct, options.fpu, options.node_capacity
+        "threads={} batch={} cpuct={} fpu={} capacity={} gc={} keep_ratio={} seed={seed}",
+        options.threads,
+        options.batch_size,
+        options.c_puct,
+        options.fpu,
+        options.node_capacity,
+        options.gc_enabled,
+        options.gc_keep_ratio
     );
 
     let evaluator = MockEvaluator::new(seed);
@@ -90,8 +98,8 @@ fn main() {
         100.0 * s.avg_batch / options.batch_size as f64
     );
     println!(
-        "max_depth={} nodes_used={} leaked_nodes={} stop={:?}",
-        s.max_depth, s.nodes_used, s.leaked_nodes, result.stop
+        "max_depth={} nodes_used={} leaked_nodes={} gc_runs={} gc_freed_nodes={} stop={:?}",
+        s.max_depth, s.nodes_used, s.leaked_nodes, s.gc_runs, s.gc_freed_nodes, result.stop
     );
     match result.best_move {
         Some(m) => println!("bestmove={} winrate={:.4}", m.to_usi(), result.winrate),

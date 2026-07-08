@@ -166,11 +166,27 @@ impl Node {
 /// 固定容量ノードプール．
 ///
 /// 全ノードを一括で事前確保し，index の単調増加でロックフリーに割り当てる．
-/// 容量到達後の [`NodePool::alloc`] は `None` を返す (解放・再利用は将来拡張)．
+/// 容量到達後の [`NodePool::alloc`] は `None` を返す．quiescent 状態で
+/// [`NodePool::compact`] を呼ぶと低訪問サブツリーを刈り取って空きを作れる．
 pub struct NodePool {
     nodes: Box<[Node]>,
     next: AtomicU32,
 }
+
+/// GC ([`NodePool::compact`]) 1 回の結果統計．
+#[derive(Clone, Copy, Debug)]
+pub struct CompactStats {
+    /// 残存ノード数 (compact 直後の使用数)．
+    pub kept: u32,
+    /// 解放されたノード数．
+    pub freed: u32,
+    /// 採用された訪問数閾値 (これ未満の visits のノードを解放した)．
+    pub visit_threshold: u32,
+}
+
+/// [`NodePool::compact`] の閾値探索用ヒストグラムの上限．
+/// これ以上の visits は最上位バケツに畳まれる (閾値はこの値で頭打ち)．
+const COMPACT_HIST_CAP: u32 = 4096;
 
 impl NodePool {
     /// capacity 個のノードを事前確保する．
@@ -212,6 +228,95 @@ impl NodePool {
         self.next
             .load(Ordering::Relaxed)
             .min(self.nodes.len() as u32)
+    }
+
+    /// 低訪問サブツリーを刈り取り，生存ノードをプール前方に詰め直す
+    /// (stop-the-world mark-compact GC)．
+    ///
+    /// visits は「子 ≤ 親」の単調性を持つ (訪問は経路単位で加算・巻き戻しされる)
+    /// ため，「visits ≥ T」のノード集合は必ずルートから連結する．そこで残存数が
+    /// `keep_target` 以下になる最小の閾値 T をヒストグラムで選び，T 未満の
+    /// ノードを一括解放する．解放された子への辺は [`NULL_NODE`] に戻り，
+    /// 再訪問時に再展開 (再評価) される．CAS 競合でリークしたノードや
+    /// ロールバックで visits = 0 に戻ったノードもここで回収される．
+    /// index 0 (ルート) は閾値によらず必ず残す．
+    ///
+    /// `keep_target` を容量より十分小さく取るほど 1 回の解放量が増え，次の枯渇
+    /// までの間隔が延びる．計算量は O(使用ノード数 + 生存辺数)，追加メモリは
+    /// index 再配置表の 4 バイト × 使用ノード数．
+    ///
+    /// # 前提
+    ///
+    /// 全探索スレッドが停止した quiescent 状態でのみ呼べる
+    /// (`&mut self` を要求するためコンパイル時に強制される)．
+    pub fn compact(&mut self, keep_target: u32) -> CompactStats {
+        let used = self.used() as usize;
+        let keep_target = keep_target.max(1);
+
+        // 残存数が keep_target 以下になる最小の閾値を visits ヒストグラムから選ぶ．
+        // 全ノードの visits が COMPACT_HIST_CAP 以上になる病的なケースでは閾値が
+        // 頭打ちし keep_target を超えて残すが，それには 2^12 × 容量回の playout が
+        // 必要で実用上到達しない
+        let mut hist = vec![0u32; COMPACT_HIST_CAP as usize + 1];
+        for node in &self.nodes[..used] {
+            hist[node.visits().min(COMPACT_HIST_CAP) as usize] += 1;
+        }
+        let mut threshold = COMPACT_HIST_CAP;
+        let mut kept_count = hist[COMPACT_HIST_CAP as usize];
+        for t in (1..COMPACT_HIST_CAP).rev() {
+            if kept_count + hist[t as usize] > keep_target {
+                break;
+            }
+            kept_count += hist[t as usize];
+            threshold = t;
+        }
+
+        // 生存ノードを前方へ詰める (旧 index → 新 index の再配置表を作りながら)．
+        // 生存ノードの新 index は旧 index 以下になるため昇順の swap で安全に移動できる
+        let mut map = vec![NULL_NODE; used];
+        let mut write = 0usize;
+        // ループ内で self.nodes を swap で可変借用するため iterator 化できない
+        #[allow(clippy::needless_range_loop)]
+        for read in 0..used {
+            if read == 0 || self.nodes[read].visits() >= threshold {
+                debug_assert_ne!(
+                    self.nodes[read].state(),
+                    node_state::EXPANDING,
+                    "quiescent 状態に EXPANDING ノードは存在しない"
+                );
+                map[read] = write as u32;
+                if write != read {
+                    self.nodes.swap(write, read);
+                }
+                write += 1;
+            }
+        }
+
+        // 生存ノードの辺を新 index に張り替える．刈られた子への辺は NULL_NODE に
+        // 戻る (再配置表の初期値)．排他参照下なので Relaxed で十分 (探索再開側との
+        // happens-before はスレッド spawn が与える)
+        for node in &self.nodes[..write] {
+            if let Some(edges) = node.edges.get() {
+                for e in edges.iter() {
+                    let c = e.child.load(Ordering::Relaxed);
+                    if c != NULL_NODE {
+                        e.child.store(map[c as usize], Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+
+        // 解放スロットを初期状態に戻す (edges の heap 領域もここで解放される)
+        for node in &mut self.nodes[write..used] {
+            *node = Node::new();
+        }
+        self.next.store(write as u32, Ordering::Relaxed);
+
+        CompactStats {
+            kept: write as u32,
+            freed: (used - write) as u32,
+            visit_threshold: threshold,
+        }
     }
 
     /// プール容量を返す．
@@ -266,5 +371,88 @@ mod tests {
         node.add_visit();
         node.revert_visit();
         assert_eq!(node.visits(), 1);
+    }
+
+    #[test]
+    fn test_compact_prunes_low_visit_subtrees() {
+        use maou_shogi::board::Board;
+        use maou_shogi::movegen::generate_legal_moves;
+
+        let mut board = Board::empty();
+        board
+            .set_sfen("lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1")
+            .expect("正当な SFEN");
+        let mvs = generate_legal_moves(&mut board);
+
+        // root(v10) ── a(v6) ── c(v4)，root ── b(v1)，leak(v0，どこからも未参照)
+        let mut pool = NodePool::new(8);
+        let root = pool.alloc().expect("空きがある");
+        let a = pool.alloc().expect("空きがある");
+        let b = pool.alloc().expect("空きがある");
+        let c = pool.alloc().expect("空きがある");
+        let _leak = pool.alloc().expect("空きがある");
+
+        let e_a = Edge::new(mvs[0], 0.6);
+        e_a.child.store(a, Ordering::Relaxed);
+        let e_b = Edge::new(mvs[1], 0.4);
+        e_b.child.store(b, Ordering::Relaxed);
+        pool.get(root).finish_expansion(Box::new([e_a, e_b]));
+        let e_c = Edge::new(mvs[0], 1.0);
+        e_c.child.store(c, Ordering::Relaxed);
+        pool.get(a).finish_expansion(Box::new([e_c]));
+
+        for _ in 0..10 {
+            pool.get(root).add_visit();
+        }
+        for _ in 0..6 {
+            pool.get(a).add_visit();
+        }
+        pool.get(b).add_visit();
+        for _ in 0..4 {
+            pool.get(c).add_visit();
+        }
+        pool.get(c).add_win(0.75);
+
+        let st = pool.compact(3);
+        // 残存 <= 3 となる最小閾値は 2: {root(10), a(6), c(4)} が残り
+        // b(1) と leak(0) が解放される
+        assert_eq!(st.visit_threshold, 2);
+        assert_eq!(st.kept, 3);
+        assert_eq!(st.freed, 2);
+        assert_eq!(pool.used(), 3);
+
+        // root は index 0 のまま統計が保存され，刈られた b への辺は未生成に戻る
+        let root_node = pool.get(0);
+        assert_eq!(root_node.visits(), 10);
+        let edges = root_node.edges();
+        assert_eq!(edges[0].child.load(Ordering::Relaxed), 1);
+        assert_eq!(edges[1].child.load(Ordering::Relaxed), NULL_NODE);
+
+        // a → c の辺は新 index に張り替わり，c の統計も保存される
+        let a_node = pool.get(1);
+        assert_eq!(a_node.visits(), 6);
+        let c_idx = a_node.edges()[0].child.load(Ordering::Relaxed);
+        assert_eq!(c_idx, 2);
+        let c_node = pool.get(2);
+        assert_eq!(c_node.visits(), 4);
+        assert!((c_node.wins() - 0.75).abs() < 1e-3);
+
+        // 解放スロットは初期状態で再割り当てできる
+        let fresh = pool.alloc().expect("解放によって空きができている");
+        assert_eq!(fresh, 3);
+        assert_eq!(pool.get(fresh).visits(), 0);
+        assert_eq!(pool.get(fresh).state(), node_state::UNEXPANDED);
+    }
+
+    #[test]
+    fn test_compact_always_keeps_root() {
+        let mut pool = NodePool::new(4);
+        assert_eq!(pool.alloc(), Some(0));
+        // visits 0 のままでも index 0 (ルート) は解放されない
+        let st = pool.compact(1);
+        assert_eq!(st.kept, 1);
+        assert_eq!(st.freed, 0);
+        assert_eq!(pool.used(), 1);
+        assert_eq!(pool.get(0).state(), node_state::UNEXPANDED);
     }
 }
