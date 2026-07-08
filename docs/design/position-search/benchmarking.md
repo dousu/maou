@@ -109,15 +109,27 @@ os.environ["LD_LIBRARY_PATH"] = ":".join(
 
 ### TensorRT EP を使う場合
 
-CUDA EP 比でカーネル融合による高速化を狙う．feature `onnx-tensorrt` で
-ビルドし，TensorRT ランタイム (libnvinfer) を pip で導入する:
+CUDA EP 比でカーネル融合による高速化を狙う (A100/ViT-19.8M/FP16 実測で
+CUDA EP 比 約 2.2×)．feature `onnx-tensorrt` でビルドし，TensorRT ランタイム
+(libnvinfer) を pip で導入する:
 
 ```python
-# TensorRT ランタイム (onnxruntime GPU バイナリが要求する 10 系)
-!pip -q install tensorrt-cu12
+# TensorRT ランタイム．onnxruntime バイナリが要求するのは 10 系
+# (libnvinfer.so.10)．pip の最新は 11 系なので pin が必須 (2026-07 検証済み)
+!pip install "tensorrt-cu12==10.*"
+
+# ライブラリを ldconfig に登録する (環境変数伝播に依存しない確実な方法．
+# SONAME で登録されるためファイル名の版番号差異も吸収される)
 import glob
-trt_libs = glob.glob("/usr/local/lib/python3*/dist-packages/tensorrt_libs")
-os.environ["LD_LIBRARY_PATH"] = ":".join(trt_libs + [os.environ["LD_LIBRARY_PATH"]])
+dirs = (
+    glob.glob("/usr/local/lib/python3*/dist-packages/tensorrt_libs")
+    + glob.glob("/usr/local/lib/python3*/dist-packages/nvidia/*/lib")
+    + ["/content/maou/target/release", "/content/maou/target/release/examples"]
+)
+with open("/etc/ld.so.conf.d/maou.conf", "w") as f:
+    f.write("\n".join(dirs) + "\n")
+!ldconfig
+!ldconfig -p | grep libnvinfer.so.10   # 1 行以上出ること
 
 # ビルド (CUDA EP へのフォールバック用に onnx-cuda も同時に有効化)
 !cargo build --release -p maou_search \
@@ -151,13 +163,18 @@ CUDA EP は cuDNN 9 / cuBLAS 等を要求する．Colab では torch 同梱の n
 パッケージ (`.../dist-packages/nvidia/*/lib`) にあるため，§4 セル 5 の
 `nvidia_libs` で解決する．
 
-### `libnvinfer.so.*` が見つからない / TensorRT EP の初期化失敗
+### `libnvinfer.so.10: cannot open shared object file`
 
 onnxruntime の TensorRT EP はビルド時ダウンロードされた onnxruntime バイナリと
-**同じメジャー版の TensorRT** ランタイムを要求する．`pip install tensorrt-cu12`
-(10 系) を導入し，`dist-packages/tensorrt_libs` を `LD_LIBRARY_PATH` に足す
-(§4 参照)．版不一致のエラーが出た場合はエラーメッセージの要求版に合わせて
-`tensorrt-cu12==10.x.*` を指定する．
+**同じメジャー版の TensorRT** を要求する (現行 10 系)．pin なしの
+`pip install tensorrt-cu12` は **11 系が入り** (`tensorrt_libs/` 内が
+`*.so.11.*` になる)，どうパスを通しても解決しない．
+`pip install "tensorrt-cu12==10.*"` で 10 系に入れ替えること
+(`ls .../tensorrt_libs/ | grep libnvinfer.so.10` で確認できる)．
+
+パス解決は `LD_LIBRARY_PATH` より **ldconfig 登録が確実** (§4 参照)．
+`ldconfig` 実行時に既存ライブラリへの `... is not a symbolic link` 警告が
+大量に出るが無害．VM リセット後は ldconfig のセルだけ再実行する．
 
 ### コピペ時のパス分断
 
