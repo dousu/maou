@@ -7,8 +7,9 @@
 //!
 //! - **pure Rust**: PyO3 に依存しない．Python への露出は maou_rust 側の責務．
 //! - **評価器の抽象化**: NN 推論は [`Evaluator`] trait の背後に置く．
-//!   本 crate は [`MockEvaluator`] (決定論的擬似乱数) のみを提供し，
-//!   ONNX 等の実推論は別実装として後から差し込む．
+//!   デフォルトビルドは [`MockEvaluator`] (決定論的擬似乱数) のみで pure Rust を
+//!   維持し，ONNX Runtime による実推論 (`onnx::OnnxEvaluator`) は `onnx`
+//!   feature (CUDA は `onnx-cuda`) で opt-in する (wheel 可搬性の維持)．
 //! - **バッチ収集 first-class**: GPU バッチ推論が最大のボトルネックになる想定のため，
 //!   各探索スレッドは virtual loss (前置 visits) を使って葉をバッチ単位で収集し，
 //!   [`Evaluator::evaluate_batch`] にまとめて渡す．バッチ充填率と探索効率の
@@ -23,10 +24,16 @@
 //! - 勝敗確定ノードの AND-OR 伝播，詰み探索 (dfpn) 統合は未実装．
 
 pub mod evaluator;
+pub mod feature;
+pub mod label;
+#[cfg(feature = "onnx")]
+pub mod onnx;
 pub mod search;
 pub mod tree;
 
 pub use evaluator::{EvalItem, EvalResult, Evaluator, MockEvaluator};
+#[cfg(feature = "onnx")]
+pub use onnx::OnnxEvaluator;
 pub use search::{
     RootChildStat, SearchLimits, SearchOptions, SearchResult, SearchStats, Searcher, StopCause,
 };
