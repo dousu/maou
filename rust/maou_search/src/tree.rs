@@ -26,8 +26,8 @@ pub const NULL_NODE: u32 = u32::MAX;
 /// wins 固定小数点表現のスケール (2^16)．
 ///
 /// 値域 [0,1] の勝率を u64 の `fetch_add` だけで lock-free に加算するための量子化．
-/// 精度は 2^-16 ≈ 1.5e-5．visits が u32 上限 (2^32) に達しても総和は 2^48 で
-/// u64 に収まる．
+/// 精度は 2^-16 ≈ 1.5e-5．visits が 2^48 (1M NPS で約 9 年) に達するまで
+/// 総和は u64 に収まる．
 const WIN_FP_SCALE: f64 = 65536.0;
 
 /// ノードの展開状態．
@@ -69,7 +69,8 @@ impl Edge {
 /// wins は評価完了後のバックプロパゲーションで加算される．
 pub struct Node {
     /// 訪問回数 (評価待ち in-flight 分を含む)．
-    visits: AtomicU32,
+    /// u32 だと 1M NPS × 約 71 分でルートが飽和するため u64 で持つ．
+    visits: AtomicU64,
     /// 勝ち数和 (親手番視点，[`WIN_FP_SCALE`] 固定小数点)．
     wins_fp: AtomicU64,
     /// 展開状態 ([`node_state`])．
@@ -81,7 +82,7 @@ pub struct Node {
 impl Node {
     fn new() -> Node {
         Node {
-            visits: AtomicU32::new(0),
+            visits: AtomicU64::new(0),
             wins_fp: AtomicU64::new(0),
             state: AtomicU8::new(node_state::UNEXPANDED),
             edges: OnceLock::new(),
@@ -90,7 +91,7 @@ impl Node {
 
     /// 訪問回数を返す．
     #[inline]
-    pub fn visits(&self) -> u32 {
+    pub fn visits(&self) -> u64 {
         self.visits.load(Ordering::Relaxed)
     }
 
@@ -259,7 +260,7 @@ impl NodePool {
         // 必要で実用上到達しない
         let mut hist = vec![0u32; COMPACT_HIST_CAP as usize + 1];
         for node in &self.nodes[..used] {
-            hist[node.visits().min(COMPACT_HIST_CAP) as usize] += 1;
+            hist[node.visits().min(u64::from(COMPACT_HIST_CAP)) as usize] += 1;
         }
         let mut threshold = COMPACT_HIST_CAP;
         let mut kept_count = hist[COMPACT_HIST_CAP as usize];
@@ -278,7 +279,7 @@ impl NodePool {
         // ループ内で self.nodes を swap で可変借用するため iterator 化できない
         #[allow(clippy::needless_range_loop)]
         for read in 0..used {
-            if read == 0 || self.nodes[read].visits() >= threshold {
+            if read == 0 || self.nodes[read].visits() >= u64::from(threshold) {
                 debug_assert_ne!(
                     self.nodes[read].state(),
                     node_state::EXPANDING,

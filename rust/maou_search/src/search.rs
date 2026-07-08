@@ -142,7 +142,7 @@ pub struct RootChildStat {
     /// 指し手．
     pub mv: Move,
     /// 訪問回数．
-    pub visits: u32,
+    pub visits: u64,
     /// ルート手番側から見た勝率 (未訪問なら 0)．
     pub q: f64,
     /// policy 事前確率．
@@ -305,14 +305,14 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
                 let mut best_score = f32::NEG_INFINITY;
                 for (i, e) in edges.iter().enumerate() {
                     let (q, n) = match e.child.load(Ordering::Acquire) {
-                        NULL_NODE => (opts.fpu, 0u32),
+                        NULL_NODE => (opts.fpu, 0u64),
                         c => {
                             let child = pool.get(c);
                             let v = child.visits();
                             if v == 0 {
                                 (opts.fpu, 0)
                             } else {
-                                ((child.wins() / f64::from(v)) as f32, v)
+                                ((child.wins() / v as f64) as f32, v)
                             }
                         }
                     };
@@ -633,7 +633,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                         if v == 0 {
                             (0, 0.0)
                         } else {
-                            (v, child.wins() / f64::from(v))
+                            (v, child.wins() / v as f64)
                         }
                     }
                 };
@@ -665,7 +665,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                 break;
             }
             let edges = node.edges();
-            let mut pv_best: Option<(&Edge, u32)> = None;
+            let mut pv_best: Option<(&Edge, u64)> = None;
             for e in edges {
                 let c = e.child.load(Ordering::Acquire);
                 if c == NULL_NODE {
@@ -810,11 +810,7 @@ mod tests {
         // best_move はルートの合法手のいずれかであること
         assert!(result.root_children.iter().any(|c| c.mv == best));
         // 全子の訪問回数の総和 + ルート初期評価 1 = ルート playout 相当
-        let total_child_visits: u64 = result
-            .root_children
-            .iter()
-            .map(|c| u64::from(c.visits))
-            .sum();
+        let total_child_visits: u64 = result.root_children.iter().map(|c| c.visits).sum();
         assert!(total_child_visits > 0);
         assert!(result.stats.max_depth >= 2, "複数手先まで読んでいるはず");
     }
@@ -836,8 +832,8 @@ mod tests {
             a.best_move.map(|m| m.to_usi()),
             b.best_move.map(|m| m.to_usi())
         );
-        let visits_a: Vec<u32> = a.root_children.iter().map(|c| c.visits).collect();
-        let visits_b: Vec<u32> = b.root_children.iter().map(|c| c.visits).collect();
+        let visits_a: Vec<u64> = a.root_children.iter().map(|c| c.visits).collect();
+        let visits_b: Vec<u64> = b.root_children.iter().map(|c| c.visits).collect();
         assert_eq!(visits_a, visits_b, "単一スレッドでは訪問分布まで再現される");
     }
 
@@ -934,8 +930,8 @@ mod tests {
             a.best_move.map(|m| m.to_usi()),
             b.best_move.map(|m| m.to_usi())
         );
-        let visits_a: Vec<u32> = a.root_children.iter().map(|c| c.visits).collect();
-        let visits_b: Vec<u32> = b.root_children.iter().map(|c| c.visits).collect();
+        let visits_a: Vec<u64> = a.root_children.iter().map(|c| c.visits).collect();
+        let visits_b: Vec<u64> = b.root_children.iter().map(|c| c.visits).collect();
         assert_eq!(
             visits_a, visits_b,
             "GC を挟んでも単一スレッドなら再現される"
