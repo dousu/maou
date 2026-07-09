@@ -140,7 +140,9 @@ class SearchRunner:
             "Candidates": "\n".join(candidates),
             "Stats": (
                 f"playouts={result.playouts} nps={result.nps:.0f} "
-                f"elapsed_ms={result.elapsed_ms} max_depth={result.max_depth} "
+                f"elapsed_ms={result.elapsed_ms} "
+                f"warmup_ms={result.warmup_ms} "
+                f"max_depth={result.max_depth} "
                 f"repetitions={result.repetitions} "
                 f"proven_nodes={result.proven_nodes} stop={result.stop}"
             ),

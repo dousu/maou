@@ -30,7 +30,7 @@ fn main() {
         eprintln!(
             "usage: nps_bench [--sfen SFEN] [--threads N] [--batch N] \
              [--playouts N] [--time-ms N] [--capacity N] [--cpuct F] \
-             [--fpu F] [--seed N] [--keep-ratio F] [--no-gc]"
+             [--fpu F] [--seed N] [--keep-ratio F] [--no-gc] [--root-dfpn]"
         );
         return;
     }
@@ -50,6 +50,10 @@ fn main() {
         node_capacity: arg_value(&args, "--capacity").unwrap_or(1 << 21),
         gc_enabled: !args.iter().any(|a| a == "--no-gc"),
         gc_keep_ratio: arg_value(&args, "--keep-ratio").unwrap_or(0.5),
+        // ルート並行 dfpn を有効にすると，dfpn スレッドの CPU/メモリ競合が
+        // MCTS の NPS に与える影響を計測できる (ノード予算は default の
+        // root_dfpn_nodes; 詰みのない局面では予算消化後に dfpn は終了する)
+        root_dfpn: args.iter().any(|a| a == "--root-dfpn"),
         ..SearchOptions::default()
     };
     let limits = SearchLimits {
@@ -64,14 +68,16 @@ fn main() {
     println!("=== maou_search NPS bench (MockEvaluator) ===");
     println!("sfen: {sfen}");
     println!(
-        "threads={} batch={} cpuct={} fpu={} capacity={} gc={} keep_ratio={} seed={seed}",
+        "threads={} batch={} cpuct={} fpu={} capacity={} gc={} keep_ratio={} \
+         root_dfpn={} seed={seed}",
         options.threads,
         options.batch_size,
         options.c_puct,
         options.fpu,
         options.node_capacity,
         options.gc_enabled,
-        options.gc_keep_ratio
+        options.gc_keep_ratio,
+        options.root_dfpn
     );
 
     let evaluator = MockEvaluator::new(seed);

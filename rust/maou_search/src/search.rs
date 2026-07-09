@@ -198,9 +198,14 @@ pub struct RootChildStat {
 pub struct SearchStats {
     /// 完了した playout 数 (評価 + 終端到達)．
     pub playouts: u64,
-    /// 経過時間 (ミリ秒)．
+    /// ルート評価 (初回推論 = TensorRT エンジンビルド/ロード等) の所要時間
+    /// (ミリ秒)．1 回限りの固定コストであり，計測区間 (`elapsed_ms`/`nps`) から
+    /// 除外して別掲する (onnx_bench の warmup と同義)．
+    pub warmup_ms: u64,
+    /// 経過時間 (ミリ秒)．ルート評価 (`warmup_ms`) は含まない探索本体の時間．
     pub elapsed_ms: u64,
     /// playout 毎秒 (mock/実 NN いずれも「葉評価スループット」の指標)．
+    /// warmup (エンジンビルド) を除外した `elapsed_ms` を分母とする．
     pub nps: f64,
     /// 衝突数 (他スレッド評価中の葉に到達してロールバックした回数)．
     pub collisions: u64,
@@ -686,7 +691,11 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         game_history: &[HistoryEntry],
         limits: &SearchLimits,
     ) -> SearchResult {
-        let start = Instant::now();
+        // ルート評価 (初回推論 = TensorRT エンジンビルド等) は 1 回限りの固定
+        // コストなので計測区間の外で済ませ，warmup_ms として別掲する
+        // (onnx_bench の out-of-timer warmup と同義)．計測 (start/deadline) は
+        // ルート展開が終わってから開始する．
+        let warmup_start = Instant::now();
         let opts = &self.options;
 
         // ルートの合法手を確認する
@@ -701,7 +710,8 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                 stop: StopCause::RootTerminal,
                 stats: SearchStats {
                     playouts: 0,
-                    elapsed_ms: start.elapsed().as_millis() as u64,
+                    warmup_ms: warmup_start.elapsed().as_millis() as u64,
+                    elapsed_ms: 0,
                     nps: 0.0,
                     collisions: 0,
                     eval_batches: 0,
@@ -745,6 +755,10 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             root_node.finish_expansion(edges);
             root_node.add_visit();
         }
+
+        // ルート評価 (初回推論のエンジンビルド含む) はここで完了．計測を開始する
+        let warmup_ms = warmup_start.elapsed().as_millis() as u64;
+        let start = Instant::now();
 
         let mut shared = Shared {
             pool,
@@ -842,13 +856,17 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             dfpn_stop.store(true, Ordering::Release);
         });
 
-        self.collect_result(&shared, start, gc_runs, gc_freed_nodes)
+        self.collect_result(&shared, warmup_ms, start, gc_runs, gc_freed_nodes)
     }
 
     /// 探索終了後の木からベストムーブ・PV・統計を集計する．
+    ///
+    /// `warmup_ms` はルート評価 (エンジンビルド等) の所要時間で，計測区間
+    /// (`start` からの経過) には含まれない．
     fn collect_result(
         &self,
         shared: &Shared<'_, E>,
+        warmup_ms: u64,
         start: Instant,
         gc_runs: u64,
         gc_freed_nodes: u64,
@@ -946,6 +964,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         let eval_items = shared.eval_items.load(Ordering::Relaxed);
         let stats = SearchStats {
             playouts,
+            warmup_ms,
             elapsed_ms: elapsed.as_millis() as u64,
             nps: playouts as f64 / elapsed.as_secs_f64().max(1e-9),
             collisions: shared.collisions.load(Ordering::Relaxed),

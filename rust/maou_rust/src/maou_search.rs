@@ -49,7 +49,8 @@ impl SearchRootChild {
 /// - `root_children`: ルート直下の全候補手の統計 (合法手生成順)．
 /// - `stop`: 停止理由 (`"playout_limit"` / `"time_limit"` / `"pool_exhausted"` /
 ///   `"root_terminal"` / `"root_proven"`)．
-/// - 統計: `playouts` / `elapsed_ms` / `nps` / `max_depth` / `repetitions`
+/// - 統計: `playouts` / `warmup_ms` (ルート評価/エンジンビルドの所要; 計測
+///   区間外) / `elapsed_ms` / `nps` / `max_depth` / `repetitions`
 ///   (千日手検出数) / `proven_nodes` (AND-OR 確定ノード数) / `nodes_used` /
 ///   `collisions` / `eval_batches` / `avg_batch` / `gc_runs`．
 #[pyclass(frozen, name = "SearchResult")]
@@ -66,6 +67,8 @@ struct PySearchResult {
     stop: String,
     #[pyo3(get)]
     playouts: u64,
+    #[pyo3(get)]
+    warmup_ms: u64,
     #[pyo3(get)]
     elapsed_ms: u64,
     #[pyo3(get)]
@@ -126,6 +129,7 @@ fn to_py_result(r: SearchResult) -> PySearchResult {
             .collect(),
         stop: stop_cause_str(r.stop).to_string(),
         playouts: r.stats.playouts,
+        warmup_ms: r.stats.warmup_ms,
         elapsed_ms: r.stats.elapsed_ms,
         nps: r.stats.nps,
         max_depth: r.stats.max_depth,
@@ -291,7 +295,13 @@ fn search(
     match model_path {
         None => {
             // mock 評価器 (決定論的擬似乱数)．API 検証/開発用
-            let _ = (use_cuda, use_tensorrt, trt_engine_cache_dir, pad_to, intra_threads);
+            let _ = (
+                use_cuda,
+                use_tensorrt,
+                trt_engine_cache_dir,
+                pad_to,
+                intra_threads,
+            );
             let evaluator = maou_search::MockEvaluator::new(0);
             Ok(run_search(py, evaluator, options, board, history, limits))
         }
@@ -309,8 +319,8 @@ fn search(
                     None
                 }),
             };
-            let evaluator = maou_search::OnnxEvaluator::from_file(&path, &onnx_options)
-                .map_err(|e| {
+            let evaluator =
+                maou_search::OnnxEvaluator::from_file(&path, &onnx_options).map_err(|e| {
                     pyo3::exceptions::PyRuntimeError::new_err(format!(
                         "ONNX モデルの読み込みに失敗: {e}"
                     ))

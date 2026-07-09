@@ -25,6 +25,9 @@ class TestSearchRunner:
         # 勝敗がほぼ決している水準 (evaluate.md: eval >= 3000)
         assert float(result["Eval"]) > 3000
         assert "stop=root_proven" in result["Stats"]
+        # ルート評価 (エンジンビルド) の所要は warmup_ms として別掲される
+        # (計測区間の nps/elapsed_ms には含まれない)
+        assert "warmup_ms=" in result["Stats"]
         # best_move は候補リストの先頭に必ず含まれる
         assert (
             result["Candidates"]

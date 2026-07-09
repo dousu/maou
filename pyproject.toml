@@ -1,6 +1,6 @@
 [project]
 name = "maou"
-version = "0.23.1"
+version = "0.24.0"
 description = "Shogi AI"
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
@@ -50,15 +50,25 @@ mpu = [
 cpu-infer = [
     "onnxruntime",
 ]
+# GPU 推論 extra の版固定 (重要):
+#   Rust wheel (maou_search) は ort crate 経由で onnxruntime 1.22 系を静的
+#   リンクする．maou search の GPU 実行時に dlopen される provider .so
+#   (libonnxruntime_providers_{shared,cuda,tensorrt}.so) は onnxruntime-gpu
+#   pip パッケージの capi/ から供給できるが，**静的コアと同一版でないと
+#   ABI 不一致でロードに失敗する**ため onnxruntime-gpu==1.22.* に固定する．
+#   これにより GPU wheel + `maou[tensorrt-infer]` だけで provider が揃い，
+#   provider tarball の別途 wget が不要になる (Colab 手順を簡素化)．
+#   TensorRT ランタイム (libnvinfer.so.10) は onnxruntime 1.22 が要求する
+#   10 系に固定する (pin なしだと 11 系が入り解決不能)．
 onnx-gpu-infer = [
-    "onnxruntime-gpu",
+    "onnxruntime-gpu==1.22.*",
 ]
 tensorrt-infer = [
-    "onnxruntime-gpu",
+    "onnxruntime-gpu==1.22.*",
     "cuda-core[cu12]",
-    "tensorrt-cu12",
-    "tensorrt-lean-cu12",
-    "tensorrt-dispatch-cu12",
+    "tensorrt-cu12==10.*",
+    "tensorrt-lean-cu12==10.*",
+    "tensorrt-dispatch-cu12==10.*",
 ]
 # クラウドプロバイダーごとのextra
 gcp = [

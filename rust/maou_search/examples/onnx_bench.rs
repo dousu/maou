@@ -41,7 +41,7 @@ fn main() {
             "usage: onnx_bench --model PATH [--sfen SFEN] [--threads N] [--batch N] \
              [--playouts N] [--time-ms N] [--capacity N] [--cpuct F] [--fpu F] \
              [--keep-ratio F] [--no-gc] [--ort-threads N] [--cuda] [--tensorrt] \
-             [--trt-cache DIR] [--pad N]"
+             [--trt-cache DIR] [--pad N] [--root-dfpn]"
         );
         return;
     }
@@ -65,6 +65,11 @@ fn main() {
         node_capacity: arg_value(&args, "--capacity").unwrap_or(1 << 21),
         gc_enabled: !args.iter().any(|a| a == "--no-gc"),
         gc_keep_ratio: arg_value(&args, "--keep-ratio").unwrap_or(0.5),
+        // ルート並行 dfpn を有効にすると，MCTS と CPU/メモリを競合する dfpn
+        // スレッドが NPS に与える影響を計測できる (実配備と同条件)．ノード予算は
+        // SearchOptions::default() の root_dfpn_nodes (1<<20 ≈ 冒頭 1 秒の詰み
+        // スキャン) を使う — 詰みのない局面では予算消化後に dfpn は終了する
+        root_dfpn: args.iter().any(|a| a == "--root-dfpn"),
         ..SearchOptions::default()
     };
     let limits = SearchLimits {
@@ -93,7 +98,7 @@ fn main() {
     println!("sfen: {sfen}");
     println!(
         "threads={} batch={} cpuct={} fpu={} capacity={} gc={} keep_ratio={} \
-         ort_threads={} cuda={} tensorrt={} pad={:?}",
+         ort_threads={} cuda={} tensorrt={} pad={:?} root_dfpn={}",
         options.threads,
         options.batch_size,
         options.c_puct,
@@ -104,7 +109,8 @@ fn main() {
         onnx_options.intra_threads,
         onnx_options.use_cuda,
         onnx_options.use_tensorrt,
-        onnx_options.pad_to
+        onnx_options.pad_to,
+        options.root_dfpn
     );
 
     let evaluator = match OnnxEvaluator::from_file(&model, &onnx_options) {

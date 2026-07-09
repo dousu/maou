@@ -1167,7 +1167,7 @@ name = "humanfriendly"
 version = "10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyreadline3", marker = "sys_platform == 'win32'" },
+    { name = "pyreadline3", marker = "sys_platform == 'win32' or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-cuda') or (extra == 'extra-4-maou-cpu' and extra == 'extra-4-maou-mpu') or (extra == 'extra-4-maou-cuda' and extra == 'extra-4-maou-mpu')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cc/3f/2c29224acb2e2df4d2046e4c73ee2662023c58ff5b113c4c1adac0886c43/humanfriendly-10.0.tar.gz", hash = "sha256:6b0b831ce8f15f7300721aa49829fc4e83921a9a301cc7f606be6686a2288ddc", size = 360702, upload-time = "2021-09-17T21:40:43.31Z" }
 wheels = [
@@ -1411,7 +1411,7 @@ wheels = [
 
 [[package]]
 name = "maou"
-version = "0.23.1"
+version = "0.24.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -1524,8 +1524,8 @@ requires-dist = [
     { name = "onnxruntime", marker = "extra == 'cpu-infer'" },
     { name = "onnxruntime-gpu", marker = "extra == 'cuda'" },
     { name = "onnxruntime-gpu", marker = "extra == 'mpu'" },
-    { name = "onnxruntime-gpu", marker = "extra == 'onnx-gpu-infer'" },
-    { name = "onnxruntime-gpu", marker = "extra == 'tensorrt-infer'" },
+    { name = "onnxruntime-gpu", marker = "extra == 'onnx-gpu-infer'", specifier = "==1.22.*" },
+    { name = "onnxruntime-gpu", marker = "extra == 'tensorrt-infer'", specifier = "==1.22.*" },
     { name = "onnxruntime-tools", marker = "extra == 'cpu'" },
     { name = "onnxruntime-tools", marker = "extra == 'cuda'" },
     { name = "onnxruntime-tools", marker = "extra == 'mpu'" },
@@ -1535,9 +1535,9 @@ requires-dist = [
     { name = "plotly", specifier = ">=6.5.0,<7.0.0" },
     { name = "polars", specifier = ">=1.0.0" },
     { name = "psutil", specifier = ">=6.0.0" },
-    { name = "tensorrt-cu12", marker = "extra == 'tensorrt-infer'" },
-    { name = "tensorrt-dispatch-cu12", marker = "extra == 'tensorrt-infer'" },
-    { name = "tensorrt-lean-cu12", marker = "extra == 'tensorrt-infer'" },
+    { name = "tensorrt-cu12", marker = "extra == 'tensorrt-infer'", specifier = "==10.*" },
+    { name = "tensorrt-dispatch-cu12", marker = "extra == 'tensorrt-infer'", specifier = "==10.*" },
+    { name = "tensorrt-lean-cu12", marker = "extra == 'tensorrt-infer'", specifier = "==10.*" },
     { name = "torch", marker = "extra == 'cpu'", specifier = ">=2.6.0,<=2.10.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "maou", extra = "cpu" } },
     { name = "torch", marker = "extra == 'cuda'", specifier = ">=2.6.0,<=2.10.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "maou", extra = "cuda" } },
     { name = "torch", marker = "extra == 'mpu'", specifier = ">=2.6.0,<=2.10.0", index = "https://download.pytorch.org/whl/cu128", conflict = { package = "maou", extra = "mpu" } },
@@ -2091,9 +2091,10 @@ wheels = [
 
 [[package]]
 name = "onnxruntime-gpu"
-version = "1.24.2"
+version = "1.22.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "coloredlogs" },
     { name = "flatbuffers" },
     { name = "numpy" },
     { name = "packaging" },
@@ -2101,10 +2102,10 @@ dependencies = [
     { name = "sympy" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/29/d4f2122c3d1150b191b3219c1b3e99e1e12ea377d2d810ea9482c17587f1/onnxruntime_gpu-1.24.2-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:88ed80d143dfba314f1951305079665e6e86516bf19d96dfaf8c0f56cd9fae1b", size = 252634764, upload-time = "2026-02-19T17:09:49.876Z" },
-    { url = "https://files.pythonhosted.org/packages/64/fb/5d3c9c7e32c66d8f8d0bbdd469a9e0d11e2a46d9c1aae14214b8debc519d/onnxruntime_gpu-1.24.2-cp311-cp311-win_amd64.whl", hash = "sha256:63d7d2695b6b189c7df2e1a71d2acd4c82b52964d44ffe07fb391c39604bb60a", size = 207102962, upload-time = "2026-02-19T17:09:07.317Z" },
-    { url = "https://files.pythonhosted.org/packages/92/1d/2eb4443d9e85c5e219b61cd4995ef1d30bc5981c4bbb5dd624c9445edb8d/onnxruntime_gpu-1.24.2-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e4a3f793b291fb678583db0e78836319ab662f10a8485f7de858631b4ea5361c", size = 252647554, upload-time = "2026-02-19T17:10:01.43Z" },
-    { url = "https://files.pythonhosted.org/packages/b9/cd/5e9b0d094e573c1409a2c1155f146ea1d5d5b805329ebde146d2c5584b2c/onnxruntime_gpu-1.24.2-cp312-cp312-win_amd64.whl", hash = "sha256:77cbfcb08943d2edba069c774451831d28be215bf875a989811188ee59e0833f", size = 207102891, upload-time = "2026-02-19T20:09:12.43Z" },
+    { url = "https://files.pythonhosted.org/packages/4a/10/cd3e7e289f7b46eb93e38b5c90139f735bf1ea7f03d4b17ceb0e998e5bb6/onnxruntime_gpu-1.22.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d30c1512f22b1f01bacb4f177d49cbefd23e0f4bef56066f1282992d133e6ff8", size = 283204403, upload-time = "2025-05-09T19:39:38.278Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/47/313ee7998ef63dd7533200966972056fc5f3c7dd3bdfd9c49ae833bb5108/onnxruntime_gpu-1.22.0-cp311-cp311-win_amd64.whl", hash = "sha256:0f1719f7cca76075b398a7d0466ead62d78fd2b8c0ea053dcf65d80c813103e8", size = 214923507, upload-time = "2025-05-09T19:32:51.275Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/5c/3f9700ba277d52c121dd2cebc8a672fb60b53e888972fc6682b6692a766c/onnxruntime_gpu-1.22.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:86b064c8f6cbe6da03f51f46351237d985f8fd5eb907d3f9997ea91881131a13", size = 283199528, upload-time = "2025-05-09T19:39:54.489Z" },
+    { url = "https://files.pythonhosted.org/packages/48/9e/f95af15627c8b9f866f2e372e467a9f1e14e7ebec224ed4b8e71ce970c81/onnxruntime_gpu-1.22.0-cp312-cp312-win_amd64.whl", hash = "sha256:89cfd71e1ba17a4668e8770e344f22cde64bfd70b2ad3d03b8a390d4414b5995", size = 214923964, upload-time = "2025-05-09T19:33:04.028Z" },
 ]
 
 [[package]]
