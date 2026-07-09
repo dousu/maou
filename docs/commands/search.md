@@ -48,8 +48,14 @@ uv run maturin develop --features onnx-tensorrt   # + TensorRT EP
 ```
 
 Passing `--model-path` to a wheel built without `onnx` raises a
-`RuntimeError` with this instruction. GPU (Colab) procedures are documented
-in [docs/design/position-search/benchmarking.md](../design/position-search/benchmarking.md).
+`RuntimeError` with this instruction.
+
+**Prebuilt GPU wheels**: the GitHub Actions workflow **Build GPU Wheel**
+(workflow_dispatch) publishes release-built GPU wheels
+(onnx-cuda + onnx-tensorrt) and the ONNX Runtime provider libraries to the
+GitHub Release `latest-gpu`, so no Rust build is needed on Colab. See the
+Colab procedure in
+[docs/design/position-search/benchmarking.md](../design/position-search/benchmarking.md).
 
 ## Outputs
 
