@@ -1,11 +1,18 @@
 [package]
 name = "maou_rust"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 
 [lib]
 name = "_rust"
 crate-type = ["cdylib"]
+
+[features]
+# maou_search の ONNX 評価器を有効化する (デフォルト wheel は pure Rust を維持し，
+# 実 NN 探索は feature 付きビルドで opt-in する — wheel 可搬性の維持)
+onnx = ["maou_search/onnx"]
+onnx-cuda = ["maou_search/onnx-cuda"]
+onnx-tensorrt = ["maou_search/onnx-tensorrt"]
 
 [dependencies]
 pyo3 = { workspace = true }
@@ -15,6 +22,7 @@ numpy = { workspace = true }
 maou_io = { path = "../maou_io" }
 maou_index = { path = "../maou_index" }
 maou_shogi = { path = "../maou_shogi" }
+maou_search = { path = "../maou_search" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
