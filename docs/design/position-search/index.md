@@ -332,7 +332,7 @@ mock 評価の `nps_bench` と ONNX 実推論の `onnx_bench` の 2 本．
 | AND-OR 勝敗確定伝播 | ✅ 実装済み (v0.7.0，§8.3) |
 | 千日手検出 | ✅ 実装済み (v0.6.0，§9) |
 | dfpn 停止フラグ + ルート並行詰み探索 | ✅ 実装済み (maou_shogi v5.5.0 + maou_search v0.8.0，§8.1) |
-| PyO3 API / CLI (`maou search`) | 未実装 (docs/commands/ 義務が発生) |
+| PyO3 API / CLI (`maou search`) | ✅ 実装済み (maou_rust v0.10.0 + maou v0.23.0．[docs/commands/search.md](../../commands/search.md)) |
 | Colab GPU 実測 | 配線検証済み (2026-07-08，極小モデル)．実モデルでの North-star 計測は未実施 |
 | モデル×探索の強さ検証フレームワーク + パラメータチューニング | 未実装 |
 
