@@ -1,10 +1,31 @@
 ---
-status: pending
+status: applied
+applied_in: 449834d
 title: maou search の warmup_ms 別掲と Colab 事前ビルド wheel 手順の精査
-target: docs/commands/search.md, docs/design/position-search/benchmarking.md
+target: docs/commands/search.md, docs/commands/hcpe_convert.md, docs/design/position-search/benchmarking.md
 ---
 
 # maou search の warmup_ms 別掲と Colab 事前ビルド wheel 手順の精査
+
+## Validation & 適用結果 (2026-07-09, Colab A100-80GB)
+
+実機検証で計画どおり動作し，docs を適用した (@ 449834d)．
+
+- **warmup 分離が必須だった証拠**: `warmup_ms=32431` (TensorRT エンジンビルド
+  32.4 秒) が計測窓 `elapsed_ms=30012` (30 秒) より長い．修正前なら deadline
+  超過で `nps≈0` になっていた．修正後は `nps=40230` (onnx_bench 41K と ~2%)．
+  `stop=time_limit` で全窓使用．実 NN 出力も健全 (▲2六歩/▲7六歩, Eval~50)．
+- **pip-provider 方式で tarball 不要を実証**: pyke ビルドの静的コア ×
+  Microsoft ビルドの pip provider (共に onnxruntime 1.22) の ABI が一致し，
+  provider ロードエラーなく完走．→ **provider tarball を CI から撤去**
+  (`build-gpu-wheel.yml`)．provider は `maou[tensorrt-infer]` の
+  onnxruntime-gpu 1.22 (`capi/`) から供給する．
+- **numpy 衝突を根治**: cshogi (py3.12 で numpy<1.27 を強制) が唯一の原因で，
+  production 探索は cshogi 不使用 → **cshogi を base から `hcpe` extra へ分離**．
+  `maou[tensorrt-infer]` は numpy 2.x のまま解決 (検証: numpy==2.5.1)．
+  BREAKING: hcpe-convert は `maou[hcpe]` が必要 (パーサに案内ガードを追加)．
+- **root-dfpn 併走**: startpos では dfpn が王手手段なく 1 ノードで即終了し
+  NPS 影響は無視できた (nodes=1)．戦術局面でのみ競合が顕在化する．
 
 ## Trigger
 
