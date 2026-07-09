@@ -28,7 +28,6 @@ from maou.app.learning.network import (
     Network,
 )
 from maou.app.learning.policy_targets import PolicyTargetMode
-from maou.app.learning.value_targets import ValueTargetMode
 from maou.app.learning.resource_monitor import ResourceUsage
 from maou.app.learning.setup import (
     DataLoaderFactory,
@@ -53,6 +52,7 @@ from maou.app.learning.training_loop import (
     RawLogitsTrainingLoop,
     TrainingLoop,
 )
+from maou.app.learning.value_targets import ValueTargetMode
 
 
 class _EmptyIterableDataset(torch.utils.data.IterableDataset):

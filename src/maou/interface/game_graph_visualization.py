@@ -231,10 +231,8 @@ class GameGraphVisualizationInterface:
             sente_value = self._to_sente_perspective(
                 float(row["result_value"]), depth
             )
-            sente_best_move_wr = (
-                self._to_sente_perspective(
-                    float(row["best_move_win_rate"]), depth
-                )
+            sente_best_move_wr = self._to_sente_perspective(
+                float(row["best_move_win_rate"]), depth
             )
 
             # レイアウトから座標を取得(なければ 0, 0)
@@ -361,11 +359,9 @@ class GameGraphVisualizationInterface:
             sente_value = self._to_sente_perspective(
                 float(row["result_value"]), depth
             )
-            sente_best_move_wr = (
-                self._to_sente_perspective(
-                    float(row["best_move_win_rate"]),
-                    depth,
-                )
+            sente_best_move_wr = self._to_sente_perspective(
+                float(row["best_move_win_rate"]),
+                depth,
             )
             x, y = layout.node_positions.get(
                 pos_hash, (0.0, 0.0)

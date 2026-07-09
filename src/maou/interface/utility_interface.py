@@ -7,10 +7,10 @@ import torch
 
 from maou.app.learning.dl import LearningDataSource
 from maou.app.learning.policy_targets import PolicyTargetMode
-from maou.app.learning.value_targets import ValueTargetMode
 from maou.app.learning.streaming_dataset import (
     StreamingDataSource,
 )
+from maou.app.learning.value_targets import ValueTargetMode
 from maou.app.utility.dataloader_benchmark import (
     BenchmarkConfig,
     DataLoaderBenchmark,
