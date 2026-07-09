@@ -67,7 +67,7 @@ PV: G*5b
 Candidates:
 G*5b (visits=1, winrate=1.0000, eval=16578.56, prior=0.0187)
 ...
-Stats: playouts=38 nps=435 elapsed_ms=87 max_depth=4 repetitions=0 proven_nodes=1 stop=root_proven
+Stats: playouts=38 nps=435 elapsed_ms=87 warmup_ms=0 max_depth=4 repetitions=0 proven_nodes=1 stop=root_proven
 <ASCII board>
 ```
 
@@ -77,9 +77,14 @@ Stats: playouts=38 nps=435 elapsed_ms=87 max_depth=4 repetitions=0 proven_nodes=
   (mate or repetition), `WinRate` is the exact value (0 / 0.5 / 1) and `Eval`
   saturates at the clipping bound (≈ ±16578).
 - `Stats` fields: `playouts` (completed simulations), `nps`, `elapsed_ms`,
-  `max_depth`, `repetitions` (sennichite detections), `proven_nodes` (AND-OR
-  proven interior nodes), and `stop` (`playout_limit` / `time_limit` /
-  `pool_exhausted` / `root_terminal` / `root_proven`).
+  `warmup_ms`, `max_depth`, `repetitions` (sennichite detections),
+  `proven_nodes` (AND-OR proven interior nodes), and `stop` (`playout_limit` /
+  `time_limit` / `pool_exhausted` / `root_terminal` / `root_proven`).
+  `warmup_ms` is the one-time root evaluation cost (the first inference, which
+  triggers the TensorRT engine build/load) — it is measured **outside** the
+  timed region, so `nps`/`elapsed_ms` reflect only the search itself. With
+  TensorRT the first run's `warmup_ms` can be tens of seconds; subsequent runs
+  reusing `--trt-cache-dir` drop to a few seconds.
 
 ## Example invocation
 
