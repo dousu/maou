@@ -283,6 +283,10 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
             ),
         ),
     ),
+    "search": LazyCommandSpec(
+        "maou.infra.console.search_board",
+        "search_board",
+    ),
     "evaluate": LazyCommandSpec(
         "maou.infra.console.evaluate_board",
         "evaluate_board",
