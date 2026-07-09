@@ -1735,7 +1735,7 @@ dependencies = [
 
 [[package]]
 name = "maou_search"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "maou_shogi",
  "ort",
@@ -1743,7 +1743,7 @@ dependencies = [
 
 [[package]]
 name = "maou_shogi"
-version = "5.4.1"
+version = "5.5.0"
 dependencies = [
  "arrayvec",
  "rustc-hash",

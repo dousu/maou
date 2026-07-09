@@ -42,13 +42,22 @@
 //! 昇格する: いずれかの子が手番側負け確定なら親は勝ち確定 (OR)，全子が
 //! 確定済みなら親の確定値は `1 - min(子の確定値)` (AND 集約)．確定ノード
 //! ([`crate::tree::proven`]) は以後降下せず確定値で短絡し，root が確定した
-//! 時点で探索を停止する ([`StopCause::RootProven`])．dfpn 統合時は詰み
-//! 結果をこの機構に注入する．
+//! 時点で探索を停止する ([`StopCause::RootProven`])．
+//!
+//! # ルート並行詰み探索 (dfpn)
+//!
+//! [`SearchOptions::root_dfpn`] を有効にすると，root 局面に対する dfpn
+//! 詰み探索 (maou_shogi) を専用スレッドで並行実行する．詰みが証明されたら
+//! root を勝ち確定にして MCTS を停止し，dfpn の詰み手順をそのまま
+//! best_move / PV として返す．MCTS が先に終了した場合は dfpn の協調的
+//! 停止フラグ (`DfPnSolver::set_stop_flag`) で打ち切る．
 
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use maou_shogi::board::{Board, SfenError};
+use maou_shogi::dfpn::{DfPnSolver, TsumeResult};
 use maou_shogi::movegen::generate_legal_moves;
 use maou_shogi::moves::Move;
 
@@ -89,6 +98,14 @@ pub struct SearchOptions {
     /// 多く解放し，次の GC までの間隔が延びる (刈られたサブツリーの再展開
     /// コストとのトレードオフ)．
     pub gc_keep_ratio: f32,
+    /// ルート局面の dfpn 詰み探索を MCTS と並行実行するか (既定 false)．
+    /// 詰みが証明されたら root を勝ち確定にして探索を停止し，詰み手順を
+    /// best_move / PV として返す ([`StopCause::RootProven`])．
+    pub root_dfpn: bool,
+    /// ルート dfpn のノード予算 ([`SearchOptions::root_dfpn`] 有効時)．
+    pub root_dfpn_nodes: u64,
+    /// ルート dfpn の探索深さ上限 (最大 2047)．
+    pub root_dfpn_depth: u32,
 }
 
 impl Default for SearchOptions {
@@ -102,6 +119,9 @@ impl Default for SearchOptions {
             max_ply: 512,
             gc_enabled: true,
             gc_keep_ratio: 0.5,
+            root_dfpn: false,
+            root_dfpn_nodes: 1 << 20,
+            root_dfpn_depth: 2047,
         }
     }
 }
@@ -249,6 +269,10 @@ struct Shared<'a, E: Evaluator> {
     repetitions: AtomicU64,
     proven_nodes: AtomicU64,
     max_depth: AtomicU16,
+    /// ルート並行 dfpn が詰みを証明したか (dfpn スレッドが立てる)．
+    dfpn_found: Arc<AtomicBool>,
+    /// ルート並行 dfpn の詰み手順 (証明時に dfpn スレッドが書く)．
+    dfpn_mate: Arc<Mutex<Option<Vec<Move>>>>,
 }
 
 impl<E: Evaluator> Shared<'_, E> {
@@ -543,6 +567,12 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
 
     while !shared.stopped() {
         shared.check_deadline();
+        // ルート並行 dfpn の詰み証明を反映する (root 勝ち確定 → 停止)
+        if shared.dfpn_found.load(Ordering::Acquire) {
+            shared.pool.get(ROOT_IDX).try_mark_proven(proven::WIN);
+            shared.set_stop(StopCause::RootProven);
+            break;
+        }
         paths.clear();
         items.clear();
         let mut had_collision = false;
@@ -739,43 +769,78 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             repetitions: AtomicU64::new(0),
             proven_nodes: AtomicU64::new(0),
             max_depth: AtomicU16::new(0),
+            dfpn_found: Arc::new(AtomicBool::new(false)),
+            dfpn_mate: Arc::new(Mutex::new(None)),
         };
 
         let gc_keep_target =
             (f64::from(opts.node_capacity) * f64::from(opts.gc_keep_ratio.clamp(0.0, 1.0))) as u32;
         let mut gc_runs = 0u64;
         let mut gc_freed_nodes = 0u64;
-        loop {
-            std::thread::scope(|s| {
-                for _ in 0..opts.threads.max(1) {
-                    s.spawn(|| worker(&shared));
+        // ルート並行 dfpn (設計 doc §8.1) の協調的停止フラグ．
+        // MCTS 側の終了時に立てて dfpn を打ち切る
+        let dfpn_stop = Arc::new(AtomicBool::new(false));
+        std::thread::scope(|outer| {
+            // ルート並行 dfpn: 別スレッドで root の詰みを探索する．GC が
+            // shared.pool を排他借用するため shared には触れず，Arc 経由の
+            // 成果物 (dfpn_found / dfpn_mate) だけで通信する
+            if opts.root_dfpn {
+                let stop = Arc::clone(&dfpn_stop);
+                let found = Arc::clone(&shared.dfpn_found);
+                let mate_out = Arc::clone(&shared.dfpn_mate);
+                let mut dfpn_board = root_board.clone();
+                let timeout_secs = limits.time_ms.map_or(3600, |ms| ms / 1000 + 1);
+                let depth = opts.root_dfpn_depth;
+                let nodes = opts.root_dfpn_nodes;
+                outer.spawn(move || {
+                    let mut solver = DfPnSolver::with_timeout(depth, nodes, timeout_secs);
+                    // 実戦用途は最初に見つかった詰みで十分 (最短確定は不要)
+                    solver.set_find_shortest(false);
+                    solver.set_stop_flag(stop);
+                    if let TsumeResult::Checkmate { moves, .. } = solver.solve(&mut dfpn_board) {
+                        // CheckmateNoPv (手順なし) は指し手を提示できないため扱わない
+                        if !moves.is_empty() {
+                            *mate_out.lock().expect("dfpn mate lock は poison しない") =
+                                Some(moves);
+                            found.store(true, Ordering::Release);
+                        }
+                    }
+                });
+            }
+            loop {
+                std::thread::scope(|s| {
+                    for _ in 0..opts.threads.max(1) {
+                        s.spawn(|| worker(&shared));
+                    }
+                });
+                // GC で継続するのはプール枯渇による停止のみ (時間/playout は予算終了)
+                if !opts.gc_enabled
+                    || StopCause::from_u8(shared.stop_cause.load(Ordering::Acquire))
+                        != Some(StopCause::PoolExhausted)
+                {
+                    break;
                 }
-            });
-            // GC で継続するのはプール枯渇による停止のみ (時間/playout は予算終了)
-            if !opts.gc_enabled
-                || StopCause::from_u8(shared.stop_cause.load(Ordering::Acquire))
-                    != Some(StopCause::PoolExhausted)
-            {
-                break;
+                // 枯渇時点で予算も尽きていれば GC せずに終了する
+                if shared.playouts.load(Ordering::Relaxed) >= shared.max_playouts {
+                    break;
+                }
+                if shared.deadline.is_some_and(|d| Instant::now() >= d) {
+                    break;
+                }
+                // 全スレッド join 済み = quiescent なので排他参照で compact できる
+                let gc = shared.pool.compact(gc_keep_target);
+                if gc.freed == 0 {
+                    // 1 ノードも解放できない場合は再起動しても即枯渇する
+                    break;
+                }
+                gc_runs += 1;
+                gc_freed_nodes += u64::from(gc.freed);
+                shared.stop_cause.store(CAUSE_NONE, Ordering::Relaxed);
+                shared.stop.store(false, Ordering::Release);
             }
-            // 枯渇時点で予算も尽きていれば GC せずに終了する
-            if shared.playouts.load(Ordering::Relaxed) >= shared.max_playouts {
-                break;
-            }
-            if shared.deadline.is_some_and(|d| Instant::now() >= d) {
-                break;
-            }
-            // 全スレッド join 済み = quiescent なので排他参照で compact できる
-            let gc = shared.pool.compact(gc_keep_target);
-            if gc.freed == 0 {
-                // 1 ノードも解放できない場合は再起動しても即枯渇する
-                break;
-            }
-            gc_runs += 1;
-            gc_freed_nodes += u64::from(gc.freed);
-            shared.stop_cause.store(CAUSE_NONE, Ordering::Relaxed);
-            shared.stop.store(false, Ordering::Release);
-        }
+            // MCTS 終了 — dfpn に協調停止を要求する (join は scope 終端で行われる)
+            dfpn_stop.store(true, Ordering::Release);
+        });
 
         self.collect_result(&shared, start, gc_runs, gc_freed_nodes)
     }
@@ -900,13 +965,31 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             gc_freed_nodes,
         };
 
+        // ルート並行 dfpn が詰みを証明していれば詰み手順を優先する
+        // (MCTS の木の訪問分布に依存しない constructive proof)
+        let dfpn_mate = shared
+            .dfpn_mate
+            .lock()
+            .expect("dfpn mate lock は poison しない")
+            .clone();
+        let (best_move, winrate, pv, stop) = if let Some(mate) = dfpn_mate {
+            (Some(mate[0]), 1.0, mate, StopCause::RootProven)
+        } else {
+            (
+                Some(best.mv),
+                root_proven.unwrap_or(best.q),
+                pv,
+                StopCause::from_u8(shared.stop_cause.load(Ordering::Acquire))
+                    .unwrap_or(StopCause::PlayoutLimit),
+            )
+        };
+
         SearchResult {
-            best_move: Some(best.mv),
-            winrate: root_proven.unwrap_or(best.q),
+            best_move,
+            winrate,
             pv,
             root_children,
-            stop: StopCause::from_u8(shared.stop_cause.load(Ordering::Acquire))
-                .unwrap_or(StopCause::PlayoutLimit),
+            stop,
             stats,
         }
     }
@@ -1310,6 +1393,64 @@ mod tests {
         assert_eq!(result.stop, StopCause::RootProven, "{:?}", result.stats);
         assert_eq!(result.winrate, 1.0);
         assert!(result.stats.proven_nodes >= 1);
+    }
+
+    #[test]
+    fn test_root_dfpn_proves_deep_mate() {
+        // 7 手詰め (dfpn テストの canonical 局面)．mock 評価の MCTS 単独では
+        // 短時間での証明が難しく，ルート並行 dfpn が詰みを証明して停止させる
+        let evaluator = MockEvaluator::new(42);
+        let searcher = Searcher::new(
+            &evaluator,
+            SearchOptions {
+                threads: 1,
+                batch_size: 8,
+                root_dfpn: true,
+                ..SearchOptions::default()
+            },
+        );
+        let mut board = Board::empty();
+        board
+            .set_sfen("8k/9/6R2/9/9/9/9/9/9 b G 1")
+            .expect("正当な SFEN");
+        let result = searcher.search(
+            &board,
+            &SearchLimits {
+                time_ms: Some(30_000),
+                ..SearchLimits::default()
+            },
+        );
+        assert_eq!(result.stop, StopCause::RootProven);
+        assert_eq!(result.winrate, 1.0);
+        assert!(!result.pv.is_empty());
+        let best = result.best_move.expect("詰み手順の先頭");
+        assert!(
+            result.root_children.iter().any(|c| c.mv == best),
+            "best_move はルートの合法手: {}",
+            best.to_usi()
+        );
+    }
+
+    #[test]
+    fn test_root_dfpn_no_mate_keeps_normal_search() {
+        // 詰みが無い局面では root_dfpn は結果に影響しない (dfpn は不詰で
+        // 即終了し，MCTS は通常の予算で停止する)
+        let result = run(
+            STARTPOS,
+            SearchOptions {
+                threads: 1,
+                batch_size: 8,
+                root_dfpn: true,
+                ..SearchOptions::default()
+            },
+            SearchLimits {
+                max_playouts: Some(500),
+                ..SearchLimits::default()
+            },
+            0,
+        );
+        assert_eq!(result.stop, StopCause::PlayoutLimit);
+        assert!(result.best_move.is_some());
     }
 
     #[test]
