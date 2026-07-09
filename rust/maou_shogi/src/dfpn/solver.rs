@@ -1,5 +1,7 @@
 //! DfPnSolver 構造体と探索エントリポイント．
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::board::Board;
@@ -142,6 +144,9 @@ pub struct DfPnSolver {
     pub(super) start_time: Instant,
     /// タイムアウトしたかどうか．
     pub(super) timed_out: bool,
+    /// 外部からの協調的停止フラグ (None なら無効)．
+    /// true になると次のチェックポイントで timeout と同じ扱いで打ち切る．
+    pub(super) stop_flag: Option<Arc<AtomicBool>>,
     /// 攻め方の手番色(solve 時に設定)．
     pub(super) attacker: Color,
     /// 最短手数探索を行うかどうか(デフォルト: true)．
@@ -233,6 +238,7 @@ impl DfPnSolver {
             nodes_searched: 0,
             start_time: Instant::now(),
             timed_out: false,
+            stop_flag: None,
             attacker: Color::Black,
             collect_progress: false,
             progress: Vec::new(),
@@ -277,10 +283,27 @@ impl DfPnSolver {
         self
     }
 
-    /// タイムアウトしたかどうかを返す．
+    /// 外部からの協調的停止フラグを設定する．
+    ///
+    /// フラグが true になると探索は次のチェックポイント (ノード数粒度，
+    /// 最大 1024 ノード程度の遅延) で打ち切られ，結果は timeout と同じ扱い
+    /// ([`TsumeResult::Unknown`] / [`StopReason::Timeout`]) になる．
+    /// 上位の探索 (MCTS のルート並行詰み探索など) が「自分が先に終わった
+    /// ので dfpn を止める」ために使う．
+    pub fn set_stop_flag(&mut self, flag: Arc<AtomicBool>) -> &mut Self {
+        self.stop_flag = Some(flag);
+        self
+    }
+
+    /// タイムアウト (または外部停止) したかどうかを返す．
     #[inline]
     pub(super) fn is_timed_out(&self) -> bool {
-        self.timed_out || self.start_time.elapsed() >= self.timeout
+        self.timed_out
+            || self
+                .stop_flag
+                .as_ref()
+                .is_some_and(|f| f.load(Ordering::Relaxed))
+            || self.start_time.elapsed() >= self.timeout
     }
 
     /// 詰将棋を解く．

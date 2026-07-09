@@ -1759,3 +1759,26 @@ fn test_no_checkmate_counter_check_probe() {
     }
     eprintln!("Still not solved at 10M");
 }
+
+/// 協調的停止フラグ: 事前に立てたフラグで探索が即座に打ち切られる
+/// (7 手詰め局面 — フラグ無しでは相応のノード数を要する)
+#[test]
+fn test_external_stop_flag_aborts_search() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    let flag = Arc::new(AtomicBool::new(true));
+    let mut solver = DfPnSolver::with_timeout(63, 100_000_000, 3600);
+    solver.set_stop_flag(Arc::clone(&flag));
+    let mut board = crate::board::Board::empty();
+    board
+        .set_sfen("8k/9/6R2/9/9/9/9/9/9 b G 1")
+        .expect("正当な SFEN");
+    let report = solver.solve_report(&mut board);
+    assert!(
+        matches!(report.result, TsumeResult::Unknown { .. }),
+        "外部停止は timeout と同じ Unknown になるはず: {:?}",
+        report.result
+    );
+    assert_eq!(report.stop_reason, StopReason::Timeout);
+}
