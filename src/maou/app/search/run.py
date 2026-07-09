@@ -110,6 +110,14 @@ class SearchRunner:
         ]
         candidates: list[str] = []
         for child in (best_first + rest)[: config.num_moves]:
+            if int(child.visits) == 0:
+                # 未訪問の winrate 0 は「データなし」であり敗勢ではないため
+                # 数値を表示しない
+                candidates.append(
+                    f"{child.usi} (visits=0, "
+                    f"prior={float(child.prior):.4f})"
+                )
+                continue
             child_winrate = float(child.winrate)
             child_eval = float(
                 Evaluation.get_eval_from_winrate(child_winrate)
