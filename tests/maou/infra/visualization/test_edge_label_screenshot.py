@@ -16,6 +16,7 @@ import os
 import socket
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import polars as pl
@@ -249,7 +250,7 @@ def graph_server(
 @pytest.fixture(scope="module")
 def browser_page(
     graph_server: str,
-) -> Page:
+) -> Iterator[Page]:
     """Playwright ブラウザページを提供する．"""
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -363,7 +364,9 @@ class TestEdgeLabelVisibility:
             _SCREENSHOT_DIR / "edge_labels_default_view.png"
         )
         browser_page.screenshot(path=str(screenshot_path))
-        assert screenshot_path.exists(), "Screenshot was not saved"
+        assert screenshot_path.exists(), (
+            "Screenshot was not saved"
+        )
 
     def test_edge_labels_visible_at_zoomed_view(
         self, browser_page: Page
