@@ -210,18 +210,26 @@ pub struct SearchLimits { pub max_playouts: Option<u64>, pub time_ms: Option<u64
 - 対局レイヤー導入後は「ルート移動時の subtree 再利用 + 残りを解放」が主機構に
   なる可能性があり，単発探索の GC はその補助と位置づける．
 
-## 8. 詰み探索統合 (8.1/8.2 は未実装，8.3 は実装済み)
+## 8. 詰み探索統合 (8.1/8.3 は実装済み，8.2 は第一版見送り)
 
-### 8.1 ルート局面の長手数詰み探索
+### 8.1 ルート局面の長手数詰み探索 (実装済み — v0.8.0)
 
-- MCTS と**並行**して maou 独自 dfpn ソルバー
-  (`dfpn::solve_tsume_report_with_timeout`) をルート局面に対して実行し，
-  詰みが見つかったら MCTS を打ち切って詰み手順を返す．
-- 前提となる maou_shogi 側の変更: **dfpn に協調的停止フラグ (AtomicBool) を追加**
-  する．現行 API の停止手段は nodes/timeout のみで，「MCTS 側が先に終了したので
-  dfpn を止める」ができない．
-- 予算パラメータ: `depth` (上限 2047)，`nodes` (デフォルト 2^20)，`timeout_secs`．
-  注意: **`draw_ply` 引数は現行 dfpn API に存在しない** (初期構想の記述は誤り)．
+- `SearchOptions::root_dfpn` (既定 false) で有効化．専用スレッドで
+  `DfPnSolver` (find_shortest=false — 実戦用途は最初に見つかった詰みで十分)
+  を root 局面に対して実行し，詰みが証明されたら root を勝ち確定 (§8.3)
+  にして MCTS を停止，dfpn の詰み手順を best_move / PV / winrate=1.0 として
+  返す．
+- maou_shogi v5.5.0 で dfpn に**協調的停止フラグ** (`set_stop_flag`,
+  `Arc<AtomicBool>`) を追加した — MCTS 側が先に終了したら dfpn を打ち切る
+  (チェックポイントは is_timed_out に集約されており停止遅延 ≤ 1024 ノード，
+  結果は timeout と同じ Unknown 扱い)．
+- 予算パラメータ: `root_dfpn_depth` (既定 2047 = 上限)，`root_dfpn_nodes`
+  (既定 2^20)．時間予算は探索の `time_ms` に追随する．
+- GC (プールの排他借用) と両立させるため dfpn スレッドは探索共有状態に
+  触れず，Arc 経由の成果物 (証明フラグ + 詰み手順) だけで通信する．
+- `CheckmateNoPv` (詰み証明済みだが手順復元失敗) は指し手を提示できない
+  ため採用しない．
+- 注意: **`draw_ply` 引数は現行 dfpn API に存在しない** (初期構想の記述は誤り)．
 
 ### 8.2 葉ノードの詰み探索
 
@@ -323,7 +331,7 @@ mock 評価の `nps_bench` と ONNX 実推論の `onnx_bench` の 2 本．
 | OnnxEvaluator (ort + 特徴量/ラベル Rust 移植) | ✅ 実装済み (v0.4.0，§4) |
 | AND-OR 勝敗確定伝播 | ✅ 実装済み (v0.7.0，§8.3) |
 | 千日手検出 | ✅ 実装済み (v0.6.0，§9) |
-| dfpn 停止フラグ + ルート並行詰み探索 | 未実装 (§8.1) |
+| dfpn 停止フラグ + ルート並行詰み探索 | ✅ 実装済み (maou_shogi v5.5.0 + maou_search v0.8.0，§8.1) |
 | PyO3 API / CLI (`maou search`) | 未実装 (docs/commands/ 義務が発生) |
 | Colab GPU 実測 | 配線検証済み (2026-07-08，極小モデル)．実モデルでの North-star 計測は未実施 |
 | モデル×探索の強さ検証フレームワーク + パラメータチューニング | 未実装 |
