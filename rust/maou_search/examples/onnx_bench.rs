@@ -70,6 +70,9 @@ fn main() {
         // SearchOptions::default() の root_dfpn_nodes (1<<20 ≈ 冒頭 1 秒の詰み
         // スキャン) を使う — 詰みのない局面では予算消化後に dfpn は終了する
         root_dfpn: args.iter().any(|a| a == "--root-dfpn"),
+        // NPS ベンチは leaf-mate を off にして純粋な MCTS(+root-dfpn) を測る
+        // (production default は leaf-mate on だが計測ノイズになるため)．
+        leaf_mate: false,
         ..SearchOptions::default()
     };
     let limits = SearchLimits {

@@ -53,10 +53,10 @@ class SearchRunner:
         max_playouts: int | None = None
         time_ms: int | None = None
         num_moves: int = 5
-        root_dfpn: bool = False
-        root_dfpn_nodes: int = 1 << 20
+        root_dfpn: bool = True
+        root_dfpn_nodes: int = 2_000_000
         root_dfpn_depth: int = 2047
-        leaf_mate: bool = False
+        leaf_mate: bool = True
         leaf_mate_nodes: int = 50
         leaf_mate_threads: int = 1
         cuda: bool = False

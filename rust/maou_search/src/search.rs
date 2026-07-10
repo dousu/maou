@@ -176,10 +176,17 @@ impl Default for SearchOptions {
             max_ply: 512,
             gc_enabled: true,
             gc_keep_ratio: 0.5,
-            root_dfpn: false,
-            root_dfpn_nodes: 1 << 20,
+            // 詰み探索はデフォルト有効: root-dfpn は NN 非依存で root/盲点の詰みを，
+            // leaf-mate は MCTS が降りる narrow mate を，いずれも余剰 CPU (別スレッド)
+            // で捕捉し，詰みのない局面では NPS を落とさない (実測: 静かな局面で dfpn は
+            // 1 ノード即終了 / leaf-mate は前フィルタ + async)．root_dfpn_nodes は
+            // 2M: ~41 手級 (NN 盲点) の詰みまで捕捉できる予算 (実測: 41te は ~1.2M
+            // ノードで解ける)．TT 確保コスト (~256MB/探索, 予算に比例) と reach の
+            // バランス点．超長手を追う場合のみ明示的に上げる．
+            root_dfpn: true,
+            root_dfpn_nodes: 2_000_000,
             root_dfpn_depth: 2047,
-            leaf_mate: false,
+            leaf_mate: true,
             leaf_mate_nodes: 50,
             leaf_mate_threads: 1,
         }
@@ -1223,6 +1230,20 @@ mod tests {
     /// 先手: 5三歩・金 1 枚 (持駒)，後手: 5一玉のみ．G*5b (5二金打) の 1 手詰め．
     const MATE_IN_1: &str = "4k4/9/4P4/9/9/9/9/9/9 b G 1";
 
+    /// テスト用の pure-MCTS オプション (詰み探索 off)．
+    ///
+    /// production の [`SearchOptions::default()`] は root-dfpn / leaf-mate を
+    /// 有効にするが，テストは MCTS 単体の挙動を決定論的に検証したいので，
+    /// ここで両者を明示的に off にする (async leaf-mate の非決定性を排除)．
+    /// 詰み探索そのもののテストは root_dfpn / leaf_mate を明示的に true にする．
+    fn pure_mcts_opts() -> SearchOptions {
+        SearchOptions {
+            root_dfpn: false,
+            leaf_mate: false,
+            ..SearchOptions::default()
+        }
+    }
+
     fn run(sfen: &str, opts: SearchOptions, limits: SearchLimits, seed: u64) -> SearchResult {
         let evaluator = MockEvaluator::new(seed);
         let searcher = Searcher::new(&evaluator, opts);
@@ -1239,7 +1260,7 @@ mod tests {
                 threads: 1,
                 batch_size: 4,
                 node_capacity: 1 << 14,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 max_playouts: Some(3000),
@@ -1265,7 +1286,7 @@ mod tests {
         let opts = SearchOptions {
             threads: 2,
             batch_size: 8,
-            ..SearchOptions::default()
+            ..pure_mcts_opts()
         };
         let overshoot = (opts.threads * opts.batch_size) as u64;
         let result = run(
@@ -1293,7 +1314,7 @@ mod tests {
             SearchOptions {
                 threads: 4,
                 batch_size: 16,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 max_playouts: Some(5000),
@@ -1315,7 +1336,7 @@ mod tests {
         let opts = SearchOptions {
             threads: 1,
             batch_size: 8,
-            ..SearchOptions::default()
+            ..pure_mcts_opts()
         };
         let limits = SearchLimits {
             max_playouts: Some(2000),
@@ -1341,7 +1362,7 @@ mod tests {
                 batch_size: 8,
                 node_capacity: 128,
                 gc_enabled: false,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 max_playouts: Some(u64::MAX >> 1),
@@ -1364,7 +1385,7 @@ mod tests {
                 threads: 1,
                 batch_size: 8,
                 node_capacity: 512,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 max_playouts: Some(20_000),
@@ -1389,7 +1410,7 @@ mod tests {
                 threads: 1,
                 batch_size: 4,
                 node_capacity: 128,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 max_playouts: Some(10_000),
@@ -1411,7 +1432,7 @@ mod tests {
             threads: 1,
             batch_size: 8,
             node_capacity: 512,
-            ..SearchOptions::default()
+            ..pure_mcts_opts()
         };
         let limits = SearchLimits {
             max_playouts: Some(10_000),
@@ -1441,7 +1462,7 @@ mod tests {
                 threads: 4,
                 batch_size: 16,
                 node_capacity: 4096,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 max_playouts: Some(50_000),
@@ -1463,7 +1484,7 @@ mod tests {
             SearchOptions {
                 threads: 2,
                 batch_size: 8,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 time_ms: Some(100),
@@ -1563,7 +1584,7 @@ mod tests {
                 threads: 1,
                 batch_size: 4,
                 node_capacity: 1 << 14,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 max_playouts: Some(3000),
@@ -1601,7 +1622,7 @@ mod tests {
                 threads: 1,
                 batch_size: 8,
                 node_capacity: 1 << 16,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 max_playouts: Some(200_000),
@@ -1632,7 +1653,7 @@ mod tests {
                 leaf_mate_nodes: 100_000,
                 leaf_mate_threads: 2,
                 root_dfpn: false,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 max_playouts: Some(200_000),
@@ -1689,7 +1710,7 @@ mod tests {
                 batch_size: 8,
                 node_capacity: 1 << 16,
                 leaf_mate: true,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 max_playouts: Some(3000),
@@ -1720,7 +1741,7 @@ mod tests {
                 threads: 1,
                 batch_size: 8,
                 root_dfpn: true,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
         );
         let mut board = Board::empty();
@@ -1755,7 +1776,7 @@ mod tests {
                 threads: 1,
                 batch_size: 8,
                 root_dfpn: true,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 max_playouts: Some(500),
@@ -1775,7 +1796,7 @@ mod tests {
             SearchOptions {
                 threads: 1,
                 batch_size: 8,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 max_playouts: Some(3000),
@@ -1816,7 +1837,7 @@ mod tests {
             SearchOptions {
                 threads: 1,
                 batch_size: 8,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
         );
         let result = searcher.search_with_history(
@@ -1854,7 +1875,7 @@ mod tests {
             SearchOptions {
                 threads: 1,
                 batch_size: 8,
-                ..SearchOptions::default()
+                ..pure_mcts_opts()
             },
             SearchLimits {
                 max_playouts: Some(50),

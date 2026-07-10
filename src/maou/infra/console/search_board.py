@@ -78,17 +78,19 @@ from maou.infra.console.common import (
     type=bool,
     is_flag=True,
     help="Run dfpn mate search on the root position in parallel with "
-    "MCTS. When a mate is proven the search stops immediately and the "
-    "mating sequence is returned as PV.",
-    default=False,
+    "MCTS (default on; NN-independent, ~free on quiet positions). When a "
+    "mate is proven the search stops immediately and the mating sequence "
+    "is returned as PV.",
+    default=True,
     required=False,
 )
 @click.option(
     "--root-dfpn-nodes",
     help="Node budget for the root dfpn mate search. Larger reaches "
-    "deeper mates (NN-independent) at the cost of more CPU.",
+    "deeper mates (NN-independent) at the cost of a larger transposition "
+    "table per search (~256MB at 2M).",
     type=int,
-    default=1 << 20,
+    default=2000000,
     show_default=True,
     required=False,
 )
@@ -104,11 +106,11 @@ from maou.infra.console.common import (
     "--leaf-mate/--no-leaf-mate",
     type=bool,
     is_flag=True,
-    help="Enable short mate search at MCTS leaves. Search threads only "
-    "enqueue mate requests (they never block); dedicated mate threads "
-    "run the df-pn on spare CPU and mark proven leaves, so search NPS is "
-    "unaffected (dlshogi-style leaf mate search).",
-    default=False,
+    help="Enable short mate search at MCTS leaves (default on). Search "
+    "threads only enqueue mate requests (they never block); dedicated "
+    "mate threads run the df-pn on spare CPU and mark proven leaves, so "
+    "search NPS is unaffected (dlshogi-style leaf mate search).",
+    default=True,
     required=False,
 )
 @click.option(
