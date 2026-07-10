@@ -84,6 +84,23 @@ from maou.infra.console.common import (
     required=False,
 )
 @click.option(
+    "--root-dfpn-nodes",
+    help="Node budget for the root dfpn mate search. Larger reaches "
+    "deeper mates (NN-independent) at the cost of more CPU.",
+    type=int,
+    default=1 << 20,
+    show_default=True,
+    required=False,
+)
+@click.option(
+    "--root-dfpn-depth",
+    help="Search depth limit for the root dfpn mate search (max 2047).",
+    type=int,
+    default=2047,
+    show_default=True,
+    required=False,
+)
+@click.option(
     "--leaf-mate/--no-leaf-mate",
     type=bool,
     is_flag=True,
@@ -147,6 +164,8 @@ def search_board(
     time_ms: int | None,
     num_moves: int,
     root_dfpn: bool,
+    root_dfpn_nodes: int,
+    root_dfpn_depth: int,
     leaf_mate: bool,
     leaf_mate_nodes: int,
     leaf_mate_threads: int,
@@ -173,6 +192,8 @@ def search_board(
         time_ms: Time limit in milliseconds.
         num_moves: Number of candidate moves to display.
         root_dfpn: Run dfpn mate search on the root position in parallel.
+        root_dfpn_nodes: Node budget for the root dfpn mate search.
+        root_dfpn_depth: Search depth limit for the root dfpn mate search.
         leaf_mate: Enable short mate search at MCTS leaves (async).
         leaf_mate_nodes: Node budget per leaf-mate df-pn call.
         leaf_mate_threads: Number of dedicated leaf-mate threads.
@@ -195,6 +216,8 @@ def search_board(
             time_ms=time_ms,
             num_moves=num_moves,
             root_dfpn=root_dfpn,
+            root_dfpn_nodes=root_dfpn_nodes,
+            root_dfpn_depth=root_dfpn_depth,
             leaf_mate=leaf_mate,
             leaf_mate_nodes=leaf_mate_nodes,
             leaf_mate_threads=leaf_mate_threads,

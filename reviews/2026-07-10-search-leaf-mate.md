@@ -23,7 +23,12 @@ durable-doc target (docs/commands/search.md) の同期義務が発生する
 
 docs/commands/search.md を以下のとおり更新する:
 
-1. **CLI options 表**に 3 行追加 (`--root-dfpn` 行の直後):
+1. **CLI options 表**に 5 行追加 (`--root-dfpn` 行の直後):
+   - `--root-dfpn-nodes INT` | default `1048576` | Node budget for the root
+     dfpn mate search. Larger reaches deeper mates (NN-independent) at the cost
+     of more CPU.
+   - `--root-dfpn-depth INT` | default `2047` | Search depth limit for the root
+     dfpn mate search (max 2047).
    - `--leaf-mate/--no-leaf-mate` | default off | Enable short mate search
      at MCTS leaves. Search threads only enqueue mate requests (never block);
      dedicated mate threads run the df-pn on spare CPU and mark proven leaves,

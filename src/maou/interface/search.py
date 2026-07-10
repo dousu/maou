@@ -17,6 +17,8 @@ def search(
     time_ms: int | None = None,
     num_moves: int = 5,
     root_dfpn: bool = False,
+    root_dfpn_nodes: int = 1 << 20,
+    root_dfpn_depth: int = 2047,
     leaf_mate: bool = False,
     leaf_mate_nodes: int = 50,
     leaf_mate_threads: int = 1,
@@ -38,6 +40,8 @@ def search(
         time_ms: 時間上限 (ミリ秒)．playouts と両方未指定なら 1000ms．
         num_moves: 表示する上位候補手数．
         root_dfpn: ルート並行 dfpn 詰み探索を有効にするか．
+        root_dfpn_nodes: ルート dfpn のノード予算．
+        root_dfpn_depth: ルート dfpn の探索深さ上限 (最大 2047)．
         leaf_mate: MCTS の葉の短手詰み探索 (専用スレッド) を行うか．
         leaf_mate_nodes: leaf-mate 1 回あたりのノード予算．
         leaf_mate_threads: leaf-mate 専用スレッド数．
@@ -64,6 +68,8 @@ def search(
         time_ms=time_ms,
         num_moves=num_moves,
         root_dfpn=root_dfpn,
+        root_dfpn_nodes=root_dfpn_nodes,
+        root_dfpn_depth=root_dfpn_depth,
         leaf_mate=leaf_mate,
         leaf_mate_nodes=leaf_mate_nodes,
         leaf_mate_threads=leaf_mate_threads,
