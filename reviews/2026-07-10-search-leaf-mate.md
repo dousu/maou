@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 552ea57
 title: maou search に leaf-mate オプション追加 (docs/commands/search.md 同期)
 target: docs/commands/search.md
 ---
