@@ -191,10 +191,14 @@ fn run_search<E: Evaluator>(
 ///   詰みが証明されると `stop == "root_proven"` で即返り，`pv` は詰み手順になる．
 /// - `root_dfpn_nodes` (int, optional) / `root_dfpn_depth` (int, optional):
 ///   ルート dfpn の予算 (デフォルト 2^20 ノード / 深さ 2047)．
-/// - `leaf_mate` (bool, optional): MCTS の各葉で短手詰み探索を行う (デフォルト
-///   False)．詰みが証明された葉を勝ち確定にして AND-OR 伝播する．
+/// - `leaf_mate` (bool, optional): MCTS の葉の短手詰み探索を有効にする
+///   (デフォルト False)．探索スレッドは王手手段を持つ葉を専用 mate スレッドへ
+///   非同期依頼するだけで solve せず，mate スレッド (余剰 CPU) が詰みを証明
+///   したら当該葉を勝ち確定にして AND-OR 伝播する (探索 NPS に影響しない)．
 /// - `leaf_mate_nodes` (int, optional): leaf-mate 1 回あたりのノード予算
 ///   (デフォルト 50)．小さいほど cheap かつ短手のみ検出する．
+/// - `leaf_mate_threads` (int, optional): leaf-mate 専用スレッド数
+///   (デフォルト 1)．余る CPU スレッド数に合わせて増やす．
 /// - `use_cuda` (bool, optional): CUDA Execution Provider (`onnx-cuda` feature 必要)．
 /// - `use_tensorrt` (bool, optional): TensorRT Execution Provider
 ///   (`onnx-tensorrt` feature 必要)．有効時は `pad_to` 未指定なら `batch_size`
@@ -208,7 +212,7 @@ fn run_search<E: Evaluator>(
 /// - 探索中は GIL を解放するが Python シグナルは処理しない — Ctrl-C は探索が
 ///   返るまで効かない．中断制御は `max_playouts` / `time_ms` で行うこと．
 #[pyfunction]
-#[pyo3(signature = (sfen, *, moves=None, model_path=None, threads=None, batch_size=None, max_playouts=None, time_ms=None, node_capacity=None, c_puct=None, fpu=None, max_ply=None, gc_keep_ratio=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_to=None, intra_threads=None))]
+#[pyo3(signature = (sfen, *, moves=None, model_path=None, threads=None, batch_size=None, max_playouts=None, time_ms=None, node_capacity=None, c_puct=None, fpu=None, max_ply=None, gc_keep_ratio=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_to=None, intra_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn search(
     py: Python<'_>,
@@ -229,6 +233,7 @@ fn search(
     root_dfpn_depth: Option<u32>,
     leaf_mate: Option<bool>,
     leaf_mate_nodes: Option<u64>,
+    leaf_mate_threads: Option<usize>,
     use_cuda: Option<bool>,
     use_tensorrt: Option<bool>,
     trt_engine_cache_dir: Option<String>,
@@ -302,6 +307,9 @@ fn search(
     }
     if let Some(v) = leaf_mate_nodes {
         options.leaf_mate_nodes = v;
+    }
+    if let Some(v) = leaf_mate_threads {
+        options.leaf_mate_threads = v;
     }
     let limits = SearchLimits {
         max_playouts,

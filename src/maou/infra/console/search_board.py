@@ -87,9 +87,10 @@ from maou.infra.console.common import (
     "--leaf-mate/--no-leaf-mate",
     type=bool,
     is_flag=True,
-    help="Run a short mate search (df-pn) at each MCTS leaf. When a mate "
-    "is proven the leaf is marked won and propagated through the search "
-    "tree (dlshogi-style leaf mate search).",
+    help="Enable short mate search at MCTS leaves. Search threads only "
+    "enqueue mate requests (they never block); dedicated mate threads "
+    "run the df-pn on spare CPU and mark proven leaves, so search NPS is "
+    "unaffected (dlshogi-style leaf mate search).",
     default=False,
     required=False,
 )
@@ -99,6 +100,14 @@ from maou.infra.console.common import (
     "restricts to shorter mates).",
     type=int,
     default=50,
+    show_default=True,
+    required=False,
+)
+@click.option(
+    "--leaf-mate-threads",
+    help="Number of dedicated leaf-mate threads (use spare CPU cores).",
+    type=int,
+    default=1,
     show_default=True,
     required=False,
 )
@@ -140,6 +149,7 @@ def search_board(
     root_dfpn: bool,
     leaf_mate: bool,
     leaf_mate_nodes: int,
+    leaf_mate_threads: int,
     cuda: bool,
     tensorrt: bool,
     trt_cache_dir: Path | None,
@@ -163,8 +173,9 @@ def search_board(
         time_ms: Time limit in milliseconds.
         num_moves: Number of candidate moves to display.
         root_dfpn: Run dfpn mate search on the root position in parallel.
-        leaf_mate: Run a short mate search at each MCTS leaf.
+        leaf_mate: Enable short mate search at MCTS leaves (async).
         leaf_mate_nodes: Node budget per leaf-mate df-pn call.
+        leaf_mate_threads: Number of dedicated leaf-mate threads.
         cuda: Enable CUDA Execution Provider.
         tensorrt: Enable TensorRT Execution Provider.
         trt_cache_dir: TensorRT engine cache directory.
@@ -186,6 +197,7 @@ def search_board(
             root_dfpn=root_dfpn,
             leaf_mate=leaf_mate,
             leaf_mate_nodes=leaf_mate_nodes,
+            leaf_mate_threads=leaf_mate_threads,
             cuda=cuda,
             tensorrt=tensorrt,
             trt_engine_cache_dir=trt_cache_dir,

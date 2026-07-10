@@ -52,6 +52,7 @@
 //! best_move / PV として返す．MCTS が先に終了した場合は dfpn の協調的
 //! 停止フラグ (`DfPnSolver::set_stop_flag`) で打ち切る．
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -77,6 +78,45 @@ const MAX_PV_LEN: usize = 64;
 /// leaf-mate ソルバ 1 回あたりのタイムアウト (秒)．探索は `leaf_mate_nodes`
 /// で node-bound されるので実際には到達しない安全弁 (50 ノード探索は μ 秒オーダ)．
 const LEAF_MATE_TIMEOUT_SECS: u64 = 1;
+
+/// leaf-mate 依頼キューの最大長．満杯なら探索スレッドは依頼を捨てる
+/// (mate スレッドが追いつかないときの graceful degradation; 探索は
+/// ブロックしない)．
+const MATE_QUEUE_CAP: usize = 4096;
+
+/// leaf-mate の非同期詰み探索依頼 (探索スレッド → 専用 mate スレッド)．
+///
+/// 探索スレッドは新規展開した葉のうち王手手段を持つものについて，これを
+/// キューに try-push する (ブロックしない)．mate スレッドが `board` に対し
+/// df-pn を回し，詰みなら [`MateResult`] を結果キューへ返す．mate スレッドは
+/// `shared` (特に `NodePool`) に触れず Arc 経由のキューだけで通信する
+/// (compact が `&mut NodePool` を取るため; root-dfpn と同じ方針)．
+struct MateRequest {
+    /// 詰みを判定する葉ノードの index．
+    idx: u32,
+    /// 葉局面 (手番側が攻め方)．df-pn はこの clone に対して解く．
+    board: Board,
+    /// root からこの葉までの経路 (proof の AND-OR 伝播に使う)．
+    path: Vec<u32>,
+    /// 依頼時の GC 世代 ([`Shared::generation`])．
+    generation: u64,
+}
+
+/// mate スレッドが証明した詰み (専用 mate スレッド → 探索スレッド)．
+///
+/// 探索スレッド (`worker`) が結果キューから取り出し，pool にアクセスできる
+/// 立場で `idx` を [`proven::WIN`] にして `path` を AND-OR 伝播する．適用時に
+/// `generation` が現世代と異なれば (compact で index 無効化) 破棄する
+/// (偽証明防止)．探索スレッドは compact と排他 (inner scope 内でのみ適用) の
+/// ため追加ロック不要．
+struct MateResult {
+    /// 詰みが証明された葉ノードの index．
+    idx: u32,
+    /// root からこの葉までの経路．
+    path: Vec<u32>,
+    /// 依頼時の GC 世代．
+    generation: u64,
+}
 
 /// 探索の設定．
 #[derive(Clone, Debug)]
@@ -119,6 +159,10 @@ pub struct SearchOptions {
     /// 小さいほど cheap かつ短手のみ検出 (既定 50 = dlshogi 相当)．非詰み葉は
     /// この予算で打ち切って Unknown を返すので per-leaf コストの上限になる．
     pub leaf_mate_nodes: u64,
+    /// leaf-mate 専用スレッド数 ([`SearchOptions::leaf_mate`] 有効時, 既定 1)．
+    /// GPU 律速で余る CPU スレッド数に合わせて増やすと詰み探索スループットが
+    /// 上がる (探索スレッドとは別スレッドなので NPS には影響しない)．
+    pub leaf_mate_threads: usize,
 }
 
 impl Default for SearchOptions {
@@ -137,6 +181,7 @@ impl Default for SearchOptions {
             root_dfpn_depth: 2047,
             leaf_mate: false,
             leaf_mate_nodes: 50,
+            leaf_mate_threads: 1,
         }
     }
 }
@@ -297,9 +342,61 @@ struct Shared<'a, E: Evaluator> {
     dfpn_found: Arc<AtomicBool>,
     /// ルート並行 dfpn の詰み手順 (証明時に dfpn スレッドが書く)．
     dfpn_mate: Arc<Mutex<Option<Vec<Move>>>>,
+    /// leaf-mate 依頼キュー (探索スレッドが try-push, mate スレッドが pop)．
+    /// mate スレッドは `shared` に触れないため Arc で共有する．
+    mate_queue: Arc<Mutex<VecDeque<MateRequest>>>,
+    /// leaf-mate 結果キュー (mate スレッドが push, 探索スレッドが drain-apply)．
+    mate_results: Arc<Mutex<VecDeque<MateResult>>>,
+    /// GC 世代．[`NodePool::compact`] 実行ごとに +1 する．探索スレッドは結果の
+    /// 世代と現世代が一致するときだけ proof を適用する (compact 後の無効 index
+    /// への誤マーク=偽証明を防ぐ)．
+    generation: AtomicU64,
 }
 
 impl<E: Evaluator> Shared<'_, E> {
+    /// leaf-mate 依頼を専用スレッドへ非同期にキューイングする (探索スレッド用)．
+    ///
+    /// 探索スレッドをブロックしないため `try_lock` で試み，ロックが取れないか
+    /// キューが満杯なら依頼を捨てる (詰み探索を諦めるだけで探索は継続)．
+    /// これにより探索スレッドの NPS は leaf-mate によって低下しない．
+    fn enqueue_mate_request(&self, idx: u32, board: &Board, path: &[u32]) {
+        if let Ok(mut q) = self.mate_queue.try_lock() {
+            if q.len() < MATE_QUEUE_CAP {
+                q.push_back(MateRequest {
+                    idx,
+                    board: board.clone(),
+                    path: path.to_vec(),
+                    generation: self.generation.load(Ordering::Acquire),
+                });
+            }
+        }
+    }
+
+    /// mate スレッドが証明した詰みを木へ反映する (探索スレッドから呼ぶ)．
+    ///
+    /// 探索スレッドは inner scope 内でのみ pool にアクセスし，GC compact は
+    /// inner scope の外 (全 worker join 後) で走るため，適用と compact は自然に
+    /// 排他される (追加ロック不要)．世代が進んだ結果 (compact 済み = index 無効)
+    /// は破棄する (偽証明防止)．`try_mark_proven` (CAS) ゆえ `finish_expansion`
+    /// と競合しても安全．
+    fn apply_mate_results(&self) {
+        loop {
+            let res = self
+                .mate_results
+                .lock()
+                .expect("mate_results lock は poison しない")
+                .pop_front();
+            let Some(res) = res else { break };
+            if res.generation != self.generation.load(Ordering::Acquire) {
+                continue; // compact 済み — index 無効化，破棄 (偽証明防止)
+            }
+            if self.pool.get(res.idx).try_mark_proven(proven::WIN) {
+                self.leaf_mates.fetch_add(1, Ordering::Relaxed);
+            }
+            propagate_proven_from(self, &res.path);
+        }
+    }
+
     /// 停止フラグを立てる．最初に立てたスレッドの cause が記録される．
     fn set_stop(&self, cause: StopCause) {
         let _ = self.stop_cause.compare_exchange(
@@ -447,12 +544,10 @@ fn propagate_proven_from<E: Evaluator>(shared: &Shared<'_, E>, path: &[u32]) {
 
 /// ルートから PUCT で降下して評価対象の葉を 1 つ選ぶ．
 ///
-/// `leaf_mate` は worker ごとの leaf-mate ソルバ (有効時のみ `Some`)．新規展開する
-/// 葉で手番側が短手で詰ませられるかを判定するのに使う (per-worker 再利用)．
-fn select_leaf<E: Evaluator>(
-    shared: &Shared<'_, E>,
-    leaf_mate: Option<&mut DfPnSolver>,
-) -> Selection {
+/// leaf-mate 有効時は，新規展開した葉のうち王手手段を持つものを専用 mate
+/// スレッドへ非同期依頼する ([`Shared::enqueue_mate_request`])．探索スレッド
+/// 自身は solve せず即座に葉を NN 評価へ回すため NPS は低下しない．
+fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
     let pool = &shared.pool;
     let opts = shared.opts;
     let mut board = shared.root_board.clone();
@@ -565,32 +660,17 @@ fn select_leaf<E: Evaluator>(
                         propagate_proven_from(shared, &path);
                         return Selection::Backpropped;
                     }
-                    // leaf-mate: 手番側 (board.turn) が短手で詰ませられるかを小予算
-                    // df-pn で判定する．does_have_mate_possibility (王手手段の有無) で
-                    // 前フィルタし，詰みが証明された葉のみ勝ち確定にして AND-OR 伝播する
-                    // (no-moves の TERMINAL_LOSS 分岐の双対)．solve は board を
-                    // do_move/undo するため clone に対して行い，EvalItem へ渡す board を
-                    // 汚さない．Checkmate/CheckmateNoPv 双方を証明として扱う (leaf-mate は
-                    // 詰み手順を必要とせず，詰みの成立だけ分かればよい)．
-                    // root は root-dfpn / MCTS が担当する (root の詰みは手順つきで
-                    // 返したいため)．leaf-mate は深部の葉に限定し，そこで証明した
-                    // 詰みを AND-OR で root へ伝播させる (bootstrap)．
-                    if let Some(solver) = leaf_mate {
-                        if idx != ROOT_IDX
-                            && board.does_have_mate_possibility(board.turn())
-                        {
-                            let mut mate_board = board.clone();
-                            if matches!(
-                                solver.solve(&mut mate_board),
-                                TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }
-                            ) {
-                                node.mark_terminal(node_state::TERMINAL_WIN);
-                                shared.leaf_mates.fetch_add(1, Ordering::Relaxed);
-                                backprop(shared, &path, 1.0);
-                                propagate_proven_from(shared, &path);
-                                return Selection::Backpropped;
-                            }
-                        }
+                    // leaf-mate (非同期): 手番側が王手手段を持つ葉 (root 以外) を
+                    // 専用 mate スレッドへ依頼する．探索スレッドは solve せず
+                    // (try-push のみ, ブロックしない) そのまま葉を NN 評価へ回す．
+                    // mate スレッドが詰みを証明したら try_mark_proven(WIN) で当該
+                    // ノードを勝ち確定にし AND-OR で root へ伝播する (bootstrap)．
+                    // root は root-dfpn / MCTS が担当するため除外する．
+                    if shared.opts.leaf_mate
+                        && idx != ROOT_IDX
+                        && board.does_have_mate_possibility(board.turn())
+                    {
+                        shared.enqueue_mate_request(idx, &board, &path);
                     }
                     return Selection::Leaf {
                         path,
@@ -621,12 +701,6 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
     let batch_size = shared.opts.batch_size.max(1);
     let mut paths: Vec<Vec<u32>> = Vec::with_capacity(batch_size);
     let mut items: Vec<EvalItem> = Vec::with_capacity(batch_size);
-    // leaf-mate 用の per-worker ソルバ (有効時のみ確保; TT はスレッド間非共有)．
-    // 多数の葉で solve を反復するが check_cache は再利用され TT のみ solve 毎に
-    // 小サイズで確保される (new_leaf_mate)．
-    let mut leaf_solver = shared.opts.leaf_mate.then(|| {
-        DfPnSolver::new_leaf_mate(shared.opts.leaf_mate_nodes, LEAF_MATE_TIMEOUT_SECS)
-    });
 
     while !shared.stopped() {
         shared.check_deadline();
@@ -636,12 +710,14 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
             shared.set_stop(StopCause::RootProven);
             break;
         }
+        // leaf-mate スレッドが証明した詰みを木へ反映する (バッチ毎に drain)
+        shared.apply_mate_results();
         paths.clear();
         items.clear();
         let mut had_collision = false;
 
         while items.len() < batch_size && !shared.stopped() {
-            match select_leaf(shared, leaf_solver.as_mut()) {
+            match select_leaf(shared) {
                 Selection::Leaf { path, item } => {
                     paths.push(path);
                     items.push(*item);
@@ -700,6 +776,50 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
         }
         shared.complete_playouts(n);
         shared.check_deadline();
+    }
+}
+
+/// leaf-mate 専用スレッドのメインループ．
+///
+/// 依頼キュー `inq` から取り出し，clone 局面に df-pn を回す (`nodes` 予算)．
+/// 詰み (`Checkmate` / `CheckmateNoPv`) なら結果キュー `outq` へ [`MateResult`]
+/// を返す (適用は探索スレッド側 [`Shared::apply_mate_results`] が行う)．
+///
+/// `shared` (特に `NodePool`) には一切触れず Arc 共有のキューだけで通信する
+/// (compact が `&mut NodePool` を取るため探索スレッドと同時に pool を借用でき
+/// ない; root-dfpn と同じ方針)．探索スレッドをブロックしないため solve は
+/// clone 局面に対して行う．
+fn mate_worker(
+    inq: &Mutex<VecDeque<MateRequest>>,
+    outq: &Mutex<VecDeque<MateResult>>,
+    stop: &AtomicBool,
+    nodes: u64,
+) {
+    let mut solver = DfPnSolver::new_leaf_mate(nodes, LEAF_MATE_TIMEOUT_SECS);
+    while !stop.load(Ordering::Acquire) {
+        let req = inq
+            .lock()
+            .expect("mate_queue lock は poison しない")
+            .pop_front();
+        let Some(req) = req else {
+            // キューが空: 探索スレッドの投入を待つ (短い譲歩でスピンを緩和)
+            std::thread::yield_now();
+            continue;
+        };
+        // solve は clone 局面に対して行う (pool 非参照)
+        let mut board = req.board;
+        if matches!(
+            solver.solve(&mut board),
+            TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }
+        ) {
+            outq.lock()
+                .expect("mate_results lock は poison しない")
+                .push_back(MateResult {
+                    idx: req.idx,
+                    path: req.path,
+                    generation: req.generation,
+                });
+        }
     }
 }
 
@@ -845,6 +965,9 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             max_depth: AtomicU16::new(0),
             dfpn_found: Arc::new(AtomicBool::new(false)),
             dfpn_mate: Arc::new(Mutex::new(None)),
+            mate_queue: Arc::new(Mutex::new(VecDeque::new())),
+            mate_results: Arc::new(Mutex::new(VecDeque::new())),
+            generation: AtomicU64::new(0),
         };
 
         let gc_keep_target =
@@ -881,6 +1004,19 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                     }
                 });
             }
+            // leaf-mate 専用スレッド: 探索スレッドが投入する詰み依頼を余剰 CPU で
+            // 処理する (探索スレッドは solve しないため NPS を落とさない)．
+            // root-dfpn と同様 shared には触れず Arc 共有キューだけで通信する
+            // (compact が &mut NodePool を取るため)．
+            if opts.leaf_mate {
+                for _ in 0..opts.leaf_mate_threads.max(1) {
+                    let stop = Arc::clone(&dfpn_stop);
+                    let inq = Arc::clone(&shared.mate_queue);
+                    let outq = Arc::clone(&shared.mate_results);
+                    let nodes = opts.leaf_mate_nodes;
+                    outer.spawn(move || mate_worker(&inq, &outq, &stop, nodes));
+                }
+            }
             loop {
                 std::thread::scope(|s| {
                     for _ in 0..opts.threads.max(1) {
@@ -901,7 +1037,10 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                 if shared.deadline.is_some_and(|d| Instant::now() >= d) {
                     break;
                 }
-                // 全スレッド join 済み = quiescent なので排他参照で compact できる
+                // 全スレッド join 済み = quiescent なので排他参照で compact できる．
+                // 世代を進めて，compact 前に投入された leaf-mate 結果 (旧 index) を
+                // 無効化する (探索スレッドの apply_mate_results が世代不一致で破棄)．
+                shared.generation.fetch_add(1, Ordering::AcqRel);
                 let gc = shared.pool.compact(gc_keep_target);
                 if gc.freed == 0 {
                     // 1 ノードも解放できない場合は再起動しても即枯渇する
@@ -1476,10 +1615,13 @@ mod tests {
     }
 
     #[test]
-    fn test_leaf_mate_proves_deep_mate() {
-        // 3 手詰め局面．leaf-mate (深部の葉での小予算 df-pn) が詰み筋の
-        // 手番側ノードで短手詰みを証明し，AND-OR で root へ伝播する．
-        // root_dfpn は無効なので RootProven は leaf-mate 由来と確定できる．
+    fn test_leaf_mate_enabled_search_proves() {
+        // leaf-mate を有効にした状態でも探索は詰みを正しく証明し，専用 mate
+        // スレッドは探索終了時に協調停止する (ハングしない)．3 手詰めを使う．
+        // 非同期 leaf-mate の「寄与」自体は GPU 律速前提のため mock では
+        // 計測できず (MCTS の AND-OR が先に証明する)，Colab で計測する．
+        // ここでは leaf-mate 有効時の健全性 (正しく証明・偽陽性なし・停止) を
+        // 検証する．mate スレッドの単体動作は test_mate_worker_finds_mate を参照．
         let result = run(
             "8k/9/7G1/9/9/9/9/9/9 b G 1",
             SearchOptions {
@@ -1487,6 +1629,8 @@ mod tests {
                 batch_size: 8,
                 node_capacity: 1 << 16,
                 leaf_mate: true,
+                leaf_mate_nodes: 100_000,
+                leaf_mate_threads: 2,
                 root_dfpn: false,
                 ..SearchOptions::default()
             },
@@ -1498,11 +1642,40 @@ mod tests {
         );
         assert_eq!(result.stop, StopCause::RootProven, "{:?}", result.stats);
         assert_eq!(result.winrate, 1.0);
-        assert!(
-            result.stats.leaf_mates >= 1,
-            "leaf-mate が発火して詰みを証明している: {:?}",
-            result.stats
-        );
+    }
+
+    #[test]
+    fn test_mate_worker_finds_mate() {
+        // 非同期 mate スレッドの単体検証: 詰み局面の依頼に対して df-pn を回し
+        // MateResult を結果キューへ返すこと (探索の MCTS 競合に依存しない
+        // 決定論的テスト)．
+        let inq: Mutex<VecDeque<MateRequest>> = Mutex::new(VecDeque::new());
+        let outq: Mutex<VecDeque<MateResult>> = Mutex::new(VecDeque::new());
+        let stop = AtomicBool::new(false);
+        let mut board = Board::empty();
+        board.set_sfen(MATE_IN_1).expect("正当な SFEN");
+        inq.lock().expect("lock").push_back(MateRequest {
+            idx: 7,
+            board,
+            path: vec![ROOT_IDX, 7],
+            generation: 0,
+        });
+        std::thread::scope(|s| {
+            s.spawn(|| mate_worker(&inq, &outq, &stop, 1000));
+            let mut got = None;
+            for _ in 0..2000 {
+                if let Some(r) = outq.lock().expect("lock").pop_front() {
+                    got = Some(r);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            stop.store(true, Ordering::Release);
+            let r = got.expect("mate スレッドが 1 手詰めを検出して結果を返す");
+            assert_eq!(r.idx, 7);
+            assert_eq!(r.path, vec![ROOT_IDX, 7]);
+            assert_eq!(r.generation, 0);
+        });
     }
 
     #[test]
