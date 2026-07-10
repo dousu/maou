@@ -112,33 +112,6 @@ from maou.infra.console.common import (
     required=False,
 )
 @click.option(
-    "--pv-mate/--no-pv-mate",
-    type=bool,
-    is_flag=True,
-    help="Enable long mate search on the principal variation. Dedicated "
-    "threads run a large-budget df-pn on the current PV leaf (on spare "
-    "CPU) and mark proven nodes, targeting mid/long mates that leaf-mate "
-    "(small budget) cannot reach (dlshogi-style PV mate search).",
-    default=False,
-    required=False,
-)
-@click.option(
-    "--pv-mate-nodes",
-    help="Node budget per PV-mate df-pn call.",
-    type=int,
-    default=1000000,
-    show_default=True,
-    required=False,
-)
-@click.option(
-    "--pv-mate-threads",
-    help="Number of dedicated PV-mate threads (use spare CPU cores).",
-    type=int,
-    default=1,
-    show_default=True,
-    required=False,
-)
-@click.option(
     "--cuda/--no-cuda",
     type=bool,
     is_flag=True,
@@ -177,9 +150,6 @@ def search_board(
     leaf_mate: bool,
     leaf_mate_nodes: int,
     leaf_mate_threads: int,
-    pv_mate: bool,
-    pv_mate_nodes: int,
-    pv_mate_threads: int,
     cuda: bool,
     tensorrt: bool,
     trt_cache_dir: Path | None,
@@ -206,9 +176,6 @@ def search_board(
         leaf_mate: Enable short mate search at MCTS leaves (async).
         leaf_mate_nodes: Node budget per leaf-mate df-pn call.
         leaf_mate_threads: Number of dedicated leaf-mate threads.
-        pv_mate: Enable long mate search on the principal variation.
-        pv_mate_nodes: Node budget per PV-mate df-pn call.
-        pv_mate_threads: Number of dedicated PV-mate threads.
         cuda: Enable CUDA Execution Provider.
         tensorrt: Enable TensorRT Execution Provider.
         trt_cache_dir: TensorRT engine cache directory.
@@ -231,9 +198,6 @@ def search_board(
             leaf_mate=leaf_mate,
             leaf_mate_nodes=leaf_mate_nodes,
             leaf_mate_threads=leaf_mate_threads,
-            pv_mate=pv_mate,
-            pv_mate_nodes=pv_mate_nodes,
-            pv_mate_threads=pv_mate_threads,
             cuda=cuda,
             tensorrt=tensorrt,
             trt_engine_cache_dir=trt_cache_dir,

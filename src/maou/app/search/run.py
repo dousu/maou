@@ -37,9 +37,6 @@ class SearchRunner:
             leaf_mate: MCTS の葉の短手詰み探索 (専用スレッド) を行うか．
             leaf_mate_nodes: leaf-mate 1 回あたりのノード予算．
             leaf_mate_threads: leaf-mate 専用スレッド数．
-            pv_mate: PV 上長手数詰み探索 (専用スレッド) を行うか．
-            pv_mate_nodes: PV-mate 1 回あたりのノード予算．
-            pv_mate_threads: PV-mate 専用スレッド数．
             cuda: CUDA Execution Provider を使うか．
             tensorrt: TensorRT Execution Provider を使うか．
             trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
@@ -58,9 +55,6 @@ class SearchRunner:
         leaf_mate: bool = False
         leaf_mate_nodes: int = 50
         leaf_mate_threads: int = 1
-        pv_mate: bool = False
-        pv_mate_nodes: int = 1_000_000
-        pv_mate_threads: int = 1
         cuda: bool = False
         tensorrt: bool = False
         trt_engine_cache_dir: Path | None = None
@@ -95,9 +89,6 @@ class SearchRunner:
             leaf_mate=config.leaf_mate,
             leaf_mate_nodes=config.leaf_mate_nodes,
             leaf_mate_threads=config.leaf_mate_threads,
-            pv_mate=config.pv_mate,
-            pv_mate_nodes=config.pv_mate_nodes,
-            pv_mate_threads=config.pv_mate_threads,
             use_cuda=config.cuda,
             use_tensorrt=config.tensorrt,
             trt_engine_cache_dir=(
@@ -163,8 +154,7 @@ class SearchRunner:
                 f"max_depth={result.max_depth} "
                 f"repetitions={result.repetitions} "
                 f"proven_nodes={result.proven_nodes} "
-                f"leaf_mates={result.leaf_mates} "
-                f"pv_mates={result.pv_mates} stop={result.stop}"
+                f"leaf_mates={result.leaf_mates} stop={result.stop}"
             ),
         }
         if config.board_view:
