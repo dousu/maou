@@ -34,6 +34,8 @@ class SearchRunner:
             time_ms: 時間上限ミリ秒 (None で無制限)．
             num_moves: 表示する上位候補手数．
             root_dfpn: ルート並行 dfpn 詰み探索を有効にするか．
+            leaf_mate: MCTS の各葉で短手詰み探索を行うか．
+            leaf_mate_nodes: leaf-mate 1 回あたりのノード予算．
             cuda: CUDA Execution Provider を使うか．
             tensorrt: TensorRT Execution Provider を使うか．
             trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
@@ -49,6 +51,8 @@ class SearchRunner:
         time_ms: int | None = None
         num_moves: int = 5
         root_dfpn: bool = False
+        leaf_mate: bool = False
+        leaf_mate_nodes: int = 50
         cuda: bool = False
         tensorrt: bool = False
         trt_engine_cache_dir: Path | None = None
@@ -80,6 +84,8 @@ class SearchRunner:
             max_playouts=config.max_playouts,
             time_ms=config.time_ms,
             root_dfpn=config.root_dfpn,
+            leaf_mate=config.leaf_mate,
+            leaf_mate_nodes=config.leaf_mate_nodes,
             use_cuda=config.cuda,
             use_tensorrt=config.tensorrt,
             trt_engine_cache_dir=(
@@ -144,7 +150,8 @@ class SearchRunner:
                 f"warmup_ms={result.warmup_ms} "
                 f"max_depth={result.max_depth} "
                 f"repetitions={result.repetitions} "
-                f"proven_nodes={result.proven_nodes} stop={result.stop}"
+                f"proven_nodes={result.proven_nodes} "
+                f"leaf_mates={result.leaf_mates} stop={result.stop}"
             ),
         }
         if config.board_view:

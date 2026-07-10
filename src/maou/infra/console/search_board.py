@@ -84,6 +84,25 @@ from maou.infra.console.common import (
     required=False,
 )
 @click.option(
+    "--leaf-mate/--no-leaf-mate",
+    type=bool,
+    is_flag=True,
+    help="Run a short mate search (df-pn) at each MCTS leaf. When a mate "
+    "is proven the leaf is marked won and propagated through the search "
+    "tree (dlshogi-style leaf mate search).",
+    default=False,
+    required=False,
+)
+@click.option(
+    "--leaf-mate-nodes",
+    help="Node budget per leaf-mate df-pn call (smaller = cheaper and "
+    "restricts to shorter mates).",
+    type=int,
+    default=50,
+    show_default=True,
+    required=False,
+)
+@click.option(
     "--cuda/--no-cuda",
     type=bool,
     is_flag=True,
@@ -119,6 +138,8 @@ def search_board(
     time_ms: int | None,
     num_moves: int,
     root_dfpn: bool,
+    leaf_mate: bool,
+    leaf_mate_nodes: int,
     cuda: bool,
     tensorrt: bool,
     trt_cache_dir: Path | None,
@@ -142,6 +163,8 @@ def search_board(
         time_ms: Time limit in milliseconds.
         num_moves: Number of candidate moves to display.
         root_dfpn: Run dfpn mate search on the root position in parallel.
+        leaf_mate: Run a short mate search at each MCTS leaf.
+        leaf_mate_nodes: Node budget per leaf-mate df-pn call.
         cuda: Enable CUDA Execution Provider.
         tensorrt: Enable TensorRT Execution Provider.
         trt_cache_dir: TensorRT engine cache directory.
@@ -161,6 +184,8 @@ def search_board(
             time_ms=time_ms,
             num_moves=num_moves,
             root_dfpn=root_dfpn,
+            leaf_mate=leaf_mate,
+            leaf_mate_nodes=leaf_mate_nodes,
             cuda=cuda,
             tensorrt=tensorrt,
             trt_engine_cache_dir=trt_cache_dir,

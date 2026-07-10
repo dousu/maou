@@ -17,6 +17,8 @@ def search(
     time_ms: int | None = None,
     num_moves: int = 5,
     root_dfpn: bool = False,
+    leaf_mate: bool = False,
+    leaf_mate_nodes: int = 50,
     cuda: bool = False,
     tensorrt: bool = False,
     trt_engine_cache_dir: Path | None = None,
@@ -35,6 +37,8 @@ def search(
         time_ms: 時間上限 (ミリ秒)．playouts と両方未指定なら 1000ms．
         num_moves: 表示する上位候補手数．
         root_dfpn: ルート並行 dfpn 詰み探索を有効にするか．
+        leaf_mate: MCTS の各葉で短手詰み探索を行うか．
+        leaf_mate_nodes: leaf-mate 1 回あたりのノード予算．
         cuda: CUDA Execution Provider を使うか．
         tensorrt: TensorRT Execution Provider を使うか．
         trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
@@ -58,6 +62,8 @@ def search(
         time_ms=time_ms,
         num_moves=num_moves,
         root_dfpn=root_dfpn,
+        leaf_mate=leaf_mate,
+        leaf_mate_nodes=leaf_mate_nodes,
         cuda=cuda,
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_engine_cache_dir,

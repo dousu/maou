@@ -74,6 +74,10 @@ const DEFAULT_MAX_PLAYOUTS: u64 = 1 << 20;
 /// PV 復元の最大長．
 const MAX_PV_LEN: usize = 64;
 
+/// leaf-mate ソルバ 1 回あたりのタイムアウト (秒)．探索は `leaf_mate_nodes`
+/// で node-bound されるので実際には到達しない安全弁 (50 ノード探索は μ 秒オーダ)．
+const LEAF_MATE_TIMEOUT_SECS: u64 = 1;
+
 /// 探索の設定．
 #[derive(Clone, Debug)]
 pub struct SearchOptions {
@@ -106,6 +110,15 @@ pub struct SearchOptions {
     pub root_dfpn_nodes: u64,
     /// ルート dfpn の探索深さ上限 (最大 2047)．
     pub root_dfpn_depth: u32,
+    /// MCTS の各葉で短手詰み探索 (leaf-mate) を行うか (既定 false)．
+    /// 展開直前の葉で手番側が短手で詰ませられるかを小予算 df-pn で判定し，
+    /// 詰みなら葉を勝ち確定 ([`node_state::TERMINAL_WIN`]) にして AND-OR 伝播
+    /// する (dlshogi の MCTS 葉ノード短手数詰み探索相当)．
+    pub leaf_mate: bool,
+    /// leaf-mate 1 回あたりのノード予算 ([`SearchOptions::leaf_mate`] 有効時)．
+    /// 小さいほど cheap かつ短手のみ検出 (既定 50 = dlshogi 相当)．非詰み葉は
+    /// この予算で打ち切って Unknown を返すので per-leaf コストの上限になる．
+    pub leaf_mate_nodes: u64,
 }
 
 impl Default for SearchOptions {
@@ -122,6 +135,8 @@ impl Default for SearchOptions {
             root_dfpn: false,
             root_dfpn_nodes: 1 << 20,
             root_dfpn_depth: 2047,
+            leaf_mate: false,
+            leaf_mate_nodes: 50,
         }
     }
 }
@@ -223,6 +238,9 @@ pub struct SearchStats {
     /// AND-OR 伝播で勝敗/引き分けが確定した内部ノード数 (葉の終端マークは
     /// 含まない)．
     pub proven_nodes: u64,
+    /// leaf-mate 探索が葉で詰みを証明して勝ち確定にした回数
+    /// ([`SearchOptions::leaf_mate`] 有効時)．
+    pub leaf_mates: u64,
     /// 使用したノード数 (GC 実行後はその時点の残存数)．
     pub nodes_used: u32,
     /// 子ノード生成の CAS 競合で捨てられたノード数 (GC で回収される)．
@@ -273,6 +291,7 @@ struct Shared<'a, E: Evaluator> {
     leaked_nodes: AtomicU64,
     repetitions: AtomicU64,
     proven_nodes: AtomicU64,
+    leaf_mates: AtomicU64,
     max_depth: AtomicU16,
     /// ルート並行 dfpn が詰みを証明したか (dfpn スレッドが立てる)．
     dfpn_found: Arc<AtomicBool>,
@@ -427,7 +446,13 @@ fn propagate_proven_from<E: Evaluator>(shared: &Shared<'_, E>, path: &[u32]) {
 }
 
 /// ルートから PUCT で降下して評価対象の葉を 1 つ選ぶ．
-fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
+///
+/// `leaf_mate` は worker ごとの leaf-mate ソルバ (有効時のみ `Some`)．新規展開する
+/// 葉で手番側が短手で詰ませられるかを判定するのに使う (per-worker 再利用)．
+fn select_leaf<E: Evaluator>(
+    shared: &Shared<'_, E>,
+    leaf_mate: Option<&mut DfPnSolver>,
+) -> Selection {
     let pool = &shared.pool;
     let opts = shared.opts;
     let mut board = shared.root_board.clone();
@@ -540,6 +565,33 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
                         propagate_proven_from(shared, &path);
                         return Selection::Backpropped;
                     }
+                    // leaf-mate: 手番側 (board.turn) が短手で詰ませられるかを小予算
+                    // df-pn で判定する．does_have_mate_possibility (王手手段の有無) で
+                    // 前フィルタし，詰みが証明された葉のみ勝ち確定にして AND-OR 伝播する
+                    // (no-moves の TERMINAL_LOSS 分岐の双対)．solve は board を
+                    // do_move/undo するため clone に対して行い，EvalItem へ渡す board を
+                    // 汚さない．Checkmate/CheckmateNoPv 双方を証明として扱う (leaf-mate は
+                    // 詰み手順を必要とせず，詰みの成立だけ分かればよい)．
+                    // root は root-dfpn / MCTS が担当する (root の詰みは手順つきで
+                    // 返したいため)．leaf-mate は深部の葉に限定し，そこで証明した
+                    // 詰みを AND-OR で root へ伝播させる (bootstrap)．
+                    if let Some(solver) = leaf_mate {
+                        if idx != ROOT_IDX
+                            && board.does_have_mate_possibility(board.turn())
+                        {
+                            let mut mate_board = board.clone();
+                            if matches!(
+                                solver.solve(&mut mate_board),
+                                TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }
+                            ) {
+                                node.mark_terminal(node_state::TERMINAL_WIN);
+                                shared.leaf_mates.fetch_add(1, Ordering::Relaxed);
+                                backprop(shared, &path, 1.0);
+                                propagate_proven_from(shared, &path);
+                                return Selection::Backpropped;
+                            }
+                        }
+                    }
                     return Selection::Leaf {
                         path,
                         item: Box::new(EvalItem { board, moves }),
@@ -569,6 +621,12 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
     let batch_size = shared.opts.batch_size.max(1);
     let mut paths: Vec<Vec<u32>> = Vec::with_capacity(batch_size);
     let mut items: Vec<EvalItem> = Vec::with_capacity(batch_size);
+    // leaf-mate 用の per-worker ソルバ (有効時のみ確保; TT はスレッド間非共有)．
+    // 多数の葉で solve を反復するが check_cache は再利用され TT のみ solve 毎に
+    // 小サイズで確保される (new_leaf_mate)．
+    let mut leaf_solver = shared.opts.leaf_mate.then(|| {
+        DfPnSolver::new_leaf_mate(shared.opts.leaf_mate_nodes, LEAF_MATE_TIMEOUT_SECS)
+    });
 
     while !shared.stopped() {
         shared.check_deadline();
@@ -583,7 +641,7 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
         let mut had_collision = false;
 
         while items.len() < batch_size && !shared.stopped() {
-            match select_leaf(shared) {
+            match select_leaf(shared, leaf_solver.as_mut()) {
                 Selection::Leaf { path, item } => {
                     paths.push(path);
                     items.push(*item);
@@ -720,6 +778,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                     max_depth: 0,
                     repetitions: 0,
                     proven_nodes: 0,
+                    leaf_mates: 0,
                     nodes_used: 0,
                     leaked_nodes: 0,
                     gc_runs: 0,
@@ -782,6 +841,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             leaked_nodes: AtomicU64::new(0),
             repetitions: AtomicU64::new(0),
             proven_nodes: AtomicU64::new(0),
+            leaf_mates: AtomicU64::new(0),
             max_depth: AtomicU16::new(0),
             dfpn_found: Arc::new(AtomicBool::new(false)),
             dfpn_mate: Arc::new(Mutex::new(None)),
@@ -978,6 +1038,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             max_depth: shared.max_depth.load(Ordering::Relaxed),
             repetitions: shared.repetitions.load(Ordering::Relaxed),
             proven_nodes: shared.proven_nodes.load(Ordering::Relaxed),
+            leaf_mates: shared.leaf_mates.load(Ordering::Relaxed),
             nodes_used: shared.pool.used(),
             leaked_nodes: shared.leaked_nodes.load(Ordering::Relaxed),
             gc_runs,
@@ -1412,6 +1473,67 @@ mod tests {
         assert_eq!(result.stop, StopCause::RootProven, "{:?}", result.stats);
         assert_eq!(result.winrate, 1.0);
         assert!(result.stats.proven_nodes >= 1);
+    }
+
+    #[test]
+    fn test_leaf_mate_proves_deep_mate() {
+        // 3 手詰め局面．leaf-mate (深部の葉での小予算 df-pn) が詰み筋の
+        // 手番側ノードで短手詰みを証明し，AND-OR で root へ伝播する．
+        // root_dfpn は無効なので RootProven は leaf-mate 由来と確定できる．
+        let result = run(
+            "8k/9/7G1/9/9/9/9/9/9 b G 1",
+            SearchOptions {
+                threads: 1,
+                batch_size: 8,
+                node_capacity: 1 << 16,
+                leaf_mate: true,
+                root_dfpn: false,
+                ..SearchOptions::default()
+            },
+            SearchLimits {
+                max_playouts: Some(200_000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        assert_eq!(result.stop, StopCause::RootProven, "{:?}", result.stats);
+        assert_eq!(result.winrate, 1.0);
+        assert!(
+            result.stats.leaf_mates >= 1,
+            "leaf-mate が発火して詰みを証明している: {:?}",
+            result.stats
+        );
+    }
+
+    #[test]
+    fn test_leaf_mate_no_false_positive() {
+        // 初期局面 (詰みなし) では leaf-mate は決して詰みを証明しない
+        // (偽陽性ゼロ)．探索は正常に予算で終了する (ハングしない)．
+        let result = run(
+            STARTPOS,
+            SearchOptions {
+                threads: 1,
+                batch_size: 8,
+                node_capacity: 1 << 16,
+                leaf_mate: true,
+                ..SearchOptions::default()
+            },
+            SearchLimits {
+                max_playouts: Some(3000),
+                ..SearchLimits::default()
+            },
+            7,
+        );
+        assert_ne!(
+            result.stop,
+            StopCause::RootProven,
+            "詰みなし局面を誤って勝ち確定にしない"
+        );
+        assert_eq!(
+            result.stats.leaf_mates, 0,
+            "偽の詰み検出がない: {:?}",
+            result.stats
+        );
     }
 
     #[test]

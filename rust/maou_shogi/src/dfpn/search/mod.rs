@@ -531,7 +531,10 @@ impl DfPnSolver {
         let size = if let Ok(s) = std::env::var("TTSIZE") {
             s.parse::<usize>().unwrap_or(1 << 23).max(1 << 12)
         } else {
-            ((self.max_nodes as usize).saturating_mul(2)).clamp(1 << 18, 1 << 23)
+            // floor は既定 1<<18 (production)．leaf-mate ソルバは min_tt_entries を
+            // 小さくして per-leaf の TT 確保コストを下げる (new_leaf_mate)．
+            ((self.max_nodes as usize).saturating_mul(2))
+                .clamp(self.min_tt_entries, 1 << 23)
         };
         // 千日手テーブルも固定サイズ (generation GC で bound)．既定は主 TT と同数
         // (24 byte/entry ≒ 主 TT の 37.5% メモリ)．`REPSIZE` で上書き可．
