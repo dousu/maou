@@ -116,6 +116,8 @@ struct MateResult {
     path: Vec<u32>,
     /// 依頼時の GC 世代．
     generation: u64,
+    /// PV-mate 由来か (統計を leaf-mate と分けるため)．
+    is_pv: bool,
 }
 
 /// 探索の設定．
@@ -163,6 +165,17 @@ pub struct SearchOptions {
     /// GPU 律速で余る CPU スレッド数に合わせて増やすと詰み探索スループットが
     /// 上がる (探索スレッドとは別スレッドなので NPS には影響しない)．
     pub leaf_mate_threads: usize,
+    /// PV-mate を有効にするか (既定 false)．現在の PV 葉 (最善応手列の深部) に
+    /// 大予算 df-pn を専用スレッドで回し，詰みなら勝ち確定にして AND-OR 伝播
+    /// する (dlshogi の PV 上長手数詰み探索相当)．leaf-mate では届かない中長手
+    /// の詰みを余剰 CPU で狙う．探索スレッドは PV 葉を投入するだけでブロック
+    /// しない．
+    pub pv_mate: bool,
+    /// PV-mate 1 回あたりのノード予算 ([`SearchOptions::pv_mate`] 有効時)．
+    /// 既定 1,000,000 (leaf-mate より桁違いに大きい)．
+    pub pv_mate_nodes: u64,
+    /// PV-mate 専用スレッド数 ([`SearchOptions::pv_mate`] 有効時, 既定 1)．
+    pub pv_mate_threads: usize,
 }
 
 impl Default for SearchOptions {
@@ -182,6 +195,9 @@ impl Default for SearchOptions {
             leaf_mate: false,
             leaf_mate_nodes: 50,
             leaf_mate_threads: 1,
+            pv_mate: false,
+            pv_mate_nodes: 1_000_000,
+            pv_mate_threads: 1,
         }
     }
 }
@@ -286,6 +302,9 @@ pub struct SearchStats {
     /// leaf-mate 探索が葉で詰みを証明して勝ち確定にした回数
     /// ([`SearchOptions::leaf_mate`] 有効時)．
     pub leaf_mates: u64,
+    /// PV-mate 探索が PV 葉で詰みを証明して勝ち確定にした回数
+    /// ([`SearchOptions::pv_mate`] 有効時)．
+    pub pv_mates: u64,
     /// 使用したノード数 (GC 実行後はその時点の残存数)．
     pub nodes_used: u32,
     /// 子ノード生成の CAS 競合で捨てられたノード数 (GC で回収される)．
@@ -337,6 +356,7 @@ struct Shared<'a, E: Evaluator> {
     repetitions: AtomicU64,
     proven_nodes: AtomicU64,
     leaf_mates: AtomicU64,
+    pv_mates: AtomicU64,
     max_depth: AtomicU16,
     /// ルート並行 dfpn が詰みを証明したか (dfpn スレッドが立てる)．
     dfpn_found: Arc<AtomicBool>,
@@ -345,6 +365,9 @@ struct Shared<'a, E: Evaluator> {
     /// leaf-mate 依頼キュー (探索スレッドが try-push, mate スレッドが pop)．
     /// mate スレッドは `shared` に触れないため Arc で共有する．
     mate_queue: Arc<Mutex<VecDeque<MateRequest>>>,
+    /// PV-mate 依頼キュー (探索スレッドが現 PV 葉を投入, PV スレッドが pop)．
+    /// leaf-mate と別キュー・別スレッド (予算が桁違いに大きいため)．
+    pv_mate_queue: Arc<Mutex<VecDeque<MateRequest>>>,
     /// leaf-mate 結果キュー (mate スレッドが push, 探索スレッドが drain-apply)．
     mate_results: Arc<Mutex<VecDeque<MateResult>>>,
     /// GC 世代．[`NodePool::compact`] 実行ごとに +1 する．探索スレッドは結果の
@@ -391,9 +414,79 @@ impl<E: Evaluator> Shared<'_, E> {
                 continue; // compact 済み — index 無効化，破棄 (偽証明防止)
             }
             if self.pool.get(res.idx).try_mark_proven(proven::WIN) {
-                self.leaf_mates.fetch_add(1, Ordering::Relaxed);
+                if res.is_pv {
+                    self.pv_mates.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    self.leaf_mates.fetch_add(1, Ordering::Relaxed);
+                }
             }
             propagate_proven_from(self, &res.path);
+        }
+    }
+
+    /// 現在の PV (root から最大訪問辺で辿った経路) の葉局面と経路を返す．
+    ///
+    /// PV-mate 依頼の生成に使う (探索スレッドから呼ぶので pool アクセス可)．
+    /// 木は並行更新されるため厳密な一貫性はないが，df-pn は返した `Board` を
+    /// 解くので健全性に影響しない (seed としての近似で十分)．root のみ
+    /// (深さ 0) の場合は `None` を返す (root は root-dfpn が担当)．
+    fn current_pv_leaf(&self) -> Option<(Vec<u32>, Board)> {
+        let mut board = self.root_board.clone();
+        let mut path = vec![ROOT_IDX];
+        let mut idx = ROOT_IDX;
+        loop {
+            let node = self.pool.get(idx);
+            if node.state() != node_state::EXPANDED {
+                break;
+            }
+            let mut best: Option<(Move, u32, u64)> = None;
+            for e in node.edges() {
+                let c = e.child.load(Ordering::Acquire);
+                if c == NULL_NODE {
+                    continue;
+                }
+                let v = self.pool.get(c).visits();
+                if v == 0 {
+                    continue;
+                }
+                if best.is_none_or(|(_, _, bv)| v > bv) {
+                    best = Some((e.mv, c, v));
+                }
+            }
+            let Some((mv, child, _)) = best else { break };
+            board.do_move(mv);
+            path.push(child);
+            idx = child;
+            if path.len() >= MAX_PV_LEN {
+                break;
+            }
+        }
+        if path.len() < 2 {
+            return None;
+        }
+        Some((path, board))
+    }
+
+    /// 現在の PV 葉を PV-mate キューへ投入する (探索スレッド用)．
+    ///
+    /// キューが空のときだけ投入する (自然なスロットル: PV スレッドが前の依頼を
+    /// 消化してから次を作るので，1 度に 1 依頼のみ)．探索スレッドはブロック
+    /// しない (`try_lock`)．PV 走査は空検出時のみ = PV-solve あたり 1 回程度で
+    /// 低頻度．
+    fn enqueue_pv_mate_request(&self) {
+        let Ok(mut q) = self.pv_mate_queue.try_lock() else {
+            return;
+        };
+        if !q.is_empty() {
+            return;
+        }
+        if let Some((path, board)) = self.current_pv_leaf() {
+            q.push_back(MateRequest {
+                idx: *path.last().expect("path は空にならない"),
+                board,
+                path,
+                generation: self.generation.load(Ordering::Acquire),
+            });
         }
     }
 
@@ -710,8 +803,12 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
             shared.set_stop(StopCause::RootProven);
             break;
         }
-        // leaf-mate スレッドが証明した詰みを木へ反映する (バッチ毎に drain)
+        // leaf-mate / PV-mate スレッドが証明した詰みを木へ反映する (バッチ毎)
         shared.apply_mate_results();
+        // PV-mate: 現在の PV 葉を専用スレッドへ依頼する (キューが空のときだけ)
+        if shared.opts.pv_mate {
+            shared.enqueue_pv_mate_request();
+        }
         paths.clear();
         items.clear();
         let mut had_collision = false;
@@ -794,6 +891,7 @@ fn mate_worker(
     outq: &Mutex<VecDeque<MateResult>>,
     stop: &AtomicBool,
     nodes: u64,
+    is_pv: bool,
 ) {
     let mut solver = DfPnSolver::new_leaf_mate(nodes, LEAF_MATE_TIMEOUT_SECS);
     while !stop.load(Ordering::Acquire) {
@@ -818,6 +916,7 @@ fn mate_worker(
                     idx: req.idx,
                     path: req.path,
                     generation: req.generation,
+                    is_pv,
                 });
         }
     }
@@ -899,6 +998,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                     repetitions: 0,
                     proven_nodes: 0,
                     leaf_mates: 0,
+                    pv_mates: 0,
                     nodes_used: 0,
                     leaked_nodes: 0,
                     gc_runs: 0,
@@ -962,10 +1062,12 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             repetitions: AtomicU64::new(0),
             proven_nodes: AtomicU64::new(0),
             leaf_mates: AtomicU64::new(0),
+            pv_mates: AtomicU64::new(0),
             max_depth: AtomicU16::new(0),
             dfpn_found: Arc::new(AtomicBool::new(false)),
             dfpn_mate: Arc::new(Mutex::new(None)),
             mate_queue: Arc::new(Mutex::new(VecDeque::new())),
+            pv_mate_queue: Arc::new(Mutex::new(VecDeque::new())),
             mate_results: Arc::new(Mutex::new(VecDeque::new())),
             generation: AtomicU64::new(0),
         };
@@ -1014,7 +1116,18 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                     let inq = Arc::clone(&shared.mate_queue);
                     let outq = Arc::clone(&shared.mate_results);
                     let nodes = opts.leaf_mate_nodes;
-                    outer.spawn(move || mate_worker(&inq, &outq, &stop, nodes));
+                    outer.spawn(move || mate_worker(&inq, &outq, &stop, nodes, false));
+                }
+            }
+            // PV-mate 専用スレッド: 現在の PV 葉に大予算 df-pn を回す (別キュー・
+            // 別スレッド)．leaf-mate と同じ Arc 共有・結果適用機構を使う．
+            if opts.pv_mate {
+                for _ in 0..opts.pv_mate_threads.max(1) {
+                    let stop = Arc::clone(&dfpn_stop);
+                    let inq = Arc::clone(&shared.pv_mate_queue);
+                    let outq = Arc::clone(&shared.mate_results);
+                    let nodes = opts.pv_mate_nodes;
+                    outer.spawn(move || mate_worker(&inq, &outq, &stop, nodes, true));
                 }
             }
             loop {
@@ -1178,6 +1291,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             repetitions: shared.repetitions.load(Ordering::Relaxed),
             proven_nodes: shared.proven_nodes.load(Ordering::Relaxed),
             leaf_mates: shared.leaf_mates.load(Ordering::Relaxed),
+            pv_mates: shared.pv_mates.load(Ordering::Relaxed),
             nodes_used: shared.pool.used(),
             leaked_nodes: shared.leaked_nodes.load(Ordering::Relaxed),
             gc_runs,
@@ -1661,7 +1775,7 @@ mod tests {
             generation: 0,
         });
         std::thread::scope(|s| {
-            s.spawn(|| mate_worker(&inq, &outq, &stop, 1000));
+            s.spawn(|| mate_worker(&inq, &outq, &stop, 1000, false));
             let mut got = None;
             for _ in 0..2000 {
                 if let Some(r) = outq.lock().expect("lock").pop_front() {
@@ -1675,7 +1789,36 @@ mod tests {
             assert_eq!(r.idx, 7);
             assert_eq!(r.path, vec![ROOT_IDX, 7]);
             assert_eq!(r.generation, 0);
+            assert!(!r.is_pv);
         });
+    }
+
+    #[test]
+    fn test_pv_mate_enabled_search_proves() {
+        // PV-mate を有効にした状態でも探索は正しく詰みを証明し，PV-mate 専用
+        // スレッドは探索終了時に協調停止する (ハングしない)．寄与自体は GPU
+        // 律速前提のため mock では計測できず (MCTS が先に証明する)，Colab で
+        // 計測する．ここでは PV-mate 有効時の健全性 (正しく証明・停止) を検証．
+        let result = run(
+            "8k/9/6R2/9/9/9/9/9/9 b G 1",
+            SearchOptions {
+                threads: 1,
+                batch_size: 8,
+                node_capacity: 1 << 16,
+                pv_mate: true,
+                pv_mate_nodes: 100_000,
+                pv_mate_threads: 2,
+                root_dfpn: false,
+                ..SearchOptions::default()
+            },
+            SearchLimits {
+                max_playouts: Some(200_000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        assert_eq!(result.stop, StopCause::RootProven, "{:?}", result.stats);
+        assert_eq!(result.winrate, 1.0);
     }
 
     #[test]

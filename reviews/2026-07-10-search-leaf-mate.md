@@ -32,13 +32,22 @@ docs/commands/search.md を以下のとおり更新する:
      call. Smaller = cheaper and restricts to shorter mates.
    - `--leaf-mate-threads INT` | default `1` | Number of dedicated leaf-mate
      threads (use spare CPU cores).
+   - `--pv-mate/--no-pv-mate` | default off | Enable long mate search on the
+     principal variation. Dedicated threads run a large-budget df-pn on the
+     current PV leaf (on spare CPU) and mark proven nodes, targeting mid/long
+     mates that leaf-mate cannot reach (dlshogi-style PV mate search).
+   - `--pv-mate-nodes INT` | default `1000000` | Node budget per PV-mate df-pn
+     call.
+   - `--pv-mate-threads INT` | default `1` | Number of dedicated PV-mate
+     threads (use spare CPU cores).
 
 2. **Overview** の探索機能列挙に「optional asynchronous per-leaf short mate
-   search on dedicated threads (`--leaf-mate`)」を root-parallel dfpn と
-   並べて追記．
+   search (`--leaf-mate`) and PV long mate search (`--pv-mate`) on dedicated
+   threads」を root-parallel dfpn と並べて追記．
 
 3. **Stats fields** の記述に `leaf_mates` (leaf-mate が葉で詰みを証明した
-   回数) を `proven_nodes` の後に追加．
+   回数) と `pv_mates` (PV-mate が PV 葉で詰みを証明した回数) を
+   `proven_nodes` の後に追加．
 
 ## What this enables
 
@@ -61,6 +70,6 @@ docs/commands/search.md を以下のとおり更新する:
 
 ## Rollback plan
 
-docs/commands/search.md の追加分を削除し，コード側は maou_search 0.11.0 /
-maou_rust 0.13.0 / maou 0.27.0 (maou_shogi 5.6.0 は既存の leaf-mate ソルバ
-のみで維持可) の leaf-mate 関連コミットを revert する．
+docs/commands/search.md の追加分を削除し，コード側は maou_search 0.12.0 /
+maou_rust 0.14.0 / maou 0.28.0 (maou_shogi 5.6.0 は既存の leaf-mate ソルバ
+のみで維持可) の leaf-mate / PV-mate 関連コミットを revert する．

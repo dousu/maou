@@ -52,8 +52,9 @@ impl SearchRootChild {
 /// - 統計: `playouts` / `warmup_ms` (ルート評価/エンジンビルドの所要; 計測
 ///   区間外) / `elapsed_ms` / `nps` / `max_depth` / `repetitions`
 ///   (千日手検出数) / `proven_nodes` (AND-OR 確定ノード数) / `leaf_mates`
-///   (leaf-mate が葉で詰みを証明した回数) / `nodes_used` / `collisions` /
-///   `eval_batches` / `avg_batch` / `gc_runs`．
+///   (leaf-mate が葉で詰みを証明した回数) / `pv_mates` (PV-mate が PV 葉で
+///   詰みを証明した回数) / `nodes_used` / `collisions` / `eval_batches` /
+///   `avg_batch` / `gc_runs`．
 #[pyclass(frozen, name = "SearchResult")]
 struct PySearchResult {
     #[pyo3(get)]
@@ -82,6 +83,8 @@ struct PySearchResult {
     proven_nodes: u64,
     #[pyo3(get)]
     leaf_mates: u64,
+    #[pyo3(get)]
+    pv_mates: u64,
     #[pyo3(get)]
     nodes_used: u32,
     #[pyo3(get)]
@@ -139,6 +142,7 @@ fn to_py_result(r: SearchResult) -> PySearchResult {
         repetitions: r.stats.repetitions,
         proven_nodes: r.stats.proven_nodes,
         leaf_mates: r.stats.leaf_mates,
+        pv_mates: r.stats.pv_mates,
         nodes_used: r.stats.nodes_used,
         collisions: r.stats.collisions,
         eval_batches: r.stats.eval_batches,
@@ -199,6 +203,12 @@ fn run_search<E: Evaluator>(
 ///   (デフォルト 50)．小さいほど cheap かつ短手のみ検出する．
 /// - `leaf_mate_threads` (int, optional): leaf-mate 専用スレッド数
 ///   (デフォルト 1)．余る CPU スレッド数に合わせて増やす．
+/// - `pv_mate` (bool, optional): PV 上長手数詰み探索を有効にする
+///   (デフォルト False)．現在の PV 葉に大予算 df-pn を専用スレッドで回し，
+///   詰みなら勝ち確定にして AND-OR 伝播する (leaf-mate では届かない中長手用)．
+/// - `pv_mate_nodes` (int, optional): PV-mate 1 回あたりのノード予算
+///   (デフォルト 1,000,000)．
+/// - `pv_mate_threads` (int, optional): PV-mate 専用スレッド数 (デフォルト 1)．
 /// - `use_cuda` (bool, optional): CUDA Execution Provider (`onnx-cuda` feature 必要)．
 /// - `use_tensorrt` (bool, optional): TensorRT Execution Provider
 ///   (`onnx-tensorrt` feature 必要)．有効時は `pad_to` 未指定なら `batch_size`
@@ -212,7 +222,7 @@ fn run_search<E: Evaluator>(
 /// - 探索中は GIL を解放するが Python シグナルは処理しない — Ctrl-C は探索が
 ///   返るまで効かない．中断制御は `max_playouts` / `time_ms` で行うこと．
 #[pyfunction]
-#[pyo3(signature = (sfen, *, moves=None, model_path=None, threads=None, batch_size=None, max_playouts=None, time_ms=None, node_capacity=None, c_puct=None, fpu=None, max_ply=None, gc_keep_ratio=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_to=None, intra_threads=None))]
+#[pyo3(signature = (sfen, *, moves=None, model_path=None, threads=None, batch_size=None, max_playouts=None, time_ms=None, node_capacity=None, c_puct=None, fpu=None, max_ply=None, gc_keep_ratio=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, pv_mate=None, pv_mate_nodes=None, pv_mate_threads=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_to=None, intra_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn search(
     py: Python<'_>,
@@ -234,6 +244,9 @@ fn search(
     leaf_mate: Option<bool>,
     leaf_mate_nodes: Option<u64>,
     leaf_mate_threads: Option<usize>,
+    pv_mate: Option<bool>,
+    pv_mate_nodes: Option<u64>,
+    pv_mate_threads: Option<usize>,
     use_cuda: Option<bool>,
     use_tensorrt: Option<bool>,
     trt_engine_cache_dir: Option<String>,
@@ -310,6 +323,15 @@ fn search(
     }
     if let Some(v) = leaf_mate_threads {
         options.leaf_mate_threads = v;
+    }
+    if let Some(v) = pv_mate {
+        options.pv_mate = v;
+    }
+    if let Some(v) = pv_mate_nodes {
+        options.pv_mate_nodes = v;
+    }
+    if let Some(v) = pv_mate_threads {
+        options.pv_mate_threads = v;
     }
     let limits = SearchLimits {
         max_playouts,

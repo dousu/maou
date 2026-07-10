@@ -20,6 +20,9 @@ def search(
     leaf_mate: bool = False,
     leaf_mate_nodes: int = 50,
     leaf_mate_threads: int = 1,
+    pv_mate: bool = False,
+    pv_mate_nodes: int = 1_000_000,
+    pv_mate_threads: int = 1,
     cuda: bool = False,
     tensorrt: bool = False,
     trt_engine_cache_dir: Path | None = None,
@@ -41,6 +44,9 @@ def search(
         leaf_mate: MCTS の葉の短手詰み探索 (専用スレッド) を行うか．
         leaf_mate_nodes: leaf-mate 1 回あたりのノード予算．
         leaf_mate_threads: leaf-mate 専用スレッド数．
+        pv_mate: PV 上長手数詰み探索 (専用スレッド) を行うか．
+        pv_mate_nodes: PV-mate 1 回あたりのノード予算．
+        pv_mate_threads: PV-mate 専用スレッド数．
         cuda: CUDA Execution Provider を使うか．
         tensorrt: TensorRT Execution Provider を使うか．
         trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
@@ -67,6 +73,9 @@ def search(
         leaf_mate=leaf_mate,
         leaf_mate_nodes=leaf_mate_nodes,
         leaf_mate_threads=leaf_mate_threads,
+        pv_mate=pv_mate,
+        pv_mate_nodes=pv_mate_nodes,
+        pv_mate_threads=pv_mate_threads,
         cuda=cuda,
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_engine_cache_dir,
