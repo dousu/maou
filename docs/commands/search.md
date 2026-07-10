@@ -11,7 +11,12 @@
 - The search itself runs in Rust with the GIL released
   (`maou._rust.maou_search.search`). It includes repetition (sennichite)
   detection with perpetual-check classification, AND-OR win/loss propagation,
-  and an optional root-parallel dfpn mate search (`--root-dfpn`).
+  and **mate search enabled by default** on dedicated (spare-CPU) threads:
+  root-parallel dfpn (`--root-dfpn`, NN-independent, corrects NN blind spots)
+  and asynchronous per-leaf short mate search (`--leaf-mate`). Both run without
+  affecting search NPS (df-pn terminates in 1 node on quiet positions; leaf-mate
+  only enqueues on mate-possible leaves). Disable with
+  `--no-root-dfpn --no-leaf-mate` (e.g. for pure NPS benchmarking).
 - The evaluation score uses the same Ponanza-style conversion
   (`eval = 600 × logit`) as `maou evaluate` via
   `maou.app.inference.eval.Evaluation`, applied to the **searched** win rate.
@@ -30,7 +35,12 @@
 | `--playouts INT` | | Maximum number of playouts. |
 | `--time-ms INT` | | Time limit in milliseconds. Defaults to 1000 when neither `--playouts` nor `--time-ms` is specified. |
 | `--num-moves INT` | default `5` | Number of candidate moves to display. The best move is always listed first. |
-| `--root-dfpn/--no-root-dfpn` | default off | Run dfpn mate search on the root position in parallel with MCTS. When a mate is proven the search stops immediately (`stop=root_proven`) and the mating sequence is returned as PV. |
+| `--root-dfpn/--no-root-dfpn` | **default on** | Run dfpn mate search on the root position in parallel with MCTS (NN-independent; ~free on quiet positions since df-pn terminates in 1 node without checking moves). When a mate is proven the search stops immediately (`stop=root_proven`) and the mating sequence is returned as PV. |
+| `--root-dfpn-nodes INT` | default `2000000` | Node budget for the root dfpn mate search. Larger reaches deeper mates (NN-independent) at the cost of a larger transposition table per search (~256MB at 2M). 2M catches ~41-move (NN blind-spot) mates; the search returns the first mate (`find_shortest=false`), so the extra time at larger budgets is TT allocation, not search. |
+| `--root-dfpn-depth INT` | default `2047` | Search depth limit for the root dfpn mate search (max 2047). |
+| `--leaf-mate/--no-leaf-mate` | **default on** | Enable short mate search at MCTS leaves. Search threads only enqueue mate requests (they never block); dedicated mate threads run the df-pn on spare CPU and mark proven leaves, so search NPS is unaffected (dlshogi-style leaf mate search). Catches narrow mates the tree descends into; NN blind spots are covered by `--root-dfpn` instead. |
+| `--leaf-mate-nodes INT` | default `50` | Node budget per leaf-mate df-pn call. Smaller = cheaper and restricts to shorter mates. |
+| `--leaf-mate-threads INT` | default `1` | Number of dedicated leaf-mate threads (raise to spare CPU cores). |
 | `--cuda/--no-cuda` | default `--no-cuda` | Enable the CUDA Execution Provider. Requires `--model-path` and a wheel built with `onnx-cuda`. |
 | `--tensorrt/--no-tensorrt` | default `--no-tensorrt` | Enable the TensorRT Execution Provider (FP16 + engine cache). Requires `--model-path` and a wheel built with `onnx-tensorrt`. Batches are padded to `--batch-size` to keep the input shape fixed. |
 | `--trt-cache-dir PATH` | | TensorRT engine cache directory (default: `trt_cache/` in the current directory). |
@@ -78,7 +88,8 @@ Stats: playouts=38 nps=435 elapsed_ms=87 warmup_ms=0 max_depth=4 repetitions=0 p
   saturates at the clipping bound (≈ ±16578).
 - `Stats` fields: `playouts` (completed simulations), `nps`, `elapsed_ms`,
   `warmup_ms`, `max_depth`, `repetitions` (sennichite detections),
-  `proven_nodes` (AND-OR proven interior nodes), and `stop` (`playout_limit` /
+  `proven_nodes` (AND-OR proven interior nodes), `leaf_mates` (times leaf-mate
+  proved a mate at a leaf), and `stop` (`playout_limit` /
   `time_limit` / `pool_exhausted` / `root_terminal` / `root_proven`).
   `warmup_ms` is the one-time root evaluation cost (the first inference, which
   triggers the TensorRT engine build/load) — it is measured **outside** the

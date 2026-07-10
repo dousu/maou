@@ -210,37 +210,72 @@ pub struct SearchLimits { pub max_playouts: Option<u64>, pub time_ms: Option<u64
 - 対局レイヤー導入後は「ルート移動時の subtree 再利用 + 残りを解放」が主機構に
   なる可能性があり，単発探索の GC はその補助と位置づける．
 
-## 8. 詰み探索統合 (8.1/8.3 は実装済み，8.2 は第一版見送り)
+## 8. 詰み探索統合 (8.1/8.2/8.3 実装済み，詰み探索はデフォルト有効)
 
-### 8.1 ルート局面の長手数詰み探索 (実装済み — v0.8.0)
+詰み探索は **root-dfpn と leaf-mate をデフォルト有効** (SearchOptions::default())
+とする．いずれも余剰 CPU (専用スレッド) で動き，詰みのない局面では NPS を
+落とさない (Colab A100: NPS 95-99% 保持)．役割分担と PV-mate 棄却は §8.4．
 
-- `SearchOptions::root_dfpn` (既定 false) で有効化．専用スレッドで
+### 8.1 ルート局面の詰み探索 (実装済み — v0.8.0，default-on)
+
+- `SearchOptions::root_dfpn` (**既定 true**) で有効化．専用スレッドで
   `DfPnSolver` (find_shortest=false — 実戦用途は最初に見つかった詰みで十分)
   を root 局面に対して実行し，詰みが証明されたら root を勝ち確定 (§8.3)
   にして MCTS を停止，dfpn の詰み手順を best_move / PV / winrate=1.0 として
   返す．
-- maou_shogi v5.5.0 で dfpn に**協調的停止フラグ** (`set_stop_flag`,
-  `Arc<AtomicBool>`) を追加した — MCTS 側が先に終了したら dfpn を打ち切る
-  (チェックポイントは is_timed_out に集約されており停止遅延 ≤ 1024 ノード，
-  結果は timeout と同じ Unknown 扱い)．
+- **NN 非依存で NN 盲点の詰みを補正する**のが root-dfpn の主眼．NN が誤って
+  「負け」と評価する局面 (例: 41 手詰めがあるのに winrate 0.28) でも，df-pn は
+  評価に関係なく root から詰みを探索するため補正できる (Colab A100 実測: 予算 2M
+  で 5.3s / bestmove G\*7d / winrate 0.28→1.0)．
 - 予算パラメータ: `root_dfpn_depth` (既定 2047 = 上限)，`root_dfpn_nodes`
-  (既定 2^20)．時間予算は探索の `time_ms` に追随する．
+  (**既定 2,000,000**)．両者 **CLI 露出** (`--root-dfpn-nodes` /
+  `--root-dfpn-depth`)．時間予算は探索の `time_ms` に追随する．
+  - **find_shortest=false ゆえ探索自体は予算に依存せず**最初の詰みを返す．
+    予算を上げると所要時間が伸びるのは **TT 確保コスト** — TT は
+    `(max_nodes*2).clamp(2^18, 2^23)` サイズで探索前にゼロ初期化 (memset) される
+    ため予算に比例する (2M で ~256MB)．既定 2M は ~41 手級 (実測 ~1.2M ノード) を
+    捕捉できる最小に近い値 (2^20 は僅かに届かない)．深追いのみ明示的に上げる．
+- maou_shogi v5.5.0 で dfpn に**協調的停止フラグ** (`set_stop_flag`,
+  `Arc<AtomicBool>`) を追加 — MCTS 側が先に終了したら dfpn を打ち切る
+  (停止遅延 ≤ 1024 ノード，結果は timeout と同じ Unknown 扱い)．
 - GC (プールの排他借用) と両立させるため dfpn スレッドは探索共有状態に
   触れず，Arc 経由の成果物 (証明フラグ + 詰み手順) だけで通信する．
 - `CheckmateNoPv` (詰み証明済みだが手順復元失敗) は指し手を提示できない
-  ため採用しない．
+  ため root-dfpn では採用しない．
 - 注意: **`draw_ply` 引数は現行 dfpn API に存在しない** (初期構想の記述は誤り)．
 
-### 8.2 葉ノードの詰み探索
+### 8.2 葉ノードの短手詰み探索 (leaf-mate) (実装済み — 非同期，default-on)
 
-**第一版では実装しない**．理由:
+dlshogi の葉ノード短手数詰み探索に相当．`SearchOptions::leaf_mate`
+(**既定 true**) で有効化．**専用 mate スレッドによる非同期設計**で，探索
+NPS を落とさない (Colab A100: 95-99% 保持)．
 
-- 現行 dfpn API は solve 呼び出しごとに TT を新規確保する (最小 2^18×64B = 16MB)．
-  葉で高頻度に呼ぶと確保コストだけで破綻する．やるなら軽量 1〜3 手詰ルーチン
-  (maou_shogi の `mate1ply` 系) か TT 再利用 API の追加が前提．
-- 100万 NPS 目標下では葉詰み分の CPU をバッチ収集に回す方が得な可能性がある
-  (user も同見解)．モデル×探索の強さ検証フレームワーク (§11) ができてから
-  費用対効果を実測して判断する．
+- **探索スレッドはブロックしない**: 新規展開する葉のうち王手手段を持つもの
+  (`Board::does_have_mate_possibility` で前フィルタ，root は除外) を Arc 共有
+  キューへ try-push するだけで solve せず，そのまま NN 評価へ回す．
+- **専用 mate スレッド** (`leaf_mate_threads`，既定 1) が
+  `DfPnSolver::new_leaf_mate` (小 TT・find_shortest=false・`leaf_mate_nodes`
+  既定 50) で df-pn を回し，詰みを結果キューへ返す．
+- **探索スレッド (worker) が結果を反映**: 当該葉を `try_mark_proven(WIN)` で
+  勝ち確定にし AND-OR 伝播 (§8.3) する．`try_mark_proven` (CAS) ゆえ
+  `finish_expansion` と競合しても proof を失わない．
+- **健全性 (偽証明ゼロ)**:
+  - mate スレッドは `NodePool` に触れず Arc 共有キューだけで通信する
+    (GC の `compact` が `&mut NodePool` を取るため探索スレッドと同時に pool を
+    借用できない; root-dfpn と同じ方針)．proof 適用は worker が inner scope 内で
+    行い，`compact` (全 worker join 後に実行) と自然に排他される．
+  - **GC 世代 (`generation`) ガード**: `compact` はノード index を再配置する
+    ため，結果の世代が現世代と異なれば (compact 済み = index 無効) 破棄する
+    (compact 後の無効 index への誤マーク = 偽証明を防ぐ)．
+  - 勝ち確定にするのは df-pn の `Checkmate` / `CheckmateNoPv` のときのみ
+    (root 並行 dfpn と同じ健全な証明パス)．
+- **限界 (NN-coupled)**: leaf-mate は MCTS が詰み筋を降りることに依存する．
+  NN 盲点 (例: 41 手詰めを winrate 0.28 と誤判定) では MCTS が詰み筋を避け
+  leaf-mate が starve する (深さ 56 まで潜り leaf_mates 多数でも root 未達)．
+  この種の詰みは root-dfpn (NN 非依存，§8.1) が担当する．
+- 旧「dfpn API は solve 毎に TT を新規確保 (16MB) するため葉高頻度呼び出しは
+  破綻」という制約は，`min_tt_entries` による小 TT (`new_leaf_mate`) + 専用
+  スレッドの非同期化で解消した．統計は `SearchStats::leaf_mates`．
 
 ### 8.3 勝敗確定ノードの AND-OR 伝播 (実装済み — v0.7.0)
 
@@ -260,6 +295,27 @@ pub struct SearchLimits { pub max_playouts: Option<u64>, pub time_ms: Option<u64
   変換できる場面で援用する (具体化は実装時)．
 - 制限: 詰み手数 (mate distance) は保持しない — 最短詰みの選好は dfpn 統合時
   に PV から得る想定．
+
+### 8.4 役割分担と PV-mate 棄却 (dfpn リソース戦略の結論)
+
+Colab A100 実測 (学習済み ONNX, 29/41/63 手詰め局面) で確立した役割分担:
+
+| 詰みの性質 | ツール |
+|---|---|
+| MCTS が降りる narrow mate | **leaf-mate** (小予算・全葉, §8.2) |
+| root 直下 / NN 盲点の詰み (NN 非依存) | **root-dfpn** (予算 CLI 可, §8.1) |
+| 受けが広い長手 tsume (63 手級) | **範囲外** — bounded mate search の実用外．NN の positional eval が答え |
+
+- **PV-mate (PV 上の大予算 df-pn) は棄却 (REFUTED)**．実装 (a4ab7f3) して Colab で
+  計測したが **leaf-mate に dominated**: 29 手 (受け narrow) を leaf-mate が 9.3s で
+  割ったのに対し PV-mate 単独は 60s 未証明，全局面で leaf-mate/root-dfpn の割れない
+  root を割った例はゼロ．さらに PV-mate は NPS を ~78% に落とす (大 TT ×スレッドの
+  メモリ帯域 + 静かな PV 葉での大予算無駄撃ち)．**「深い詰みは `leaf_mate_nodes` を
+  上げる (broad coverage) 方が PV-mate (deep single-line) より常に良い」**という
+  構造的結論で撤去 (2738717)．
+- **North-star の問い「MCTS がいくら探索しても詰みで評価が一変しないか」= YES**．
+  41 手詰め (NN が winrate 0.28 と誤判定) を root-dfpn が 1.0 に補正した実証がその
+  直接的な答え (§8.1)．
 
 ## 9. 千日手・連続王手の千日手 (実装済み — v0.6.0)
 
@@ -332,6 +388,7 @@ mock 評価の `nps_bench` と ONNX 実推論の `onnx_bench` の 2 本．
 | AND-OR 勝敗確定伝播 | ✅ 実装済み (v0.7.0，§8.3) |
 | 千日手検出 | ✅ 実装済み (v0.6.0，§9) |
 | dfpn 停止フラグ + ルート並行詰み探索 | ✅ 実装済み (maou_shogi v5.5.0 + maou_search v0.8.0，§8.1) |
+| leaf-mate (非同期葉詰み) + root-dfpn 予算 CLI + 詰み探索 default-on | ✅ 実装済み (maou_shogi v5.6.0 + maou_search v0.14.0 + maou v0.31.0，§8.1/8.2/8.4)．PV-mate は実装後に dominated と実証し撤去 (§8.4) |
 | PyO3 API / CLI (`maou search`) | ✅ 実装済み (maou_rust v0.10.0 + maou v0.23.0．[docs/commands/search.md](../../commands/search.md)) |
 | Colab GPU 実測 | 配線検証済み (2026-07-08，極小モデル)．実モデルでの North-star 計測は未実施 |
 | モデル×探索の強さ検証フレームワーク + パラメータチューニング | 未実装 |
@@ -342,11 +399,12 @@ mock 評価の `nps_bench` と ONNX 実推論の `onnx_bench` の 2 本．
 |---|---|---|
 | 1 | 最終手選択 (visit 最大 vs visit フィルタ + Q 最大) | 両案実装しベンチ/対局比較 (実モデル接続後) |
 | 2 | global batch collector の要否 / ort session の Mutex 直列化解消 | 実モデルの GPU 実測 (fill % と NPS) 後 |
-| 3 | 葉詰み探索の有無と予算 | 検証フレームワークで費用対効果を実測 |
 | 4 | c_puct / fpu / batch_size / gc_keep_ratio 等の既定値 | チューニングフレームワーク |
 | 5 | NPS の定義 (playouts/s vs NN eval/s) | 実 NN 接続時に確定 |
 
-(旧 #2「千日手検出方式」は経路ハッシュ方式の採用で解決 — §9)
+- (旧 #2「千日手検出方式」は経路ハッシュ方式の採用で解決 — §9)
+- (旧 #3「葉詰み探索の有無と予算」は leaf-mate 非同期実装 + default-on で解決
+  — §8.2/8.4．PV-mate は dominated と実証し棄却)
 
 ## 12. 参考
 
