@@ -8,16 +8,6 @@ name: Build GPU Wheel
 # 使い方は docs/design/position-search/benchmarking.md を参照．
 on:
   workflow_dispatch:
-  # workflow_dispatch はデフォルトブランチにファイルが存在しないと起動
-  # できないため，main マージ前の暫定として本ブランチの関連変更で起動する
-  # (マージ後にこの push トリガーは削除してよい)
-  push:
-    branches: [feat/position-search]
-    paths:
-      - "rust/**"
-      - "src/maou/**"
-      - "pyproject.toml"
-      - ".github/workflows/build-gpu-wheel.yml"
 
 concurrency:
   group: build-gpu-wheel
@@ -34,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: |
             3.11
