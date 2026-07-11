@@ -1,5 +1,6 @@
 ---
-status: pending
+status: applied
+applied_in: 40ad115
 title: 設計ドキュメント §6 最終手選択を確定基準 (robust child + 負け確定除外) で更新
 target: docs/design/position-search/index.md
 ---
