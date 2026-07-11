@@ -1,5 +1,6 @@
 ---
-status: pending
+status: applied
+applied_in: 6b2e3ed
 title: CSA/KIF パーサ独自実装に伴う docs 同期 (hcpe_convert.md 要件 + rust-backend.md モジュール表)
 target: docs/commands/hcpe_convert.md, docs/rust-backend.md
 ---
