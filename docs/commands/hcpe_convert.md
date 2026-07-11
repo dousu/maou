@@ -14,11 +14,14 @@
 
 ## Requirements
 
-- CSA/KIF parsing uses `cshogi`, which is **not** installed by default (it pins
-  `numpy<1.27` on Python 3.12; production search/inference uses the Rust backend
-  and does not need it). Install the `hcpe` extra before running this command:
-  `uv sync --extra hcpe` (dev) or `pip install 'maou[hcpe]'` (wheel). Running
-  `hcpe-convert` without it raises an `ImportError` pointing here.
+- CSA/KIF parsing uses the in-house Rust backend (`maou_shogi::kifu`,
+  exposed as `maou._rust.maou_shogi.parse_csa_str` / `parse_kif_str`).
+  No extra dependency is required — `hcpe-convert` works on a base
+  install. The parser is parity-verified against the previous
+  cshogi-based implementation (`rust/maou_shogi/tests/kifu_parity.rs`).
+  The legacy `hcpe` extra (cshogi) is retained only for backward
+  compatibility and fixture regeneration; production code does not
+  import it.
 
 ## CLI options
 

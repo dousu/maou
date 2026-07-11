@@ -321,6 +321,10 @@ rust/
         ├── board.rs        # 盤面表現 (Bitboard + Mailbox)，do_move/undo_move，hash_after
         ├── bitboard.rs     # 81 マス Bitboard
         ├── attack.rs       # 利きテーブル (PEXT ベース，BMI2 は runtime gate)
+        ├── kifu/           # CSA/KIF 棋譜パーサ (cshogi parity 検証済み)
+        │   ├── csa.rs      #   CSA V2.2 (P+/P-/AL は spec 準拠の独自拡張)
+        │   ├── kif.rs      #   KIF 柿木形式 (不成対応，BOD は明示エラー)
+        │   └── record.rs   #   GameRecord + cshogi 互換 move エンコード
         ├── movegen.rs      # 合法手生成
         ├── moves.rs        # Move エンコーディング (cshogi 互換 16-bit + 拡張)
         ├── piece.rs        # 駒の内部実装 (cshogi 互換変換のみ公開)
@@ -530,6 +534,11 @@ let report = solve_tsume_report_with_timeout(
   cshogi 互換の `push()`/`pop()` インターフェースを提供する．
 - **HCP**: Apery 互換の 32 バイトバイナリフォーマット．既存データとの互換性を保証．
 - **特徴量**: 104×9×9 (= `PIECE_TYPES_NUM * 2 + 76`) チャネル．cshogi 互換の出力順序．
+- **棋譜パーサ**: CSA/KIF パーサは独自実装 (`maou_shogi::kifu`)．出力
+  moves は cshogi の 32-bit エンコーディング (to | from<<7 |
+  promote<<14 | 移動前駒種<<16 | 捕獲駒種<<20，打は from=81+idx) と
+  bit-exact．golden fixture parity (`tests/kifu_parity.rs`，oracle =
+  cshogi 0.9.7) で置換の等価性を実証済み．
 
 ## Using Polars + Rust I/O
 
