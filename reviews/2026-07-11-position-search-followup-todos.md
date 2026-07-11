@@ -1,6 +1,6 @@
 ---
-status: approved
-applied_in:
+status: applied
+applied_in: a46f03f
 title: proven の CLI 露出と確定値衝突規則の docs 反映 (search.md + 設計 §8.3/§11)
 target: docs/commands/search.md, docs/design/position-search/index.md
 ---
