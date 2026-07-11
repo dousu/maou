@@ -177,15 +177,47 @@ pub struct SearchLimits { pub max_playouts: Option<u64>, pub time_ms: Option<u64
 - playout 上限はバッチ粒度により最大 `threads × batch_size` 超過し得る (仕様)．
 - 将来: depth 予算，詰将棋ソルバーと同様のノード数予算の意味論統一 (未決)．
 
-## 6. 最終手選択 (暫定仕様 — 未決)
+## 6. 最終手選択 (実装済み — maou_search v0.15.0)
 
-実装済みの暫定仕様: **訪問回数最大 → 同数なら Q 最大 → 同率なら合法手生成順で先頭**
-(決定論的)．
+採用基準 (2026-07-11 確定．優先順):
 
-未決 (user 2026-07-07「実験して決める」): visit 最大は自然に有望手へ収束するはず
-だが，探索アルゴリズムとの兼ね合いで「最低 visit 数でフィルタしたうえで Q 値最大」
-が勝る可能性もある．両案を実装しベンチ/対局で比較して確定する．
-詰み確定ノード (§8) は実装後，無条件で最優先とする．
+1. **root-dfpn が詰みを証明** → 詰み手順の初手 (§8.1，最優先)．
+2. **root の勝敗が AND-OR 伝播で確定** (勝ち/引き分け) → 確定値を達成する子 (§8.3)．
+3. それ以外 → **robust child**: 負け確定 (ルート視点 proven=0) の手を除外して
+   訪問回数最大 → 同数なら Q 最大 → 同率なら合法手生成順で先頭
+   (`select_best_root_index`)．全手が負け確定なら除外なしで同基準 (どれも同値)．
+
+乱択 (温度) は導入しない — 本機能は match play 相当の 1 局面探索であり，
+自己対局学習の多様性付与 (AlphaZero の τ=1/30 手) や resign 判断は上位レイヤーの
+責務とする (時間管理と同じ整理，§1)．
+
+### 根拠 (2026-07-11 web 調査 + mock 検証)
+
+- 主要エンジンの評価時 (match play) の基準は**訪問回数 argmax (robust child) が
+  共通の土台**: AlphaZero (評価時 τ→0 = argmax visits)，dlshogi (proven 順序 →
+  move_count 最大 → nnrate tiebreak)，lc0 (terminal rank → N → Q → P)．
+- 生の max-Q (max child) は文献上最悪の基準とされ，mock でも低訪問子のノイズ Q を
+  拾う挙動を機械的に再現した (41te 局面 5k playouts で訪問割合 10% の子を選択)．
+- **負け確定の手の除外は dlshogi と同じ健全性規則**で，自己対局に依存せず論理的に
+  正当化できる — 自己対局不可の現環境で確定できる根拠．「勝ち確定の子の優先」は
+  AND-OR 即時伝播 (1 子でも負け確定なら root 勝ち確定，§8.3) により 2. に包含される．
+
+### 自己対局導入後の再検討 (未決)
+
+現環境では強さの比較検証ができないため，以下は自己対局フレームワーク導入後に
+対局比較で再評価する:
+
+- **LCB (secure child) 化**: leela-zero v0.17 が採用 (Student-t 分位 × 二項分散の
+  下側信頼限界，実験値 3200 visits で 61.75% 勝率)．KataGo も採用 (lcbStdevs=5.0，
+  minVisitPropForLCB=0.15 — 最多訪問の 15% 以上訪問した子に限り LCB 最大を採用)．
+  一方 lc0 は不採用 (robust child + Q tiebreak) で強豪間でも結論が割れる．導入には
+  per-child の value 分散統計 (二乗和) の追加とパラメータ (z，訪問ゲート) の対局
+  チューニングが必要．
+- **最短詰みの選好**: root-dfpn は find_shortest=false (§8.1) のため非最短の詰み
+  手順を返し得る (41te で 45 手 line)．lc0 は moves-left で短い勝ち/長い負けを
+  選好する．
+- **温度乱択** (KataGo chosenMoveTemperature=0.10 相当): 対局の多様性が必要に
+  なった時点で検討．
 
 ## 7. メモリ計画と GC (実装済み)
 
@@ -389,6 +421,7 @@ mock 評価の `nps_bench` と ONNX 実推論の `onnx_bench` の 2 本．
 | 千日手検出 | ✅ 実装済み (v0.6.0，§9) |
 | dfpn 停止フラグ + ルート並行詰み探索 | ✅ 実装済み (maou_shogi v5.5.0 + maou_search v0.8.0，§8.1) |
 | leaf-mate (非同期葉詰み) + root-dfpn 予算 CLI + 詰み探索 default-on | ✅ 実装済み (maou_shogi v5.6.0 + maou_search v0.14.0 + maou v0.31.0，§8.1/8.2/8.4)．PV-mate は実装後に dominated と実証し撤去 (§8.4) |
+| 最終手選択 (robust child + 負け確定除外) | ✅ 実装済み (maou_search v0.15.0，§6) |
 | PyO3 API / CLI (`maou search`) | ✅ 実装済み (maou_rust v0.10.0 + maou v0.23.0．[docs/commands/search.md](../../commands/search.md)) |
 | Colab GPU 実測 | 配線検証済み (2026-07-08，極小モデル)．実モデルでの North-star 計測は未実施 |
 | モデル×探索の強さ検証フレームワーク + パラメータチューニング | 未実装 |
@@ -397,7 +430,7 @@ mock 評価の `nps_bench` と ONNX 実推論の `onnx_bench` の 2 本．
 
 | # | 未決 | 決め方 |
 |---|---|---|
-| 1 | 最終手選択 (visit 最大 vs visit フィルタ + Q 最大) | 両案実装しベンチ/対局比較 (実モデル接続後) |
+| 1 | 最終手選択の LCB (secure child) 化・最短詰み選好・温度乱択の要否 | 自己対局フレームワーク導入後に対局比較 (§6) |
 | 2 | global batch collector の要否 / ort session の Mutex 直列化解消 | 実モデルの GPU 実測 (fill % と NPS) 後 |
 | 4 | c_puct / fpu / batch_size / gc_keep_ratio 等の既定値 | チューニングフレームワーク |
 | 5 | NPS の定義 (playouts/s vs NN eval/s) | 実 NN 接続時に確定 |
@@ -410,5 +443,6 @@ mock 評価の `nps_bench` と ONNX 実推論の `onnx_bench` の 2 本．
 
 - dlshogi (探索の工夫全般，初期構想の参照元)
 - AlphaZero (PUCT / policy-value MCTS)
+- lc0 / KataGo / leela-zero (最終手選択 — robust child / LCB の参照実装，§6)
 - [詰将棋ソルバー設計](../tsume-solver/index.md) — dfpn 統合 (§8) の詳細仕様
 - [maou-shogi 設計思想](../maou-shogi-concept.md)
