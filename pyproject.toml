@@ -1,6 +1,6 @@
 [project]
 name = "maou"
-version = "0.33.0"
+version = "0.34.0"
 description = "Shogi AI"
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
@@ -83,10 +83,11 @@ visualize = [
     "gradio>=6.7.0,<7.0.0",
     "matplotlib>=3.5.0",
 ]
-# 棋譜フォーマット (CSA/KIF) 解析用の extra．
-# hcpe-convert (CSA/KIF -> HCPE 変換) が cshogi を要求する．cshogi は py3.12 で
-# numpy<1.27 を強制するため base 依存から分離した (production 探索/推論は Rust
-# backend を使い cshogi 不使用; Colab GPU wheel の numpy 2.x を保つため)．
+# 旧・棋譜フォーマット (CSA/KIF) 解析用の extra．
+# CSA/KIF パーサは Rust backend (maou_shogi::kifu) の独自実装となり，
+# production は cshogi を一切使用しない (hcpe-convert も base install で動作)．
+# この extra は後方互換のためにのみ残している (削除は破壊的変更のため保留)．
+# cshogi は py3.12 で numpy<1.27 を強制する点に注意 (base 依存に戻さないこと)．
 hcpe = [
     "cshogi>=0.9.2",
 ]
@@ -132,8 +133,8 @@ profile = "dev"
 
 [dependency-groups]
 dev = [
-    # cshogi は base 依存から hcpe extra へ分離したが，棋譜パーサ
-    # (csa_parser/kif_parser) のテストが必要とするため dev には含める．
+    # cshogi は棋譜パーサの parity 検証 oracle (golden fixture 再生成
+    # scratchpad/gen_kifu_golden.py と交差検証テスト) のため dev に残す．
     "cshogi>=0.9.2",
     "pre-commit>=4.3.0",
     "flake8>=7.2.0",

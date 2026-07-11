@@ -531,6 +531,106 @@ fn solve_tsume(
     })
 }
 
+/// パースした棋譜 1 局分 (`maou_shogi::kifu::GameRecord` の Python 露出)．
+///
+/// `moves` は cshogi 互換の 32-bit int エンコーディング
+/// (`Board.push` / `move16` にそのまま渡せる)．
+#[pyclass(frozen, name = "GameRecord")]
+struct PyGameRecord {
+    /// バージョン行 (CSA "V2.2" 等．KIF は空文字列)
+    #[pyo3(get)]
+    version: String,
+    /// メタ情報 (CSA $KEY / KIF ヘッダ) — (key, value) の出現順リスト
+    #[pyo3(get)]
+    var_info: Vec<(String, String)>,
+    /// 対局者名 [先手/下手, 後手/上手]．KIF で未指定なら None
+    #[pyo3(get)]
+    names: Vec<Option<String>>,
+    /// レーティング [先手, 後手] (CSA 'black_rate:/'white_rate: 行由来)
+    #[pyo3(get)]
+    ratings: Vec<f32>,
+    /// 初期局面 SFEN
+    #[pyo3(get)]
+    sfen: String,
+    /// 指し手 (cshogi 互換 32-bit int)
+    #[pyo3(get)]
+    moves: Vec<u32>,
+    /// 消費時間 (秒)．cshogi 互換 quirk により moves と長さが異なり得る
+    #[pyo3(get)]
+    times: Vec<i32>,
+    /// 評価値 (moves と同長; CSA '** コメント由来，KIF は 0)
+    #[pyo3(get)]
+    scores: Vec<i32>,
+    /// 指し手コメント (moves と同長; 無い手は空文字列)
+    #[pyo3(get)]
+    comments: Vec<String>,
+    /// 指し手より前のコメント行
+    #[pyo3(get)]
+    header_comment: String,
+    /// 終局状態 ("%TORYO" 等)．未終局は None
+    #[pyo3(get)]
+    endgame: Option<String>,
+    /// 勝敗 (0=引き分け, 1=先手勝ち, 2=後手勝ち)．KIF で不明なら None
+    #[pyo3(get)]
+    win: Option<u8>,
+}
+
+#[pymethods]
+impl PyGameRecord {
+    fn __repr__(&self) -> String {
+        format!(
+            "GameRecord(sfen='{}', moves={}, endgame={:?}, win={:?})",
+            self.sfen,
+            self.moves.len(),
+            self.endgame,
+            self.win
+        )
+    }
+}
+
+impl From<maou_shogi::kifu::GameRecord> for PyGameRecord {
+    fn from(r: maou_shogi::kifu::GameRecord) -> Self {
+        let [name_b, name_w] = r.names;
+        PyGameRecord {
+            version: r.version,
+            var_info: r.var_info,
+            names: vec![name_b, name_w],
+            ratings: r.ratings.to_vec(),
+            sfen: r.sfen,
+            moves: r.moves,
+            times: r.times,
+            scores: r.scores,
+            comments: r.comments,
+            header_comment: r.header_comment,
+            endgame: r.endgame,
+            win: r.win,
+        }
+    }
+}
+
+/// CSA 形式棋譜 (複数対局可) をパースする．
+///
+/// cshogi の `CSA.Parser.parse_str` 互換 (parity 検証済み)．
+/// パース失敗時は ValueError．
+#[pyfunction]
+fn parse_csa_str(content: &str) -> PyResult<Vec<PyGameRecord>> {
+    maou_shogi::kifu::parse_csa_multi(content)
+        .map(|records| records.into_iter().map(PyGameRecord::from).collect())
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("CSA parse error: {e}")))
+}
+
+/// KIF 形式棋譜 (単一対局，UTF-8) をパースする．
+///
+/// cshogi の `KIF.Parser.parse_str` 互換 (parity 検証済み)．
+/// Shift_JIS (.kif) のデコードは呼び出し側の責務．
+/// パース失敗時は ValueError．
+#[pyfunction]
+fn parse_kif_str(content: &str) -> PyResult<PyGameRecord> {
+    maou_shogi::kifu::parse_kif_str(content)
+        .map(PyGameRecord::from)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("KIF parse error: {e}")))
+}
+
 /// Create maou_shogi submodule
 pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let m = PyModule::new(py, "maou_shogi")?;
@@ -538,6 +638,7 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_class::<PyBoard>()?;
     m.add_class::<TsumeResult>()?;
     m.add_class::<TsumeProgressSample>()?;
+    m.add_class::<PyGameRecord>()?;
     m.add_function(wrap_pyfunction!(move16, &m)?)?;
     m.add_function(wrap_pyfunction!(move_to, &m)?)?;
     m.add_function(wrap_pyfunction!(move_from, &m)?)?;
@@ -546,6 +647,8 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_function(wrap_pyfunction!(move_is_promotion, &m)?)?;
     m.add_function(wrap_pyfunction!(move_drop_hand_piece, &m)?)?;
     m.add_function(wrap_pyfunction!(solve_tsume, &m)?)?;
+    m.add_function(wrap_pyfunction!(parse_csa_str, &m)?)?;
+    m.add_function(wrap_pyfunction!(parse_kif_str, &m)?)?;
 
     Ok(m)
 }

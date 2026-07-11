@@ -238,17 +238,10 @@ def cast_command_callback(
 _TRAINING_EXTRAS = ("cpu", "cuda", "mpu")
 
 LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
+    # CSA/KIF パーサは Rust backend の独自実装になったため
+    # cshogi (hcpe extra) は不要
     "hcpe-convert": LazyCommandSpec(
-        "maou.infra.console.hcpe_convert",
-        "hcpe_convert",
-        missing_help=(
-            "Command 'hcpe-convert' requires the hcpe dependencies "
-            "(cshogi). Install with `uv sync --extra hcpe` or "
-            "`pip install 'maou[hcpe]'`."
-        ),
-        required_packages=(
-            PackageRequirement("cshogi", ("hcpe",)),
-        ),
+        "maou.infra.console.hcpe_convert", "hcpe_convert"
     ),
     "pre-process": LazyCommandSpec(
         "maou.infra.console.pre_process", "pre_process"

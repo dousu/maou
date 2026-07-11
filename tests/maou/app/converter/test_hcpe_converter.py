@@ -67,6 +67,55 @@ class TestHCPEConverter:
             )
             assert output_file.exists()
 
+    def test_successfull_kif_conversion(
+        self,
+        default_fixture: typing.Annotated[None, pytest.fixture],
+    ) -> None:
+        """KIF 形式の変換で全指し手分の行が出力されること．
+
+        従来 (cshogi ベースのパーサ) は scores() が空リストのため
+        1 行も出力されなかった．開始日時ヘッダの無い棋譜では
+        partitioningKey が null になる経路も検証する．
+        """
+        import polars as pl
+
+        input_paths = [
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_1.kifu"
+            ),
+            Path(
+                "tests/maou/app/converter/resources/test_dir/input/test_data_no_date.kifu"
+            ),
+        ]
+        output_dir = Path(
+            "tests/maou/app/converter/resources/test_dir/output"
+        )
+        option: hcpe_converter.HCPEConverter.ConvertOption = (
+            hcpe_converter.HCPEConverter.ConvertOption(
+                input_paths=input_paths,
+                input_format="kif",
+                output_dir=output_dir,
+                min_rating=None,
+                min_moves=None,
+                max_moves=None,
+                allowed_endgame_status=None,
+                max_workers=1,
+                chunk_size=0,
+            )
+        )
+
+        self.test_class.convert(option)
+        # 163 手の対局 (開始日時あり)
+        df = pl.read_ipc(output_dir / "test_data_1.feather")
+        assert df.height == 163
+        assert df["partitioningKey"].null_count() == 0
+        # 4 手の対局 (開始日時なし → partitioningKey は null)
+        df = pl.read_ipc(
+            output_dir / "test_data_no_date.feather"
+        )
+        assert df.height == 4
+        assert df["partitioningKey"].null_count() == 4
+
     def test_failed_conversion_no_input(
         self,
         default_fixture: typing.Annotated[None, pytest.fixture],

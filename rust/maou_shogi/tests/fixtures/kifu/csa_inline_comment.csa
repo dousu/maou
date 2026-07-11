@@ -1,0 +1,19 @@
+V2.2
+N+black
+N-white
+'black_rate:black:1234.5
+'white_rate:white:2345.0
+$EVENT:inline comment test
+$START_TIME:2026/07/11 12:00:00
+PI
++
++7776FU,'opening comment
+T1
+'** 42 -3334FU
+-3334FU
+T2
+'** -55
++2726FU
+T3
+-8384FU
+%SENNICHITE

@@ -238,11 +238,13 @@ class HCPEConverter:
                     f"{file.with_suffix('.hcpe').name}_{idx}"
                 )
 
-                # 棋譜共通情報を記録
+                # 棋譜共通情報を記録 (開始日時の無い棋譜は null)
                 hcpe_data["partitioningKey"].append(
                     datetime.fromisoformat(
                         partitioning_key_value.isoformat()
                     ).date()
+                    if partitioning_key_value is not None
+                    else None
                 )
                 # Convert ratings to uint16
                 hcpe_data["ratings"].append(

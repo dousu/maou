@@ -1,15 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-try:
-    from cshogi import CSA
-except ImportError as e:  # pragma: no cover
-    raise ImportError(
-        "CSAParser は cshogi に依存します (棋譜フォーマット解析用)．"
-        "`uv sync --extra hcpe` または `pip install 'maou[hcpe]'` "
-        "でインストールしてください．"
-    ) from e
-
+from maou._rust.maou_shogi import GameRecord, parse_csa_str
 from maou.domain.parser import parser
 
 
@@ -17,23 +9,25 @@ class CSAParser(parser.Parser):
     """Parser for CSA format Shogi game records.
 
     CSA (Computer Shogi Association) is a standard format for representing
-    Shogi games. This parser extracts game information using the cshogi library.
+    Shogi games. This parser uses the Rust backend (maou_shogi::kifu) —
+    a complete in-house implementation with no external dependency.
 
-    **Design Note: cshogi Dependency**
-    This parser is intentionally coupled to cshogi.CSA.Parser as CSA parsing is
-    an implementation detail. The Parser abstract base class provides abstraction
-    at the domain boundary.
-
-    If replacing cshogi with another library, create a new CSAParser implementation
-    rather than wrapping the existing one.
+    **Compatibility Note**
+    The Rust parser is parity-verified against the previous cshogi-based
+    implementation (rust/maou_shogi/tests/kifu_parity.rs): move integers
+    are bit-exact cshogi-compatible 32-bit encodings, and win/endgame/
+    scores/comments semantics are preserved.
     """
 
+    record: GameRecord
+
     def parse(self, content: str) -> None:
-        """CSAの棋譜文字列をパースして読み取れる状態にする.
-        基本的にこのクラスはcshogiの実装のラッパーでしかないが，cshogiの定義を外に出さないようにする．
+        """CSAの棋譜文字列をパースして読み取れる状態にする．
+
+        複数対局を含む文字列は先頭の 1 局のみを対象とする (従来互換)．
         """
-        # 1ファイル前提の処理
-        self.kif = CSA.Parser.parse_str(content)[0]
+        self.record = parse_csa_str(content)[0]
+        self._var_info = dict(self.record.var_info)
 
     def init_pos_sfen(self) -> str:
         """Get initial board position in SFEN notation.
@@ -41,55 +35,70 @@ class CSAParser(parser.Parser):
         Returns:
             Initial position as SFEN string
         """
-        return self.kif.sfen
+        return self.record.sfen
 
     def endgame(self) -> str:
         """Get game termination reason.
 
         Returns:
-            Endgame reason from CSA format
+            Endgame reason (e.g. '%TORYO')，未終局なら空文字列
         """
-        return self.kif.endgame
+        return self.record.endgame or ""
 
     def winner(self) -> int:
-        """Get game winner.
+        """Get game result.
 
         Returns:
-            Winner player number from CSA format
+            0=引き分け，1=先手勝ち，2=後手勝ち (cshogi 互換値)
         """
-        return self.kif.win
+        win = self.record.win
+        assert win is not None  # CSA では常に決定される
+        return win
 
     def ratings(self) -> list[int]:
         """Get player ratings.
 
         Returns:
-            List of player ratings from CSA format
+            [先手, 後手] のレーティング ('black_rate:/'white_rate: 行由来，
+            無指定は 0)
         """
-        return self.kif.ratings
+        return self.record.ratings
 
     def moves(self) -> list[int]:
         """Get sequence of moves in the game.
 
         Returns:
-            List of moves encoded as integers from CSA format
+            List of moves encoded as cshogi-compatible 32-bit integers
         """
-        return self.kif.moves
+        return self.record.moves
 
     def scores(self) -> list[int]:
         """Get evaluation scores for each position.
 
         Returns:
-            List of position evaluation scores from CSA format
+            List of position evaluation scores ('** コメント由来，
+            moves と同長)
         """
-        return self.kif.scores
+        return self.record.scores
 
     def comments(self) -> list[str]:
         """Get comments for each move.
 
         Returns:
-            List of move comments from CSA format
+            List of move comments (moves と同長，無い手は空文字列)
         """
-        return self.kif.comments
+        return self.record.comments
+
+    def _start_date(self) -> Any:
+        """$START_TIME から日付を取得する (無ければ None)．"""
+        try:
+            datetime_str = self._var_info["START_TIME"]
+        except KeyError:
+            return None
+        date_obj = datetime.strptime(
+            datetime_str, "%Y/%m/%d %H:%M:%S"
+        )
+        return date_obj.date()
 
     def clustering_key_value(self) -> Any:
         """Get clustering key based on game start date.
@@ -97,15 +106,7 @@ class CSAParser(parser.Parser):
         Returns:
             Date object for clustering, or None if START_TIME not available
         """
-        try:
-            datetime_str = self.kif.var_info["START_TIME"]
-            date_obj = datetime.strptime(
-                datetime_str, "%Y/%m/%d %H:%M:%S"
-            )
-            clustering_key = date_obj.date()
-        except KeyError:
-            clustering_key = None
-        return clustering_key
+        return self._start_date()
 
     def partitioning_key_value(self) -> Any:
         """Get partitioning key based on game start date.
@@ -113,12 +114,4 @@ class CSAParser(parser.Parser):
         Returns:
             Date object for partitioning, or None if START_TIME not available
         """
-        try:
-            datetime_str = self.kif.var_info["START_TIME"]
-            date_obj = datetime.strptime(
-                datetime_str, "%Y/%m/%d %H:%M:%S"
-            )
-            partitioning_key = date_obj.date()
-        except KeyError:
-            partitioning_key = None
-        return partitioning_key
+        return self._start_date()
