@@ -1,6 +1,6 @@
 [project]
 name = "maou"
-version = "0.22.0"
+version = "0.33.0"
 description = "Shogi AI"
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
@@ -10,7 +10,6 @@ license = {text = "GPL-3.0-only"}
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "click>=8.1.7",
-    "cshogi>=0.9.2",
     "tqdm>=4.67.1",
     "numpy>=1.19.0",
     "google-crc32c>=1.6.0",
@@ -50,15 +49,25 @@ mpu = [
 cpu-infer = [
     "onnxruntime",
 ]
+# GPU 推論 extra の版固定 (重要):
+#   Rust wheel (maou_search) は ort crate 経由で onnxruntime 1.22 系を静的
+#   リンクする．maou search の GPU 実行時に dlopen される provider .so
+#   (libonnxruntime_providers_{shared,cuda,tensorrt}.so) は onnxruntime-gpu
+#   pip パッケージの capi/ から供給できるが，**静的コアと同一版でないと
+#   ABI 不一致でロードに失敗する**ため onnxruntime-gpu==1.22.* に固定する．
+#   これにより GPU wheel + `maou[tensorrt-infer]` だけで provider が揃い，
+#   provider tarball の別途 wget が不要になる (Colab 手順を簡素化)．
+#   TensorRT ランタイム (libnvinfer.so.10) は onnxruntime 1.22 が要求する
+#   10 系に固定する (pin なしだと 11 系が入り解決不能)．
 onnx-gpu-infer = [
-    "onnxruntime-gpu",
+    "onnxruntime-gpu==1.22.*",
 ]
 tensorrt-infer = [
-    "onnxruntime-gpu",
+    "onnxruntime-gpu==1.22.*",
     "cuda-core[cu12]",
-    "tensorrt-cu12",
-    "tensorrt-lean-cu12",
-    "tensorrt-dispatch-cu12",
+    "tensorrt-cu12==10.*",
+    "tensorrt-lean-cu12==10.*",
+    "tensorrt-dispatch-cu12==10.*",
 ]
 # クラウドプロバイダーごとのextra
 gcp = [
@@ -73,6 +82,13 @@ aws = [
 visualize = [
     "gradio>=6.7.0,<7.0.0",
     "matplotlib>=3.5.0",
+]
+# 棋譜フォーマット (CSA/KIF) 解析用の extra．
+# hcpe-convert (CSA/KIF -> HCPE 変換) が cshogi を要求する．cshogi は py3.12 で
+# numpy<1.27 を強制するため base 依存から分離した (production 探索/推論は Rust
+# backend を使い cshogi 不使用; Colab GPU wheel の numpy 2.x を保つため)．
+hcpe = [
+    "cshogi>=0.9.2",
 ]
 
 [project.scripts]
@@ -116,6 +132,9 @@ profile = "dev"
 
 [dependency-groups]
 dev = [
+    # cshogi は base 依存から hcpe extra へ分離したが，棋譜パーサ
+    # (csa_parser/kif_parser) のテストが必要とするため dev には含める．
+    "cshogi>=0.9.2",
     "pre-commit>=4.3.0",
     "flake8>=7.2.0",
     "yamllint>=1.37.1",

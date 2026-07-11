@@ -1,7 +1,14 @@
 from datetime import datetime
 from typing import Any
 
-from cshogi import CSA
+try:
+    from cshogi import CSA
+except ImportError as e:  # pragma: no cover
+    raise ImportError(
+        "CSAParser は cshogi に依存します (棋譜フォーマット解析用)．"
+        "`uv sync --extra hcpe` または `pip install 'maou[hcpe]'` "
+        "でインストールしてください．"
+    ) from e
 
 from maou.domain.parser import parser
 

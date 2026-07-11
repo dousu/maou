@@ -244,7 +244,7 @@ thread_local! {
     /// [diag] stack level 別「pop 済み子 (= 親健在なら stash 到達可能)」hash 集合．
     /// level L のノードが pop されたら set[L+1] (その子らの stash) は無効化 (clear)．
     static SPROF_POPPED: std::cell::RefCell<Vec<rustc_hash::FxHashSet<u64>>> =
-        std::cell::RefCell::new(Vec::new());
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// [diag] 子 pop 時に記録: level `cidx` の hash を stash 到達可能集合へ，子自身の
@@ -531,7 +531,10 @@ impl DfPnSolver {
         let size = if let Ok(s) = std::env::var("TTSIZE") {
             s.parse::<usize>().unwrap_or(1 << 23).max(1 << 12)
         } else {
-            ((self.max_nodes as usize).saturating_mul(2)).clamp(1 << 18, 1 << 23)
+            // floor は既定 1<<18 (production)．leaf-mate ソルバは min_tt_entries を
+            // 小さくして per-leaf の TT 確保コストを下げる (new_leaf_mate)．
+            ((self.max_nodes as usize).saturating_mul(2))
+                .clamp(self.min_tt_entries, 1 << 23)
         };
         // 千日手テーブルも固定サイズ (generation GC で bound)．既定は主 TT と同数
         // (24 byte/entry ≒ 主 TT の 37.5% メモリ)．`REPSIZE` で上書き可．
@@ -659,7 +662,7 @@ impl DfPnSolver {
             // idx: 0=movegen 1=tt_lookup 2=lookahead 3=dag 4=build_total (umbrella ⊃ 0,1,2 + build_other)．
             let w = wall.max(1) as f64;
             let row = |name: &str, t: u64, c: u64| {
-                let avg = if c > 0 { t / c } else { 0 };
+                let avg = t.checked_div(c).unwrap_or(0);
                 eprintln!(
                     "[dfpn] PROF  {:<32} {:>10.1}us cnt={:<9} avg={:>5}ns {:>5.1}%",
                     name,
@@ -943,6 +946,7 @@ impl DfPnSolver {
     /// 判定に使う (= 子の合法手を全列挙し 1 段深い δ 集約で評価)．flat な seed で評価すると exceed
     /// 判定が緩く over-explore するため，集約済結果で判定する．
     /// `Err(result)` = 終局/budget/深さ上限 (push しない; 親が即時結果に使う)．`Ok(())` = expansion を top へ push．
+    #[allow(clippy::too_many_arguments)]
     fn emplace(
         &mut self,
         tt: &mut TranspositionTable,
@@ -974,10 +978,7 @@ impl DfPnSolver {
         if let Some(t) = __bt {
             prof_add(4, t.elapsed().as_nanos() as u64);
         }
-        let exp = match built {
-            Ok(e) => e,
-            Err(terminal) => return Err(terminal),
-        };
+        let exp = built?;
         self.expansion_stack.push(exp);
         let my = self.expansion_stack.len() - 1;
         self.expansion_stack[my].set_key_hand_pair((super::position_key(board), attacker_hand));
@@ -1113,6 +1114,7 @@ impl DfPnSolver {
 
     /// 1 ノードの探索本体．**呼出し前に親が `emplace` で expansion を push 済** (top の expansion を
     /// 使う)．自分では build も Pop もしない (親が Pop する)．
+    #[allow(clippy::too_many_arguments)]
     fn search_impl(
         &mut self,
         tt: &mut TranspositionTable,
@@ -1236,6 +1238,7 @@ impl DfPnSolver {
 
     /// `LocalExpansion` の構築: movegen + 各子 seed (TT LookUp) + 千日手判定．
     /// `Err(result)` = 終局 (合法手なし) の即時結果．`Ok(exp)` = 展開済ノード．
+    #[allow(clippy::too_many_arguments)]
     fn build_expansion(
         &mut self,
         tt: &mut TranspositionTable,

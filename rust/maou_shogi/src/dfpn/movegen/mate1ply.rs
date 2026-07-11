@@ -132,10 +132,7 @@ impl DfPnSolver {
     /// 解決して最初の詰みを返せば 2-pass と一致)．buffer は None ⊆ 全候補 ≤ `MAX_MOVES` で overflow 不可．
     fn mate1ply_fused(&self, board: &mut Board, turn: Color) -> Option<Move> {
         use std::ops::ControlFlow;
-        let mut verifier = match board.mate1ply_verifier(turn) {
-            Some(v) => v,
-            None => return None,
-        };
+        let mut verifier = board.mate1ply_verifier(turn)?;
         let defender = turn.opponent();
         let mut fallbacks = ArrayVec::<Move, MAX_MOVES>::new();
         let b: &Board = &*board;

@@ -11,6 +11,7 @@
 //! ## 探索不変性
 //! - 探索 DFS は append/exit が厳密に LIFO (search 関数の入口で push・出口で pop)．
 //! - 探索パス上で同一キーは高々 1 回しか現れない (再出現は千日手として検出され do_move しない)．
+//!
 //! → 逆順線形走査が返す祖先は HashMap が返すものと完全一致するため，置換は探索結果を変えない．
 
 use super::search_result::Hand;

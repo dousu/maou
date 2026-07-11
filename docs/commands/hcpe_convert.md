@@ -12,6 +12,14 @@
   discovered files, emitting per-file status strings plus optional feature store
   uploads.【F:src/maou/interface/converter.py†L60-L117】【F:src/maou/app/converter/hcpe_converter.py†L58-L236】
 
+## Requirements
+
+- CSA/KIF parsing uses `cshogi`, which is **not** installed by default (it pins
+  `numpy<1.27` on Python 3.12; production search/inference uses the Rust backend
+  and does not need it). Install the `hcpe` extra before running this command:
+  `uv sync --extra hcpe` (dev) or `pip install 'maou[hcpe]'` (wheel). Running
+  `hcpe-convert` without it raises an `ImportError` pointing here.
+
 ## CLI options
 
 ### Input and filtering

@@ -1,21 +1,21 @@
 //! 探索ヒューリスティック: df-pn+ / DFPN-E の初期 pn/dn 推定と move ordering．
+//!
+//! # DFPN-E (Kishimoto et al., NeurIPS 2019) エッジコスト型ヒューリスティック
+//!
+//! 標準 df-pn+ はノード(局面)の特徴で初期 pn/dn を設定するが，
+//! DFPN-E は**エッジ(手)**の特徴に基づくコストを加算する．
+//! 展開済みノードではエッジコストをゼロに戻すため，
+//! 実質的には初期 pn への加算として機能する．
+//!
+//! 詰将棋での手の質:
+//! - OR ノードの王手: 成+取 > 取/成 > 近い静か手 > 遠い静か手
+//! - AND ノードの応手: 合駒(攻め方有利) < 駒取り < 玉の逃げ
 
 use crate::board::Board;
 use crate::moves::Move;
 use crate::types::{Color, Square};
 
 use super::PN_UNIT;
-
-/// DFPN-E (Kishimoto et al., NeurIPS 2019) エッジコスト型ヒューリスティック．
-///
-/// 標準 df-pn+ はノード(局面)の特徴で初期 pn/dn を設定するが，
-/// DFPN-E は**エッジ(手)**の特徴に基づくコストを加算する．
-/// 展開済みノードではエッジコストをゼロに戻すため，
-/// 実質的には初期 pn への加算として機能する．
-///
-/// 詰将棋での手の質:
-/// - OR ノードの王手: 成+取 > 取/成 > 近い静か手 > 遠い静か手
-/// - AND ノードの応手: 合駒(攻め方有利) < 駒取り < 玉の逃げ
 
 /// `to` への利き数に玉の隣接分を補正する．
 ///
@@ -172,36 +172,34 @@ pub(super) fn move_brief_eval(m: Move, king_sq: Square, board: &Board) -> i32 {
     };
 
     // 成れるのに成らない歩/角/飛: +1000 penalty
-    if !m.is_drop() && !m.is_promotion() {
-        if matches!(raw_pt, 1 | 5 | 6) {
-            let from = m.from_sq();
-            let us = board.turn;
-            let in_enemy = |sq: Square| -> bool {
-                let r = sq.row() as u8;
-                match us {
-                    Color::Black => r <= 2,
-                    Color::White => r >= 6,
-                }
-            };
-            if in_enemy(from) || in_enemy(to) {
-                value += 1000;
+    if !m.is_drop() && !m.is_promotion() && matches!(raw_pt, 1 | 5 | 6) {
+        let from = m.from_sq();
+        let us = board.turn;
+        let in_enemy = |sq: Square| -> bool {
+            let r = sq.row();
+            match us {
+                Color::Black => r <= 2,
+                Color::White => r >= 6,
             }
+        };
+        if in_enemy(from) || in_enemy(to) {
+            value += 1000;
         }
     }
 
     let after_raw = if m.is_promotion() { raw_pt + 8 } else { raw_pt };
     let pt_value: i32 = match after_raw {
-        1 => 10,                // Pawn
-        2 => 20,                // Lance
-        3 => 20,                // Knight
-        4 => 30,                // Silver
-        5 => 50,                // Bishop
-        6 => 50,                // Rook
-        7 => 50,                // Gold
-        8 => 80,                // King (AND 玉捕獲手の tie-break に必要)
-        9 | 10 | 11 | 12 => 50, // ProPawn..ProSilver
-        13 => 80,               // Horse
-        14 => 80,               // Dragon
+        1 => 10,      // Pawn
+        2 => 20,      // Lance
+        3 => 20,      // Knight
+        4 => 30,      // Silver
+        5 => 50,      // Bishop
+        6 => 50,      // Rook
+        7 => 50,      // Gold
+        8 => 80,      // King (AND 玉捕獲手の tie-break に必要)
+        9..=12 => 50, // ProPawn..ProSilver
+        13 => 80,     // Horse
+        14 => 80,     // Dragon
         _ => 0,
     };
     value -= pt_value;
@@ -286,16 +284,16 @@ pub(super) fn check_order_key(
 /// PAWN→0, LANCE→1, KNIGHT→2, SILVER→3, BISHOP→4, ROOK→5, GOLD/成駒(金移動)→6, HORSE→7, DRAGON→8．
 fn piece_gen_order(raw_pt: u8) -> u64 {
     match raw_pt {
-        1 => 0,                // Pawn
-        2 => 1,                // Lance
-        3 => 2,                // Knight
-        4 => 3,                // Silver
-        5 => 4,                // Bishop
-        6 => 5,                // Rook
-        7 => 6,                // Gold
-        9 | 10 | 11 | 12 => 6, // と金/成香/成桂/成銀 (金の動き)
-        13 => 7,               // Horse
-        14 => 8,               // Dragon
+        1 => 0,      // Pawn
+        2 => 1,      // Lance
+        3 => 2,      // Knight
+        4 => 3,      // Silver
+        5 => 4,      // Bishop
+        6 => 5,      // Rook
+        7 => 6,      // Gold
+        9..=12 => 6, // と金/成香/成桂/成銀 (金の動き)
+        13 => 7,     // Horse
+        14 => 8,     // Dragon
         _ => 9,
     }
 }

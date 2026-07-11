@@ -41,7 +41,6 @@ from maou.app.learning.network import (
     Network,
 )
 from maou.app.learning.policy_targets import PolicyTargetMode
-from maou.app.learning.value_targets import ValueTargetMode
 from maou.app.learning.setup import (
     DataLoaderFactory,
     DeviceConfig,
@@ -57,6 +56,7 @@ from maou.app.learning.streaming_dataset import (
     StreamingKifDataset,
 )
 from maou.app.learning.training_loop import TrainingLoop
+from maou.app.learning.value_targets import ValueTargetMode
 from maou.domain.cloud_storage import CloudStorage
 
 try:

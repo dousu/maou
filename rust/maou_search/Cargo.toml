@@ -1,0 +1,24 @@
+[package]
+name = "maou_search"
+version = "0.15.2"
+edition = "2021"
+description = "MCTS-based single-position search engine for shogi (pure Rust, batched evaluation)"
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+# ONNX Runtime による NN 評価器 (デフォルトビルドは pure Rust を維持する)
+onnx = ["dep:ort"]
+# CUDA Execution Provider (Colab 等 GPU 環境向け．有効化は実行時フラグ)
+onnx-cuda = ["onnx", "ort/cuda"]
+# TensorRT Execution Provider (カーネル融合による推論高速化．有効化は実行時フラグ)
+onnx-tensorrt = ["onnx", "ort/tensorrt"]
+
+[dependencies]
+maou_shogi = { path = "../maou_shogi" }
+ort = { version = "=2.0.0-rc.10", optional = true }
+
+[[example]]
+name = "onnx_bench"
+required-features = ["onnx"]

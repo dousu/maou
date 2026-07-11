@@ -45,6 +45,7 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
   - `rust/maou_rust/Cargo.toml` for `maou_rust` crate (PyO3 bindings)
   - `rust/maou_io/Cargo.toml` for `maou_io` crate
   - `rust/maou_index/Cargo.toml` for `maou_index` crate
+  - `rust/maou_search/Cargo.toml` for `maou_search` crate
 - MUST follow semantic versioning independently per crate: `fix:` → patch, `feat:` → minor, breaking change → major
 - MUST NOT push changes to `rust/<crate>/` without a corresponding version bump in that crate's `Cargo.toml`
 - Rust crate versions are independent of the Python package version in `pyproject.toml`
@@ -233,6 +234,7 @@ cargo test --release -p maou_shogi -- --ignored --nocapture       # #[ignore] �
 | Rust Backend | [docs/rust-backend.md](docs/rust-backend.md) |
 | maou_shogi 設計思想 | [docs/design/maou-shogi-concept.md](docs/design/maou-shogi-concept.md) |
 | 詰将棋ソルバー設計 | [docs/design/tsume-solver/](docs/design/tsume-solver/index.md) |
+| 1局面探索エンジン設計 | [docs/design/position-search/](docs/design/position-search/index.md) |
 | Performance | [docs/performance.md](docs/performance.md) |
 | LR Tuning | [docs/learning-rate-tuning.md](docs/learning-rate-tuning.md) |
 | Git Workflow | [docs/git-workflow.md](docs/git-workflow.md) |

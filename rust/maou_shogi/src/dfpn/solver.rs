@@ -1,5 +1,7 @@
 //! DfPnSolver 構造体と探索エントリポイント．
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::board::Board;
@@ -142,6 +144,9 @@ pub struct DfPnSolver {
     pub(super) start_time: Instant,
     /// タイムアウトしたかどうか．
     pub(super) timed_out: bool,
+    /// 外部からの協調的停止フラグ (None なら無効)．
+    /// true になると次のチェックポイントで timeout と同じ扱いで打ち切る．
+    pub(super) stop_flag: Option<Arc<AtomicBool>>,
     /// 攻め方の手番色(solve 時に設定)．
     pub(super) attacker: Color,
     /// 最短手数探索を行うかどうか(デフォルト: true)．
@@ -163,6 +168,14 @@ pub struct DfPnSolver {
     /// デフォルトは 0(無効)．超長手数問題で OOM を防ぐ場合に設定する．
     /// 推奨値: 探索ノード数の 1/5〜1/2 程度(例: 100M ノードなら 20M〜50M)．
     pub(super) tt_gc_threshold: usize,
+    /// solve 毎に確保する TT サイズの下限 (エントリ数)．
+    ///
+    /// 既定は 1<<18 (主 TT 16MB; production 探索の下限)．[`Self::solve_report_impl`]
+    /// の size clamp の floor に使う (`TTSIZE` env 未指定時)．leaf-mate のように
+    /// tiny な `max_nodes` で per-leaf に多数回 solve する用途では小さくして
+    /// (例 1<<10) TT 確保・初期化コストを下げる．既定値では既存挙動と同一．
+    /// [`Self::new_leaf_mate`] が小さい値を設定する．
+    pub(super) min_tt_entries: usize,
     /// 王手生成キャッシュ．
     pub(super) check_cache: CheckCache,
     /// mid 探索パス上の board.hash → ply (千日手検出 + 参照祖先 ply 特定用)．
@@ -204,6 +217,30 @@ impl DfPnSolver {
         Self::new(31, 1_048_576)
     }
 
+    /// leaf-mate 用の軽量ソルバーを生成する．
+    ///
+    /// MCTS の各葉で短手詰みを判定する用途 (dlshogi の `LeafDfpnNodesLimit` 相当)．
+    /// `max_nodes` を小さく (例 50) 取ることで「コスト上限」と「短手詰みのみ検出」を
+    /// 同時に満たす (df-pn は best-first ゆえ短手は数十ノードで発見し，非詰みは
+    /// `max_nodes` で打ち切って [`TsumeResult::Unknown`] を返す)．`find_shortest=false`
+    /// でルート並行 dfpn と同じ健全パス (最初に見つけた詰みをそのまま返す) を使うため
+    /// 偽陽性を出さない．TT は `max_nodes` 規模の小サイズに絞り per-leaf の確保・初期化
+    /// コストを下げる (production の 1<<18 floor を回避)．ソルバーは worker ごとに 1 個
+    /// 生成し，多数の葉で `solve` を反復呼び出しする想定 (`check_cache` は再利用される)．
+    ///
+    /// # Panics
+    ///
+    /// 内部で [`Self::with_timeout`] を呼ぶが depth (=31) は常に有効なのでパニックしない．
+    pub fn new_leaf_mate(max_nodes: u64, timeout_secs: u64) -> Self {
+        let mut s = Self::with_timeout(31, max_nodes, timeout_secs);
+        s.find_shortest = false;
+        // 小 TT: max_nodes 規模で十分なサイズに絞る (次の 2 冪; 512〜65536 entries)．
+        s.min_tt_entries = ((max_nodes as usize).saturating_mul(8))
+            .next_power_of_two()
+            .clamp(1 << 9, 1 << 16);
+        s
+    }
+
     /// タイムアウト指定付きでソルバーを生成する．
     ///
     /// # Panics
@@ -223,6 +260,7 @@ impl DfPnSolver {
             pv_nodes_per_child: 1024,
             check_cache: CheckCache::new(),
             tt_gc_threshold: 0,
+            min_tt_entries: 1 << 18,
             path_depths: super::path_stack::PathStack::new(),
             nodes: 0,
             expansion_stack: Vec::new(),
@@ -233,6 +271,7 @@ impl DfPnSolver {
             nodes_searched: 0,
             start_time: Instant::now(),
             timed_out: false,
+            stop_flag: None,
             attacker: Color::Black,
             collect_progress: false,
             progress: Vec::new(),
@@ -277,10 +316,27 @@ impl DfPnSolver {
         self
     }
 
-    /// タイムアウトしたかどうかを返す．
+    /// 外部からの協調的停止フラグを設定する．
+    ///
+    /// フラグが true になると探索は次のチェックポイント (ノード数粒度，
+    /// 最大 1024 ノード程度の遅延) で打ち切られ，結果は timeout と同じ扱い
+    /// ([`TsumeResult::Unknown`] / [`StopReason::Timeout`]) になる．
+    /// 上位の探索 (MCTS のルート並行詰み探索など) が「自分が先に終わった
+    /// ので dfpn を止める」ために使う．
+    pub fn set_stop_flag(&mut self, flag: Arc<AtomicBool>) -> &mut Self {
+        self.stop_flag = Some(flag);
+        self
+    }
+
+    /// タイムアウト (または外部停止) したかどうかを返す．
     #[inline]
     pub(super) fn is_timed_out(&self) -> bool {
-        self.timed_out || self.start_time.elapsed() >= self.timeout
+        self.timed_out
+            || self
+                .stop_flag
+                .as_ref()
+                .is_some_and(|f| f.load(Ordering::Relaxed))
+            || self.start_time.elapsed() >= self.timeout
     }
 
     /// 詰将棋を解く．

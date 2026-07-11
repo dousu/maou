@@ -283,7 +283,7 @@ fn test_tsume_9te_b_ryu_2a_not_checkmate() {
     for usi in &moves_usi {
         let m = board
             .move_from_usi(usi)
-            .expect(&format!("invalid USI: {}", usi));
+            .unwrap_or_else(|| panic!("invalid USI: {}", usi));
         board.do_move(m);
     }
 
@@ -963,7 +963,7 @@ fn test_39te_divergence_probe() {
         .unwrap_or(total);
     let mut board = Board::new();
     board.set_sfen(sfen).unwrap();
-    for k in 0..total {
+    for (k, &usi) in line.iter().enumerate() {
         if k % 2 == 0 && k <= probe_max {
             let expected = (total - k) as i64;
             let sub_sfen = board.sfen();
@@ -987,8 +987,8 @@ fn test_39te_divergence_probe() {
             );
         }
         let m = board
-            .move_from_usi(line[k])
-            .unwrap_or_else(|| panic!("invalid USI: {}", line[k]));
+            .move_from_usi(usi)
+            .unwrap_or_else(|| panic!("invalid USI: {usi}"));
         board.do_move(m);
     }
 }
@@ -1622,7 +1622,7 @@ fn test_counter_check_diagnostic() {
     let out_path = "/tmp/counter_check_diagnostic.log";
     let sfen = "7l1/5n1k1/5R2P/6sK1/7L1/9/9/9/9 b r2b4g3s3n2l17p 1";
 
-    let _result = std::thread::Builder::new()
+    std::thread::Builder::new()
         .stack_size(32 * 1024 * 1024)
         .spawn(move || {
             let mut out = std::fs::File::create(out_path).unwrap();
@@ -1758,4 +1758,27 @@ fn test_no_checkmate_counter_check_probe() {
         }
     }
     eprintln!("Still not solved at 10M");
+}
+
+/// 協調的停止フラグ: 事前に立てたフラグで探索が即座に打ち切られる
+/// (7 手詰め局面 — フラグ無しでは相応のノード数を要する)
+#[test]
+fn test_external_stop_flag_aborts_search() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    let flag = Arc::new(AtomicBool::new(true));
+    let mut solver = DfPnSolver::with_timeout(63, 100_000_000, 3600);
+    solver.set_stop_flag(Arc::clone(&flag));
+    let mut board = crate::board::Board::empty();
+    board
+        .set_sfen("8k/9/6R2/9/9/9/9/9/9 b G 1")
+        .expect("正当な SFEN");
+    let report = solver.solve_report(&mut board);
+    assert!(
+        matches!(report.result, TsumeResult::Unknown { .. }),
+        "外部停止は timeout と同じ Unknown になるはず: {:?}",
+        report.result
+    );
+    assert_eq!(report.stop_reason, StopReason::Timeout);
 }

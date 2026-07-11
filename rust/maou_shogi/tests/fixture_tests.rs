@@ -10,8 +10,9 @@ use serde::Deserialize;
 
 fn load_fixture<T: serde::de::DeserializeOwned>(filename: &str) -> T {
     let path = format!("{}/tests/fixtures/{}", env!("CARGO_MANIFEST_DIR"), filename);
-    let content = std::fs::read_to_string(&path).expect(&format!("Failed to read: {}", path));
-    serde_json::from_str(&content).expect(&format!("Failed to parse: {}", path))
+    let content =
+        std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read: {}", path));
+    serde_json::from_str(&content).unwrap_or_else(|_| panic!("Failed to parse: {}", path))
 }
 
 // === SFEN Fixtures ===
@@ -97,7 +98,8 @@ fn test_move_fixtures() {
 
     for fixture in &fixtures {
         // USIからMoveを生成して16-bitエンコーディングを比較
-        let m = Move::from_usi(&fixture.usi).expect(&format!("Invalid USI: {}", fixture.usi));
+        let m =
+            Move::from_usi(&fixture.usi).unwrap_or_else(|| panic!("Invalid USI: {}", fixture.usi));
 
         assert_eq!(
             m.to_move16(),

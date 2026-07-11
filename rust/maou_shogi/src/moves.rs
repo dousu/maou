@@ -85,6 +85,8 @@ impl Move {
     }
 
     /// 移動元のフィールド値を返す(駒打ちの場合は 81+piece_type)．
+    // from_ は変換コンストラクタではなく「移動元 (from) フィールド」の意 (cshogi 用語)．
+    #[allow(clippy::wrong_self_convention)]
     #[inline]
     fn from_field(self) -> u32 {
         (self.0 & Self::FROM_MASK) >> 7
@@ -197,7 +199,7 @@ impl Move {
             };
             let to_file = b[2].checked_sub(b'0')?;
             let to_rank = b[3].checked_sub(b'a')?;
-            if to_file < 1 || to_file > 9 || to_rank > 8 {
+            if !(1..=9).contains(&to_file) || to_rank > 8 {
                 return None;
             }
             let to = Square::new(to_file - 1, to_rank);
@@ -210,7 +212,7 @@ impl Move {
         let to_file = b[2].checked_sub(b'0')?;
         let to_rank = b[3].checked_sub(b'a')?;
 
-        if from_file < 1 || from_file > 9 || to_file < 1 || to_file > 9 {
+        if !(1..=9).contains(&from_file) || !(1..=9).contains(&to_file) {
             return None;
         }
         if from_rank > 8 || to_rank > 8 {

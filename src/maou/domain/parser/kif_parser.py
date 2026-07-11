@@ -1,6 +1,13 @@
 from typing import Any
 
-from cshogi import KIF
+try:
+    from cshogi import KIF
+except ImportError as e:  # pragma: no cover
+    raise ImportError(
+        "KifParser は cshogi に依存します (棋譜フォーマット解析用)．"
+        "`uv sync --extra hcpe` または `pip install 'maou[hcpe]'` "
+        "でインストールしてください．"
+    ) from e
 
 from maou.domain.parser import parser
 

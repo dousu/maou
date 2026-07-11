@@ -370,3 +370,78 @@ class TestHelpDisplay:
 
         assert result.exit_code == 0
         assert "requires:" in result.output
+
+
+class TestImportErrorFallback:
+    """依存 guard が素の ImportError を上げるモジュールのフォールバックテスト．
+
+    csa_parser 等の依存 guard は ModuleNotFoundError ではなく素の
+    ImportError (インストール案内つき) に変換して再送出する．LazyGroup が
+    ImportError を捕捉しないと，全 lazy command を resolve する
+    `maou --help` が base install (cshogi なし) でクラッシュする (回帰)．
+    """
+
+    def test_plain_import_error_falls_back(
+        self, runner: CliRunner
+    ) -> None:
+        """素の ImportError でもフォールバックコマンドに変換される．"""
+        spec = LazyCommandSpec(
+            "fake.module",
+            "fake_cmd",
+            missing_help=(
+                "Install with `uv sync --extra hcpe`."
+            ),
+        )
+        cli = _make_group({"test-cmd": spec})
+
+        with patch(
+            "maou.infra.console.app.import_module",
+            side_effect=ImportError(
+                "CSAParser は cshogi に依存します"
+            ),
+        ):
+            result = runner.invoke(cli, ["test-cmd"])
+
+        assert result.exit_code != 0
+        assert not isinstance(result.exception, ImportError)
+        assert "uv sync --extra hcpe" in result.output
+
+    def test_group_help_survives_plain_import_error(
+        self, runner: CliRunner
+    ) -> None:
+        """親グループの --help が素の ImportError でクラッシュしない．"""
+        spec = LazyCommandSpec(
+            "fake.module",
+            "fake_cmd",
+            missing_help="Install with `uv sync --extra hcpe`.",
+        )
+        cli = _make_group({"test-cmd": spec})
+
+        with patch(
+            "maou.infra.console.app.import_module",
+            side_effect=ImportError(
+                "CSAParser は cshogi に依存します"
+            ),
+        ):
+            result = runner.invoke(cli, ["--help"])
+
+        assert result.exit_code == 0
+        assert "test-cmd" in result.output
+
+    def test_missing_command_module_reraises(
+        self, runner: CliRunner
+    ) -> None:
+        """コマンドモジュール自体の不存在は隠蔽せず再送出される．"""
+        spec = LazyCommandSpec("fake.module", "fake_cmd")
+        cli = _make_group({"test-cmd": spec})
+
+        with patch(
+            "maou.infra.console.app.import_module",
+            side_effect=ModuleNotFoundError(
+                "No module named 'fake.module'",
+                name="fake.module",
+            ),
+        ):
+            result = runner.invoke(cli, ["test-cmd"])
+
+        assert isinstance(result.exception, ModuleNotFoundError)

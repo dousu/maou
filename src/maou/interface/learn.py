@@ -32,9 +32,6 @@ from maou.app.learning.network import (
 from maou.app.learning.policy_targets import (  # noqa: F401
     PolicyTargetMode as PolicyTargetMode,
 )
-from maou.app.learning.value_targets import (  # noqa: F401
-    ValueTargetMode as ValueTargetMode,
-)
 from maou.app.learning.setup import (
     DeviceSetup,
     ModelFactory,
@@ -44,6 +41,9 @@ from maou.app.learning.stage_component_factory import (
 )
 from maou.app.learning.streaming_dataset import (
     StreamingDataSource,
+)
+from maou.app.learning.value_targets import (  # noqa: F401
+    ValueTargetMode as ValueTargetMode,
 )
 
 SUPPORTED_MODEL_ARCHITECTURES = BACKBONE_ARCHITECTURES

@@ -572,14 +572,17 @@ class TestInferWithEnginePath:
 
             # onnx_path=None + engine_path 指定の場合，
             # load_engine が呼ばれ build_engine_from_onnx は呼ばれないことを確認
-            with patch.object(
-                TensorRTInference,
-                "load_engine",
-                return_value=b"dummy_serialized",
-            ) as mock_load, patch.object(
-                TensorRTInference,
-                "build_engine_from_onnx",
-            ) as mock_build:
+            with (
+                patch.object(
+                    TensorRTInference,
+                    "load_engine",
+                    return_value=b"dummy_serialized",
+                ) as mock_load,
+                patch.object(
+                    TensorRTInference,
+                    "build_engine_from_onnx",
+                ) as mock_build,
+            ):
                 try:
                     TensorRTInference.infer(
                         onnx_path=None,

@@ -126,7 +126,7 @@ impl DfPnSolver {
                     board.undo_move(mv, cap);
                     if let Some(d) = r {
                         let dist = d + 1;
-                        if best.map_or(true, |(_, bd)| dist < bd) {
+                        if best.is_none_or(|(_, bd)| dist < bd) {
                             best = Some((mv, dist));
                         }
                         if fast {
@@ -184,7 +184,7 @@ impl DfPnSolver {
                                 let cap2 = board.do_move(amove);
                                 let gh = board.hash;
                                 let checker_survives =
-                                    pv_choice.get(&gh).map_or(true, |dm| dm.to_sq() != x);
+                                    pv_choice.get(&gh).is_none_or(|dm| dm.to_sq() != x);
                                 board.undo_move(amove, cap2);
                                 recapture_transparent = checker_survives;
                             }

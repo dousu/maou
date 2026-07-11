@@ -114,8 +114,8 @@ impl DelayedMoveList {
 
             // 既存の chain と「同等」な手を探す
             let mut linked = false;
-            for j in 0..heads_len {
-                let (head_move, head_idx) = heads[j];
+            for head in heads.iter_mut().take(heads_len) {
+                let (head_move, head_idx) = *head;
                 // 同 to_sq (同マス合駒/成不成ペア) または「支援なし & 非逆王手」の
                 // 別マス中合いペア (interp_chain 両 true) なら同等とみなす．
                 let same = is_same(head_move, m)
@@ -128,7 +128,7 @@ impl DelayedMoveList {
                     // 既存 chain の末尾に追加: head_idx → i_raw
                     next[head_idx as usize] = i_raw as u32 + 1;
                     prev[i_raw] = head_idx + 1;
-                    heads[j] = (m, i_raw as u32);
+                    *head = (m, i_raw as u32);
                     linked = true;
                     break;
                 }
