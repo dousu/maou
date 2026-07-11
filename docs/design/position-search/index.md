@@ -323,6 +323,15 @@ NPS を落とさない (Colab A100: 95-99% 保持)．
 - 千日手由来の確定値を伝播できる根拠は経路の一意性 (§9 — 判定結果がノード
   不変のため終端と同格に扱える)．
 - 詰み探索 (§8.1) の結果はこの機構に注入する (dfpn の詰み確定 → proven 化)．
+- **確定値の衝突は先勝ち** (maou_search v0.15.2): 履歴非依存の詰み探索
+  (root-dfpn / leaf-mate) と千日手 1 回近似 (§9) は，詰み筋が対局履歴との
+  再出現を跨ぐ稀な局面で同一ノードに異なる確定値を出し得る．確定値は伝播後に
+  覆せない (確定ノードは降下短絡で再伝播しない) ため `try_mark_proven` の
+  CAS 先勝ちで確定し，後着の値は破棄する．
+- マーク/伝播スキャンのメモリ順序は SeqCst (maou_search v0.15.1)．AcqRel
+  では「自分を確定 → 兄弟を読む」の store-buffering により，最後の 2 兄弟を
+  同時確定した 2 スレッドが互いを未確定と読んで AND 集約を両方中断し，親の
+  確定が回復不能に失われ得る．
 - 詰将棋ソルバーのノウハウ (証明駒/持ち駒優越，枝刈り) は，詰み確定を勝敗に
   変換できる場面で援用する (具体化は実装時)．
 - 制限: 詰み手数 (mate distance) は保持しない — 最短詰みの選好は dfpn 統合時
@@ -422,6 +431,7 @@ mock 評価の `nps_bench` と ONNX 実推論の `onnx_bench` の 2 本．
 | dfpn 停止フラグ + ルート並行詰み探索 | ✅ 実装済み (maou_shogi v5.5.0 + maou_search v0.8.0，§8.1) |
 | leaf-mate (非同期葉詰み) + root-dfpn 予算 CLI + 詰み探索 default-on | ✅ 実装済み (maou_shogi v5.6.0 + maou_search v0.14.0 + maou v0.31.0，§8.1/8.2/8.4)．PV-mate は実装後に dominated と実証し撤去 (§8.4) |
 | 最終手選択 (robust child + 負け確定除外) | ✅ 実装済み (maou_search v0.15.0，§6) |
+| ルート子の確定値 (proven) の PyO3/CLI 露出 (Candidates に `proven=win\|draw\|loss` 表示) | ✅ 実装済み (maou_rust v0.16.0 + maou v0.33.0，[docs/commands/search.md](../../commands/search.md)) |
 | PyO3 API / CLI (`maou search`) | ✅ 実装済み (maou_rust v0.10.0 + maou v0.23.0．[docs/commands/search.md](../../commands/search.md)) |
 | Colab GPU 実測 | 配線検証済み (2026-07-08，極小モデル)．実モデルでの North-star 計測は未実施 |
 | モデル×探索の強さ検証フレームワーク + パラメータチューニング | 未実装 |

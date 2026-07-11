@@ -75,7 +75,7 @@ Eval: 16578.56
 WinRate: 1.0000
 PV: G*5b
 Candidates:
-G*5b (visits=1, winrate=1.0000, eval=16578.56, prior=0.0187)
+G*5b (visits=1, winrate=1.0000, eval=16578.56, prior=0.0187, proven=win)
 ...
 Stats: playouts=38 nps=435 elapsed_ms=87 warmup_ms=0 max_depth=4 repetitions=0 proven_nodes=1 stop=root_proven
 <ASCII board>
@@ -86,6 +86,12 @@ Stats: playouts=38 nps=435 elapsed_ms=87 warmup_ms=0 max_depth=4 repetitions=0 p
   [docs/commands/evaluate.md](evaluate.md)). When the root result is proven
   (mate or repetition), `WinRate` is the exact value (0 / 0.5 / 1) and `Eval`
   saturates at the clipping bound (≈ ±16578).
+- A candidate whose outcome is proven (mate search or AND-OR propagation)
+  gets a `proven=win|draw|loss` suffix (root perspective). `winrate` keeps
+  the pre-proof search average, so a proven-losing move can still display a
+  high winrate — the marker explains why such a move is never chosen as
+  `Bestmove` (proven-losing moves are excluded unless every move is proven
+  losing).
 - `Stats` fields: `playouts` (completed simulations), `nps`, `elapsed_ms`,
   `warmup_ms`, `max_depth`, `repetitions` (sennichite detections),
   `proven_nodes` (AND-OR proven interior nodes), `leaf_mates` (times leaf-mate
