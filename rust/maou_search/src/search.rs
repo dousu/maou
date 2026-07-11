@@ -258,6 +258,34 @@ pub struct RootChildStat {
     pub q: f64,
     /// policy 事前確率．
     pub prior: f32,
+    /// ルート手番側から見た確定値 (0 = この手を指すと負け確定，0.5 = 引き分け
+    /// 確定，1 = 勝ち確定)．未確定なら `None`．
+    pub proven: Option<f64>,
+}
+
+/// 最終手選択 (robust child): 負け確定 (`proven == Some(0.0)`) の手を除外して
+/// 訪問回数最大 → 同数なら Q 最大 → 同率なら合法手生成順で先頭．全手が負け
+/// 確定なら除外なしで同基準 (どれを指しても負けが確定しており同値)．
+///
+/// 生の max-Q (訪問数を見ずに Q 最大) は低訪問子のノイズ Q を拾うため
+/// 採用しない．LCB (secure child) への置換は自己対局検証後の再検討事項
+/// (docs/design/position-search/index.md §6)．
+fn select_best_root_index(children: &[RootChildStat]) -> usize {
+    let mut best_i = 0usize;
+    for (i, c) in children.iter().enumerate().skip(1) {
+        let b = &children[best_i];
+        let c_losing = c.proven == Some(0.0);
+        let b_losing = b.proven == Some(0.0);
+        let better = if c_losing != b_losing {
+            b_losing
+        } else {
+            c.visits > b.visits || (c.visits == b.visits && c.q > b.q)
+        };
+        if better {
+            best_i = i;
+        }
+    }
+    best_i
 }
 
 /// 探索の実行統計．
@@ -307,7 +335,9 @@ pub struct SearchStats {
 #[derive(Clone, Debug)]
 pub struct SearchResult {
     /// 最有力手 (ルートに合法手がなければ `None`)．
-    /// 選択基準: 訪問回数最大 → 同数なら Q 最大 → 同率なら合法手生成順で先頭．
+    /// 選択基準: 負け確定の手を除外して訪問回数最大 → 同数なら Q 最大 →
+    /// 同率なら合法手生成順で先頭 (robust child)．root の勝敗確定・root-dfpn の
+    /// 詰み証明はこれに優先する．
     pub best_move: Option<Move>,
     /// ルート手番側から見た best_move の勝率 (Q)．root の勝敗が確定した
     /// 場合 ([`StopCause::RootProven`]) は確定値 (0 / 0.5 / 1)．
@@ -1083,16 +1113,14 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             .edges()
             .iter()
             .map(|e| {
-                let (visits, q) = match e.child.load(Ordering::Acquire) {
-                    NULL_NODE => (0, 0.0),
+                let (visits, q, proven) = match e.child.load(Ordering::Acquire) {
+                    NULL_NODE => (0, 0.0, None),
                     c => {
                         let child = pool.get(c);
                         let v = child.visits();
-                        if v == 0 {
-                            (0, 0.0)
-                        } else {
-                            (v, child.wins() / v as f64)
-                        }
+                        let q = if v == 0 { 0.0 } else { child.wins() / v as f64 };
+                        // 確定値は子ノード手番側視点なのでルート視点へ反転する
+                        (v, q, child.proven_value().map(|pv| 1.0 - pv))
                     }
                 };
                 RootChildStat {
@@ -1100,36 +1128,22 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                     visits,
                     q,
                     prior: e.prior,
+                    proven,
                 }
             })
             .collect();
 
-        // 訪問回数最大 → 同数なら Q 最大 → 同率なら合法手生成順で先頭
-        let mut best_i = 0usize;
-        for (i, c) in root_children.iter().enumerate().skip(1) {
-            let b = &root_children[best_i];
-            if c.visits > b.visits || (c.visits == b.visits && c.q > b.q) {
-                best_i = i;
-            }
-        }
+        // 負け確定の手を除外した robust child (select_best_root_index 参照)
+        let mut best_i = select_best_root_index(&root_children);
 
         // root の勝敗が確定している場合は確定値を達成する子を優先する
         // (訪問回数最大は確定前の探索の偏りを引きずり得る)．勝ち確定なら
-        // 負け確定 (値 0) の子，引き分け確定なら値 0.5 の子．負け確定は
-        // 全子が勝ち確定なのでどれでも同じ (訪問回数最大のまま)
+        // ルート視点の確定値 1 の子，引き分け確定なら 0.5 の子．負け確定は
+        // 全子が負け確定なのでどれでも同じ (robust child のまま)
         let root_proven = root_node.proven_value();
         if let Some(rv) = root_proven {
             if rv > 0.0 {
-                let want = 1.0 - rv;
-                let found =
-                    root_node
-                        .edges()
-                        .iter()
-                        .position(|e| match e.child.load(Ordering::Acquire) {
-                            NULL_NODE => false,
-                            c => pool.get(c).proven_value() == Some(want),
-                        });
-                if let Some(i) = found {
+                if let Some(i) = root_children.iter().position(|c| c.proven == Some(rv)) {
                     best_i = i;
                 }
             }
@@ -1278,6 +1292,103 @@ mod tests {
         assert_eq!(
             result.pv.first().map(|m| m.to_usi()).as_deref(),
             Some("G*5b")
+        );
+    }
+
+    /// [`select_best_root_index`] 用のダミー子統計 (mv は選択基準に関与しない)．
+    fn stat(visits: u64, q: f64, proven: Option<f64>) -> RootChildStat {
+        RootChildStat {
+            mv: Move::from_usi("7g7f").expect("正当な USI"),
+            visits,
+            q,
+            prior: 0.1,
+            proven,
+        }
+    }
+
+    #[test]
+    fn test_select_best_root_index_robust_child() {
+        // 訪問回数最大が勝つ (Q は劣っていても)
+        let c = [
+            stat(100, 0.4, None),
+            stat(200, 0.6, None),
+            stat(50, 0.9, None),
+        ];
+        assert_eq!(select_best_root_index(&c), 1);
+        // 同数なら Q 最大
+        let c = [stat(100, 0.4, None), stat(100, 0.6, None)];
+        assert_eq!(select_best_root_index(&c), 1);
+        // 同数同率なら生成順で先頭
+        let c = [stat(100, 0.5, None), stat(100, 0.5, None)];
+        assert_eq!(select_best_root_index(&c), 0);
+    }
+
+    #[test]
+    fn test_select_best_root_index_filters_proven_losing() {
+        // 負け確定の手は訪問回数最大でも除外される
+        let c = [
+            stat(1000, 0.7, Some(0.0)),
+            stat(100, 0.5, None),
+            stat(300, 0.4, None),
+        ];
+        assert_eq!(select_best_root_index(&c), 2, "負け確定 (idx 0) を回避する");
+        // 引き分け確定 (0.5) は除外対象ではない
+        let c = [stat(1000, 0.5, Some(0.5)), stat(100, 0.6, None)];
+        assert_eq!(select_best_root_index(&c), 0);
+        // 全手が負け確定なら通常基準 (訪問回数最大)
+        let c = [
+            stat(100, 0.1, Some(0.0)),
+            stat(500, 0.2, Some(0.0)),
+            stat(200, 0.3, Some(0.0)),
+        ];
+        assert_eq!(select_best_root_index(&c), 1);
+    }
+
+    /// 先手: 5九玉 + 持駒金 1 枚，後手: 4七銀 + 持駒金 1 枚．
+    /// 受け (G*5h 打で後手の打ち場所を塞ぐ / K6h 等) はあるが，無関係な
+    /// 金打ちの大半や K4i は後手の 1 手詰め (紐つき G*5h / G*4h) を許し，
+    /// AND-OR 伝播で負け確定になる．root 自体は未確定に留まる．
+    const HANGING_MATE: &str = "9/9/9/9/9/9/5s3/9/4K4 b Gg 1";
+
+    #[test]
+    fn test_bestmove_avoids_proven_losing_child() {
+        let result = run(
+            HANGING_MATE,
+            SearchOptions {
+                threads: 1,
+                batch_size: 8,
+                ..pure_mcts_opts()
+            },
+            SearchLimits {
+                max_playouts: Some(50_000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        // 前提: 負け確定の子が AND-OR 伝播で検出されている
+        // (検出ゼロならこのテストは選択規則を検証できていない)
+        let losing = result
+            .root_children
+            .iter()
+            .filter(|c| c.proven == Some(0.0))
+            .count();
+        assert!(
+            losing > 0,
+            "負け確定の子が検出されるはず (proven_nodes={})",
+            result.stats.proven_nodes
+        );
+        assert_ne!(result.stop, StopCause::RootProven, "root は未確定のはず");
+        let best = result.best_move.expect("合法手がある");
+        let best_stat = result
+            .root_children
+            .iter()
+            .find(|c| c.mv == best)
+            .expect("best_move は root の子");
+        assert_ne!(
+            best_stat.proven,
+            Some(0.0),
+            "負け確定の手 {} を最終手に選ばない",
+            best.to_usi()
         );
     }
 
