@@ -444,6 +444,4 @@ class TestImportErrorFallback:
         ):
             result = runner.invoke(cli, ["test-cmd"])
 
-        assert isinstance(
-            result.exception, ModuleNotFoundError
-        )
+        assert isinstance(result.exception, ModuleNotFoundError)

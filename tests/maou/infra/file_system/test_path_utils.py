@@ -61,7 +61,10 @@ class TestCollectFiles:
     ) -> None:
         """存在しないパスで ValueError．"""
         p = tmp_path / "nonexistent"
-        with pytest.raises(ValueError, match="ファイルでもディレクトリでもありません"):
+        with pytest.raises(
+            ValueError,
+            match="ファイルでもディレクトリでもありません",
+        ):
             collect_files(p)
 
     def test_empty_directory(self, tmp_path: Path) -> None:

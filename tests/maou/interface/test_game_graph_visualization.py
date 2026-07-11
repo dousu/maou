@@ -183,9 +183,7 @@ class TestGetViewportData:
         viz = GameGraphVisualizationInterface(nodes, edges)
         layout = _make_layout(nodes, edges, 100)
         visible_hashes = {100, 200}
-        data = viz.get_viewport_data(
-            visible_hashes, layout
-        )
+        data = viz.get_viewport_data(visible_hashes, layout)
         assert "nodes" in data
         assert "edges" in data
         for node in data["nodes"]:
@@ -201,9 +199,7 @@ class TestGetViewportData:
         viz = GameGraphVisualizationInterface(nodes, edges)
         layout = _make_layout(nodes, edges, 100)
         visible_hashes = {100, 200}
-        data = viz.get_viewport_data(
-            visible_hashes, layout
-        )
+        data = viz.get_viewport_data(visible_hashes, layout)
         node_map = {n["id"]: n for n in data["nodes"]}
         # depth=0: 先手番 → そのまま 0.53
         assert node_map["100"][

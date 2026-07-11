@@ -13,6 +13,7 @@ from __future__ import annotations
 import threading
 
 import pytest
+
 from maou._rust.maou_shogi import solve_tsume
 
 # 後手玉 1一，先手金 2三，先手持ち駒: 金．G*1b (または G*2b) の 1 手詰．
