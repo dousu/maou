@@ -237,9 +237,12 @@ impl Node {
 
     /// 確定状態を書き込む (NONE からの CAS)．新規確定なら true を返す．
     ///
-    /// 木に合流が無く root への経路がノード毎に一意なため，各ノードの確定値は
-    /// ゲーム理論的に一意 — 複数スレッドが同時に確定させても同じ値になる
-    /// (CAS に負けた場合は既存値との一致を debug_assert で検証する)．
+    /// 木に合流が無く root への経路がノード毎に一意なため，確定値は原則
+    /// ノード毎に一意だが，履歴非依存の詰み探索 (root-dfpn / leaf-mate) と
+    /// 千日手 1 回近似 ([`crate::repetition`]) は同一ノードに異なる確定値を
+    /// 出し得る (詰み筋が対局履歴との再出現を跨ぐ稀な局面)．確定値は伝播後に
+    /// 覆せない (確定ノードは降下短絡で再伝播しない) ため**先勝ちで確定**し，
+    /// 後着の値は破棄する (CAS 負け = false)．
     pub fn try_mark_proven(&self, p: u8) -> bool {
         debug_assert!(
             matches!(p, proven::LOSS | proven::DRAW | proven::WIN),
@@ -247,16 +250,9 @@ impl Node {
         );
         // SeqCst: AND 集約の兄弟スキャンとの store-buffering を禁止する
         // ([`Node::proven_value_sync`] のコメント参照)
-        match self
-            .proven
+        self.proven
             .compare_exchange(proven::NONE, p, Ordering::SeqCst, Ordering::SeqCst)
-        {
-            Ok(_) => true,
-            Err(existing) => {
-                debug_assert_eq!(existing, p, "確定値はノード毎に一意のはず");
-                false
-            }
-        }
+            .is_ok()
     }
 
     /// 子辺の配列を返す．state が EXPANDED になってから呼ぶこと．

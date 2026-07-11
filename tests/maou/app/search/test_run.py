@@ -29,11 +29,10 @@ class TestSearchRunner:
         # (計測区間の nps/elapsed_ms には含まれない)
         assert "warmup_ms=" in result["Stats"]
         # best_move は候補リストの先頭に必ず含まれる
-        assert (
-            result["Candidates"]
-            .splitlines()[0]
-            .startswith("G*5b ")
-        )
+        first_candidate = result["Candidates"].splitlines()[0]
+        assert first_candidate.startswith("G*5b ")
+        # 勝敗確定した手には proven マークが付く (G*5b は勝ち確定)
+        assert "proven=win" in first_candidate
         assert "Board" in result
 
     def test_history_marks_perpetual_check_as_loss(

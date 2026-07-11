@@ -28,14 +28,21 @@ struct SearchRootChild {
     /// policy 事前確率．
     #[pyo3(get)]
     prior: f32,
+    /// ルート手番側から見た確定値 (0 = この手を指すと負け確定，0.5 = 引き分け
+    /// 確定，1 = 勝ち確定)．未確定なら `None`．
+    #[pyo3(get)]
+    proven: Option<f64>,
 }
 
 #[pymethods]
 impl SearchRootChild {
     fn __repr__(&self) -> String {
+        let proven = self
+            .proven
+            .map_or_else(|| "None".to_string(), |v| format!("{v}"));
         format!(
-            "SearchRootChild(usi='{}', visits={}, winrate={:.4}, prior={:.4})",
-            self.usi, self.visits, self.winrate, self.prior
+            "SearchRootChild(usi='{}', visits={}, winrate={:.4}, prior={:.4}, proven={})",
+            self.usi, self.visits, self.winrate, self.prior, proven
         )
     }
 }
@@ -128,6 +135,7 @@ fn to_py_result(r: SearchResult) -> PySearchResult {
                 visits: c.visits,
                 winrate: c.q,
                 prior: c.prior,
+                proven: c.proven,
             })
             .collect(),
         stop: stop_cause_str(r.stop).to_string(),

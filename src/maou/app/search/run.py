@@ -125,12 +125,23 @@ class SearchRunner:
         ]
         candidates: list[str] = []
         for child in (best_first + rest)[: config.num_moves]:
+            # 勝敗確定した手はマークを付ける (確定前の Q が高いまま残る
+            # 負け確定手が bestmove と食い違って見えるのを説明可能にする)
+            proven_mark = ""
+            if child.proven is not None:
+                proven_label = {
+                    0.0: "loss",
+                    0.5: "draw",
+                    1.0: "win",
+                }[float(child.proven)]
+                proven_mark = f", proven={proven_label}"
             if int(child.visits) == 0:
                 # 未訪問の winrate 0 は「データなし」であり敗勢ではないため
                 # 数値を表示しない
                 candidates.append(
                     f"{child.usi} (visits=0, "
-                    f"prior={float(child.prior):.4f})"
+                    f"prior={float(child.prior):.4f}"
+                    f"{proven_mark})"
                 )
                 continue
             child_winrate = float(child.winrate)
@@ -140,7 +151,8 @@ class SearchRunner:
             candidates.append(
                 f"{child.usi} (visits={child.visits}, "
                 f"winrate={child_winrate:.4f}, eval={child_eval:.2f}, "
-                f"prior={float(child.prior):.4f})"
+                f"prior={float(child.prior):.4f}"
+                f"{proven_mark})"
             )
 
         output: dict[str, str] = {
