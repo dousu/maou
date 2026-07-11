@@ -187,12 +187,12 @@ fn run_search<E: Evaluator>(
 /// - `c_puct` (float, optional) / `fpu` (float, optional): PUCT パラメータ．
 /// - `max_ply` (int, optional): 最大探索深さ (デフォルト 512)．
 /// - `gc_keep_ratio` (float, optional): GC 後に残すノード比 (デフォルト 0.5)．
-/// - `root_dfpn` (bool, optional): ルート並行 dfpn 詰み探索 (デフォルト False)．
+/// - `root_dfpn` (bool, optional): ルート並行 dfpn 詰み探索 (デフォルト True)．
 ///   詰みが証明されると `stop == "root_proven"` で即返り，`pv` は詰み手順になる．
 /// - `root_dfpn_nodes` (int, optional) / `root_dfpn_depth` (int, optional):
-///   ルート dfpn の予算 (デフォルト 2^20 ノード / 深さ 2047)．
+///   ルート dfpn の予算 (デフォルト 2,000,000 ノード / 深さ 2047)．
 /// - `leaf_mate` (bool, optional): MCTS の葉の短手詰み探索を有効にする
-///   (デフォルト False)．探索スレッドは王手手段を持つ葉を専用 mate スレッドへ
+///   (デフォルト True)．探索スレッドは王手手段を持つ葉を専用 mate スレッドへ
 ///   非同期依頼するだけで solve せず，mate スレッド (余剰 CPU) が詰みを証明
 ///   したら当該葉を勝ち確定にして AND-OR 伝播する (探索 NPS に影響しない)．
 /// - `leaf_mate_nodes` (int, optional): leaf-mate 1 回あたりのノード予算

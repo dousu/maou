@@ -192,7 +192,9 @@ impl Node {
             ),
             "終端状態のみ"
         );
-        self.state.store(state, Ordering::Release);
+        // SeqCst: AND 集約の兄弟スキャンとの store-buffering を禁止する
+        // ([`Node::proven_value_sync`] のコメント参照)
+        self.state.store(state, Ordering::SeqCst);
     }
 
     /// 確定値 (このノードの手番側から見た勝率) を返す．
@@ -201,13 +203,30 @@ impl Node {
     /// のどちらで確定していても `Some` になる．未確定は `None`．
     #[inline]
     pub fn proven_value(&self) -> Option<f64> {
-        match self.state() {
+        self.proven_value_with(Ordering::Acquire)
+    }
+
+    /// [`Node::proven_value`] の SeqCst 版 — AND 集約の兄弟スキャン専用．
+    ///
+    /// 「自分を確定 (store) → 兄弟を読む (load)」は store-buffering 形の
+    /// リオーダリングを許すため，マーク側 ([`Node::try_mark_proven`] /
+    /// [`Node::mark_terminal`]) とスキャン側の双方が SeqCst でないと，
+    /// 最後の 2 兄弟を同時確定した 2 スレッドが互いを未確定と読んで
+    /// AND 集約を両方中断し得る．親の確定は再伝播されない (確定ノードは
+    /// 降下短絡でバックプロパゲーションのみ) ため取りこぼしは回復不能．
+    pub fn proven_value_sync(&self) -> Option<f64> {
+        self.proven_value_with(Ordering::SeqCst)
+    }
+
+    #[inline]
+    fn proven_value_with(&self, order: Ordering) -> Option<f64> {
+        match self.state.load(order) {
             node_state::TERMINAL_LOSS => return Some(0.0),
             node_state::TERMINAL_DRAW => return Some(0.5),
             node_state::TERMINAL_WIN => return Some(1.0),
             _ => {}
         }
-        match self.proven.load(Ordering::Acquire) {
+        match self.proven.load(order) {
             proven::NONE => None,
             proven::LOSS => Some(0.0),
             proven::DRAW => Some(0.5),
@@ -226,9 +245,11 @@ impl Node {
             matches!(p, proven::LOSS | proven::DRAW | proven::WIN),
             "確定状態のみ"
         );
+        // SeqCst: AND 集約の兄弟スキャンとの store-buffering を禁止する
+        // ([`Node::proven_value_sync`] のコメント参照)
         match self
             .proven
-            .compare_exchange(proven::NONE, p, Ordering::AcqRel, Ordering::Acquire)
+            .compare_exchange(proven::NONE, p, Ordering::SeqCst, Ordering::SeqCst)
         {
             Ok(_) => true,
             Err(existing) => {

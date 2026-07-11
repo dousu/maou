@@ -526,7 +526,10 @@ fn terminal_value(state: u8) -> f64 {
 fn propagate_proven(pool: &NodePool, path: &[u32]) -> u64 {
     let mut newly = 0u64;
     for i in (1..path.len()).rev() {
-        let Some(cv) = pool.get(path[i]).proven_value() else {
+        // スキャンは SeqCst 版を使う (store-buffering で兄弟の確定を
+        // 見逃すと親の確定が回復不能に失われる — proven_value_sync の
+        // コメント参照)
+        let Some(cv) = pool.get(path[i]).proven_value_sync() else {
             break;
         };
         let parent = pool.get(path[i - 1]);
@@ -541,7 +544,7 @@ fn propagate_proven(pool: &NodePool, path: &[u32]) -> u64 {
                     all_proven = false;
                     break;
                 }
-                match pool.get(c).proven_value() {
+                match pool.get(c).proven_value_sync() {
                     None => {
                         all_proven = false;
                         break;
@@ -839,8 +842,11 @@ fn mate_worker(
             .expect("mate_queue lock は poison しない")
             .pop_front();
         let Some(req) = req else {
-            // キューが空: 探索スレッドの投入を待つ (短い譲歩でスピンを緩和)
-            std::thread::yield_now();
+            // キューが空: 短い sleep で待つ．yield_now のスピンは静かな局面で
+            // コアを 1 本占有し，コア数の少ない CPU-only 環境では探索スレッド
+            // と競合する (GPU 律速環境では影響なし)．依頼は advisory なので
+            // ~200µs の起床遅延は許容できる．
+            std::thread::sleep(Duration::from_micros(200));
             continue;
         };
         // solve は clone 局面に対して行う (pool 非参照)

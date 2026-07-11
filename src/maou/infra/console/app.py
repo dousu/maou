@@ -82,7 +82,11 @@ class LazyGroup(click.Group):
 
         try:
             module: ModuleType = import_module(module_path)
-        except ModuleNotFoundError as exc:
+        except ImportError as exc:
+            # ModuleNotFoundError に限定しない: 依存 guard (csa_parser 等) は
+            # インストール案内つきの素の ImportError に変換して再送出するため，
+            # ここで捕捉しないと `maou --help` (全 lazy command を resolve する)
+            # が base install で落ちる．
             if exc.name is not None and exc.name.startswith(
                 module_path
             ):
@@ -190,7 +194,7 @@ class LazyGroup(click.Group):
         self,
         cmd_name: str,
         spec: LazyCommandSpec,
-        error: ModuleNotFoundError,
+        error: ImportError,
     ) -> click.Command:
         fallback = self._fallback_commands.get(cmd_name)
         if fallback is not None:
@@ -235,7 +239,16 @@ _TRAINING_EXTRAS = ("cpu", "cuda", "mpu")
 
 LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
     "hcpe-convert": LazyCommandSpec(
-        "maou.infra.console.hcpe_convert", "hcpe_convert"
+        "maou.infra.console.hcpe_convert",
+        "hcpe_convert",
+        missing_help=(
+            "Command 'hcpe-convert' requires the hcpe dependencies "
+            "(cshogi). Install with `uv sync --extra hcpe` or "
+            "`pip install 'maou[hcpe]'`."
+        ),
+        required_packages=(
+            PackageRequirement("cshogi", ("hcpe",)),
+        ),
     ),
     "pre-process": LazyCommandSpec(
         "maou.infra.console.pre_process", "pre_process"
