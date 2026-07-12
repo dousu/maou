@@ -22,8 +22,8 @@
   bit-exact against the previous Python/cshogi implementation
   (`tests/maou/app/converter/test_rust_convert_parity.py`,
   `rust/maou_shogi/tests/kifu_parity.rs`).
-  The legacy `hcpe` extra (cshogi) is retained only for fixture
-  regeneration; production code does not import it.
+  cshogi is no longer a runtime or optional dependency; it remains only in
+  the `dev` dependency group as the parity oracle for regenerating fixtures.
 - **Multi-game CSA files are fully converted.** A file containing several
   games (separated by `/`) yields rows for every game; game 0 keeps the
   legacy id form `{stem}.hcpe_{ply}` and games ≥ 1 use
