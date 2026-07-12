@@ -8,9 +8,11 @@
 //! 生成した golden fixtures (`tests/fixtures/kifu/`) と照合する．
 
 pub mod csa;
+pub mod hcpe;
 pub mod kif;
 pub mod record;
 
 pub use csa::{parse_csa_multi, parse_csa_str};
+pub use hcpe::{game_to_hcpe_rows, HcpeError, HcpeRow};
 pub use kif::parse_kif_str;
 pub use record::{GameRecord, KifuParseError, WIN_BLACK, WIN_DRAW, WIN_WHITE};

@@ -5,6 +5,7 @@ members = [
     "rust/maou_index",
     "rust/maou_shogi",
     "rust/maou_search",
+    "rust/maou_convert",
 ]
 resolver = "2"
 
@@ -31,6 +32,8 @@ thiserror = "2.0"
 rustc-hash = "2.1"
 arrayvec = "0.7"
 tempfile = "3.26"
+rayon = "1.10"
+encoding_rs = "0.8"
 
 # Build profile optimizations for memory-constrained environments
 [profile.dev]

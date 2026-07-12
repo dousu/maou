@@ -5,21 +5,28 @@ use std::sync::Arc;
 ///
 /// HCPEフォーマットは棋譜データを効率的に保存するための構造．
 /// 各レコードは1つの局面とその評価値，指し手，対局情報を含む．
+///
+/// 型は現行の Polars 由来出力 (`domain/data/schema.py` の
+/// `get_hcpe_polars_schema` → Arrow) と bit-exact に一致させている:
+/// large_binary / large_utf8 / large_list<uint16> と全フィールド nullable．
+/// これにより Rust 側 (`maou_convert`) で組み立てた RecordBatch が
+/// Polars 出力の feather と同一 schema になる (parity gate)．
+/// `ratings` は可変長 (KIF はレーティング欠損で空リスト，CSA は 2 要素)．
 pub fn hcpe_schema() -> Schema {
     Schema::new(vec![
-        Field::new("hcp", DataType::FixedSizeBinary(32), false),
-        Field::new("eval", DataType::Int16, false),
-        Field::new("bestMove16", DataType::Int16, false),
-        Field::new("gameResult", DataType::Int8, false),
-        Field::new("id", DataType::Utf8, false),
-        Field::new("partitioningKey", DataType::Date32, false),
+        Field::new("hcp", DataType::LargeBinary, true),
+        Field::new("eval", DataType::Int16, true),
+        Field::new("bestMove16", DataType::Int16, true),
+        Field::new("gameResult", DataType::Int8, true),
+        Field::new("id", DataType::LargeUtf8, true),
+        Field::new("partitioningKey", DataType::Date32, true),
         Field::new(
             "ratings",
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::UInt16, false)), 2),
-            false,
+            DataType::LargeList(Arc::new(Field::new("item", DataType::UInt16, true))),
+            true,
         ),
-        Field::new("endgameStatus", DataType::Utf8, false),
-        Field::new("moves", DataType::Int16, false),
+        Field::new("endgameStatus", DataType::LargeUtf8, true),
+        Field::new("moves", DataType::Int16, true),
     ])
 }
 
