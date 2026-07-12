@@ -2,7 +2,7 @@
 title: hcpe extra 削除に伴う docs 同期
 date: 2026-07-12
 status: applied
-applied_in: PENDING
+applied_in: 6a357fe
 target:
   - docs/commands/hcpe_convert.md
 ---
