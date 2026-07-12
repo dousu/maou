@@ -337,7 +337,7 @@ class SingleEpochBenchmark:
         )
         total_memory = torch.cuda.get_device_properties(
             self.device
-        ).total_mem
+        ).total_memory
 
         return GPUMemoryBreakdown(
             model_parameters_bytes=model_param_bytes,
