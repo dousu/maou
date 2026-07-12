@@ -184,7 +184,7 @@ cargo test --release -p maou_shogi -- <test_name> --nocapture --ignored
 | テスト名 | バジェット | 備考 |
 |---|---|---|
 | `test_29te` | - | mid 1te/3te/29te canonical (396,516 nodes (find_shortest 総数) / mate-29 / STRICT Some(29)) |
-| `test_39te_measure` | 30M nodes (default) | 39te canonical (17,545,528 nodes / mate-39 / STRICT Some(39) / canonical PV) |
+| `test_39te_measure` | 30M nodes (default) | 39te canonical (17,593,615 nodes / mate-39 / STRICT Some(39) / canonical PV) |
 | `test_counter_check_example` | - | 逆王手詰将棋 mate-7 健全性 |
 | `test_counter_check_diagnostic` | - | 診断用ログ出力 |
 | `test_no_checkmate_counter_check_probe` | 10M nodes | ノード予算プローブ |
