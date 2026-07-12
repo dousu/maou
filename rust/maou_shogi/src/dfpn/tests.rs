@@ -925,9 +925,12 @@ fn test_39te_measure() {
                     "39te は真の最短 39 手を返すべき: {}",
                     moves.len()
                 );
+                // canonical 更新履歴: 17,545,528 → 17,593,615 (maou_shogi 5.7.1 の
+                // 二歩マスク修正 occupied_files で受け方の非合法 P*8i 系が消え，
+                // 探索順序が変化．mate-39/STRICT Some(39)/PV は不変)
                 assert_eq!(
-                    nodes_searched, 17_545_528,
-                    "39te の探索ノード数が canonical (17,545,528) から乖離"
+                    nodes_searched, 17_593_615,
+                    "39te の探索ノード数が canonical (17,593,615) から乖離"
                 );
             }
         }
