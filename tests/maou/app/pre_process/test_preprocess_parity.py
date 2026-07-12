@@ -89,3 +89,52 @@ class TestPreprocessParity:
                 golden["pieces_in_hand"][i],
                 err_msg=f"piecesInHand mismatch at hash {h}",
             )
+
+
+class TestRustBulkPreprocessParity:
+    """Rust 一括 API (maou._rust.maou_search) と Python 実装の交差検証．
+
+    前処理 hot path を Rust に置換する前の parity gate．
+    Python 側実装が Rust 委譲になった後も，このテストは
+    「per-position の意味論が golden 時点と同じ」ことの回帰検証として機能する．
+    """
+
+    def test_preprocess_hcpes_matches_python_loop(self) -> None:
+        """Rust preprocess_hcpes が Python の per-position 計算と一致する．"""
+        from maou._rust.maou_search import preprocess_hcpes
+
+        from maou.app.pre_process.transform import Transform
+        from maou.domain.board import shogi
+
+        data = _build_input()
+        n = len(data)
+
+        hashes, labels, results = preprocess_hcpes(
+            np.ascontiguousarray(data["hcp"]),
+            np.ascontiguousarray(data["bestMove16"]),
+            np.ascontiguousarray(data["gameResult"]).astype(
+                np.int8
+            ),
+        )
+        assert hashes.dtype == np.uint64
+        assert labels.dtype == np.uint16
+        assert results.dtype == np.float32
+
+        board = shogi.Board()
+        for i in range(n):
+            board.set_hcp(data["hcp"][i])
+            assert hashes[i] == board.hash(), (
+                f"hash mismatch at {i}"
+            )
+            assert labels[
+                i
+            ] == Transform.board_move_label_from_board(
+                board,
+                int(data["bestMove16"][i]),
+            ), f"move label mismatch at {i}"
+            assert results[
+                i
+            ] == Transform.board_game_result_from_board(
+                board,
+                int(data["gameResult"][i]),
+            ), f"result value mismatch at {i}"

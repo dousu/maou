@@ -76,3 +76,35 @@ class TestStage2Golden:
                 golden["legal_moves_label"][i],
                 err_msg=f"legalMovesLabel mismatch at index {i}",
             )
+
+
+class TestRustBulkStage2Golden:
+    """Rust 一括 API (encode_hcp_features / legal_move_masks) の golden 検証．
+
+    golden はリファクタ前の Python 実装 (make_board_id_positions /
+    make_pieces_in_hand / 後手番の盤面再構築 + make_move_label) の出力．
+    Rust 側は後手番の合法手を「元盤面の合法手を後手視点でラベル化」で
+    計算しており，このテストが盤面再構築方式との同値性を実データで検証する．
+    """
+
+    def test_bulk_features_and_masks_match_golden(self) -> None:
+        from maou._rust.maou_search import (
+            encode_hcp_features,
+            legal_move_masks,
+        )
+
+        golden = np.load(GOLDEN_NPZ)
+        hcps = np.ascontiguousarray(golden["hcps"])
+
+        boards, hands = encode_hcp_features(hcps)
+        np.testing.assert_array_equal(
+            boards, golden["board_id_positions"]
+        )
+        np.testing.assert_array_equal(
+            hands, golden["pieces_in_hand"]
+        )
+
+        masks = legal_move_masks(hcps)
+        np.testing.assert_array_equal(
+            masks, golden["legal_moves_label"]
+        )

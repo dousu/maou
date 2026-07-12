@@ -1,6 +1,7 @@
 //! maou_shogi submodule - PyO3 bindings for Shogi board operations
 
-use numpy::{PyArray3, PyArrayMethods};
+use numpy::ndarray::Array2;
+use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray3, PyArrayMethods};
 use pyo3::prelude::*;
 
 use maou_shogi::board::Board;
@@ -199,6 +200,29 @@ impl PyBoard {
     /// Zobrist ハッシュ値を返す．
     fn zobrist_hash(&self) -> u64 {
         self.board.hash()
+    }
+
+    /// 手番視点に正規化した駒 ID 盤面を (9, 9) uint8 の ndarray で返す．
+    ///
+    /// 後手番なら 180 度回転し先手/後手の駒 ID を入れ替える (正規化後は
+    /// 手番側 1-14 / 相手側 15-28)．メモリ配置は row-major `[段][筋]`．
+    /// Python 側 `make_board_id_positions` の委譲先 (maou_search::feature)．
+    fn board_id_positions<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<u8>> {
+        let mut out = [0u8; 81];
+        maou_search::feature::encode_board_ids(&self.board, &mut out);
+        Array2::from_shape_vec((9, 9), out.to_vec())
+            .expect("81 要素は (9, 9) に変形できる")
+            .into_pyarray(py)
+    }
+
+    /// 手番側を先頭にした持ち駒枚数を (14,) uint8 の ndarray で返す．
+    ///
+    /// 順序は手番側 [歩香桂銀金角飛] + 相手側 [同]．
+    /// Python 側 `make_pieces_in_hand` の委譲先 (maou_search::feature)．
+    fn hand_counts<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u8>> {
+        let mut out = [0u8; 14];
+        maou_search::feature::encode_hand_counts(&self.board, &mut out);
+        out.to_vec().into_pyarray(py)
     }
 
     /// 盤面が妥当かどうかを検証する．

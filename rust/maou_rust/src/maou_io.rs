@@ -89,6 +89,41 @@ fn load_feather_file<'py>(py: Python<'py>, file_path: String) -> PyResult<Bound<
     batch.to_pyarrow(py)
 }
 
+/// 複数の RecordBatch を 1 つの Arrow IPC (Feather) ファイルに保存する．
+///
+/// 単一バッチへの `combine_chunks()` を強制せず，バッチ列をそのまま書き出す
+/// (大規模データのメモリピーク回避)．
+/// GIL を解放して I/O を実行するため，他の Python スレッドをブロックしない．
+#[pyfunction]
+fn save_feather_batches(
+    py: Python,
+    batches: Vec<Bound<'_, PyAny>>,
+    file_path: String,
+) -> PyResult<()> {
+    let batches: Vec<RecordBatch> = batches
+        .iter()
+        .map(RecordBatch::from_pyarrow_bound)
+        .collect::<PyResult<_>>()?;
+    py.detach(|| maou_io_core::arrow_io::save_feather_batches(&batches, &file_path))
+        .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    Ok(())
+}
+
+/// Arrow IPC (Feather) ファイルを RecordBatch のリストとして読み込む．
+///
+/// ファイル内のバッチ構造を保ったまま返す (単一バッチへの結合をしない)．
+/// GIL を解放して I/O を実行するため，他の Python スレッドをブロックしない．
+#[pyfunction]
+fn load_feather_batches<'py>(
+    py: Python<'py>,
+    file_path: String,
+) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    let batches = py
+        .detach(|| maou_io_core::arrow_io::load_feather_batches(&file_path))
+        .map_err(|e: MaouIOError| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?;
+    batches.iter().map(|b| b.to_pyarrow(py)).collect()
+}
+
 // Sparse array compression functions
 
 /// 密な整数配列をスパース表現(インデックス配列，値配列)に圧縮する．
@@ -196,6 +231,8 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_function(wrap_pyfunction!(load_preprocessing_feather, &m)?)?;
     m.add_function(wrap_pyfunction!(save_feather_file, &m)?)?;
     m.add_function(wrap_pyfunction!(load_feather_file, &m)?)?;
+    m.add_function(wrap_pyfunction!(save_feather_batches, &m)?)?;
+    m.add_function(wrap_pyfunction!(load_feather_batches, &m)?)?;
     m.add_function(wrap_pyfunction!(compress_sparse_array_rust, &m)?)?;
     m.add_function(wrap_pyfunction!(expand_sparse_array_rust, &m)?)?;
     m.add_function(wrap_pyfunction!(add_sparse_arrays_rust, &m)?)?;
