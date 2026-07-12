@@ -965,10 +965,14 @@ def convert_hcpe_df_to_numpy(df: "pl.DataFrame") -> np.ndarray:
     )
     array["partitioningKey"] = partitioning_key
 
-    # ratings: list of 2 uint16 values
+    # ratings: list of 2 uint16 values．
+    # KIF 由来の HCPE はレーティング情報が無く空リストになるため，
+    # 長さ 2 でないものは [0, 0] (レーティング不明) に正規化する
     ratings_list = df["ratings"].to_list()
     ratings_arrays = [
-        item if item is not None else [0, 0]
+        item
+        if item is not None and len(item) == 2
+        else [0, 0]
         for item in ratings_list
     ]
     array["ratings"] = np.array(ratings_arrays, dtype=np.uint16)
