@@ -1,0 +1,10 @@
+hcp: large_binary
+eval: int16
+bestMove16: int16
+gameResult: int8
+id: large_string
+partitioningKey: date32[day]
+ratings: large_list<item: uint16>
+  child 0, item: uint16
+endgameStatus: large_string
+moves: int16
