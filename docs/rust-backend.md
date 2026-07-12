@@ -4,13 +4,15 @@
 
 The project uses Rust (PyO3 + maturin) for high-performance operations．
 Rust ワークスペースは `rust/` 以下に配置され，単一の `cdylib` (`maou_rust`) から
-3 つのサブモジュールとして Python に公開される．
+5 つのサブモジュールとして Python に公開される．
 
 ```
 maou._rust
-├── maou._rust.maou_io      # Arrow IPC I/O
-├── maou._rust.maou_index   # インデックス操作
-└── maou._rust.maou_shogi   # 将棋盤面操作・合法手生成・特徴量抽出
+├── maou._rust.maou_io       # Arrow IPC I/O (feather バッチ入出力・スパース配列)
+├── maou._rust.maou_index    # インデックス操作
+├── maou._rust.maou_shogi    # 将棋盤面操作・合法手生成・特徴量抽出・棋譜パーサ
+├── maou._rust.maou_search   # MCTS 1 局面探索エンジン・前処理一括エンコード
+└── maou._rust.maou_convert  # 棋譜 (CSA/KIF) → HCPE 一括変換パイプライン
 ```
 
 ## Initial Rust Setup
@@ -293,9 +295,11 @@ rust/
 ├── maou_rust/              # PyO3 cdylib (Python バインディング)
 │   └── src/
 │       ├── lib.rs          # エントリポイント，サブモジュール登録
-│       ├── maou_io.rs      # Arrow I/O ラッパー
+│       ├── maou_io.rs      # Arrow I/O ラッパー (feather バッチ入出力含む)
 │       ├── maou_index.rs   # インデックスラッパー
-│       └── maou_shogi.rs   # 将棋エンジンラッパー (PyBoard 等)
+│       ├── maou_shogi.rs   # 将棋エンジンラッパー (PyBoard 等)
+│       ├── maou_search.rs  # 探索 + 前処理一括エンコードラッパー
+│       └── maou_convert.rs # 棋譜→HCPE 一括変換ラッパー
 ├── maou_io/                # Arrow IPC I/O クレート
 │   └── src/
 │       ├── lib.rs
@@ -314,7 +318,17 @@ rust/
 │       ├── lib.rs
 │       ├── evaluator.rs    # Evaluator trait (NN 推論の抽象境界) + MockEvaluator
 │       ├── tree.rs         # 固定容量ノードプール + lock-free 統計
-│       └── search.rs       # PUCT 探索本体 (バッチ収集 + virtual loss)
+│       ├── search.rs       # PUCT 探索本体 (バッチ収集 + virtual loss)
+│       ├── feature.rs      # NN 入力エンコード (board ID 9×9 + 持ち駒 14)
+│       ├── label.rs        # 指し手 → policy ラベル (1496 クラス)
+│       └── preprocess.rs   # HCPE 前処理一括エンコード (hash/label/特徴量/合法手)
+├── maou_convert/           # 棋譜 → HCPE 一括変換クレート
+│   └── src/
+│       ├── lib.rs
+│       ├── decode.rs       # UTF-8 → cp932 fallback デコード
+│       ├── date.rs         # 開始日時 → Date32 (chrono 非依存)
+│       ├── pipeline.rs     # フィルタ + partitioningKey + rayon 並列
+│       └── batch.rs        # HcpeRecord 列 → Arrow RecordBatch
 └── maou_shogi/             # 将棋エンジンクレート
     └── src/
         ├── lib.rs
@@ -324,7 +338,8 @@ rust/
         ├── kifu/           # CSA/KIF 棋譜パーサ (cshogi parity 検証済み)
         │   ├── csa.rs      #   CSA V2.2 (P+/P-/AL は spec 準拠の独自拡張)
         │   ├── kif.rs      #   KIF 柿木形式 (不成対応，BOD は明示エラー)
-        │   └── record.rs   #   GameRecord + cshogi 互換 move エンコード
+        │   ├── record.rs   #   GameRecord + cshogi 互換 move エンコード
+        │   └── hcpe.rs     #   GameRecord → HCPE 行列変換 (局面再生)
         ├── movegen.rs      # 合法手生成
         ├── moves.rs        # Move エンコーディング (cshogi 互換 16-bit + 拡張)
         ├── piece.rs        # 駒の内部実装 (cshogi 互換変換のみ公開)
