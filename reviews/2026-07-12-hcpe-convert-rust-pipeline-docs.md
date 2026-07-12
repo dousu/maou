@@ -2,7 +2,7 @@
 title: HCPE 変換の Rust パイプライン移行に伴う docs 同期
 date: 2026-07-12
 status: applied
-applied_in: PENDING
+applied_in: af63052
 target:
   - docs/commands/hcpe_convert.md
   - docs/rust-backend.md
