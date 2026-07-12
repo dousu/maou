@@ -1,7 +1,8 @@
 ---
 title: 二歩マスク修正に伴う dfpn 39te canonical 値の docs 同期
 date: 2026-07-12
-status: pending
+status: applied
+applied_in: faf6e08
 target:
   - CLAUDE.md
 ---
