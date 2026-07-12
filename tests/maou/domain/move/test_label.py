@@ -876,3 +876,21 @@ class TestLabel:
             )
             == 1
         )
+
+    def test_make_result_value_hcpe_raw_values(self) -> None:
+        """HCPE の gameResult 生値 (0=引分, 1=先手勝, 2=後手勝) との対応を固定する.
+
+        回帰: shogi.Result の旧定義 (BLACK_WIN=0, WHITE_WIN=1, DRAW=2) が
+        HCPE 規約とずれており，教師値が全て取り違っていた．enum 値を
+        HCPE 規約に揃えたため，生値でも正しい教師値になることを検証する．
+        """
+        assert (
+            label.make_result_value(shogi.Turn.BLACK, 0) == 0.5
+        )
+        assert label.make_result_value(shogi.Turn.BLACK, 1) == 1
+        assert label.make_result_value(shogi.Turn.BLACK, 2) == 0
+        assert (
+            label.make_result_value(shogi.Turn.WHITE, 0) == 0.5
+        )
+        assert label.make_result_value(shogi.Turn.WHITE, 1) == 0
+        assert label.make_result_value(shogi.Turn.WHITE, 2) == 1

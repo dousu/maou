@@ -58,9 +58,18 @@ class Turn(IntEnum):
 
 
 class Result(IntEnum):
-    BLACK_WIN = 0
-    WHITE_WIN = 1
-    DRAW = 2
+    """対局結果．
+
+    HCPE の gameResult 列および GameRecord.win と同じ規約
+    (0=引き分け, 1=先手勝ち, 2=後手勝ち)．
+    旧定義 (BLACK_WIN=0, WHITE_WIN=1, DRAW=2) はこの規約とずれており，
+    make_result_value が HCPE の gameResult を誤読して value head の
+    教師値が全て取り違っていた．
+    """
+
+    DRAW = 0
+    BLACK_WIN = 1
+    WHITE_WIN = 2
 
 
 class PieceId(IntEnum):

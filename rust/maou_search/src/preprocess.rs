@@ -56,24 +56,18 @@ impl fmt::Display for PreprocessError {
 
 impl std::error::Error for PreprocessError {}
 
-/// gameResult (cshogi 規約: 0=引き分け, 1=先手勝ち, 2=後手勝ち) から
-/// 手番側の教師値を計算する．
+/// gameResult (HCPE 規約: 0=引き分け, 1=先手勝ち, 2=後手勝ち) から
+/// 手番側の教師値 (1=手番側勝ち, 0=負け, 0.5=引き分け) を計算する．
 ///
-/// # 既知バグの bit-exact 移植
-///
-/// Python 正実装 `make_result_value` (label.py) は gameResult を
-/// `shogi.Result` (BLACK_WIN=0, WHITE_WIN=1, DRAW=2) の値で match するため，
-/// HCPE に保存される cshogi 規約の値とずれている (先手番で先手勝ち(1)→0.0，
-/// 引き分け(0)→1.0，後手勝ち(2)→0.5)．parity gate (golden fixture) を
-/// 通すため現行挙動をそのまま移植している．修正時は Python 側と golden を
-/// 同一コミットで更新すること．
+/// 旧実装は Python `make_result_value` の gameResult 規約取り違え
+/// (`shogi.Result` 旧定義 BLACK_WIN=0/WHITE_WIN=1/DRAW=2 で解釈) を
+/// bit-exact 移植していた．規約修正に伴い Python 側 (`shogi.Result` の
+/// 値を HCPE 規約へ変更) と同一コミットで正しい対応に更新済み．
 #[inline]
 pub fn result_value(turn: Color, game_result: i8) -> f32 {
     match (turn, game_result) {
-        (Color::Black, 0) => 1.0,
-        (Color::Black, 1) => 0.0,
-        (Color::White, 0) => 0.0,
-        (Color::White, 1) => 1.0,
+        (Color::Black, 1) | (Color::White, 2) => 1.0,
+        (Color::Black, 2) | (Color::White, 1) => 0.0,
         _ => 0.5,
     }
 }
@@ -213,15 +207,15 @@ mod tests {
     }
 
     #[test]
-    fn test_result_value_replicates_python_bug() {
-        // Python make_result_value の現行挙動 (バグ込み) の固定．
-        // gameResult は cshogi 規約 (0=draw, 1=black win, 2=white win)．
-        assert_eq!(result_value(Color::Black, 0), 1.0); // 引き分け→「勝ち」
-        assert_eq!(result_value(Color::Black, 1), 0.0); // 先手勝ち→「負け」
-        assert_eq!(result_value(Color::Black, 2), 0.5); // 後手勝ち→「引き分け」
-        assert_eq!(result_value(Color::White, 0), 0.0);
-        assert_eq!(result_value(Color::White, 1), 1.0);
-        assert_eq!(result_value(Color::White, 2), 0.5);
+    fn test_result_value_hcpe_convention() {
+        // gameResult は HCPE 規約 (0=draw, 1=black win, 2=white win)．
+        // 手番側視点の教師値 (1=勝ち, 0=負け, 0.5=引き分け) を返す．
+        assert_eq!(result_value(Color::Black, 0), 0.5);
+        assert_eq!(result_value(Color::Black, 1), 1.0);
+        assert_eq!(result_value(Color::Black, 2), 0.0);
+        assert_eq!(result_value(Color::White, 0), 0.5);
+        assert_eq!(result_value(Color::White, 1), 0.0);
+        assert_eq!(result_value(Color::White, 2), 1.0);
     }
 
     #[test]
@@ -235,8 +229,8 @@ mod tests {
             process_hcpes(&hcps, &[m16 as i16], &[1]).expect("有効な入力");
         assert_eq!(hashes, vec![board.hash()]);
         assert_eq!(labels, vec![move_label(Color::Black, m)]);
-        // gameResult=1 (先手勝ち) × 先手番 → 現行バグ挙動で 0.0
-        assert_eq!(results, vec![0.0]);
+        // gameResult=1 (先手勝ち) × 先手番 → 手番側勝ち = 1.0
+        assert_eq!(results, vec![1.0]);
     }
 
     #[test]

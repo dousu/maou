@@ -631,11 +631,12 @@ def make_result_value(turn: int, game_result: int) -> float:
 
     Args:
         turn: Current player turn (BLACK or WHITE)
-        game_result: Game result (BLACK_WIN, WHITE_WIN, or DRAW)
+        game_result: Game result in HCPE convention
+            (0=DRAW, 1=BLACK_WIN, 2=WHITE_WIN — shogi.Result と同値)
 
     Returns:
-        Value between -1 and 1 representing game outcome
-        from current player's perspective
+        Value in {0, 0.5, 1} representing game outcome
+        from current player's perspective (1=win, 0=loss, 0.5=draw)
     """
     match (turn, game_result):
         case (shogi.Turn.BLACK, shogi.Result.BLACK_WIN):

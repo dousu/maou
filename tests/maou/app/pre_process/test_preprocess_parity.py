@@ -8,9 +8,11 @@ cshogi 遺構リファクタの parity gate．golden はリファクタ前実装
 production 経路と同じ convert_hcpe_df_to_numpy で構築する．
 
 NOTE: golden の resultValue 相当 (win_counts/move_win_values) は
-gameResult 規約バグ (cshogi 規約 0=draw/1=black/2=white を
-shogi.Result で解釈) を含む現行挙動を固定している．
-バグ修正コミットで期待値を明示的に更新する．
+gameResult 規約バグ (旧 shogi.Result 定義による誤読) の修正に伴い
+修正後の値で再生成済み (hashes/labels/特徴量はリファクタ前実装と
+bit-exact のまま)．規約の正しさ自体は
+test_label.py::test_make_result_value_hcpe_raw_values と Rust 側
+test_result_value_hcpe_convention が生値で固定している．
 """
 
 from pathlib import Path

@@ -44,5 +44,7 @@ floodgate 2025-01-05 (https://wdoor.c.u-tokyo.ac.jp/shogi/x/2025/01/05/) より:
 - stage2: `tests/maou/app/utility/resources/golden/stage2_golden.npz`
   (同入力の unique 局面ごとの特徴量/合法手ラベル)
 
-前処理 golden の値には gameResult 規約バグ (cshogi 規約と shogi.Result の取り違え)
-を含む現行挙動が固定されている．バグ修正コミットで期待値を明示更新する．
+前処理 golden の win 系列 (win_counts/move_win_values) は gameResult 規約バグ
+(旧 shogi.Result 定義による誤読) の修正に伴い修正後の値で再生成済み．
+hashes/labels/特徴量はリファクタ前実装と bit-exact のまま．
+stage2 golden は二歩マスク修正 (occupied_files) 後の movegen で再生成済み．
