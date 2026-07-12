@@ -90,7 +90,7 @@ class Stage2DataGenerationUseCase:
         """
         import duckdb
 
-        from maou.domain.board import shogi
+        from maou._rust.maou_search import hcp_hashes
 
         # Collect feather files
         feather_files = sorted(input_dir.rglob("*.feather"))
@@ -110,7 +110,6 @@ class Stage2DataGenerationUseCase:
                 """
             )
 
-            board = shogi.Board()
             total_input = 0
 
             for file_path in tqdm(
@@ -125,22 +124,15 @@ class Stage2DataGenerationUseCase:
                     )
                     continue
 
-                hcp_series = df["hcp"]
-                batch_size = len(hcp_series)
+                hcp_bytes_list = df["hcp"].to_list()
+                batch_size = len(hcp_bytes_list)
                 total_input += batch_size
 
-                # Compute hash for each HCP
-                hash_ids = np.empty(batch_size, dtype=np.uint64)
-                hcp_bytes_list = []
-
-                for i in range(batch_size):
-                    hcp_bytes = hcp_series[i]
-                    hcp_array = np.frombuffer(
-                        hcp_bytes, dtype=np.uint8
-                    )
-                    board.set_hcp(hcp_array)
-                    hash_ids[i] = board.hash()
-                    hcp_bytes_list.append(hcp_bytes)
+                # Rust 一括計算で全 HCP の zobrist hash を取得
+                hcps = np.frombuffer(
+                    b"".join(hcp_bytes_list), dtype=np.uint8
+                ).reshape(-1, 32)
+                hash_ids = hcp_hashes(hcps)
 
                 # Insert into DuckDB with dedup (INSERT OR IGNORE)
                 batch_df = pl.DataFrame(  # noqa: F841 (used by DuckDB)
@@ -199,18 +191,13 @@ class Stage2DataGenerationUseCase:
         """
         import duckdb
 
-        from maou.app.pre_process.feature import (
-            make_board_id_positions,
-            make_pieces_in_hand,
+        from maou._rust.maou_search import (
+            encode_hcp_features,
+            legal_move_masks,
         )
-        from maou.domain.board import shogi
         from maou.domain.data.rust_io import save_stage2_df
         from maou.domain.data.schema import (
             get_stage2_polars_schema,
-        )
-        from maou.domain.move.label import (
-            MOVE_LABELS_NUM,
-            make_move_label,
         )
 
         schema = get_stage2_polars_schema()
@@ -224,7 +211,6 @@ class Stage2DataGenerationUseCase:
                 count_row[0] if count_row is not None else 0
             )
 
-            board = shogi.Board()
             output_files: list[Path] = []
             chunk_idx = 0
             offset = 0
@@ -249,68 +235,30 @@ class Stage2DataGenerationUseCase:
                     if not rows:
                         break
 
-                    ids: list[int] = []
+                    ids: list[int] = [
+                        hash_id for hash_id, _ in rows
+                    ]
+
+                    # チャンク内の全 HCP を束ねて Rust 一括エンコード
+                    # (特徴量 + 手番視点正規化済み合法手ラベルマスク)
+                    hcps = np.frombuffer(
+                        b"".join(
+                            hcp_bytes for _, hcp_bytes in rows
+                        ),
+                        dtype=np.uint8,
+                    ).reshape(-1, 32)
+                    board_ids, hands = encode_hcp_features(hcps)
+                    legal_masks = legal_move_masks(hcps)
+
                     board_id_positions_list: list[
                         list[list[int]]
-                    ] = []
-                    pieces_in_hand_list: list[list[int]] = []
-                    legal_moves_labels_list: list[
-                        list[int]
-                    ] = []
-
-                    for hash_id, hcp_bytes in rows:
-                        hcp_array = np.frombuffer(
-                            hcp_bytes, dtype=np.uint8
-                        )
-                        board.set_hcp(hcp_array)
-
-                        # Generate features
-                        board_positions = (
-                            make_board_id_positions(board)
-                        )
-                        pieces_in_hand = make_pieces_in_hand(
-                            board
-                        )
-
-                        # Generate legal move labels
-                        # 盤面は先手視点に正規化済みなので，
-                        # 正規化後の盤面の合法手からラベルを生成する
-                        legal_labels = np.zeros(
-                            MOVE_LABELS_NUM,
-                            dtype=np.uint8,
-                        )
-                        if board.get_turn() == shogi.Turn.BLACK:
-                            # 先手番: 正規化なし，元のboardの合法手をそのまま使用
-                            for move in board.get_legal_moves():
-                                label = make_move_label(
-                                    shogi.Turn.BLACK,
-                                    move,
-                                )
-                                legal_labels[label] = 1
-                        else:
-                            # 後手番: 盤面が180度回転されているため，
-                            # 正規化後の盤面を再構築して合法手を取得
-                            normalized_board = self._reconstruct_normalized_board(
-                                board_positions,
-                                pieces_in_hand,
-                            )
-                            for move in normalized_board.get_legal_moves():
-                                label = make_move_label(
-                                    shogi.Turn.BLACK,
-                                    move,
-                                )
-                                legal_labels[label] = 1
-
-                        ids.append(hash_id)
-                        board_id_positions_list.append(
-                            board_positions.tolist()
-                        )
-                        pieces_in_hand_list.append(
-                            pieces_in_hand.tolist()
-                        )
-                        legal_moves_labels_list.append(
-                            legal_labels.tolist()
-                        )
+                    ] = board_ids.tolist()
+                    pieces_in_hand_list: list[list[int]] = (
+                        hands.tolist()
+                    )
+                    legal_moves_labels_list: list[list[int]] = (
+                        legal_masks.tolist()
+                    )
 
                     chunk_df = pl.DataFrame(
                         {

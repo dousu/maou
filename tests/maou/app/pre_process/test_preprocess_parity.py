@@ -102,7 +102,6 @@ class TestRustBulkPreprocessParity:
     def test_preprocess_hcpes_matches_python_loop(self) -> None:
         """Rust preprocess_hcpes が Python の per-position 計算と一致する．"""
         from maou._rust.maou_search import preprocess_hcpes
-
         from maou.app.pre_process.transform import Transform
         from maou.domain.board import shogi
 

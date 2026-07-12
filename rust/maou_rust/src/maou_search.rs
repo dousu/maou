@@ -497,6 +497,30 @@ fn legal_move_masks<'py>(
     Ok(masks.into_pyarray(py))
 }
 
+/// N 局面の zobrist hash を一括計算する．
+///
+/// stage2 データ生成の重複排除 (unique HCP 収集) の置き換え．
+/// GIL を解放して計算する．
+///
+/// # 引数
+///
+/// - `hcp`: HCP 配列 (N, 32) uint8
+///
+/// # 返り値
+///
+/// `hashes (N,) uint64`
+#[pyfunction]
+fn hcp_hashes<'py>(
+    py: Python<'py>,
+    hcp: PyReadonlyArray2<'py, u8>,
+) -> PyResult<Bound<'py, PyArray1<u64>>> {
+    let (_, hcp_vec) = hcp_array_to_vec(&hcp)?;
+    let hashes = py
+        .detach(move || preprocess::hcp_hashes(&hcp_vec))
+        .map_err(preprocess_err)?;
+    Ok(hashes.into_pyarray(py))
+}
+
 /// 指し手 1 つを policy ラベル (0..1496) に変換する．
 ///
 /// Python `make_move_label` の Rust 委譲先 (手番視点正規化込み)．
@@ -527,6 +551,7 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_function(wrap_pyfunction!(preprocess_hcpes, &m)?)?;
     m.add_function(wrap_pyfunction!(encode_hcp_features, &m)?)?;
     m.add_function(wrap_pyfunction!(legal_move_masks, &m)?)?;
+    m.add_function(wrap_pyfunction!(hcp_hashes, &m)?)?;
     m.add_function(wrap_pyfunction!(move_label, &m)?)?;
     m.add("MOVE_LABELS_NUM", maou_search::label::MOVE_LABELS_NUM)?;
 

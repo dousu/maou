@@ -137,6 +137,18 @@ pub fn process_hcpes(
     Ok((hashes, labels, results))
 }
 
+/// N 局面の zobrist hash を一括計算する．
+///
+/// stage2 データ生成の重複排除 (unique HCP 収集) 用．
+pub fn hcp_hashes(hcps: &[u8]) -> Result<Vec<u64>, PreprocessError> {
+    let n = split_hcps(hcps)?;
+    let mut hashes = Vec::with_capacity(n);
+    for i in 0..n {
+        hashes.push(board_at(hcps, i)?.hash());
+    }
+    Ok(hashes)
+}
+
 /// N 局面の NN 入力特徴量 (boardIdPositions N×81 u8, piecesInHand N×14 u8) を
 /// 一括エンコードする．
 ///
