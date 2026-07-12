@@ -111,20 +111,17 @@ class TestHcpeGolden:
         )
 
     def test_multi_game_csa(self, tmp_path: Path) -> None:
-        """複数局 CSA の変換挙動．
+        """複数局 CSA は全局変換される (承認済み挙動変更)．
 
-        現行実装は先頭 1 局のみ変換する (残局は破棄)．
-        Rust パイプライン切替コミットで全局変換
-        (golden/csa_multi_game.expected_all_games.feather,
-        id: game0 は従来形式, game>=1 は {stem}.hcpe_g{g}_{idx})
-        へ期待値を切り替える (承認済み挙動変更)．
+        id: game0 は従来形式 {stem}.hcpe_{idx}，game>=1 は
+        {stem}.hcpe_g{g}_{idx}．従来の Python 実装は先頭 1 局のみ変換していた．
         """
         input_path = INPUT_DIR / "csa_multi_game.csa"
         _convert([input_path], "csa", tmp_path)
 
         golden = pl.read_ipc(
             GOLDEN_DIR
-            / "csa_multi_game.current_first_game.feather"
+            / "csa_multi_game.expected_all_games.feather"
         )
         actual = pl.read_ipc(
             tmp_path / "csa_multi_game.feather"
@@ -132,20 +129,23 @@ class TestHcpeGolden:
         assert_frame_equal(actual, golden)
 
     def test_sjis_kif(self, tmp_path: Path) -> None:
-        """cp932 エンコードの .kif の変換挙動．
+        """cp932 エンコードの .kif が UTF-8 版と同一内容に変換される
+        (承認済み挙動変更)．
 
-        現行実装は read_text() が UTF-8 固定のためデコードエラーになる
-        (sequential モードは例外を再送出する)．
-        Rust パイプライン切替コミットで UTF-8→cp932 fallback により
-        UTF-8 版と同一内容 (id の stem のみ異なる,
-        golden/kif_test_data_sjis.expected.feather) へ期待値を
-        切り替える (承認済み挙動変更)．
+        Rust 側の UTF-8→cp932 fallback により，従来 read_text() の
+        UTF-8 固定で読めなかった cp932 .kif が変換できる．
+        id の stem のみ UTF-8 版と異なる．
         """
         input_path = INPUT_DIR / "test_data_sjis.kif"
-        with pytest.raises(
-            Exception, match="codec can't decode"
-        ):
-            _convert([input_path], "kif", tmp_path)
+        _convert([input_path], "kif", tmp_path)
+
+        golden = pl.read_ipc(
+            GOLDEN_DIR / "kif_test_data_sjis.expected.feather"
+        )
+        actual = pl.read_ipc(
+            tmp_path / "test_data_sjis.feather"
+        )
+        assert_frame_equal(actual, golden)
 
     def test_arrow_schema_stable(self, tmp_path: Path) -> None:
         """出力 .feather の Arrow schema が固定されている．
