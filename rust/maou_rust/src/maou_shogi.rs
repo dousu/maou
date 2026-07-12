@@ -1,28 +1,15 @@
 //! maou_shogi submodule - PyO3 bindings for Shogi board operations
 
 use numpy::ndarray::Array2;
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyArray3, PyArrayMethods};
+use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::prelude::*;
 
 use maou_shogi::board::Board;
 use maou_shogi::dfpn;
-use maou_shogi::feature;
 use maou_shogi::hcp;
 use maou_shogi::movegen;
 use maou_shogi::moves::{self, Move};
-use maou_shogi::types::{Color, Piece, Square, FEATURES_NUM};
-
-/// PyArray3<f32> の feature planes の形状を検証する．
-fn validate_feature_array_shape(arr: &Bound<'_, PyArray3<f32>>) -> PyResult<()> {
-    let shape = arr.dims();
-    let expected = [FEATURES_NUM, 9, 9];
-    if shape != expected {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "expected array shape {expected:?}, got {shape:?}"
-        )));
-    }
-    Ok(())
-}
+use maou_shogi::types::{Color, Piece, Square};
 
 /// 将棋盤面の Python バインディング．
 ///
@@ -139,35 +126,6 @@ impl PyBoard {
             .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("no moves to undo"))?;
         self.board
             .undo_move(Move::from_raw_u32(m_raw), Piece::from_raw_u8(cap_raw));
-        Ok(())
-    }
-
-    /// 先手視点の駒特徴平面 (104x9x9) を書き込む．
-    fn piece_planes<'py>(&self, arr: &Bound<'py, PyArray3<f32>>) -> PyResult<()> {
-        validate_feature_array_shape(arr)?;
-        // SAFETY: The caller must ensure no other Python reference aliases `arr`
-        // during this call. `as_array_mut()` bypasses Python-level aliasing checks;
-        // if another ndarray view shares the same buffer, this is undefined behavior.
-        // In practice, `to_piece_planes()` in shogi.py creates a new local array
-        // that is not shared, satisfying this invariant.
-        let mut rw = unsafe { arr.as_array_mut() };
-        let slice = rw
-            .as_slice_mut()
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("array must be contiguous"))?;
-        feature::piece_planes(&self.board, slice);
-        Ok(())
-    }
-
-    /// 後手視点 (180度回転) の駒特徴平面 (104x9x9) を書き込む．
-    fn piece_planes_rotate<'py>(&self, arr: &Bound<'py, PyArray3<f32>>) -> PyResult<()> {
-        validate_feature_array_shape(arr)?;
-        // SAFETY: Same invariant as `piece_planes` — caller must ensure
-        // exclusive access to `arr`. See comment in `piece_planes` for details.
-        let mut rw = unsafe { arr.as_array_mut() };
-        let slice = rw
-            .as_slice_mut()
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("array must be contiguous"))?;
-        feature::piece_planes_rotate(&self.board, slice);
         Ok(())
     }
 

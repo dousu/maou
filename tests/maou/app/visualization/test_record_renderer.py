@@ -289,7 +289,6 @@ class TestConvertToSfen:
         """生成済みStage2データからextract_display_fieldsが正しく動作することを検証する．"""
         from pathlib import Path as P
 
-        import numpy as np
         import polars as pl
 
         from maou.app.utility.stage2_data_generation import (

@@ -12,10 +12,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from maou.app.pre_process import feature
 from maou.app.pre_process.feature import (
     make_board_id_positions,
-    make_feature_from_board_state,
     make_pieces_in_hand,
 )
 from maou.domain.board.shogi import Board, PieceId
@@ -118,83 +116,6 @@ class TestStage1VsCshogiBoard:
             ),
         )
 
-    @pytest.mark.parametrize(
-        "piece_id,row,col",
-        [
-            (PieceId.FU, 6, 4),
-            (PieceId.KI, 3, 3),
-            (PieceId.KA, 7, 7),
-            (PieceId.HI, 7, 1),
-            (PieceId.TO, 2, 5),
-            (PieceId.UMA, 5, 2),
-            (PieceId.RYU, 3, 7),
-        ],
-    )
-    def test_feature_planes_from_stage1_data(
-        self, piece_id: int, row: int, col: int
-    ) -> None:
-        """Stage1のデータをmake_feature_from_board_stateに通して有効な特徴量になること."""
-        # Stage1方式のデータ
-        board_positions = np.zeros((9, 9), dtype=np.uint8)
-        board_positions[row][col] = piece_id
-        pieces_in_hand = np.zeros(14, dtype=np.uint8)
-
-        # 特徴量変換が例外なく成功すること
-        features = make_feature_from_board_state(
-            board_positions, pieces_in_hand
-        )
-        assert features.shape[0] > 0
-
-        # (row, col) にいずれかの駒プレーンで1が立つこと
-        # NOTE: make_feature_from_board_state は単一駒盤面で
-        # 手番推定ヒューリスティックにより先手/後手プレーンの
-        # 割り当てが変わりうるため，プレーンインデックスは指定しない
-        piece_planes = features[:, row, col]
-        assert piece_planes.sum() == 1, (
-            f"Expected exactly 1 plane active at ({row},{col}), "
-            f"got {piece_planes.sum()}"
-        )
-
-    @pytest.mark.parametrize(
-        "piece_id,row,col",
-        [
-            (PieceId.FU, 6, 4),
-            (PieceId.KI, 3, 3),
-            (PieceId.KA, 7, 7),
-            (PieceId.HI, 7, 1),
-        ],
-    )
-    def test_feature_planes_stage1_vs_cshogi_match(
-        self, piece_id: int, row: int, col: int
-    ) -> None:
-        """Stage1データとcshogi経由データで同一の特徴量プレーンが得られること."""
-        # Stage1方式
-        stage1_board = np.zeros((9, 9), dtype=np.uint8)
-        stage1_board[row][col] = piece_id
-        stage1_hand = np.zeros(14, dtype=np.uint8)
-        stage1_features = make_feature_from_board_state(
-            stage1_board, stage1_hand
-        )
-
-        # cshogi方式
-        sfen = _make_single_piece_sfen(piece_id, row, col)
-        board = Board()
-        board.set_sfen(sfen)
-        cshogi_board = make_board_id_positions(board)
-        cshogi_hand = make_pieces_in_hand(board)
-        cshogi_features = make_feature_from_board_state(
-            cshogi_board, cshogi_hand
-        )
-
-        np.testing.assert_array_equal(
-            stage1_features,
-            cshogi_features,
-            err_msg=(
-                f"Feature planes differ for "
-                f"PieceId={PieceId(piece_id).name} at ({row},{col})"
-            ),
-        )
-
 
 class TestStage1VsCshogiHandPieces:
     """Stage1の持ち駒データとcshogi経由のmake_pieces_in_hand()の一致検証."""
@@ -264,8 +185,7 @@ class TestStage2VsPreprocess:
         original_hand = make_pieces_in_hand(board)
 
         # HCPにエンコードしてから復元 (Stage2/Preprocess のパスを模倣)
-        hcp_df = board.get_hcp_df()
-        hcp_bytes = hcp_df["hcp"][0]
+        hcp_bytes = board.to_hcp()
         hcp = np.frombuffer(hcp_bytes, dtype=np.uint8)
 
         board2 = Board()
@@ -282,42 +202,6 @@ class TestStage2VsPreprocess:
             original_hand,
             restored_hand,
             err_msg=f"piecesInHand differs after HCP roundtrip for {sfen}",
-        )
-
-    @pytest.mark.parametrize(
-        "sfen",
-        [
-            "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1",
-            "lnsgkgsnl/1r5b1/ppppppppp/9/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL w - 2",
-            "8k/9/9/9/9/9/9/9/K8 b - 1",
-        ],
-    )
-    def test_feature_roundtrip_consistency(
-        self, sfen: str
-    ) -> None:
-        """make_feature と make_feature_from_board_state の一致検証.
-
-        cshogi直接パス(make_feature)と
-        boardIdPositions経由パス(make_feature_from_board_state)が
-        同じ特徴量を生成することを確認する．
-        """
-        board = Board()
-        board.set_sfen(sfen)
-
-        # cshogi直接パス
-        direct_features = feature.make_feature(board)
-
-        # boardIdPositions経由パス
-        board_ids = make_board_id_positions(board)
-        hand = make_pieces_in_hand(board)
-        indirect_features = make_feature_from_board_state(
-            board_ids, hand
-        )
-
-        np.testing.assert_array_equal(
-            direct_features,
-            indirect_features,
-            err_msg=f"Feature planes differ for {sfen}",
         )
 
 

@@ -159,8 +159,7 @@ class TestDataRetriever:
         )
 
         # HCPバイナリを取得
-        hcp_df = board.get_hcp_df()
-        hcp_bytes = hcp_df["hcp"][0]
+        hcp_bytes = board.to_hcp()
 
         # テスト用レコード
         record = {
@@ -212,8 +211,7 @@ class TestDataRetriever:
         )
 
         # HCPバイナリを取得
-        hcp_df = board.get_hcp_df()
-        hcp_bytes = hcp_df["hcp"][0]
+        hcp_bytes = board.to_hcp()
 
         # テスト用レコード
         record = {
@@ -278,8 +276,7 @@ class TestDataRetriever:
         )
 
         # HCPバイナリを取得
-        hcp_df = board.get_hcp_df()
-        hcp_bytes = hcp_df["hcp"][0]
+        hcp_bytes = board.to_hcp()
 
         # 複数のフィールドを持つレコード
         record = {
@@ -317,8 +314,7 @@ class TestDataRetriever:
         )
 
         # HCPバイナリを取得
-        hcp_df = board.get_hcp_df()
-        hcp_bytes = hcp_df["hcp"][0]
+        hcp_bytes = board.to_hcp()
 
         record = {"id": "test", "eval": 0, "hcp": hcp_bytes}
         decoded = data_retriever._decode_hcp_to_board_info(
@@ -348,8 +344,7 @@ class TestDataRetriever:
             "lnsgkgsnl/1r7/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b B 1"
         )
 
-        hcp_df = board.get_hcp_df()
-        hcp_bytes = hcp_df["hcp"][0]
+        hcp_bytes = board.to_hcp()
 
         record = {"id": "test", "eval": 0, "hcp": hcp_bytes}
         decoded = data_retriever._decode_hcp_to_board_info(

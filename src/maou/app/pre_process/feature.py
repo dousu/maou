@@ -1,15 +1,10 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 import numpy as np
 
 from maou.domain.board import shogi
-from maou.domain.board.shogi import PieceId
-
-if TYPE_CHECKING:
-    import polars as pl
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -72,179 +67,12 @@ def _swap_piece_ids(board: np.ndarray) -> np.ndarray:
     return result
 
 
-def make_feature(board: shogi.Board) -> np.ndarray:
-    """Create feature representation of board position.
-
-    Converts board state into neural network input features including
-    piece positions and pieces in hand for both players.
-
-    Args:
-        board: Current board position
-
-    Returns:
-        Feature array with shape (FEATURES_NUM, 9, 9)
-    """
-    features = np.empty(
-        (shogi.FEATURES_NUM, 9, 9), dtype=np.float32
-    )
-    features.fill(0)
-    if board.get_turn() == shogi.Turn.BLACK:
-        board.to_piece_planes(features)
-        pieces_in_hand = board.get_pieces_in_hand()
-    else:
-        board.to_piece_planes_rotate(features)
-        pieces_in_hand = reversed(board.get_pieces_in_hand())
-    # 盤面の駒の数の分だけ最初の地点をずらす
-    i = shogi.PIECE_TYPES * 2
-    # 先手と後手の持ち駒数から特徴量を作成する
-    for hands in pieces_in_hand:
-        for num, max_num in zip(
-            hands,
-            shogi.MAX_PIECES_IN_HAND,
-        ):
-            # 全面1にする
-            features[i : i + num].fill(1)
-            i += max_num
-    return features.astype(np.uint8)
-
-
-def make_feature_from_board_state(
-    board_id_positions: np.ndarray, pieces_in_hand: np.ndarray
-) -> np.ndarray:
-    """Reconstruct feature planes from board identifiers and hand pieces.
-
-    Args:
-        board_id_positions: Piece identifiers on the board in player perspective.
-        pieces_in_hand: Concatenated piece counts for current player then opponent.
-
-    Returns:
-        Feature planes equivalent to :func:`make_feature` output.
-    """
-    features = np.zeros(
-        (shogi.FEATURES_NUM, 9, 9), dtype=np.uint8
-    )
-
-    if board_id_positions.shape != (9, 9):
-        raise ValueError(
-            "board_id_positions must have shape (9, 9)"
-        )
-    if pieces_in_hand.shape != (14,):
-        raise ValueError("pieces_in_hand must have shape (14,)")
-
-    offset = len(PieceId) - 1
-
-    current_hand = pieces_in_hand[: shogi.PIECE_TYPES]
-    opponent_hand = pieces_in_hand[shogi.PIECE_TYPES :]
-
-    current_hand_total = int(current_hand.sum())
-    opponent_hand_total = int(opponent_hand.sum())
-
-    black_on_board = int(
-        np.count_nonzero(
-            (board_id_positions > PieceId.EMPTY.value)
-            & (board_id_positions <= offset)
-        )
-    )
-    white_on_board = int(
-        np.count_nonzero(board_id_positions > offset)
-    )
-
-    total_pieces_per_colour = 20
-    black_missing = total_pieces_per_colour - black_on_board
-    white_missing = total_pieces_per_colour - white_on_board
-
-    if (
-        current_hand_total == white_missing
-        and opponent_hand_total == black_missing
-    ):
-        current_is_black = True
-    elif (
-        current_hand_total == black_missing
-        and opponent_hand_total == white_missing
-    ):
-        current_is_black = False
-    else:
-        weighted_score = 0
-        for rank in range(9):
-            rank_weight = rank - 4
-            row = board_id_positions[rank]
-            black_count = np.count_nonzero(
-                (row > PieceId.EMPTY.value) & (row <= offset)
-            )
-            white_count = np.count_nonzero(row > offset)
-            weighted_score += int(
-                rank_weight * (black_count - white_count)
-            )
-        current_is_black = weighted_score >= 0
-
-    for rank in range(9):
-        for file in range(9):
-            piece_id = int(board_id_positions[rank, file])
-            if piece_id == PieceId.EMPTY.value:
-                continue
-            if piece_id <= offset:
-                base_index = piece_id - 1
-                is_black_piece = True
-            else:
-                base_index = piece_id - offset - 1
-                is_black_piece = False
-
-            if (current_is_black and is_black_piece) or (
-                not current_is_black and not is_black_piece
-            ):
-                plane_index = base_index
-            else:
-                plane_index = base_index + shogi.PIECE_TYPES
-
-            features[plane_index, rank, file] = 1
-
-    start = shogi.PIECE_TYPES * 2
-    hand_slice = shogi.MAX_PIECES_IN_HAND
-    current_hand = pieces_in_hand[: len(hand_slice)]
-    opponent_hand = pieces_in_hand[len(hand_slice) :]
-
-    for hand in (current_hand, opponent_hand):
-        for count, max_count in zip(hand, hand_slice):
-            end = start + int(max_count)
-            count_int = int(min(count, max_count))
-            if count_int > 0:
-                features[start : start + count_int].fill(1)
-            start = end
-
-    return features
-
-
 def make_board_id_positions(board: shogi.Board) -> np.ndarray:
     """盤面の駒配置をPieceIdで表現する.
     後手番であれば180度回転し，駒IDを入れ替える．
     正規化後は手番側の駒が常に1-14，相手側が15-28となる．
-    shapeが(9, 9)のuint8のndarrayで返す
-    """
-    df = board.get_board_id_positions_df()
-    board_id_positions = np.array(
-        df["boardIdPositions"].to_list()[0], dtype=np.uint8
-    )
-    if board.get_turn() == shogi.Turn.BLACK:
-        return board_id_positions
-    else:
-        rotated = np.rot90(board_id_positions, 2)
-        return _swap_piece_ids(rotated)
-
-
-def make_board_id_positions_fast(
-    board: shogi.Board,
-) -> np.ndarray:
-    """numpy lookup tableで盤面の駒配置をPieceIdに変換する．
-
-    get_board_id_positions_df()のPolars DataFrame往復を廃止し，
-    board.piecesから直接numpy fancy indexingで変換する．
-    後手番であれば180度回転し，駒IDを入れ替える．
-
-    Args:
-        board: 盤面オブジェクト
-
-    Returns:
-        shapeが(9, 9)のuint8のndarray
+    board.piecesから直接numpy fancy indexingで変換する
+    (Polars DataFrame往復なし)．shapeが(9, 9)のuint8のndarrayで返す
     """
     raw_board = np.array(board.get_pieces(), dtype=np.uint8)
     converted = _PIECE_ID_TABLE[raw_board]
@@ -254,6 +82,10 @@ def make_board_id_positions_fast(
     else:
         rotated = np.rot90(board_id_positions, 2)
         return _swap_piece_ids(rotated)
+
+
+# 旧名の後方互換エイリアス (slow/fast の区別は解消済み)
+make_board_id_positions_fast = make_board_id_positions
 
 
 def make_pieces_in_hand(board: shogi.Board) -> np.ndarray:
@@ -268,56 +100,3 @@ def make_pieces_in_hand(board: shogi.Board) -> np.ndarray:
             reversed(board.get_pieces_in_hand())
         )
     return np.concatenate(pieces_in_hand).astype(np.uint8)
-
-
-def make_board_id_positions_df(
-    board: shogi.Board,
-) -> "pl.DataFrame":
-    """盤面の駒配置をPolars DataFrameで返す．
-    後手番であれば180度回転し，駒IDを入れ替える．
-    正規化後は手番側の駒が常に1-14，相手側が15-28となる．
-
-    Args:
-        board: 盤面オブジェクト
-
-    Returns:
-        pl.DataFrame: boardIdPositions列を持つ1行のDataFrame
-
-    Example:
-        >>> board = shogi.Board()
-        >>> df = make_board_id_positions_df(board)
-        >>> len(df)
-        1
-        >>> df.schema
-        {'boardIdPositions': List(List(UInt8))}
-    """
-    try:
-        import polars as pl
-    except ImportError as e:
-        raise ImportError(
-            "polars is not installed. Install with: uv add polars"
-        ) from e
-
-    # Get positions as DataFrame
-    df = board.get_board_id_positions_df()
-
-    # Rotate if white turn
-    if board.get_turn() == shogi.Turn.WHITE:
-        positions = np.array(
-            df["boardIdPositions"].to_list()[0], dtype=np.uint8
-        )
-        rotated = np.rot90(positions, 2)
-        swapped = _swap_piece_ids(rotated)
-        positions_list = swapped.tolist()
-
-        from maou.domain.data.schema import (
-            get_board_position_polars_schema,
-        )
-
-        schema = get_board_position_polars_schema()
-        return pl.DataFrame(
-            {"boardIdPositions": [positions_list]},
-            schema=schema,
-        )
-
-    return df

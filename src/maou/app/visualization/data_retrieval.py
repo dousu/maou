@@ -353,9 +353,8 @@ class DataRetriever:
         # 手番を取得（HCPから復元）
         turn = board.get_turn()
 
-        # 盤面の駒配置を取得
-        board_df = board.get_board_id_positions_df()
-        board_id_positions = board_df["boardIdPositions"][0]
+        # 盤面の駒配置を取得 (9x9 のネストリスト)
+        board_id_positions = board.get_board_id_positions()
 
         # 持ち駒を取得
         black_hand, white_hand = board.get_pieces_in_hand()
