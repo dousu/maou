@@ -163,7 +163,6 @@ def benchmark_training(
     dataloader_workers: int | None = None,
     pin_memory: bool | None = None,
     prefetch_factor: int | None = None,
-    cache_transforms: bool | None = None,
     model_architecture: BackboneArchitecture | None = None,
     gce_parameter: float | None = None,
     policy_loss_ratio: float | None = None,
@@ -229,7 +228,6 @@ def benchmark_training(
         dataloader_workers: Number of DataLoader workers
         pin_memory: Enable pinned memory for GPU transfers
         prefetch_factor: Number of batches loaded in advance by each worker
-        cache_transforms: Enable in-memory caching of dataset transforms
         model_architecture: Backbone architecture ('resnet', 'mlp-mixer', 'vit')
         gce_parameter: GCE loss hyperparameter
         policy_loss_ratio: Policy loss weight
@@ -294,11 +292,6 @@ def benchmark_training(
         raise ValueError(
             f"prefetch_factor must be positive, got {prefetch_factor}"
         )
-
-    if cache_transforms is None:
-        cache_transforms_enabled = False
-    else:
-        cache_transforms_enabled = cache_transforms
 
     if model_architecture is None:
         model_architecture = "resnet"
@@ -475,7 +468,6 @@ def benchmark_training(
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
-        cache_transforms=cache_transforms_enabled,
         gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,

@@ -790,15 +790,6 @@ def benchmark_dataloader(
     default=2,
 )
 @click.option(
-    "--cache-transforms/--no-cache-transforms",
-    default=None,
-    help=(
-        "Enable in-memory caching of dataset transforms when supported by the "
-        "input pipeline."
-    ),
-    required=False,
-)
-@click.option(
     "--gce-parameter",
     type=float,
     help="GCE loss hyperparameter (default: 0.1).",
@@ -1125,7 +1116,6 @@ def benchmark_training(
     dataloader_workers: int,
     pin_memory: bool | None,
     prefetch_factor: int,
-    cache_transforms: bool | None,
     gce_parameter: float,
     policy_loss_ratio: float,
     value_loss_ratio: float,
@@ -1491,7 +1481,6 @@ def benchmark_training(
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
-        cache_transforms=cache_transforms,
         model_architecture=model_architecture,
         architecture_config=architecture_config,
         gce_parameter=gce_parameter,

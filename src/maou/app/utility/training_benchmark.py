@@ -657,7 +657,6 @@ class TrainingBenchmarkConfig:
     dataloader_workers: int = 4
     pin_memory: bool | None = None
     prefetch_factor: int = 2
-    cache_transforms: bool | None = None
     gce_parameter: float = 0.1
     policy_loss_ratio: float = 1.0
     value_loss_ratio: float = 1.0
@@ -1346,16 +1345,10 @@ class TrainingBenchmarkUseCase:
                     )
                 )
 
-                cache_transforms_enabled = (
-                    config.cache_transforms
-                    if config.cache_transforms is not None
-                    else False
-                )
                 device_config, dataloaders, model_components = (
                     TrainingSetup.setup_training_components(
                         training_datasource=training_datasource,
                         validation_datasource=validation_datasource,
-                        cache_transforms=cache_transforms_enabled,
                         gpu=config.gpu,
                         model_architecture=config.model_architecture,
                         architecture_config=config.architecture_config,

@@ -1,56 +1,47 @@
 import numpy as np
 
 from maou.app.pre_process import feature
-from maou.app.pre_process.transform import Transform
 from maou.domain.board import shogi
 from maou.domain.board.shogi import Board, PieceId, Turn
-from maou.domain.move.label import MOVE_LABELS_NUM
+from maou.domain.move.label import (
+    make_move_label,
+    make_result_value,
+)
 
 
-def test_transform_returns_board_features() -> None:
-    """Transform should emit board identifiers and pieces in hand."""
+def test_feature_functions_from_hcp_roundtrip() -> None:
+    """HCP から復元した盤面で特徴量・教師値関数が期待の形状を返すこと．"""
 
     board = shogi.Board()
     board.set_sfen(
         "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/"
         "LNSGKGSNL b - 1"
     )
-    hcp_bytes = board.to_hcp()
-
-    # Convert bytes to numpy array for Transform
-    hcp = np.frombuffer(hcp_bytes, dtype=np.uint8)
-
+    hcp = np.frombuffer(board.to_hcp(), dtype=np.uint8)
     move = next(board.get_legal_moves())
     move16 = shogi.move16(move)
 
-    transform = Transform()
-    (
-        board_ids,
-        pieces_in_hand,
-        move_label,
-        result_value,
-        legal_mask,
-    ) = transform(
-        hcp=hcp,
-        move16=move16,
-        game_result=shogi.Result.DRAW,
-        eval=0,
-    )
+    restored = shogi.Board()
+    restored.set_hcp(hcp)
 
-    expected_board_ids = feature.make_board_id_positions(board)
-    expected_pieces_in_hand = feature.make_pieces_in_hand(board)
+    board_ids = feature.make_board_id_positions(restored)
+    pieces_in_hand = feature.make_pieces_in_hand(restored)
+    move_label = make_move_label(restored.get_turn(), move16)
+    result_value = make_result_value(
+        restored.get_turn(), shogi.Result.DRAW
+    )
 
     assert board_ids.shape == (9, 9)
     assert board_ids.dtype == np.uint8
     assert pieces_in_hand.shape == (14,)
     assert pieces_in_hand.dtype == np.uint8
-    assert legal_mask.shape == (MOVE_LABELS_NUM,)
-    assert legal_mask.dtype == np.uint8
     assert isinstance(move_label, int)
-    assert isinstance(result_value, float)
-    np.testing.assert_array_equal(board_ids, expected_board_ids)
+    assert result_value == 0.5
     np.testing.assert_array_equal(
-        pieces_in_hand, expected_pieces_in_hand
+        board_ids, feature.make_board_id_positions(board)
+    )
+    np.testing.assert_array_equal(
+        pieces_in_hand, feature.make_pieces_in_hand(board)
     )
 
 

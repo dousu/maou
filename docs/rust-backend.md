@@ -715,8 +715,6 @@ datasource = PolarsDataFrameSource(
 # Use with existing KifDataset (no code changes needed!)
 dataset = KifDataset(
     datasource=datasource,
-    transform=None,  # Preprocessing data doesn't need transform
-    cache_transforms=False,
 )
 
 # Create DataLoader as usual

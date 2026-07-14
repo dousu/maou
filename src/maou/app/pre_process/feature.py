@@ -48,10 +48,6 @@ def make_board_id_positions(board: shogi.Board) -> np.ndarray:
         return _swap_piece_ids(rotated)
 
 
-# 旧名の後方互換エイリアス (slow/fast の区別は解消済み)
-make_board_id_positions_fast = make_board_id_positions
-
-
 def make_pieces_in_hand(board: shogi.Board) -> np.ndarray:
     """持ち駒の各駒種類の枚数を返す.
     手番の持ち駒が最初に入る

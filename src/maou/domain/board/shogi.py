@@ -12,9 +12,6 @@ from maou._rust.maou_shogi import (
 )
 from maou._rust.maou_shogi import move_from as _move_from
 from maou._rust.maou_shogi import move_is_drop as _move_is_drop
-from maou._rust.maou_shogi import (
-    move_is_promotion as _move_is_promotion,
-)
 from maou._rust.maou_shogi import move_to as _move_to
 from maou._rust.maou_shogi import move_to_usi as _move_to_usi
 
@@ -219,18 +216,6 @@ def move_is_drop(move: int) -> bool:
         True if move is a drop, False otherwise
     """
     return _move_is_drop(move)
-
-
-def move_is_promotion(move: int) -> bool:
-    """Check if move includes piece promotion.
-
-    Args:
-        move: Move integer
-
-    Returns:
-        True if move promotes the piece, False otherwise
-    """
-    return _move_is_promotion(move)
 
 
 def move_drop_hand_piece(move: int) -> int:
@@ -463,17 +448,6 @@ class Board:
             現在の局面のZobristハッシュ値
         """
         return self.board.zobrist_hash()
-
-    def is_ok(self) -> bool:
-        """盤面状態の整合性を検証する．
-
-        Rust 側は片玉局面(詰将棋)もサポートしており，
-        少なくとも1枚の王が存在すれば有効と判定する．
-
-        Returns:
-            bool: 盤面が有効な状態であれば True
-        """
-        return self.board.is_ok()
 
     def get_board_id_positions(self) -> list[list[int]]:
         """Get board piece positions as 9x9 nested list.

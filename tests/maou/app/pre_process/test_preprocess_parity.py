@@ -104,8 +104,11 @@ class TestRustBulkPreprocessParity:
     def test_preprocess_hcpes_matches_python_loop(self) -> None:
         """Rust preprocess_hcpes が Python の per-position 計算と一致する．"""
         from maou._rust.maou_search import preprocess_hcpes
-        from maou.app.pre_process.transform import Transform
         from maou.domain.board import shogi
+        from maou.domain.move.label import (
+            make_move_label,
+            make_result_value,
+        )
 
         data = _build_input()
         n = len(data)
@@ -127,15 +130,11 @@ class TestRustBulkPreprocessParity:
             assert hashes[i] == board.hash(), (
                 f"hash mismatch at {i}"
             )
-            assert labels[
-                i
-            ] == Transform.board_move_label_from_board(
-                board,
+            assert labels[i] == make_move_label(
+                board.get_turn(),
                 int(data["bestMove16"][i]),
             ), f"move label mismatch at {i}"
-            assert results[
-                i
-            ] == Transform.board_game_result_from_board(
-                board,
+            assert results[i] == make_result_value(
+                board.get_turn(),
                 int(data["gameResult"][i]),
             ), f"result value mismatch at {i}"
