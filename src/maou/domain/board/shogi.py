@@ -18,7 +18,7 @@ from maou._rust.maou_shogi import (
 from maou._rust.maou_shogi import move_to as _move_to
 from maou._rust.maou_shogi import move_to_usi as _move_to_usi
 
-# Domain-level constants (not imported from cshogi)
+# Domain-level constants
 MAX_PIECES_IN_HAND: list[int] = [
     18,
     4,
@@ -87,39 +87,63 @@ class PieceId(IntEnum):
     RYU = auto()
 
 
-# cshogi piece ID constants (for board setup)
-# Black pieces: 1-14, White pieces: 17-30 (black + 16)
-CSHOGI_BLACK_KING = 8  # cshogi.BKING
-CSHOGI_WHITE_KING = 24  # cshogi.WKING
-
 # ============================================================================
-# Piece ID System Constants
+# 駒 ID 規約の定数
 # ============================================================================
 #
-# cshogi形式とdomain形式で白駒オフセットが異なる．
-# マジックナンバーを排除するため，以下の定数を使用すること．
+# Rust エンジン (maou_shogi) の raw 駒 ID と，正規化後の domain PieceId で
+# 白駒オフセットが異なる．マジックナンバーを排除するため以下を使用する．
 #
-#   cshogi形式:  白駒 = 黒駒 + 16  (1-14 → 17-30)
-#   domain形式:  白駒 = 黒駒 + 14  (0-14 → 15-28)
+#   raw 形式 (board.pieces() の生値): 白駒 = 黒駒 + 16  (1-14 → 17-30)
+#   domain 形式 (PieceId):            白駒 = 黒駒 + 14  (0-14 → 15-28)
 #
 
-# cshogi形式の定数
-CSHOGI_WHITE_OFFSET: int = 16
-"""cshogi形式での白駒オフセット．白駒ID = 黒駒ID + 16．"""
-
-CSHOGI_BLACK_MIN: int = 1
-CSHOGI_BLACK_MAX: int = 14
-CSHOGI_WHITE_MIN: int = 17
-CSHOGI_WHITE_MAX: int = 30
-
-# domain形式の定数
+# domain PieceId (正規化後) の定数
 DOMAIN_WHITE_OFFSET: int = 14
 """domain形式での白駒オフセット．白駒ID = 黒駒ID + 14．"""
 
-DOMAIN_BLACK_MIN: int = 0
-DOMAIN_BLACK_MAX: int = 14
 DOMAIN_WHITE_MIN: int = 15
 DOMAIN_WHITE_MAX: int = 28
+
+# raw 駒 ID (Rust エンジン board.pieces() の生値, 0-30) → domain PieceId (0-28) の
+# 変換テーブル (単一の真実)．raw は 金(7)/角(5)/飛(6) の順で白駒 +16，
+# domain PieceId は 金(5)/角(6)/飛(7) の順で白駒 +14．15,16 は raw の未使用ギャップ．
+RAW_PIECE_TO_PIECEID: np.ndarray = np.array(
+    [
+        0,  # 0: EMPTY
+        1,
+        2,
+        3,
+        4,  # 1-4: 歩香桂銀 → FU/KY/KE/GI
+        6,
+        7,
+        5,  # 5-7: 角飛金 → KA/HI/KI
+        8,  # 8: 玉 → OU
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,  # 9-14: と成香成桂成銀馬龍
+        0,
+        0,  # 15,16: 未使用
+        15,
+        16,
+        17,
+        18,  # 17-20: 白歩香桂銀
+        20,
+        21,
+        19,  # 21-23: 白角飛金
+        22,  # 24: 白玉
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,  # 25-30: 白成駒
+    ],
+    dtype=np.uint8,
+)
 
 
 def move16(move: int) -> int:
@@ -234,62 +258,30 @@ class Board:
     PieceId体系への変換やPolars DataFrame出力などのドメインロジックを提供する．
     """
 
-    _CSHOGI_TO_PIECEID: dict[int, int] = {
-        # Black pieces (1-14)
-        0: 0,  # EMPTY
-        1: 1,  # BPAWN → FU
-        2: 2,  # BLANCE → KY
-        3: 3,  # BKNIGHT → KE
-        4: 4,  # BSILVER → GI
-        5: 6,  # BBISHOP → KA (角)
-        6: 7,  # BROOK → HI (飛)
-        7: 5,  # BGOLD → KI (金)
-        8: 8,  # BKING → OU
-        9: 9,  # BPROM_PAWN → TO
-        10: 10,  # BPROM_LANCE → NKY
-        11: 11,  # BPROM_KNIGHT → NKE
-        12: 12,  # BPROM_SILVER → NGI
-        13: 13,  # BPROM_BISHOP → UMA (馬)
-        14: 14,  # BPROM_ROOK → RYU (龍)
-        # White pieces (17-30)
-        17: 15,  # WPAWN → FU + 14
-        18: 16,  # WLANCE → KY + 14
-        19: 17,  # WKNIGHT → KE + 14
-        20: 18,  # WSILVER → GI + 14
-        21: 20,  # WBISHOP → KA + 14 (角)
-        22: 21,  # WROOK → HI + 14 (飛)
-        23: 19,  # WGOLD → KI + 14 (金)
-        24: 22,  # WKING → OU + 14
-        25: 23,  # WPROM_PAWN → TO + 14
-        26: 24,  # WPROM_LANCE → NKY + 14
-        27: 25,  # WPROM_KNIGHT → NKE + 14
-        28: 26,  # WPROM_SILVER → NGI + 14
-        29: 27,  # WPROM_BISHOP → UMA + 14 (馬)
-        30: 28,  # WPROM_ROOK → RYU + 14 (龍)
-    }
-
     @staticmethod
-    def cshogi_piece_to_piece_id(cshogi_piece: int) -> int:
-        """Convert cshogi piece ID to domain PieceId enum value.
+    def raw_piece_to_piece_id(raw_piece: int) -> int:
+        """raw 駒 ID (Rust エンジン board.pieces() の生値) を domain PieceId に変換する.
 
-        cshogi uses BISHOP=5, ROOK=6, GOLD=7 with white offset +16.
-        PieceId uses KI(金)=5, KA(角)=6, HI(飛)=7 with white offset +14.
+        raw は 角(5)/飛(6)/金(7)・白駒 +16，domain PieceId は 金(5)/角(6)/飛(7)・
+        白駒 +14．変換表は module-level の RAW_PIECE_TO_PIECEID (単一の真実)．
 
         Args:
-            cshogi_piece: cshogi piece ID (0-30)
+            raw_piece: raw 駒 ID (0-30)
 
         Returns:
-            PieceId enum value (0-28)
+            domain PieceId enum value (0-28)
 
         Examples:
-            >>> Board.cshogi_piece_to_piece_id(0)  # EMPTY
+            >>> Board.raw_piece_to_piece_id(0)  # EMPTY
             0
-            >>> Board.cshogi_piece_to_piece_id(5)  # cshogi.BBISHOP -> PieceId.KA
+            >>> Board.raw_piece_to_piece_id(5)  # raw 角 -> PieceId.KA
             6
-            >>> Board.cshogi_piece_to_piece_id(21)  # cshogi.WBISHOP
+            >>> Board.raw_piece_to_piece_id(21)  # raw 白角
             20
         """
-        return Board._CSHOGI_TO_PIECEID.get(cshogi_piece, 0)
+        if 0 <= raw_piece <= 30:
+            return int(RAW_PIECE_TO_PIECEID[raw_piece])
+        return 0
 
     def __init__(self) -> None:
         """初期局面(平手)でBoardを生成する．"""
@@ -434,24 +426,25 @@ class Board:
         return self.board.pieces_in_hand()
 
     def get_piece_at(self, square: int) -> int:
-        """指定マスのcshogi駒IDを返す．
+        """指定マスのraw駒IDを返す．
 
         Args:
             square: マス番号(column-major: col * 9 + row)
 
         Returns:
-            cshogi駒ID(0-30)．駒がない場合は0．
+            raw駒ID(0-30，Rustエンジン内部表現)．駒がない場合は0．
         """
         return self.board.piece(square)
 
     def get_pieces(self) -> list[int]:
         """盤面の駒配列(81要素)を返す．
 
-        cshogiの内部表現をそのまま返す．
-        値はcshogi駒ID(0-30)で，column-major順に格納される．
+        Rustエンジンの内部表現をそのまま返す．
+        値はraw駒ID(0-30，白駒=黒駒+16)で，column-major順に格納される．
+        domain PieceIdへの変換はRAW_PIECE_TO_PIECEIDを使う．
 
         Returns:
-            81要素のリスト(cshogi駒ID)
+            81要素のリスト(raw駒ID)
         """
         return self.board.pieces()
 
@@ -485,9 +478,10 @@ class Board:
     def get_board_id_positions(self) -> list[list[int]]:
         """Get board piece positions as 9x9 nested list.
 
-        盤面の駒配置を[row][col]形式の二次元リストで返す．
-        cshogiのcolumn-major配置(square = col * 9 + row)を
-        Fortran orderでreshapeして[row][col]形式に変換する．
+        盤面の駒配置を[row][col]形式の二次元リストで返す (手番正規化なし)．
+        Rust エンジンの column-major 配置 (square = col * 9 + row) を
+        Fortran orderでreshapeして[row][col]形式に変換する．raw 駒 ID →
+        domain PieceId 変換は RAW_PIECE_TO_PIECEID の fancy indexing で行う．
 
         Returns:
             9x9のPieceId二次元リスト([row][col]形式)
@@ -500,14 +494,8 @@ class Board:
             >>> len(positions[0])
             9
         """
-        v_map = np.vectorize(
-            Board.cshogi_piece_to_piece_id,
-            otypes=[np.uint8],
+        raw = np.array(self.board.pieces(), dtype=np.uint8)
+        positions = RAW_PIECE_TO_PIECEID[raw].reshape(
+            (9, 9), order="F"
         )
-        positions = v_map(
-            np.array(
-                self.board.pieces(),
-                dtype=np.uint8,
-            )
-        ).reshape((9, 9), order="F")
         return positions.tolist()

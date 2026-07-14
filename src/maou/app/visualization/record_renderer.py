@@ -14,8 +14,6 @@ if TYPE_CHECKING:
     import plotly.graph_objects as go
 
 from maou.domain.board.shogi import (
-    CSHOGI_BLACK_MAX,
-    CSHOGI_BLACK_MIN,
     DOMAIN_WHITE_MIN,
     DOMAIN_WHITE_OFFSET,
     Board,
@@ -226,8 +224,8 @@ class RecordRenderer(ABC):
             """
             if piece_id == 0:
                 return ""
-            if CSHOGI_BLACK_MIN <= piece_id <= CSHOGI_BLACK_MAX:
-                # 先手駒（大文字）
+            if piece_id < DOMAIN_WHITE_MIN:
+                # 先手駒（大文字）: domain PieceId 1-14
                 return black_piece_to_sfen.get(piece_id, "")
             elif piece_id >= DOMAIN_WHITE_MIN:
                 # 後手駒（小文字）: piece_id - 14 の先手マッピングを小文字化

@@ -1045,8 +1045,8 @@ class GameGraphVisualizationInterface:
         """
         move = board.get_move_from_move16(move16)
         from_sq = move_from(move)
-        cshogi_piece = board.get_piece_at(from_sq)
-        piece_id = Board.cshogi_piece_to_piece_id(cshogi_piece)
+        raw_piece = board.get_piece_at(from_sq)
+        piece_id = Board.raw_piece_to_piece_id(raw_piece)
         return get_piece_name_ja(piece_id)
 
     @classmethod
