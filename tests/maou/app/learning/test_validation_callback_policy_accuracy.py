@@ -71,6 +71,26 @@ def _reference_policy_top5_stats(
     return ratio_sum, sample_count
 
 
+def _policy_accuracy(
+    callback: ValidationCallback,
+    predictions: torch.Tensor,
+    labels: torch.Tensor,
+) -> float:
+    """production の GPU 集計 API から平均 accuracy を導出するテストヘルパ．
+
+    旧 API (`_policy_accuracy` メソッド) は
+    `_compute_policy_top5_accuracy_stats_gpu` へ統合された．
+    """
+    ratio_sum, sample_count = (
+        callback._compute_policy_top5_accuracy_stats_gpu(
+            logits=predictions, targets=labels
+        )
+    )
+    if sample_count == 0:
+        return 0.0
+    return float(ratio_sum) / float(sample_count)
+
+
 def test_policy_accuracy_top5_overlap() -> None:
     """ValidationCallback should compute label overlap within prediction Top-5."""
 
@@ -93,7 +113,7 @@ def test_policy_accuracy_top5_overlap() -> None:
     # prediction Top-5 contains {1, 2, 4, 5}, overlap = 1.0.
     expected_accuracy = (0.5 + 1.0) / 2
 
-    accuracy = callback._policy_accuracy(predictions, labels)
+    accuracy = _policy_accuracy(callback, predictions, labels)
 
     assert accuracy == pytest.approx(expected_accuracy)
 
@@ -117,7 +137,7 @@ def test_policy_accuracy_includes_empty_label_samples() -> None:
 
     expected_accuracy = (0.5 + 0.0) / 2
 
-    accuracy = callback._policy_accuracy(predictions, labels)
+    accuracy = _policy_accuracy(callback, predictions, labels)
 
     assert accuracy == pytest.approx(expected_accuracy)
 
@@ -129,7 +149,7 @@ def test_policy_accuracy_handles_no_positive_labels() -> None:
     predictions = torch.rand((1, 3))
     labels = torch.zeros((1, 3))
 
-    accuracy = callback._policy_accuracy(predictions, labels)
+    accuracy = _policy_accuracy(callback, predictions, labels)
 
     assert accuracy == 0.0
 
@@ -191,7 +211,7 @@ def test_policy_top5_stats_matches_reference(
     callback = ValidationCallback()
 
     ratio_sum, sample_count = (
-        callback._compute_policy_top5_accuracy_stats(
+        callback._compute_policy_top5_accuracy_stats_gpu(
             logits=logits, targets=targets
         )
     )

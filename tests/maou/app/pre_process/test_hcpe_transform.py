@@ -17,6 +17,21 @@ from maou.infra.file_system.file_data_source import (
 )
 
 
+def _valid_hcpe_fields() -> tuple[bytes, int]:
+    """平手初期局面の HCP と合法手の move16 を返す．
+
+    回帰: 旧 fixture は hcp を null (全ゼロ) のままにしており，
+    set_hcp が Rust 側で panic していた．また bestMove16 に
+    16-bit を超える 32-bit move 値 (66309) を入れていた．
+    """
+    from maou.domain.board import shogi
+
+    board = shogi.Board()
+    hcp_bytes = board.to_hcp()
+    move = next(board.get_legal_moves())
+    return hcp_bytes, shogi.move16(move)
+
+
 def _create_test_hcpe_data(
     directory: Path, samples: int
 ) -> list[Path]:
@@ -28,9 +43,7 @@ def _create_test_hcpe_data(
     ids = [f"test_id_{i}" for i in range(samples)]
     eval_values = rng.integers(-100, 100, size=samples).tolist()
 
-    # Use a valid move from initial position (1g1f)
-    # This is the first legal move in standard shogi position
-    valid_move16 = 66309  # 0x10305
+    hcp_bytes, valid_move16 = _valid_hcpe_fields()
     best_moves = [valid_move16] * samples
 
     # Set game results (1 = first player wins)
@@ -39,6 +52,7 @@ def _create_test_hcpe_data(
     df = df.with_columns(
         [
             pl.Series("id", ids),
+            pl.Series("hcp", [hcp_bytes] * samples),
             pl.Series("eval", eval_values),
             pl.Series("bestMove16", best_moves),
             pl.Series("gameResult", game_results),
@@ -95,7 +109,7 @@ def test_preprocess_with_multiple_input_files(
 
     # Create multiple input files
     input_paths = []
-    valid_move16 = 66309  # 0x10305 (1g1f - valid move from initial position)
+    hcp_bytes, valid_move16 = _valid_hcpe_fields()
     for i in range(3):
         df = create_empty_hcpe_df(2)
         df = df.with_columns(
@@ -103,6 +117,7 @@ def test_preprocess_with_multiple_input_files(
                 pl.Series(
                     "id", [f"file{i}_id{j}" for j in range(2)]
                 ),
+                pl.Series("hcp", [hcp_bytes] * 2),
                 pl.Series("bestMove16", [valid_move16] * 2),
                 pl.Series("gameResult", [1] * 2),
             ]
@@ -221,13 +236,14 @@ def test_preprocess_with_input_splitting(
     input_dir.mkdir()
 
     # Create a single file with 20 records
-    valid_move16 = 66309
+    hcp_bytes, valid_move16 = _valid_hcpe_fields()
     df = create_empty_hcpe_df(20)
     df = df.with_columns(
         [
             pl.Series(
                 "id", [f"split_test_id_{i}" for i in range(20)]
             ),
+            pl.Series("hcp", [hcp_bytes] * 20),
             pl.Series("bestMove16", [valid_move16] * 20),
             pl.Series("gameResult", [1] * 20),
         ]
