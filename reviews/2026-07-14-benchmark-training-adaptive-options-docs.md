@@ -2,7 +2,7 @@
 title: benchmark-training への adaptive batch オプション追加に伴う docs 同期
 date: 2026-07-14
 status: applied
-applied_in: PENDING
+applied_in: 7aa23a3
 target:
   - docs/commands/utility_benchmark_training.md
 ---
