@@ -18,6 +18,9 @@ from maou.infra.console.common import (
     app_logger,
     handle_exception,
 )
+from maou.infra.console.learn_model import (
+    _build_adaptive_batch_config,
+)
 from maou.interface.learn import (
     PolicyTargetMode,
     ValueTargetMode,
@@ -709,6 +712,63 @@ def benchmark_dataloader(
     default=256,
 )
 @click.option(
+    "--gradient-accumulation-steps",
+    type=click.IntRange(min=1),
+    help=(
+        "Number of gradient accumulation steps."
+        " Effective batch size = batch_size × gradient_accumulation_steps."
+        " Ignored when --adaptive-batch is enabled."
+    ),
+    required=False,
+    default=1,
+    show_default=True,
+)
+@click.option(
+    "--adaptive-batch",
+    is_flag=True,
+    default=False,
+    help=(
+        "Enable adaptive batch size based on Gradient Noise Scale (GNS)."
+        " Dynamically adjusts gradient accumulation steps during benchmarking."
+        " Only applies to Stage 3 (policy+value)."
+    ),
+)
+@click.option(
+    "--adaptive-batch-min-steps",
+    type=click.IntRange(min=2),
+    default=2,
+    show_default=True,
+    help="Minimum gradient accumulation steps for adaptive batch.",
+)
+@click.option(
+    "--adaptive-batch-max-steps",
+    type=click.IntRange(min=2),
+    default=8,
+    show_default=True,
+    help="Maximum gradient accumulation steps for adaptive batch. Power of 2 recommended.",
+)
+@click.option(
+    "--adaptive-batch-interval",
+    type=click.IntRange(min=1),
+    default=50,
+    show_default=True,
+    help="Optimizer steps between adaptive batch adjustments.",
+)
+@click.option(
+    "--adaptive-batch-smoothing",
+    type=click.FloatRange(min=0.01, max=1.0),
+    default=0.1,
+    show_default=True,
+    help="EMA smoothing factor for GNS estimates (0=smooth, 1=reactive).",
+)
+@click.option(
+    "--adaptive-batch-measurement-interval",
+    type=click.IntRange(min=1),
+    default=1,
+    show_default=True,
+    help="Optimizer steps between GNS measurements.",
+)
+@click.option(
     "--dataloader-workers",
     type=int,
     help="Number of DataLoader workers (default: 4).",
@@ -1055,6 +1115,13 @@ def benchmark_training(
     detect_anomaly: bool,
     test_ratio: float,
     batch_size: int,
+    gradient_accumulation_steps: int,
+    adaptive_batch: bool,
+    adaptive_batch_min_steps: int,
+    adaptive_batch_max_steps: int,
+    adaptive_batch_interval: int,
+    adaptive_batch_smoothing: float,
+    adaptive_batch_measurement_interval: int,
     dataloader_workers: int,
     pin_memory: bool | None,
     prefetch_factor: int,
@@ -1401,9 +1468,21 @@ def benchmark_training(
         if vit_overrides:
             architecture_config = vit_overrides
 
+    # adaptive batch 設定 (learn-model と同じ構築規則)
+    adaptive_batch_config = _build_adaptive_batch_config(
+        adaptive_batch=adaptive_batch,
+        min_steps=adaptive_batch_min_steps,
+        max_steps=adaptive_batch_max_steps,
+        interval=adaptive_batch_interval,
+        smoothing=adaptive_batch_smoothing,
+        measurement_interval=adaptive_batch_measurement_interval,
+    )
+
     # Run benchmark
     result_json = utility_interface.benchmark_training(
         datasource=datasource,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        adaptive_batch_config=adaptive_batch_config,
         gpu=gpu,
         compilation=compilation,
         detect_anomaly=detect_anomaly,
@@ -1504,7 +1583,12 @@ def benchmark_training(
         )
 
     click.echo()
-    click.echo(result["benchmark_results"]["Recommendations"])
+    # Recommendations は結果に含まれない場合がある (表示層は欠損に寛容にする)
+    recommendations = result["benchmark_results"].get(
+        "Recommendations"
+    )
+    if recommendations:
+        click.echo(recommendations)
 
 
 @click.command("generate-stage1-data")

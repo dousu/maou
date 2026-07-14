@@ -5,6 +5,9 @@ from typing import Any
 
 import torch
 
+from maou.app.learning.adaptive_batch import (
+    AdaptiveBatchConfig,
+)
 from maou.app.learning.dl import LearningDataSource
 from maou.app.learning.policy_targets import PolicyTargetMode
 from maou.app.learning.streaming_dataset import (
@@ -210,6 +213,8 @@ def benchmark_training(
     batch_sizes: list[int] | None = None,
     learning_rates: list[float] | None = None,
     estimate_cbs: bool = False,
+    gradient_accumulation_steps: int = 1,
+    adaptive_batch_config: AdaptiveBatchConfig | None = None,
 ) -> str:
     """
     Benchmark single epoch training performance with detailed timing analysis.
@@ -489,6 +494,8 @@ def benchmark_training(
         run_validation=run_validation,
         sample_ratio=sample_ratio,
         enable_resource_monitoring=enable_resource_monitoring,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        adaptive_batch_config=adaptive_batch_config,
         detect_anomaly=detect_anomaly,
         model_architecture=model_architecture,
         streaming=streaming,
