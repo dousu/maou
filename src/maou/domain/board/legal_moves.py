@@ -1,6 +1,6 @@
 """Custom legal move generation for shogi pieces.
 
-このモジュールは，cshogiに依存せずに将棋の駒の合法手を生成する．
+このモジュールは，純粋なPythonで将棋の駒の合法手を生成する．
 stage1データ生成では単一の駒のみが存在するため，玉の存在確認や
 王手のチェックは不要である．
 
@@ -397,7 +397,7 @@ def get_legal_moves_for_piece(
 ) -> list[tuple[int, int]]:
     """指定された駒の合法手を取得する．
 
-    このメソッドはcshogiに依存せず，純粋なPythonで合法手を計算する．
+    このメソッドは純粋なPythonで合法手を計算する．
     stage1データ生成では単一の駒のみが存在するため，
     他の駒との衝突や王手のチェックは不要である．
 

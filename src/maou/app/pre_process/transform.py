@@ -45,9 +45,6 @@ class Transform:
             result_value, legal_move_mask)
         """
 
-        # self.logger.debug(f"hcp type: {type(hcp)}")
-        # self.logger.debug(f"hcp shape: {hcp.shape}")
-        # self.logger.debug(f"hcp dtype: {hcp.dtype}")
         board = shogi.Board()
         board.set_hcp(hcp)
 
@@ -56,12 +53,8 @@ class Transform:
             pieces_in_hand = make_pieces_in_hand(board)
 
             # 教師データ
-            # move label
-            # この変換は必要なさそうなので行わない
-            # move = move_from_move16(move16)
-            # 不正な棋譜が入っているときここは簡単にエラーになるので注意 (ratingで絞るとか？)
-            # endgame statusが%TIMEUPが入っていると変なcshogi move値になっていそう
-            # こういうどうしようもないのは学習から除外するためにエラー出たら何もしないという選択肢もある
+            # move label (不正な棋譜が混入していると IllegalMove になる．
+            # 学習から除外したい場合は呼び出し側で捕捉する)
             move_label = make_move_label(
                 board.get_turn(), move16
             )
@@ -82,7 +75,7 @@ class Transform:
         except Exception:
             move = board.get_move_from_move16(move16)
             self.logger.error(
-                f"cshogi move: {move} {move16}"
+                f"move: {move} {move16}"
                 f", game: {game_result}"
                 f", eval: {eval}"
                 f", sfen: {board.get_sfen()}"

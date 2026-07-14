@@ -238,8 +238,7 @@ def cast_command_callback(
 _TRAINING_EXTRAS = ("cpu", "cuda", "mpu")
 
 LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
-    # CSA/KIF パーサは Rust backend の独自実装になったため
-    # cshogi (hcpe extra) は不要
+    # CSA/KIF パーサ・HCPE 変換は Rust backend の独自実装 (追加依存なし)
     "hcpe-convert": LazyCommandSpec(
         "maou.infra.console.hcpe_convert", "hcpe_convert"
     ),

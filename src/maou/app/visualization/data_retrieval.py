@@ -594,7 +594,7 @@ class DataRetriever:
         # 空の盤面を初期化
         board: list[list[int]] = [[0] * 9 for _ in range(9)]
 
-        # 駒ID定義（cshogi互換）
+        # 駒ID定義（domain PieceId）
         # 先手: 歩=1, 香=2, 桂=3, 銀=4, 金=5, 角=6, 飛=7, 玉=8
         # 成駒: と=9, 成香=10, 成桂=11, 成銀=12, 馬=13, 竜=14
         # 後手: +DOMAIN_WHITE_OFFSET (14)
@@ -803,7 +803,7 @@ class DataRetriever:
         # 空の盤面を初期化
         board: list[list[int]] = [[0] * 9 for _ in range(9)]
 
-        # 駒ID定義（cshogi互換）
+        # 駒ID定義（domain PieceId）
         # 先手: 歩=1, 香=2, 桂=3, 銀=4, 金=5, 角=6, 飛=7, 玉=8
         # 成駒: と=9, 成香=10, 成桂=11, 成銀=12, 馬=13, 竜=14
         # 後手: +DOMAIN_WHITE_OFFSET (14)

@@ -144,7 +144,7 @@ class RecordRenderer(ABC):
         """レコードからBoardインスタンスを再構築する．
 
         boardIdPositions（9x9配列）とpiecesInHand（14要素配列）から
-        cshogi.Boardインスタンスを生成する．
+        domain Boardインスタンスを生成する．
 
         Args:
             record: レコードデータ

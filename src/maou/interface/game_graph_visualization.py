@@ -980,10 +980,10 @@ class GameGraphVisualizationInterface:
 
     @staticmethod
     def _move_to_arrow(move: int) -> MoveArrow:
-        """cshogiの指し手をMoveArrowに変換する．
+        """指し手 (32-bit move) をMoveArrowに変換する．
 
         Args:
-            move: cshogiの指し手(get_move_from_move16の返り値)
+            move: 32-bit move (get_move_from_move16の返り値)
 
         Returns:
             MoveArrowオブジェクト
