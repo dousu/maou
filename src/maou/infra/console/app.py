@@ -238,6 +238,12 @@ def cast_command_callback(
 _TRAINING_EXTRAS = ("cpu", "cuda", "mpu")
 
 LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
+    # floodgate 棋譜取得．daily 戦略と .tar.xz 年は標準ライブラリのみで
+    # 動作する (.7z 展開だけ optional extra `fetch` の py7zr が必要)
+    "fetch-floodgate": LazyCommandSpec(
+        "maou.infra.console.fetch_floodgate",
+        "fetch_floodgate",
+    ),
     # CSA/KIF パーサ・HCPE 変換は Rust backend の独自実装 (追加依存なし)
     "hcpe-convert": LazyCommandSpec(
         "maou.infra.console.hcpe_convert", "hcpe_convert"
