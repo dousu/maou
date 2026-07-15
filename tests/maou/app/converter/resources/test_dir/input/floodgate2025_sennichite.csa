@@ -7,13 +7,13 @@ N-AobaFuribisha_w1903_avg_1600p
 $EVENT:wdoor+floodgate-300-10F+IVI_250105_C-5+AobaFuribisha_w1903_avg_1600p+20250105100003
 $START_TIME:2025/01/05 10:00:01
 P1-KY-KE-GI-KI-OU-KI-GI-KE-KY
-P2 * -HI *  *  *  *  * -KA * 
+P2 * -HI *  *  *  *  * -KA *
 P3-FU-FU-FU-FU-FU-FU-FU-FU-FU
-P4 *  *  *  *  *  *  *  *  * 
-P5 *  *  *  *  *  *  *  *  * 
-P6 *  *  *  *  *  *  *  *  * 
+P4 *  *  *  *  *  *  *  *  *
+P5 *  *  *  *  *  *  *  *  *
+P6 *  *  *  *  *  *  *  *  *
 P7+FU+FU+FU+FU+FU+FU+FU+FU+FU
-P8 * +KA *  *  *  *  * +HI * 
+P8 * +KA *  *  *  *  * +HI *
 P9+KY+KE+GI+KI+OU+KI+GI+KE+KY
 +
 'rating:IVI_250105_C-5+0f3bc65af86c989d830d1cdac2f4f742:AobaFuribisha_w1903_avg_1600p+707d4f98d9d2620cdaab58f19d02a2e4
@@ -136,13 +136,13 @@ T0
 T20
 %SENNICHITE
 'P1 * -KE-KI * -OU * -GI-KE-KY
-'P2+UM *  * -HI *  *  *  *  * 
+'P2+UM *  * -HI *  *  *  *  *
 'P3-KY-FU-GI * -FU * -KI-FU-FU
-'P4-FU * -FU-FU * -FU-FU *  * 
-'P5 *  *  *  *  *  *  * +FU * 
-'P6+FU * +FU *  *  * +FU *  * 
+'P4-FU * -FU-FU * -FU-FU *  *
+'P5 *  *  *  *  *  *  * +FU *
+'P6+FU * +FU *  *  * +FU *  *
 'P7 * +FU * +FU+FU+FU+KE * +FU
-'P8 * +GI+OU+KI * +GI * +HI * 
+'P8 * +GI+OU+KI * +GI * +HI *
 'P9+KY+KE *  *  * +KI *  * +KY
 'P-00KA
 '+

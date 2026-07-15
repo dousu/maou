@@ -1,6 +1,6 @@
 [package]
 name = "maou_search"
-version = "0.17.2"
+version = "0.17.3"
 edition = "2021"
 description = "MCTS-based single-position search engine for shogi (pure Rust, batched evaluation)"
 

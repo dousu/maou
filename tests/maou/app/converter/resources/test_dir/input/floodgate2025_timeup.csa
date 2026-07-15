@@ -7,13 +7,13 @@ N-AkeOme
 $EVENT:wdoor+floodgate-300-10F+IVI_250105_C-5+AkeOme+20250105070002
 $START_TIME:2025/01/05 07:00:02
 P1-KY-KE-GI-KI-OU-KI-GI-KE-KY
-P2 * -HI *  *  *  *  * -KA * 
+P2 * -HI *  *  *  *  * -KA *
 P3-FU-FU-FU-FU-FU-FU-FU-FU-FU
-P4 *  *  *  *  *  *  *  *  * 
-P5 *  *  *  *  *  *  *  *  * 
-P6 *  *  *  *  *  *  *  *  * 
+P4 *  *  *  *  *  *  *  *  *
+P5 *  *  *  *  *  *  *  *  *
+P6 *  *  *  *  *  *  *  *  *
 P7+FU+FU+FU+FU+FU+FU+FU+FU+FU
-P8 * +KA *  *  *  *  * +HI * 
+P8 * +KA *  *  *  *  * +HI *
 P9+KY+KE+GI+KI+OU+KI+GI+KE+KY
 +
 'rating:IVI_250105_C-5+0f3bc65af86c989d830d1cdac2f4f742:AkeOme+9c47ec14edeae6ab557e7ad07a0b6b63
@@ -438,14 +438,14 @@ T6
 T3
 '** -1633 +4534GI -4434KI +3534FU -3323OU +0026FU -2526KY +2826HI -0035GI +2628HI -0067GI +5848OU -0056GI +3433TO -3233KI +0034KY -5647NG +4847OU -0036KI +4748OU -3546GI +4839OU -4647GI +0037KI -0038FU +3738KI -3334KI +3847KI -3647KI +0032GI -2332OU +0042KI -3222OU +0023FU -2211OU +0022GI -1322KA +2322TO -1122OU
 %TIME_UP
-'P1 *  *  *  *  * -KE * -KE * 
+'P1 *  *  *  *  * -KE * -KE *
 'P2 *  *  *  *  *  * -KI * -KY
 'P3+FU *  * +TO+TO-FU-OU+FU-KA
 'P4 *  * -KE *  * -KI-FU-FU-FU
-'P5 *  *  * -KY * +GI+FU-KY * 
-'P6+UM * +FU *  * +FU *  *  * 
+'P5 *  *  * -KY * +GI+FU-KY *
+'P6+UM * +FU *  * +FU *  *  *
 'P7 *  *  *  *  * +KI *  * +FU
-'P8 * -RY+GI * +OU *  * +HI * 
+'P8 * -RY+GI * +OU *  * +HI *
 'P9 *  *  *  *  *  *  * +KE+KY
 'P+00FU00FU00FU00FU00FU00KI
 'P-00FU00GI00GI

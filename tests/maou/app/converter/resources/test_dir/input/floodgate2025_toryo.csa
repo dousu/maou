@@ -7,13 +7,13 @@ N-elmo_WCSC27_479_1000k
 $EVENT:wdoor+floodgate-300-10F+AobaFuribisha_w1909_avg_1600p+elmo_WCSC27_479_1000k+20250105233006
 $START_TIME:2025/01/05 23:30:01
 P1-KY-KE-GI-KI-OU-KI-GI-KE-KY
-P2 * -HI *  *  *  *  * -KA * 
+P2 * -HI *  *  *  *  * -KA *
 P3-FU-FU-FU-FU-FU-FU-FU-FU-FU
-P4 *  *  *  *  *  *  *  *  * 
-P5 *  *  *  *  *  *  *  *  * 
-P6 *  *  *  *  *  *  *  *  * 
+P4 *  *  *  *  *  *  *  *  *
+P5 *  *  *  *  *  *  *  *  *
+P6 *  *  *  *  *  *  *  *  *
 P7+FU+FU+FU+FU+FU+FU+FU+FU+FU
-P8 * +KA *  *  *  *  * +HI * 
+P8 * +KA *  *  *  *  * +HI *
 P9+KY+KE+GI+KI+OU+KI+GI+KE+KY
 +
 'rating:AobaFuribisha_w1909_avg_1600p+707d4f98d9d2620cdaab58f19d02a2e4:elmo_WCSC27_479_1000k+707d4f98d9d2620cdaab58f19d02a2e4
@@ -509,13 +509,13 @@ T0
 '** 5000
 %TORYO
 'P1-KY *  *  *  * -FU+KI-KE-KY
-'P2 *  *  * +UM *  * -OU+GI * 
+'P2 *  *  * +UM *  * -OU+GI *
 'P3-FU * -FU-FU * -GI * -FU-FU
-'P4 *  *  *  *  * +FU+KE *  * 
-'P5-KY *  *  *  *  * +GI *  * 
-'P6 *  *  *  * -FU+OU *  *  * 
+'P4 *  *  *  *  * +FU+KE *  *
+'P5-KY *  *  *  *  * +GI *  *
+'P6 *  *  *  * -FU+OU *  *  *
 'P7 * +FU+FU *  *  * +FU+FU+FU
-'P8 *  *  *  *  *  *  *  *  * 
+'P8 *  *  *  *  *  *  *  *  *
 'P9 *  * +HI *  * +KI * +KE+KY
 'P+00FU00FU00FU00GI00KI
 'P-00FU00FU00HI00KA00KE00KI

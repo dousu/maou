@@ -53,10 +53,14 @@ def bench_legal_moves() -> None:
         # cshogi
         t0 = time.perf_counter()
         for _ in range(N):
-            moves_c = list(cb.legal_moves)
+            list(cb.legal_moves)
         cshogi_us = (time.perf_counter() - t0) / N * 1_000_000
 
-        ratio = maou_us / cshogi_us if cshogi_us > 0 else float("inf")
+        ratio = (
+            maou_us / cshogi_us
+            if cshogi_us > 0
+            else float("inf")
+        )
         print(
             f"{name:<12} {maou_us:>10.2f} {cshogi_us:>10.2f}"
             f" {ratio:>7.1f}x {len(moves_m):>7}"
@@ -104,8 +108,14 @@ def bench_do_undo_move() -> None:
             cb.pop()
         cshogi_us = (time.perf_counter() - t0) / N * 1_000_000
 
-        ratio = maou_us / cshogi_us if cshogi_us > 0 else float("inf")
-        print(f"{name:<12} {maou_us:>10.3f} {cshogi_us:>10.3f} {ratio:>7.1f}x")
+        ratio = (
+            maou_us / cshogi_us
+            if cshogi_us > 0
+            else float("inf")
+        )
+        print(
+            f"{name:<12} {maou_us:>10.3f} {cshogi_us:>10.3f} {ratio:>7.1f}x"
+        )
 
     print()
 

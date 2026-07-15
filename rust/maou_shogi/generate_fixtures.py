@@ -8,7 +8,6 @@ Output:
 """
 
 import json
-import os
 from pathlib import Path
 
 import cshogi  # type: ignore
@@ -77,7 +76,9 @@ def generate_move_fixtures() -> None:
                 "from_sq": int(cshogi.move_from(move)),
                 "usi": cshogi.move_to_usi(move),
                 "is_drop": bool(cshogi.move_is_drop(move)),
-                "is_promotion": bool(cshogi.move_is_promotion(move)),
+                "is_promotion": bool(
+                    cshogi.move_is_promotion(move)
+                ),
             }
         )
 
@@ -159,8 +160,12 @@ def generate_legal_move_fixtures() -> None:
             print(f"WARNING: skipping '{tc['name']}': {e}")
             continue
 
-        move16_list = sorted(int(cshogi.move16(m)) for m in board.legal_moves)
-        usi_list = sorted(cshogi.move_to_usi(m) for m in board.legal_moves)
+        move16_list = sorted(
+            int(cshogi.move16(m)) for m in board.legal_moves
+        )
+        usi_list = sorted(
+            cshogi.move_to_usi(m) for m in board.legal_moves
+        )
 
         fixtures.append(
             {
@@ -182,7 +187,9 @@ def generate_special_rule_fixtures() -> None:
     # 二歩テスト: 5筋に先手の歩がある状態
     sfen_nifu = "4k4/9/9/9/4P4/9/9/9/4K4 b P 1"
     board = cshogi.Board(sfen_nifu)
-    moves_usi = [cshogi.move_to_usi(m) for m in board.legal_moves]
+    moves_usi = [
+        cshogi.move_to_usi(m) for m in board.legal_moves
+    ]
     # 5筋(col=4)に歩を打てないことを確認
     pawn_drops_col4 = [
         m for m in moves_usi if m.startswith("P*5")
@@ -200,7 +207,9 @@ def generate_special_rule_fixtures() -> None:
     # 打ち歩詰めテスト
     sfen_uchifuzume = "4k4/4P4/9/9/9/9/9/9/4K4 b P 1"
     board = cshogi.Board(sfen_uchifuzume)
-    moves_usi = [cshogi.move_to_usi(m) for m in board.legal_moves]
+    moves_usi = [
+        cshogi.move_to_usi(m) for m in board.legal_moves
+    ]
     # P*5aが合法手に含まれないことを確認
     has_p_drop_5a = "P*5a" in moves_usi
     fixtures.append(

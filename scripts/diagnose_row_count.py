@@ -32,7 +32,9 @@ def diagnose_files(directory: Path) -> None:
         print(f"No .feather files found in {directory}")
         return
 
-    print(f"Found {len(feather_files)} feather files in {directory}\n")
+    print(
+        f"Found {len(feather_files)} feather files in {directory}\n"
+    )
     print(
         f"{'File':<40} {'Format':<8} {'Batches':>8} "
         f"{'scan_row':>10} {'load_row':>10} {'pyarrow_row':>12} {'Match':>6}"
@@ -90,7 +92,11 @@ def diagnose_files(directory: Path) -> None:
             batch_sizes = []
             print(f"  ERROR pyarrow read {fp.name}: {e}")
 
-        status = "OK" if scan_rows == load_rows == pyarrow_rows else "DIFF"
+        status = (
+            "OK"
+            if scan_rows == load_rows == pyarrow_rows
+            else "DIFF"
+        )
         if status == "DIFF":
             mismatch_count += 1
         if num_batches > 1:
@@ -119,7 +125,9 @@ def diagnose_files(directory: Path) -> None:
 
     # Also check to_batches behavior
     print("\n\n=== to_batches() behavior check ===")
-    print("Testing whether Polars to_batches() produces multiple batches...\n")
+    print(
+        "Testing whether Polars to_batches() produces multiple batches...\n"
+    )
 
     sample_file = feather_files[0]
     try:
@@ -129,7 +137,9 @@ def diagnose_files(directory: Path) -> None:
         print(f"File: {sample_file.name}")
         print(f"  DataFrame rows: {len(df)}")
         print(f"  Arrow Table rows: {arrow_table.num_rows}")
-        print(f"  Number of chunks per column: {arrow_table.column(0).num_chunks}")
+        print(
+            f"  Number of chunks per column: {arrow_table.column(0).num_chunks}"
+        )
         print(f"  to_batches() count: {len(batches)}")
         for i, b in enumerate(batches):
             print(f"    Batch {i}: {b.num_rows} rows")
@@ -140,14 +150,20 @@ def diagnose_files(directory: Path) -> None:
             combined = pl.concat([df, df2])
             arrow_combined = combined.to_arrow()
             batches_combined = arrow_combined.to_batches()
-            print(f"\n  After pl.concat of 2 files:")
-            print(f"    Combined DataFrame rows: {len(combined)}")
-            print(f"    Arrow Table rows: {arrow_combined.num_rows}")
+            print("\n  After pl.concat of 2 files:")
+            print(
+                f"    Combined DataFrame rows: {len(combined)}"
+            )
+            print(
+                f"    Arrow Table rows: {arrow_combined.num_rows}"
+            )
             print(
                 f"    Number of chunks per column: "
                 f"{arrow_combined.column(0).num_chunks}"
             )
-            print(f"    to_batches() count: {len(batches_combined)}")
+            print(
+                f"    to_batches() count: {len(batches_combined)}"
+            )
             for i, b in enumerate(batches_combined):
                 print(f"      Batch {i}: {b.num_rows} rows")
             print(
@@ -162,7 +178,9 @@ def diagnose_files(directory: Path) -> None:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python scripts/diagnose_row_count.py /path/to/hcpe/feather/dir")
+        print(
+            "Usage: python scripts/diagnose_row_count.py /path/to/hcpe/feather/dir"
+        )
         sys.exit(1)
 
     target = Path(sys.argv[1])
