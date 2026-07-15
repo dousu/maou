@@ -1,7 +1,8 @@
 ---
 title: fetch-floodgate コマンド追加に伴う docs/commands 新設
 date: 2026-07-15
-status: approved
+status: applied
+applied_in: fddc4be
 # user 承認 2026-07-15 (セッション限定のドキュメント編集包括承認)
 target:
   - docs/commands/fetch_floodgate.md
