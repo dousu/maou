@@ -16,13 +16,6 @@ from pathlib import Path
 
 import numpy as np
 
-from maou.app.pre_process.feature import (
-    make_board_id_positions,
-    make_pieces_in_hand,
-)
-from maou.app.utility.stage2_data_generation import (
-    Stage2DataGenerationUseCase,
-)
 from maou.domain.board import shogi
 from maou.domain.move.label import (
     MOVE_LABELS_NUM,
@@ -44,8 +37,12 @@ class TestStage2Golden:
         board = shogi.Board()
         for i in range(n):
             board.set_hcp(hcps[i])
-            board_positions = make_board_id_positions(board)
-            pieces_in_hand = make_pieces_in_hand(board)
+            board_positions = (
+                board.get_normalized_board_id_positions()
+            )
+            pieces_in_hand = (
+                board.get_normalized_pieces_in_hand()
+            )
             legal = np.zeros(MOVE_LABELS_NUM, dtype=np.uint8)
             if board.get_turn() == shogi.Turn.BLACK:
                 for move in board.get_legal_moves():
@@ -53,8 +50,10 @@ class TestStage2Golden:
                         make_move_label(shogi.Turn.BLACK, move)
                     ] = 1
             else:
-                normalized_board = Stage2DataGenerationUseCase._reconstruct_normalized_board(
-                    board_positions, pieces_in_hand
+                normalized_board = (
+                    shogi.Board.from_board_id_positions(
+                        board_positions, pieces_in_hand
+                    )
                 )
                 for move in normalized_board.get_legal_moves():
                     legal[

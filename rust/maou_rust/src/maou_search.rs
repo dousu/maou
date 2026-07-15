@@ -445,7 +445,8 @@ fn preprocess_hcpes<'py>(
 
 /// N 局面の NN 入力特徴量を一括エンコードする．
 ///
-/// Python `make_board_id_positions` / `make_pieces_in_hand` の一括版
+/// Python `Board.get_normalized_board_id_positions` /
+/// `get_normalized_pieces_in_hand` の一括版
 /// (手番視点正規化込み)．GIL を解放して計算する．
 ///
 /// # 引数

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from enum import IntEnum, auto
 
 import numpy as np
@@ -142,6 +142,126 @@ RAW_PIECE_TO_PIECEID: np.ndarray = np.array(
     dtype=np.uint8,
 )
 
+# 先手 (黒) domain PieceId → SFEN 駒文字の変換表 (単一の真実)．
+# 後手駒 (15-28) は piece_id_to_sfen() が小文字化で導出する．
+PIECE_ID_TO_SFEN: dict[int, str] = {
+    PieceId.FU: "P",
+    PieceId.KY: "L",
+    PieceId.KE: "N",
+    PieceId.GI: "S",
+    PieceId.KI: "G",
+    PieceId.KA: "B",
+    PieceId.HI: "R",
+    PieceId.OU: "K",
+    PieceId.TO: "+P",
+    PieceId.NKY: "+L",
+    PieceId.NKE: "+N",
+    PieceId.NGI: "+S",
+    PieceId.UMA: "+B",
+    PieceId.RYU: "+R",
+}
+
+# 持ち駒インデックス (0-6: 歩香桂銀金角飛) → SFEN 駒文字．
+# 持ち駒順は PieceId 1-7 と一致するため PIECE_ID_TO_SFEN から導出する．
+HAND_PIECE_SFEN_CHARS: list[str] = [
+    PIECE_ID_TO_SFEN[PieceId(piece_id)]
+    for piece_id in range(1, 8)
+]
+
+
+def piece_id_to_sfen(piece_id: int) -> str:
+    """domain PieceId (0-28) を SFEN 駒文字に変換する．
+
+    先手駒 (1-14) は大文字，後手駒 (15-28) は小文字で返す
+    (成駒は "+P" / "+p" のように接頭辞付き)．
+
+    Args:
+        piece_id: domain形式の駒ID (0-28)
+
+    Returns:
+        SFEN 駒文字．EMPTY (0) は空文字列．
+
+    Raises:
+        ValueError: 範囲外の駒IDの場合
+    """
+    if piece_id == PieceId.EMPTY:
+        return ""
+    if DOMAIN_WHITE_MIN <= piece_id <= DOMAIN_WHITE_MAX:
+        return PIECE_ID_TO_SFEN[
+            piece_id - DOMAIN_WHITE_OFFSET
+        ].lower()
+    if piece_id in PIECE_ID_TO_SFEN:
+        return PIECE_ID_TO_SFEN[piece_id]
+    raise ValueError(f"Invalid domain piece id: {piece_id}")
+
+
+def board_id_positions_to_sfen(
+    board_id_positions: Sequence[Sequence[int]] | np.ndarray,
+    pieces_in_hand: Sequence[int] | np.ndarray,
+    *,
+    turn: Turn = Turn.BLACK,
+    move_number: int = 1,
+) -> str:
+    """9x9 の domain PieceId 配置と持ち駒配列から SFEN 文字列を構築する．
+
+    boardIdPositions ([row][col] 形式，col=0 が 1 筋) と
+    piecesInHand (14 要素: 先手 7 種 + 後手 7 種，歩香桂銀金角飛順) から
+    SFEN を組み立てる．正規化済みデータの盤面再構築
+    (Board.from_board_id_positions) の下請け．
+
+    Args:
+        board_id_positions: 9x9 の駒配置 (domain PieceId 値)
+        pieces_in_hand: 持ち駒配列 (14 要素)
+        turn: 手番 (デフォルト: 先手)
+        move_number: 手数 (デフォルト: 1)
+
+    Returns:
+        SFEN 形式の文字列
+
+    Raises:
+        ValueError: 範囲外の駒IDを含む場合
+    """
+    ranks = []
+    for row in board_id_positions:
+        # col=0 が 1 筋，SFEN は 9 筋→1 筋の順なので列を反転
+        rank_str = ""
+        empty_count = 0
+        for piece_id in reversed(list(row)):
+            pid = int(piece_id)
+            if pid == 0:
+                empty_count += 1
+            else:
+                if empty_count > 0:
+                    rank_str += str(empty_count)
+                    empty_count = 0
+                rank_str += piece_id_to_sfen(pid)
+        if empty_count > 0:
+            rank_str += str(empty_count)
+        ranks.append(rank_str if rank_str else "9")
+
+    board_sfen = "/".join(ranks)
+
+    # 持ち駒 (先手: 大文字，後手: 小文字)
+    hand_parts: list[str] = []
+    hand = [int(c) for c in pieces_in_hand]
+    for i, count in enumerate(hand[:7]):
+        if count > 0:
+            char = HAND_PIECE_SFEN_CHARS[i]
+            hand_parts.append(
+                f"{count}{char}" if count > 1 else char
+            )
+    for i, count in enumerate(hand[7:14]):
+        if count > 0:
+            char = HAND_PIECE_SFEN_CHARS[i].lower()
+            hand_parts.append(
+                f"{count}{char}" if count > 1 else char
+            )
+    hand_sfen = "".join(hand_parts) if hand_parts else "-"
+
+    turn_sfen = "b" if turn == Turn.BLACK else "w"
+
+    return f"{board_sfen} {turn_sfen} {hand_sfen} {move_number}"
+
 
 def move16(move: int) -> int:
     """Convert move to 16-bit representation used in HCPE format.
@@ -271,6 +391,42 @@ class Board:
     def __init__(self) -> None:
         """初期局面(平手)でBoardを生成する．"""
         self.board = _PyBoard()
+
+    @classmethod
+    def from_board_id_positions(
+        cls,
+        board_id_positions: Sequence[Sequence[int]]
+        | np.ndarray,
+        pieces_in_hand: Sequence[int] | np.ndarray,
+        *,
+        turn: Turn = Turn.BLACK,
+    ) -> Board:
+        """9x9 の domain PieceId 配置と持ち駒配列から Board を構築する．
+
+        boardIdPositions ([row][col] 形式) と piecesInHand (14 要素) を
+        持つレコード (Stage2 / Preprocessing 等の正規化済みデータ) から
+        Board を再構築する用途を想定している．
+
+        Args:
+            board_id_positions: 9x9 の駒配置 (domain PieceId 値)
+            pieces_in_hand: 持ち駒配列 (14 要素)
+            turn: 手番 (デフォルト: 先手．正規化済みデータは常に先手視点)
+
+        Returns:
+            構築された Board インスタンス
+
+        Raises:
+            ValueError: 不正な配置 (範囲外の駒ID，二歩等) の場合
+        """
+        board = cls()
+        board.set_sfen(
+            board_id_positions_to_sfen(
+                board_id_positions,
+                pieces_in_hand,
+                turn=turn,
+            )
+        )
+        return board
 
     def __copy__(self) -> Board:
         """SFENを経由した安全なコピーを返す．
@@ -448,6 +604,29 @@ class Board:
             現在の局面のZobristハッシュ値
         """
         return self.board.zobrist_hash()
+
+    def get_normalized_board_id_positions(self) -> np.ndarray:
+        """手番視点に正規化した駒ID盤面を(9, 9)のuint8 ndarrayで返す．
+
+        後手番なら180度回転し先手/後手の駒IDを入れ替える．
+        正規化後は手番側の駒が常に1-14，相手側が15-28となる．
+        計算は Rust (maou_search::feature::encode_board_ids) に委譲する．
+
+        Returns:
+            正規化済み9x9盤面配列([段][筋]形式，domain PieceId値)
+        """
+        return self.board.board_id_positions()
+
+    def get_normalized_pieces_in_hand(self) -> np.ndarray:
+        """手番側を先頭にした持ち駒枚数を(14,)のuint8 ndarrayで返す．
+
+        順序は手番側 [歩香桂銀金角飛] + 相手側 [同]．
+        計算は Rust (maou_search::feature::encode_hand_counts) に委譲する．
+
+        Returns:
+            正規化済み持ち駒配列(14要素)
+        """
+        return self.board.hand_counts()
 
     def get_board_id_positions(self) -> list[list[int]]:
         """Get board piece positions as 9x9 nested list.

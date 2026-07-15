@@ -62,9 +62,7 @@ def test_preprocessed_batches_provide_legal_move_masks() -> (
         dtype=dtype,
     )
 
-    dataset = KifDataset(
-        datasource=_ArrayDataSource(data)
-    )
+    dataset = KifDataset(datasource=_ArrayDataSource(data))
 
     loader = DataLoader(dataset, batch_size=2)
     (boards, pieces), (_, _, legal_move_mask) = next(
@@ -104,9 +102,7 @@ def test_dataset_accepts_float16_move_labels() -> None:
         dtype=dtype,
     )
 
-    dataset = KifDataset(
-        datasource=_ArrayDataSource(data)
-    )
+    dataset = KifDataset(datasource=_ArrayDataSource(data))
 
     (_, _), (policy, _, _) = dataset[0]
 
@@ -138,9 +134,7 @@ def test_dataset_returns_move_win_rate_when_present() -> None:
         dtype=dtype,
     )
 
-    dataset = KifDataset(
-        datasource=_ArrayDataSource(data)
-    )
+    dataset = KifDataset(datasource=_ArrayDataSource(data))
 
     (_, _), (_, _, _, move_win_rate) = dataset[0]
 
@@ -178,9 +172,7 @@ def test_dataset_returns_3_element_tuple_when_no_win_rate() -> (
         dtype=dtype,
     )
 
-    dataset = KifDataset(
-        datasource=_ArrayDataSource(data)
-    )
+    dataset = KifDataset(datasource=_ArrayDataSource(data))
 
     (_, _), targets = dataset[0]
 
@@ -199,9 +191,7 @@ def test_dataset_requires_board_identifiers() -> None:
     )
     data = np.zeros(1, dtype=dtype)
 
-    dataset = KifDataset(
-        datasource=_ArrayDataSource(data)
-    )
+    dataset = KifDataset(datasource=_ArrayDataSource(data))
 
     with pytest.raises(ValueError):
         dataset[0]
@@ -221,9 +211,7 @@ def test_numpy_to_tensor_requires_writeable_buffer() -> None:
     data = np.zeros(1, dtype=dtype)
     data.setflags(write=False)
 
-    dataset = KifDataset(
-        datasource=_ArrayDataSource(data)
-    )
+    dataset = KifDataset(datasource=_ArrayDataSource(data))
 
     with pytest.raises(ValueError, match="read-only"):
         dataset[0]

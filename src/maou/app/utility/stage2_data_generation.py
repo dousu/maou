@@ -10,16 +10,12 @@ import logging
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 import polars as pl
 from tqdm.auto import tqdm
 
 from maou.domain.data.rust_io import load_hcpe_df
-
-if TYPE_CHECKING:
-    from maou.domain.board import shogi
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +37,6 @@ class Stage2DataGenerationUseCase:
     def execute(
         self, config: Stage2DataGenerationConfig
     ) -> dict[str, int | str | list[str]]:
-        from maou.domain.board import shogi  # noqa: F401
-
         logger.info("Starting Stage 2 data generation...")
 
         config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -296,106 +290,3 @@ class Stage2DataGenerationUseCase:
         )
 
         return output_files
-
-    @staticmethod
-    def _reconstruct_normalized_board(
-        board_positions: np.ndarray,
-        pieces_in_hand: np.ndarray,
-    ) -> shogi.Board:
-        """正規化済み盤面からBoardを再構築する．
-
-        make_board_id_positions()で先手視点に正規化された盤面と
-        make_pieces_in_hand()の持ち駒から，Boardを再構築する．
-        再構築されたBoardはturn=BLACKとなる．
-
-        domain PieceIdをSFEN形式に変換し，set_sfenで構築する．
-
-        Args:
-            board_positions: 正規化済み9x9盤面配列(domain PieceId)
-            pieces_in_hand: 正規化済み持ち駒配列(14要素)
-
-        Returns:
-            再構築されたBoardインスタンス(turn=BLACK)
-        """
-        from maou.domain.board import shogi as shogi_module
-
-        # domain PieceId → SFEN文字マッピング
-        _BLACK_PIECE_TO_SFEN = {
-            1: "P",
-            2: "L",
-            3: "N",
-            4: "S",
-            5: "G",
-            6: "B",
-            7: "R",
-            8: "K",
-            9: "+P",
-            10: "+L",
-            11: "+N",
-            12: "+S",
-            13: "+B",
-            14: "+R",
-        }
-        _DOMAIN_WHITE_MIN = 15
-        _DOMAIN_WHITE_OFFSET = 14
-
-        # 盤面をSFEN形式に変換
-        ranks = []
-        for row in board_positions:
-            # col=0が1筋，SFENは9筋→1筋の順なので反転
-            reversed_row = list(reversed(row))
-            rank_str = ""
-            empty_count = 0
-            for piece_id in reversed_row:
-                pid = int(piece_id)
-                if pid == 0:
-                    empty_count += 1
-                else:
-                    if empty_count > 0:
-                        rank_str += str(empty_count)
-                        empty_count = 0
-                    if pid >= _DOMAIN_WHITE_MIN:
-                        # 後手駒: 小文字
-                        black_char = _BLACK_PIECE_TO_SFEN.get(
-                            pid - _DOMAIN_WHITE_OFFSET, ""
-                        )
-                        rank_str += black_char.lower()
-                    else:
-                        # 先手駒: 大文字
-                        rank_str += _BLACK_PIECE_TO_SFEN.get(
-                            pid, ""
-                        )
-            if empty_count > 0:
-                rank_str += str(empty_count)
-            ranks.append(rank_str if rank_str else "9")
-
-        board_sfen = "/".join(ranks)
-
-        # 持ち駒をSFEN形式に変換
-        piece_chars = ["P", "L", "N", "S", "G", "B", "R"]
-        hand_parts: list[str] = []
-
-        pih = pieces_in_hand.tolist()
-        # 先手の持ち駒 (pih[0:7])
-        for i, count in enumerate(pih[:7]):
-            if count > 0:
-                char = piece_chars[i]
-                if count > 1:
-                    hand_parts.append(f"{count}{char}")
-                else:
-                    hand_parts.append(char)
-        # 後手の持ち駒 (pih[7:14])
-        for i, count in enumerate(pih[7:14]):
-            if count > 0:
-                char = piece_chars[i].lower()
-                if count > 1:
-                    hand_parts.append(f"{count}{char}")
-                else:
-                    hand_parts.append(char)
-
-        hand_sfen = "".join(hand_parts) if hand_parts else "-"
-        sfen = f"{board_sfen} b {hand_sfen} 1"
-
-        board = shogi_module.Board()
-        board.set_sfen(sfen)
-        return board

@@ -12,29 +12,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from maou.app.pre_process.feature import (
-    make_board_id_positions,
-    make_pieces_in_hand,
+from maou.domain.board.shogi import (
+    PIECE_ID_TO_SFEN,
+    Board,
+    PieceId,
 )
-from maou.domain.board.shogi import Board, PieceId
-
-# PieceId → SFEN character mapping (BLACK pieces only)
-_PIECE_ID_TO_SFEN: dict[int, str] = {
-    PieceId.FU: "P",
-    PieceId.KY: "L",
-    PieceId.KE: "N",
-    PieceId.GI: "S",
-    PieceId.KI: "G",
-    PieceId.KA: "B",
-    PieceId.HI: "R",
-    PieceId.OU: "K",
-    PieceId.TO: "+P",
-    PieceId.NKY: "+L",
-    PieceId.NKE: "+N",
-    PieceId.NGI: "+S",
-    PieceId.UMA: "+B",
-    PieceId.RYU: "+R",
-}
 
 
 def _make_single_piece_sfen(
@@ -50,7 +32,7 @@ def _make_single_piece_sfen(
     Returns:
         SFEN文字列 (例: "9/9/9/9/9/9/4P4/9/9 b - 1")
     """
-    sfen_char = _PIECE_ID_TO_SFEN[piece_id]
+    sfen_char = PIECE_ID_TO_SFEN[piece_id]
     ranks = []
     for r in range(9):
         if r != row:
@@ -69,8 +51,8 @@ def _make_single_piece_sfen(
     return "/".join(ranks) + " b - 1"
 
 
-class TestStage1VsCshogiBoard:
-    """Stage1の手動盤面構築とcshogi経由のmake_board_id_positions()の一致検証."""
+class TestStage1VsBoardNormalization:
+    """Stage1の手動盤面構築とBoard経由のget_normalized_board_id_positions()の一致検証."""
 
     @pytest.mark.parametrize(
         "piece_id,row,col",
@@ -96,20 +78,22 @@ class TestStage1VsCshogiBoard:
     def test_board_positions_match(
         self, piece_id: int, row: int, col: int
     ) -> None:
-        """Stage1の手動構築とcshogi経由で同一のboardIdPositionsが得られること."""
+        """Stage1の手動構築とBoard経由で同一のboardIdPositionsが得られること."""
         # Stage1方式: 手動構築
         stage1_board = np.zeros((9, 9), dtype=np.uint8)
         stage1_board[row][col] = piece_id
 
-        # Stage2/Preprocess方式: cshogi経由
+        # Stage2/Preprocess方式: Board経由
         sfen = _make_single_piece_sfen(piece_id, row, col)
         board = Board()
         board.set_sfen(sfen)
-        cshogi_board = make_board_id_positions(board)
+        normalized_board = (
+            board.get_normalized_board_id_positions()
+        )
 
         np.testing.assert_array_equal(
             stage1_board,
-            cshogi_board,
+            normalized_board,
             err_msg=(
                 f"PieceId={PieceId(piece_id).name} at ({row},{col}), "
                 f"SFEN='{sfen}'"
@@ -117,8 +101,8 @@ class TestStage1VsCshogiBoard:
         )
 
 
-class TestStage1VsCshogiHandPieces:
-    """Stage1の持ち駒データとcshogi経由のmake_pieces_in_hand()の一致検証."""
+class TestStage1VsBoardHandPieces:
+    """Stage1の持ち駒データとBoard経由のget_normalized_pieces_in_hand()の一致検証."""
 
     @pytest.mark.parametrize(
         "piece_type_idx,sfen_hand_char",
@@ -135,20 +119,20 @@ class TestStage1VsCshogiHandPieces:
     def test_pieces_in_hand_match(
         self, piece_type_idx: int, sfen_hand_char: str
     ) -> None:
-        """Stage1の持ち駒データとcshogi経由で同一のpiecesInHandが得られること."""
+        """Stage1の持ち駒データとBoard経由で同一のpiecesInHandが得られること."""
         # Stage1方式: 手動構築
         stage1_hand = np.zeros(14, dtype=np.uint8)
         stage1_hand[piece_type_idx] = 1
 
-        # cshogi方式
+        # Board方式
         sfen = f"9/9/9/9/9/9/9/9/9 b {sfen_hand_char} 1"
         board = Board()
         board.set_sfen(sfen)
-        cshogi_hand = make_pieces_in_hand(board)
+        normalized_hand = board.get_normalized_pieces_in_hand()
 
         np.testing.assert_array_equal(
             stage1_hand,
-            cshogi_hand,
+            normalized_hand,
             err_msg=(
                 f"piecesInHand differs for piece_type_idx={piece_type_idx} "
                 f"({sfen_hand_char})"
@@ -159,7 +143,8 @@ class TestStage1VsCshogiHandPieces:
 class TestStage2VsPreprocess:
     """Stage2とPreprocessが同一局面で同一データを生成することの検証.
 
-    両者は同じ make_board_id_positions() / make_pieces_in_hand() を呼ぶため，
+    両者は同じ get_normalized_board_id_positions() /
+    get_normalized_pieces_in_hand() を呼ぶため，
     HCPからの復元も含めてラウンドトリップで一致することを確認する．
     """
 
@@ -181,8 +166,10 @@ class TestStage2VsPreprocess:
         # 元の局面から特徴量を生成
         board = Board()
         board.set_sfen(sfen)
-        original_board_ids = make_board_id_positions(board)
-        original_hand = make_pieces_in_hand(board)
+        original_board_ids = (
+            board.get_normalized_board_id_positions()
+        )
+        original_hand = board.get_normalized_pieces_in_hand()
 
         # HCPにエンコードしてから復元 (Stage2/Preprocess のパスを模倣)
         hcp_bytes = board.to_hcp()
@@ -190,8 +177,10 @@ class TestStage2VsPreprocess:
 
         board2 = Board()
         board2.set_hcp(hcp)
-        restored_board_ids = make_board_id_positions(board2)
-        restored_hand = make_pieces_in_hand(board2)
+        restored_board_ids = (
+            board2.get_normalized_board_id_positions()
+        )
+        restored_hand = board2.get_normalized_pieces_in_hand()
 
         np.testing.assert_array_equal(
             original_board_ids,
@@ -206,10 +195,10 @@ class TestStage2VsPreprocess:
 
 
 class TestAllStage1PatternsConsistency:
-    """Stage1の全パターンがcshogi経由と一致するかの網羅的検証."""
+    """Stage1の全パターンがBoard経由と一致するかの網羅的検証."""
 
-    def test_all_board_patterns_match_cshogi(self) -> None:
-        """Stage1の全盤上パターンでcshogi経由と一致すること."""
+    def test_all_board_patterns_match_board(self) -> None:
+        """Stage1の全盤上パターンでBoard経由と一致すること."""
         from maou.domain.data.stage1_generator import (
             Stage1DataGenerator,
         )
@@ -225,15 +214,19 @@ class TestAllStage1PatternsConsistency:
                 pattern.piece_id
             )
 
-            # cshogi方式
+            # Board方式
             sfen = _make_single_piece_sfen(
                 pattern.piece_id, pattern.row, pattern.col
             )
             board = Board()
             board.set_sfen(sfen)
-            cshogi_board = make_board_id_positions(board)
+            normalized_board = (
+                board.get_normalized_board_id_positions()
+            )
 
-            if not np.array_equal(stage1_board, cshogi_board):
+            if not np.array_equal(
+                stage1_board, normalized_board
+            ):
                 piece_name = PieceId(pattern.piece_id).name
                 mismatches.append(
                     f"{piece_name} at ({pattern.row},{pattern.col})"
@@ -244,8 +237,8 @@ class TestAllStage1PatternsConsistency:
             + ", ".join(mismatches[:10])
         )
 
-    def test_all_hand_patterns_match_cshogi(self) -> None:
-        """Stage1の全持ち駒パターンでcshogi経由と一致すること."""
+    def test_all_hand_patterns_match_board(self) -> None:
+        """Stage1の全持ち駒パターンでBoard経由と一致すること."""
         from maou.domain.data.stage1_generator import (
             Stage1DataGenerator,
         )
@@ -260,14 +253,16 @@ class TestAllStage1PatternsConsistency:
             stage1_hand = np.zeros(14, dtype=np.uint8)
             stage1_hand[pattern.piece_type_idx] = 1
 
-            # cshogi方式
+            # Board方式
             sfen_char = sfen_chars[pattern.piece_type_idx]
             sfen = f"9/9/9/9/9/9/9/9/9 b {sfen_char} 1"
             board = Board()
             board.set_sfen(sfen)
-            cshogi_hand = make_pieces_in_hand(board)
+            normalized_hand = (
+                board.get_normalized_pieces_in_hand()
+            )
 
-            if not np.array_equal(stage1_hand, cshogi_hand):
+            if not np.array_equal(stage1_hand, normalized_hand):
                 mismatches.append(
                     f"piece_type_idx={pattern.piece_type_idx} ({sfen_char})"
                 )

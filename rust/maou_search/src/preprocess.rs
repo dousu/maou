@@ -146,7 +146,8 @@ pub fn hcp_hashes(hcps: &[u8]) -> Result<Vec<u64>, PreprocessError> {
 /// N 局面の NN 入力特徴量 (boardIdPositions N×81 u8, piecesInHand N×14 u8) を
 /// 一括エンコードする．
 ///
-/// Python `make_board_id_positions` / `make_pieces_in_hand` 相当
+/// Python `Board.get_normalized_board_id_positions` /
+/// `get_normalized_pieces_in_hand` 相当
 /// (手番視点正規化込み)．
 pub fn encode_hcp_features(hcps: &[u8]) -> Result<(Vec<u8>, Vec<u8>), PreprocessError> {
     let n = split_hcps(hcps)?;

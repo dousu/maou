@@ -1411,7 +1411,7 @@ wheels = [
 
 [[package]]
 name = "maou"
-version = "0.39.0"
+version = "0.41.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

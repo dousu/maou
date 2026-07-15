@@ -7,6 +7,7 @@ kifu_parity.rs が検証する．本テストは PyO3 表面 (GameRecord) の契
 """
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -20,7 +21,7 @@ FIXTURE_DIR = (
 HIRATE_SFEN = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
 
 
-def _kif(name: str) -> object:
+def _kif(name: str) -> Any:
     return parse_kif_str((FIXTURE_DIR / name).read_text())
 
 

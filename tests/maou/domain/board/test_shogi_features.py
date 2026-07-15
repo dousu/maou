@@ -1,12 +1,28 @@
+"""Board の手番正規化特徴量 (get_normalized_board_id_positions /
+get_normalized_pieces_in_hand) のテスト．
+
+計算は Rust (maou_search::feature) に委譲されているため，
+本テストは手動構築の期待値で正規化の意味論を pin する．
+"""
+
 import numpy as np
 
-from maou.app.pre_process import feature
 from maou.domain.board import shogi
 from maou.domain.board.shogi import Board, PieceId, Turn
 from maou.domain.move.label import (
     make_move_label,
     make_result_value,
 )
+
+
+def _swap_piece_ids(board: np.ndarray) -> np.ndarray:
+    """BLACK(1-14)とWHITE(15-28)の駒IDを入れ替える (テスト oracle)．"""
+    result = board.copy()
+    black_mask = (result >= 1) & (result <= 14)
+    white_mask = (result >= 15) & (result <= 28)
+    result[black_mask] += 14
+    result[white_mask] -= 14
+    return result
 
 
 def test_feature_functions_from_hcp_roundtrip() -> None:
@@ -24,8 +40,8 @@ def test_feature_functions_from_hcp_roundtrip() -> None:
     restored = shogi.Board()
     restored.set_hcp(hcp)
 
-    board_ids = feature.make_board_id_positions(restored)
-    pieces_in_hand = feature.make_pieces_in_hand(restored)
+    board_ids = restored.get_normalized_board_id_positions()
+    pieces_in_hand = restored.get_normalized_pieces_in_hand()
     move_label = make_move_label(restored.get_turn(), move16)
     result_value = make_result_value(
         restored.get_turn(), shogi.Result.DRAW
@@ -38,14 +54,16 @@ def test_feature_functions_from_hcp_roundtrip() -> None:
     assert isinstance(move_label, int)
     assert result_value == 0.5
     np.testing.assert_array_equal(
-        board_ids, feature.make_board_id_positions(board)
+        board_ids,
+        board.get_normalized_board_id_positions(),
     )
     np.testing.assert_array_equal(
-        pieces_in_hand, feature.make_pieces_in_hand(board)
+        pieces_in_hand,
+        board.get_normalized_pieces_in_hand(),
     )
 
 
-class TestMakeBoardIdPositions:
+class TestGetNormalizedBoardIdPositions:
     def test_black_turn_returns_board_positions(self) -> None:
         board = Board()
         board.set_sfen(
@@ -53,7 +71,7 @@ class TestMakeBoardIdPositions:
             " b - 1"
         )
 
-        result = feature.make_board_id_positions(board)
+        result = board.get_normalized_board_id_positions()
 
         assert result.shape == (9, 9)
         assert result.dtype == np.uint8
@@ -67,13 +85,13 @@ class TestMakeBoardIdPositions:
         board.set_sfen("8k/9/9/9/9/9/9/9/K8 b - 1")
         board.set_turn(Turn.WHITE)
 
-        result = feature.make_board_id_positions(board)
+        result = board.get_normalized_board_id_positions()
 
         positions = np.array(
             board.get_board_id_positions(), dtype=np.uint8
         )
         rotated = np.rot90(positions, 2)
-        expected = feature._swap_piece_ids(rotated)
+        expected = _swap_piece_ids(rotated)
         np.testing.assert_array_equal(result, expected)
 
     def test_white_turn_current_player_has_ids_1_to_14(
@@ -85,7 +103,7 @@ class TestMakeBoardIdPositions:
         board.set_sfen("8k/9/9/9/9/9/9/9/K8 b - 1")
         board.set_turn(Turn.WHITE)
 
-        result = feature.make_board_id_positions(board)
+        result = board.get_normalized_board_id_positions()
 
         # After rotation + swap:
         # WHITE king (original ID=22=8+14) becomes ID=8 (range 1-14)
@@ -95,48 +113,6 @@ class TestMakeBoardIdPositions:
         assert 8 in non_zero.tolist()
         # Opponent's king should be ID 22 (8+14, range 15-28)
         assert 22 in non_zero.tolist()
-
-
-class TestSwapPieceIds:
-    """_swap_piece_ids()のテスト．"""
-
-    def test_swaps_black_to_white(self) -> None:
-        """BLACK piece IDs (1-14) should become WHITE (15-28)．"""
-        board = np.array([[1, 2, 8, 14]], dtype=np.uint8)
-        result = feature._swap_piece_ids(board)
-        expected = np.array([[15, 16, 22, 28]], dtype=np.uint8)
-        np.testing.assert_array_equal(result, expected)
-
-    def test_swaps_white_to_black(self) -> None:
-        """WHITE piece IDs (15-28) should become BLACK (1-14)．"""
-        board = np.array([[15, 16, 22, 28]], dtype=np.uint8)
-        result = feature._swap_piece_ids(board)
-        expected = np.array([[1, 2, 8, 14]], dtype=np.uint8)
-        np.testing.assert_array_equal(result, expected)
-
-    def test_empty_stays_empty(self) -> None:
-        """EMPTY (0) should remain 0．"""
-        board = np.array([[0, 1, 15, 0]], dtype=np.uint8)
-        result = feature._swap_piece_ids(board)
-        expected = np.array([[0, 15, 1, 0]], dtype=np.uint8)
-        np.testing.assert_array_equal(result, expected)
-
-    def test_does_not_mutate_input(self) -> None:
-        """入力配列が変更されないこと．"""
-        board = np.array([[1, 15]], dtype=np.uint8)
-        original = board.copy()
-        feature._swap_piece_ids(board)
-        np.testing.assert_array_equal(board, original)
-
-    def test_double_swap_roundtrip(self) -> None:
-        """2回スワップで元に戻ること．"""
-        board = np.array(
-            [[0, 1, 7, 14, 15, 21, 28, 0, 0]], dtype=np.uint8
-        )
-        result = feature._swap_piece_ids(
-            feature._swap_piece_ids(board)
-        )
-        np.testing.assert_array_equal(result, board)
 
 
 class TestGetBoardIdPositions:
@@ -191,12 +167,12 @@ class TestGetBoardIdPositions:
         np.testing.assert_array_equal(result, expected)
 
 
-class TestMakePiecesInHand:
+class TestGetNormalizedPiecesInHand:
     def test_returns_hand_counts_for_black_turn(self) -> None:
         board = Board()
         board.set_sfen("9/9/9/9/9/9/9/9/9 b 2PLGB3pnr 1")
 
-        result = feature.make_pieces_in_hand(board)
+        result = board.get_normalized_pieces_in_hand()
 
         expected = np.array(
             [2, 1, 0, 0, 1, 1, 0, 3, 0, 1, 0, 0, 0, 1],
@@ -211,7 +187,7 @@ class TestMakePiecesInHand:
         board.set_sfen("9/9/9/9/9/9/9/9/9 b 2PLGB3pnr 1")
         board.set_turn(Turn.WHITE)
 
-        result = feature.make_pieces_in_hand(board)
+        result = board.get_normalized_pieces_in_hand()
 
         expected = np.array(
             [3, 0, 1, 0, 0, 0, 1, 2, 1, 0, 0, 1, 1, 0],
