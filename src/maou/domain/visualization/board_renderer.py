@@ -178,10 +178,13 @@ class SVGBoardRenderer:
             <polygon points="0 0, 6 2, 0 4" fill="{self.COLOR_ARROW}"/>
         </marker>"""
 
+        # ヘッダー (レコードID/手番バッジ) は盤面上端より上の負 y 領域
+        # (y = MARGIN - 46 付近) に描画されるため，viewBox の y 原点を
+        # -HEADER_HEIGHT にしてヘッダー帯を可視域に含める
         return f"""<svg xmlns="http://www.w3.org/2000/svg"
                     width="{total_width}"
                     height="{total_height}"
-                    viewBox="0 0 {total_width} {total_height}"
+                    viewBox="0 -{self.HEADER_HEIGHT} {total_width} {total_height}"
                     style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.07);">
     <defs>
         <filter id="piece-shadow" x="-50%" y="-50%" width="200%" height="200%">

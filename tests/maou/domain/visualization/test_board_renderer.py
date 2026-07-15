@@ -321,3 +321,43 @@ class TestDrawPiecesWhitePieces:
             "board_renderer may be using raw piece IDs "
             "instead of domain PieceId constants"
         )
+
+
+class TestHeaderVisibility:
+    """ヘッダー (レコードID/手番) が viewBox 可視域に入ることの回帰テスト．
+
+    ヘッダーは盤面上端より上の負 y 領域に描画されるため，viewBox の
+    y 原点が 0 だとクリップされ全レンダラで不可視になる (回帰)．
+    """
+
+    def test_header_band_is_inside_viewbox(self) -> None:
+        import re
+
+        renderer = SVGBoardRenderer()
+        position = BoardPosition(
+            board_id_positions=[[0] * 9 for _ in range(9)],
+            pieces_in_hand=[0] * 14,
+        )
+
+        svg = renderer.render(
+            position,
+            turn=Turn.WHITE,
+            record_id="header-check",
+        )
+
+        assert "後手番" in svg
+        assert "ID: header-check" in svg
+
+        m = re.search(
+            r'viewBox="(-?[\d.]+) (-?[\d.]+) ([\d.]+) ([\d.]+)"',
+            svg,
+        )
+        assert m is not None, "viewBox not found"
+        min_y = float(m.group(2))
+
+        # ヘッダーバッジの上端 (MARGIN - 46) が可視域に入ること
+        header_top = renderer.MARGIN - 46
+        assert min_y <= header_top, (
+            f"header band (top={header_top}) is clipped: "
+            f"viewBox min-y={min_y}"
+        )
