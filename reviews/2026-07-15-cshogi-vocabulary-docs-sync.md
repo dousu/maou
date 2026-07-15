@@ -2,7 +2,7 @@
 title: cshogi 遺構リファクタ完了に伴う docs の stale 記述一掃
 date: 2026-07-15
 status: applied
-applied_in: TBD
+applied_in: 6de97dc
 target:
   - docs/architecture.md
   - docs/rust-backend.md
