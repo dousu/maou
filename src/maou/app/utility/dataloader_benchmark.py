@@ -90,11 +90,8 @@ class DataLoaderBenchmark:
         )
 
         # Create dataset
-        transform = None
-
         dataset = KifDataset(
             datasource=self.config.datasource,
-            transform=transform,
         )
 
         # Setup worker initialization for reproducibility

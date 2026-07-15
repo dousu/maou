@@ -18,7 +18,9 @@ from maou.app.learning.gradient_noise_scale import (
     GradientNoiseScaleEstimator,
 )
 from maou.app.learning.network import Network
+from maou.app.learning.policy_targets import PolicyTargetMode
 from maou.app.learning.training_loop import TrainingLoop
+from maou.app.learning.value_targets import ValueTargetMode
 
 
 def test_resolve_batch_size_supports_list_inputs() -> None:
@@ -326,6 +328,28 @@ class TestUnpackBatch:
         assert ctx.move_win_rate is None
 
 
+class _TwoHeadModelForAdaptive(torch.nn.Module):
+    """Adaptive batch テスト用の 2 ヘッドモデル．
+
+    production のモデル契約 (forward が (policy_logits, value) の
+    2-tuple を返す) に合わせる．
+    """
+
+    def __init__(self, input_dim: int, output_dim: int) -> None:
+        super().__init__()
+        self.policy_head = torch.nn.Linear(
+            input_dim, output_dim
+        )
+        self.value_head = torch.nn.Linear(input_dim, 1)
+
+    def forward(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.policy_head(x), self.value_head(x).squeeze(
+            -1
+        )
+
+
 class _SimpleBatchDatasetForAdaptive(
     torch.utils.data.IterableDataset,
 ):
@@ -356,11 +380,9 @@ class _SimpleBatchDatasetForAdaptive(
                 self.batch_size, self.input_dim
             )
             targets = (
-                torch.randint(
-                    0,
-                    self.output_dim,
-                    (self.batch_size,),
-                ).float(),
+                # policy 教師は (batch, labels) の分布
+                # (production の moveLabel 列に相当)
+                torch.rand(self.batch_size, self.output_dim),
                 torch.randn(self.batch_size),
                 None,
             )
@@ -381,7 +403,7 @@ class TestAdaptiveBatchIntegration:
         input_dim = 64
         output_dim = 2
         batch_size = 8
-        model = torch.nn.Linear(input_dim, output_dim)
+        model = _TwoHeadModelForAdaptive(input_dim, output_dim)
         optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
 
         adaptive_config = AdaptiveBatchConfig(
@@ -405,6 +427,8 @@ class TestAdaptiveBatchIntegration:
             adaptive_batch_config=adaptive_config,
             physical_batch_size=batch_size,
             adaptive_batch_callback=adaptive_cb,
+            policy_target_mode=PolicyTargetMode.MOVE_LABEL,
+            value_target_mode=ValueTargetMode.RESULT_VALUE,
         )
 
         # adaptive batch が有効化され初期値が min_accumulation_steps
@@ -440,7 +464,7 @@ class TestAdaptiveBatchIntegration:
         input_dim = 32
         output_dim = 2
         batch_size = 4
-        model = torch.nn.Linear(input_dim, output_dim)
+        model = _TwoHeadModelForAdaptive(input_dim, output_dim)
         optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
 
         adaptive_config = AdaptiveBatchConfig(
@@ -463,6 +487,8 @@ class TestAdaptiveBatchIntegration:
             adaptive_batch_config=adaptive_config,
             physical_batch_size=batch_size,
             adaptive_batch_callback=adaptive_cb,
+            policy_target_mode=PolicyTargetMode.MOVE_LABEL,
+            value_target_mode=ValueTargetMode.RESULT_VALUE,
         )
 
         dataset = _SimpleBatchDatasetForAdaptive(
@@ -495,7 +521,7 @@ class TestAdaptiveBatchIntegration:
         input_dim = 32
         output_dim = 2
         batch_size = 4
-        model = torch.nn.Linear(input_dim, output_dim)
+        model = _TwoHeadModelForAdaptive(input_dim, output_dim)
         optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
 
         adaptive_config = AdaptiveBatchConfig(
@@ -532,6 +558,8 @@ class TestAdaptiveBatchIntegration:
             physical_batch_size=batch_size,
             adaptive_controller=controller,
             gns_estimator=estimator,
+            policy_target_mode=PolicyTargetMode.MOVE_LABEL,
+            value_target_mode=ValueTargetMode.RESULT_VALUE,
         )
 
         assert loop.gradient_accumulation_steps == 2

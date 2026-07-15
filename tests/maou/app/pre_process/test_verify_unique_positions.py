@@ -1,6 +1,6 @@
 """ユニーク局面計算の正確性を検証するテスト．
 
-preprocessパイプラインがcshogiのzobrist_hashに基づいて
+preprocessパイプラインがBoard の zobrist hashに基づいて
 正しくユニーク局面を判定しているかを検証する．
 
 - 異なる局面は異なるユニーク局面として保持されること

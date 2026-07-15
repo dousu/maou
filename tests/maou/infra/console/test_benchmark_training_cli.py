@@ -40,7 +40,17 @@ class TestStageDataPathValidation:
 
         stage1_dir = tmp_path / "stage1"
         stage1_dir.mkdir()
-        (stage1_dir / "data.feather").touch()
+        # 回帰: touch() の空ファイルは有効な feather でないため
+        # datasource の eager ロードで落ちる．最小の有効データを書く
+        from maou.domain.data.rust_io import save_stage1_df
+        from maou.domain.data.schema import (
+            create_empty_stage1_df,
+        )
+
+        save_stage1_df(
+            create_empty_stage1_df(1),
+            stage1_dir / "data.feather",
+        )
 
         monkeypatch.setattr(
             utility,
@@ -87,7 +97,15 @@ class TestStageDataPathValidation:
 
         stage2_dir = tmp_path / "stage2"
         stage2_dir.mkdir()
-        (stage2_dir / "data.feather").touch()
+        from maou.domain.data.rust_io import save_stage2_df
+        from maou.domain.data.schema import (
+            create_empty_stage2_df,
+        )
+
+        save_stage2_df(
+            create_empty_stage2_df(1),
+            stage2_dir / "data.feather",
+        )
 
         monkeypatch.setattr(
             utility,

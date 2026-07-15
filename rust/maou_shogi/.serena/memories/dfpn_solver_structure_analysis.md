@@ -66,7 +66,7 @@
 4. **Child Node Initialization** (2320-2550):
    - For each move:
      - Execute move: `board.do_move(*m)`
-     - Calculate `child_pk = position_key(board)` 
+     - Calculate `child_pk = position_key(board)`
      - Look up child: `look_up_pn_dn(child_pk, &child_hand, child_remaining)`
      - **Inline evaluation**: PN_UNIT heuristics (mate-in-1, mate-in-3 detection)
      - **Store to TT**: `store()`, `store_with_best_move()`, `store_with_best_move_and_distance()`
@@ -94,12 +94,12 @@ pub(super) fn look_up_pn_dn(
 
 ### Implementation variants in TT:
 - `look_up_working()`: WorkingTT intermediate entries
-- `look_up_proven()`: ProvenTT proof/disproof entries  
+- `look_up_proven()`: ProvenTT proof/disproof entries
 - `look_up_proven_skip_refutable()`: ProvenTT with refutable disproof filtering (PNS mode)
 
 ### Special cases handled:
-- **remaining=0** (depth limit reached): 
-  - If proof exists: return `(0, INF, 0)` 
+- **remaining=0** (depth limit reached):
+  - If proof exists: return `(0, INF, 0)`
   - Otherwise: return `(INF, 0, 0)`
 - **Refutable disproof**: Can be skipped in PNS, visible in MID
 
@@ -138,7 +138,7 @@ pub(super) fn store(
 
 ### Dual TT Architecture (v0.24.0+)
 1. **ProvenTT** (permanent entries):
-   - Proof: pn=0 
+   - Proof: pn=0
    - Confirmed disproof: dn=0, remaining=INFINITE, non-path-dependent
    - Refutable disproof: (v0.24.75+) marked with flag bit 7
 
@@ -167,7 +167,7 @@ Collected when `profile` feature enabled. Tracks:
   - `child_init_ns`, `main_loop_collect_ns`, `depth_limit_terminal_ns`
   - `nm_promotion_refutable_ns`, `capture_tt_lookahead_ns`
   - `cross_deduce_ns`, `prefilter_ns`
-  
+
 - **Call counts**: Corresponding `_count` fields for each operation
 
 - **TT overflow stats**:

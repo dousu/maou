@@ -165,25 +165,14 @@ class DatasetFactory:
         cls,
         training_datasource: DataSource,
         validation_datasource: DataSource,
-        cache_transforms: bool = False,
     ) -> tuple[KifDataset, KifDataset]:
         """学習・検証用データセットの作成."""
 
-        transform = None
-
-        # Create base datasets
-        cache_enabled = (
-            cache_transforms and transform is not None
-        )
         dataset_train = KifDataset(
             datasource=training_datasource,
-            transform=transform,
-            cache_transforms=cache_enabled,
         )
         dataset_validation = KifDataset(
             datasource=validation_datasource,
-            transform=transform,
-            cache_transforms=cache_enabled,
         )
 
         return dataset_train, dataset_validation
@@ -1068,7 +1057,6 @@ class TrainingSetup:
         cls,
         training_datasource: DataSource,
         validation_datasource: DataSource,
-        cache_transforms: bool | None = None,
         gpu: str | None = None,
         model_architecture: BackboneArchitecture = "resnet",
         batch_size: int = 256,
@@ -1107,16 +1095,10 @@ class TrainingSetup:
         )
 
         # Dataset creation
-        cache_transforms_enabled = (
-            cache_transforms
-            if cache_transforms is not None
-            else False
-        )
         dataset_train, dataset_validation = (
             DatasetFactory.create_datasets(
                 training_datasource,
                 validation_datasource,
-                cache_transforms=cache_transforms_enabled,
             )
         )
 

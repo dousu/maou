@@ -191,3 +191,40 @@ class TestSchemaIntegration:
         )
 
         # Validation removed
+
+
+class TestConvertHcpeDfToNumpy:
+    """convert_hcpe_df_to_numpy の変換テスト．"""
+
+    def test_empty_ratings_normalized_to_zero(self) -> None:
+        """KIF 由来 HCPE の空 ratings が [0, 0] に正規化される．
+
+        回帰: 空リストのまま np.array に渡すと shape (N, 0) となり
+        (N, 2) フィールドへの broadcast エラーで crash していた．
+        """
+        import polars as pl
+
+        from maou.domain.data.schema import (
+            convert_hcpe_df_to_numpy,
+            get_hcpe_polars_schema,
+        )
+
+        df = pl.DataFrame(
+            {
+                "hcp": [bytes(32)],
+                "eval": [100],
+                "bestMove16": [1000],
+                "gameResult": [1],
+                "id": ["test.hcpe_0"],
+                "partitioningKey": [None],
+                "ratings": [[]],
+                "endgameStatus": ["%TORYO"],
+                "moves": [10],
+            },
+            schema=get_hcpe_polars_schema(),
+        )
+        array = convert_hcpe_df_to_numpy(df)
+        np.testing.assert_array_equal(
+            array["ratings"][0],
+            np.array([0, 0], dtype=np.uint16),
+        )

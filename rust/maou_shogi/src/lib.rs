@@ -4,6 +4,7 @@ pub mod board;
 pub mod dfpn;
 pub mod feature;
 pub mod hcp;
+pub mod kifu;
 pub mod movegen;
 pub mod moves;
 // piece は内部実装．cshogi互換の変換関数のみ提供し，

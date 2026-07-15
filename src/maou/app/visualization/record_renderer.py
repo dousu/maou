@@ -14,10 +14,6 @@ if TYPE_CHECKING:
     import plotly.graph_objects as go
 
 from maou.domain.board.shogi import (
-    CSHOGI_BLACK_MAX,
-    CSHOGI_BLACK_MIN,
-    DOMAIN_WHITE_MIN,
-    DOMAIN_WHITE_OFFSET,
     Board,
     Turn,
     move_drop_hand_piece,
@@ -146,158 +142,26 @@ class RecordRenderer(ABC):
         """レコードからBoardインスタンスを再構築する．
 
         boardIdPositions（9x9配列）とpiecesInHand（14要素配列）から
-        cshogi.Boardインスタンスを生成する．
+        domain Boardインスタンスを生成する
+        (Board.from_board_id_positions に委譲)．
 
         Args:
             record: レコードデータ
 
         Returns:
-            Board インスタンス
-
-        Note:
-            この実装は簡易版であり，完全なHCP変換は今後の改善課題．
-            現在はSFEN形式経由での変換を試みる．
+            Board インスタンス．再構築に失敗した場合は平手初期局面．
         """
-        board = Board()
-
-        # boardIdPositions と piecesInHand から SFEN 形式を構築
         try:
-            sfen = self._convert_to_sfen(
-                board_id_positions=record.get(
-                    "boardIdPositions", []
-                ),
-                pieces_in_hand=record.get("piecesInHand", []),
+            return Board.from_board_id_positions(
+                record.get("boardIdPositions", []),
+                record.get("piecesInHand", []),
             )
-            board.set_sfen(sfen)
         except Exception as e:
             logger.warning(
                 f"Failed to reconstruct board from record: {e}"
             )
             # フォールバック: 初期局面
-            board.set_sfen(
-                "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
-            )
-
-        return board
-
-    def _convert_to_sfen(
-        self,
-        board_id_positions: list[list[int]],
-        pieces_in_hand: list[int],
-    ) -> str:
-        """boardIdPositionsとpiecesInHandからSFEN形式に変換する．
-
-        Args:
-            board_id_positions: 9x9の駒配置（PieceId値）
-            pieces_in_hand: 持ち駒配列（14要素）
-
-        Returns:
-            SFEN形式の文字列
-
-        Note:
-            これは簡易実装であり，正確なSFEN生成には
-            駒の所属（先手/後手）判定が必要．
-            現状は基本的な変換のみ実装．
-        """
-        # 先手駒ID → SFEN文字マッピング
-        # domain PieceId: 先手=1-14, 後手=15-28（先手+14）
-        black_piece_to_sfen = {
-            1: "P",  # 歩
-            2: "L",  # 香
-            3: "N",  # 桂
-            4: "S",  # 銀
-            5: "G",  # 金
-            6: "B",  # 角
-            7: "R",  # 飛
-            8: "K",  # 玉
-            9: "+P",  # と
-            10: "+L",  # 成香
-            11: "+N",  # 成桂
-            12: "+S",  # 成銀
-            13: "+B",  # 馬
-            14: "+R",  # 龍
-        }
-
-        def get_sfen_char(piece_id: int) -> str:
-            """駒IDからSFEN文字を取得．後手駒は小文字で返す．
-
-            駒ID定数は shogi.py の DOMAIN_* を使用．
-            boardIdPositionsはdomain PieceId形式(白駒=黒駒+14)．
-            """
-            if piece_id == 0:
-                return ""
-            if CSHOGI_BLACK_MIN <= piece_id <= CSHOGI_BLACK_MAX:
-                # 先手駒（大文字）
-                return black_piece_to_sfen.get(piece_id, "")
-            elif piece_id >= DOMAIN_WHITE_MIN:
-                # 後手駒（小文字）: piece_id - 14 の先手マッピングを小文字化
-                black_char = black_piece_to_sfen.get(
-                    piece_id - DOMAIN_WHITE_OFFSET, ""
-                )
-                return black_char.lower()
-            return ""
-
-        # 盤面をSFEN形式に変換
-        ranks = []
-        for row in board_id_positions:
-            # boardIdPositionsはcol=0が1筋，SFENは9筋→1筋の順
-            # 列を反転して正しいSFEN列順にする
-            row = list(reversed(row))
-            rank_str = ""
-            empty_count = 0
-            for piece_id in row:
-                if piece_id == 0:
-                    empty_count += 1
-                else:
-                    if empty_count > 0:
-                        rank_str += str(empty_count)
-                        empty_count = 0
-                    piece_char = get_sfen_char(piece_id)
-                    rank_str += piece_char
-
-            if empty_count > 0:
-                rank_str += str(empty_count)
-
-            ranks.append(rank_str if rank_str else "9")
-
-        board_sfen = "/".join(ranks)
-
-        # 持ち駒（先手: 大文字，後手: 小文字）
-        hand_sfen = "-"
-        hand_parts = []
-        piece_chars = ["P", "L", "N", "S", "G", "B", "R"]
-
-        # 先手の持ち駒（pieces_in_hand[0:7]）
-        if len(pieces_in_hand) >= 7:
-            for i, count in enumerate(pieces_in_hand[:7]):
-                if count > 0:
-                    if count > 1:
-                        hand_parts.append(
-                            f"{count}{piece_chars[i]}"
-                        )
-                    else:
-                        hand_parts.append(piece_chars[i])
-
-        # 後手の持ち駒（pieces_in_hand[7:14]）
-        if len(pieces_in_hand) >= 14:
-            for i, count in enumerate(pieces_in_hand[7:14]):
-                if count > 0:
-                    char = piece_chars[i].lower()
-                    if count > 1:
-                        hand_parts.append(f"{count}{char}")
-                    else:
-                        hand_parts.append(char)
-
-        if hand_parts:
-            hand_sfen = "".join(hand_parts)
-
-        # 手番（デフォルト: 先手）
-        turn = "b"
-
-        # 手数（デフォルト: 1）
-        move_count = "1"
-
-        return f"{board_sfen} {turn} {hand_sfen} {move_count}"
+            return Board()
 
 
 class HCPERecordRenderer(RecordRenderer):

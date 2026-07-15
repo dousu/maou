@@ -210,7 +210,6 @@ def learn(
     dataloader_workers: int | None = None,
     pin_memory: bool | None = None,
     prefetch_factor: int | None = None,
-    cache_transforms: bool | None = None,
     gce_parameter: float | None = None,
     policy_loss_ratio: float | None = None,
     value_loss_ratio: float | None = None,
@@ -463,8 +462,6 @@ def learn(
         dir_init(model_dir)
     logger.info(f"Input: {datasource}, Output: {model_dir}")
 
-    if cache_transforms is None:
-        cache_transforms = False
     normalized_cache_mode = input_cache_mode.lower()
     if normalized_cache_mode not in {"file", "memory"}:
         raise ValueError(
@@ -491,7 +488,6 @@ def learn(
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
-        cache_transforms=cache_transforms,
         gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,
@@ -958,7 +954,6 @@ def learn_multi_stage(
     dataloader_workers: int | None = None,
     pin_memory: bool | None = None,
     prefetch_factor: int | None = None,
-    cache_transforms: bool | None = None,
     gce_parameter: float | None = None,
     policy_loss_ratio: float | None = None,
     value_loss_ratio: float | None = None,
@@ -1027,7 +1022,6 @@ def learn_multi_stage(
         dataloader_workers: DataLoader worker count for Stage 3
         pin_memory: Enable pinned memory for Stage 3
         prefetch_factor: Prefetch factor for Stage 3
-        cache_transforms: Cache transforms for Stage 3
         gce_parameter: GCE parameter for Stage 3
         policy_loss_ratio: Policy loss weight for Stage 3
         value_loss_ratio: Value loss weight for Stage 3
@@ -1340,7 +1334,6 @@ def learn_multi_stage(
             dataloader_workers=dataloader_workers,
             pin_memory=pin_memory,
             prefetch_factor=prefetch_factor,
-            cache_transforms=cache_transforms,
             gce_parameter=gce_parameter,
             policy_loss_ratio=policy_loss_ratio,
             value_loss_ratio=value_loss_ratio,

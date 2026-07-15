@@ -10,6 +10,7 @@ from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
 
 from maou.app.learning.adaptive_batch import (
+    AdaptiveBatchConfig,
     round_to_power_of_two,
 )
 from maou.app.learning.callbacks import (
@@ -268,6 +269,10 @@ class SingleEpochBenchmark:
         value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
         enable_resource_monitoring: bool = False,
         training_loop_class: type[TrainingLoop] = TrainingLoop,
+        gradient_accumulation_steps: int = 1,
+        adaptive_batch_config: AdaptiveBatchConfig
+        | None = None,
+        physical_batch_size: int | None = None,
     ):
         self.model = model
         self.device = device
@@ -282,6 +287,11 @@ class SingleEpochBenchmark:
             enable_resource_monitoring
         )
         self.training_loop_class = training_loop_class
+        self.gradient_accumulation_steps = (
+            gradient_accumulation_steps
+        )
+        self.adaptive_batch_config = adaptive_batch_config
+        self.physical_batch_size = physical_batch_size
 
         # Mixed precision training用のGradScalerを初期化（GPU使用時のみ）
         if self.device.type == "cuda":
@@ -337,7 +347,7 @@ class SingleEpochBenchmark:
         )
         total_memory = torch.cuda.get_device_properties(
             self.device
-        ).total_mem
+        ).total_memory
 
         return GPUMemoryBreakdown(
             model_parameters_bytes=model_param_bytes,
@@ -397,6 +407,9 @@ class SingleEpochBenchmark:
             value_loss_ratio=self.value_loss_ratio,
             policy_target_mode=self.policy_target_mode,
             value_target_mode=self.value_target_mode,
+            gradient_accumulation_steps=self.gradient_accumulation_steps,
+            adaptive_batch_config=self.adaptive_batch_config,
+            physical_batch_size=self.physical_batch_size,
             callbacks=callbacks,
             logger=self.logger,
         )
@@ -644,7 +657,6 @@ class TrainingBenchmarkConfig:
     dataloader_workers: int = 4
     pin_memory: bool | None = None
     prefetch_factor: int = 2
-    cache_transforms: bool | None = None
     gce_parameter: float = 0.1
     policy_loss_ratio: float = 1.0
     value_loss_ratio: float = 1.0
@@ -668,6 +680,8 @@ class TrainingBenchmarkConfig:
     run_validation: bool = False
     sample_ratio: float | None = None
     enable_resource_monitoring: bool = False
+    gradient_accumulation_steps: int = 1
+    adaptive_batch_config: AdaptiveBatchConfig | None = None
     model_architecture: BackboneArchitecture = "resnet"
     streaming: bool = False
     streaming_train_source: StreamingDataSource | None = None
@@ -1331,16 +1345,10 @@ class TrainingBenchmarkUseCase:
                     )
                 )
 
-                cache_transforms_enabled = (
-                    config.cache_transforms
-                    if config.cache_transforms is not None
-                    else False
-                )
                 device_config, dataloaders, model_components = (
                     TrainingSetup.setup_training_components(
                         training_datasource=training_datasource,
                         validation_datasource=validation_datasource,
-                        cache_transforms=cache_transforms_enabled,
                         gpu=config.gpu,
                         model_architecture=config.model_architecture,
                         architecture_config=config.architecture_config,
@@ -1464,6 +1472,15 @@ class TrainingBenchmarkUseCase:
             value_target_mode=config.value_target_mode,
             enable_resource_monitoring=config.enable_resource_monitoring,
             training_loop_class=training_loop_class,
+            gradient_accumulation_steps=config.gradient_accumulation_steps,
+            # adaptive batch は Stage 3 (policy+value) のみ適用
+            # (learn-model と同じ制約)
+            adaptive_batch_config=(
+                config.adaptive_batch_config
+                if config.stage == 3
+                else None
+            ),
+            physical_batch_size=config.batch_size,
         )
 
         # Run training benchmark

@@ -51,11 +51,13 @@ class TestInferenceRunner:
     ) -> None:
         """sfenを指定してONNXモデルで推論を実行．"""
         with (
-            patch(
-                "maou.app.inference.run.make_board_id_positions"
+            patch.object(
+                Board,
+                "get_normalized_board_id_positions",
             ) as mock_make_board,
-            patch(
-                "maou.app.inference.run.make_pieces_in_hand"
+            patch.object(
+                Board,
+                "get_normalized_pieces_in_hand",
             ) as mock_make_hand,
             patch(
                 "maou.app.inference.run.ONNXInference.infer"
@@ -118,11 +120,13 @@ class TestInferenceRunner:
     ) -> None:
         """Boardオブジェクトを指定してONNXモデルで推論を実行．"""
         with (
-            patch(
-                "maou.app.inference.run.make_board_id_positions"
+            patch.object(
+                Board,
+                "get_normalized_board_id_positions",
             ) as mock_make_board,
-            patch(
-                "maou.app.inference.run.make_pieces_in_hand"
+            patch.object(
+                Board,
+                "get_normalized_pieces_in_hand",
             ) as mock_make_hand,
             patch(
                 "maou.app.inference.run.ONNXInference.infer"
@@ -186,11 +190,13 @@ class TestInferenceRunner:
     ) -> None:
         """cudaオプションがONNXInferenceに正しく渡されることを確認．"""
         with (
-            patch(
-                "maou.app.inference.run.make_board_id_positions"
+            patch.object(
+                Board,
+                "get_normalized_board_id_positions",
             ) as mock_make_board,
-            patch(
-                "maou.app.inference.run.make_pieces_in_hand"
+            patch.object(
+                Board,
+                "get_normalized_pieces_in_hand",
             ) as mock_make_hand,
             patch(
                 "maou.app.inference.run.ONNXInference.infer"
@@ -230,11 +236,13 @@ class TestInferenceRunner:
     ) -> None:
         """不正な手（IllegalMove）が含まれる場合の処理を確認．"""
         with (
-            patch(
-                "maou.app.inference.run.make_board_id_positions"
+            patch.object(
+                Board,
+                "get_normalized_board_id_positions",
             ) as mock_make_board,
-            patch(
-                "maou.app.inference.run.make_pieces_in_hand"
+            patch.object(
+                Board,
+                "get_normalized_pieces_in_hand",
             ) as mock_make_hand,
             patch(
                 "maou.app.inference.run.ONNXInference.infer"
@@ -285,11 +293,13 @@ class TestInferenceRunner:
     ) -> None:
         """TensorRTが利用できない場合のエラー処理を確認．"""
         with (
-            patch(
-                "maou.app.inference.run.make_board_id_positions"
+            patch.object(
+                Board,
+                "get_normalized_board_id_positions",
             ) as mock_make_board,
-            patch(
-                "maou.app.inference.run.make_pieces_in_hand"
+            patch.object(
+                Board,
+                "get_normalized_pieces_in_hand",
             ) as mock_make_hand,
             patch("builtins.__import__") as mock_import,
         ):
@@ -342,11 +352,13 @@ class TestInferenceRunner:
         )
 
         with (
-            patch(
-                "maou.app.inference.run.make_board_id_positions"
+            patch.object(
+                Board,
+                "get_normalized_board_id_positions",
             ) as mock_make_board,
-            patch(
-                "maou.app.inference.run.make_pieces_in_hand"
+            patch.object(
+                Board,
+                "get_normalized_pieces_in_hand",
             ) as mock_make_hand,
             patch.dict(
                 sys.modules,
@@ -399,11 +411,13 @@ class TestInferenceRunner:
         # (実際にはありえないが，将来の拡張に備えたテスト)
 
         with (
-            patch(
-                "maou.app.inference.run.make_board_id_positions"
+            patch.object(
+                Board,
+                "get_normalized_board_id_positions",
             ) as mock_make_board,
-            patch(
-                "maou.app.inference.run.make_pieces_in_hand"
+            patch.object(
+                Board,
+                "get_normalized_pieces_in_hand",
             ) as mock_make_hand,
         ):
             mock_make_board.return_value = np.zeros(
@@ -455,11 +469,13 @@ class TestInferenceRunner:
     ) -> None:
         """Evaluationクラスとの統合が正しく動作することを確認．"""
         with (
-            patch(
-                "maou.app.inference.run.make_board_id_positions"
+            patch.object(
+                Board,
+                "get_normalized_board_id_positions",
             ) as mock_make_board,
-            patch(
-                "maou.app.inference.run.make_pieces_in_hand"
+            patch.object(
+                Board,
+                "get_normalized_pieces_in_hand",
             ) as mock_make_hand,
             patch(
                 "maou.app.inference.run.ONNXInference.infer"
@@ -505,11 +521,13 @@ class TestInferenceRunner:
         """異なるnum_moves値で正しく動作することを確認．"""
         for num_moves in [1, 3, 10, 20]:
             with (
-                patch(
-                    "maou.app.inference.run.make_board_id_positions"
+                patch.object(
+                    Board,
+                    "get_normalized_board_id_positions",
                 ) as mock_make_board,
-                patch(
-                    "maou.app.inference.run.make_pieces_in_hand"
+                patch.object(
+                    Board,
+                    "get_normalized_pieces_in_hand",
                 ) as mock_make_hand,
                 patch(
                     "maou.app.inference.run.ONNXInference.infer"

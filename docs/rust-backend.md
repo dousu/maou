@@ -4,13 +4,15 @@
 
 The project uses Rust (PyO3 + maturin) for high-performance operations．
 Rust ワークスペースは `rust/` 以下に配置され，単一の `cdylib` (`maou_rust`) から
-3 つのサブモジュールとして Python に公開される．
+5 つのサブモジュールとして Python に公開される．
 
 ```
 maou._rust
-├── maou._rust.maou_io      # Arrow IPC I/O
-├── maou._rust.maou_index   # インデックス操作
-└── maou._rust.maou_shogi   # 将棋盤面操作・合法手生成・特徴量抽出
+├── maou._rust.maou_io       # Arrow IPC I/O (feather バッチ入出力・スパース配列)
+├── maou._rust.maou_index    # インデックス操作
+├── maou._rust.maou_shogi    # 将棋盤面操作・合法手生成・特徴量抽出・棋譜パーサ
+├── maou._rust.maou_search   # MCTS 1 局面探索エンジン・前処理一括エンコード
+└── maou._rust.maou_convert  # 棋譜 (CSA/KIF) → HCPE 一括変換パイプライン
 ```
 
 ## Initial Rust Setup
@@ -293,9 +295,11 @@ rust/
 ├── maou_rust/              # PyO3 cdylib (Python バインディング)
 │   └── src/
 │       ├── lib.rs          # エントリポイント，サブモジュール登録
-│       ├── maou_io.rs      # Arrow I/O ラッパー
+│       ├── maou_io.rs      # Arrow I/O ラッパー (feather バッチ入出力含む)
 │       ├── maou_index.rs   # インデックスラッパー
-│       └── maou_shogi.rs   # 将棋エンジンラッパー (PyBoard 等)
+│       ├── maou_shogi.rs   # 将棋エンジンラッパー (PyBoard 等)
+│       ├── maou_search.rs  # 探索 + 前処理一括エンコードラッパー
+│       └── maou_convert.rs # 棋譜→HCPE 一括変換ラッパー
 ├── maou_io/                # Arrow IPC I/O クレート
 │   └── src/
 │       ├── lib.rs
@@ -314,13 +318,28 @@ rust/
 │       ├── lib.rs
 │       ├── evaluator.rs    # Evaluator trait (NN 推論の抽象境界) + MockEvaluator
 │       ├── tree.rs         # 固定容量ノードプール + lock-free 統計
-│       └── search.rs       # PUCT 探索本体 (バッチ収集 + virtual loss)
+│       ├── search.rs       # PUCT 探索本体 (バッチ収集 + virtual loss)
+│       ├── feature.rs      # NN 入力エンコード (board ID 9×9 + 持ち駒 14)
+│       ├── label.rs        # 指し手 → policy ラベル (1496 クラス)
+│       └── preprocess.rs   # HCPE 前処理一括エンコード (hash/label/特徴量/合法手)
+├── maou_convert/           # 棋譜 → HCPE 一括変換クレート
+│   └── src/
+│       ├── lib.rs
+│       ├── decode.rs       # UTF-8 → cp932 fallback デコード
+│       ├── date.rs         # 開始日時 → Date32 (chrono 非依存)
+│       ├── pipeline.rs     # フィルタ + partitioningKey + rayon 並列
+│       └── batch.rs        # HcpeRecord 列 → Arrow RecordBatch
 └── maou_shogi/             # 将棋エンジンクレート
     └── src/
         ├── lib.rs
         ├── board.rs        # 盤面表現 (Bitboard + Mailbox)，do_move/undo_move，hash_after
         ├── bitboard.rs     # 81 マス Bitboard
         ├── attack.rs       # 利きテーブル (PEXT ベース，BMI2 は runtime gate)
+        ├── kifu/           # CSA/KIF 棋譜パーサ (cshogi parity 検証済み)
+        │   ├── csa.rs      #   CSA V2.2 (P+/P-/AL は spec 準拠の独自拡張)
+        │   ├── kif.rs      #   KIF 柿木形式 (不成対応，BOD は明示エラー)
+        │   ├── record.rs   #   GameRecord + cshogi 互換 move エンコード
+        │   └── hcpe.rs     #   GameRecord → HCPE 行列変換 (局面再生)
         ├── movegen.rs      # 合法手生成
         ├── moves.rs        # Move エンコーディング (cshogi 互換 16-bit + 拡張)
         ├── piece.rs        # 駒の内部実装 (cshogi 互換変換のみ公開)
@@ -523,13 +542,20 @@ let report = solve_tsume_report_with_timeout(
 
 - **Move エンコーディング**: cshogi 互換の 16-bit/32-bit ビットレイアウトを採用．
   打ち手は bit 15 フラグではなく `from_field >= 81` で識別する．
-- **Piece ID**: cshogi 互換 ID を使用 (0=空, 1-14=先手, 17-30=後手)．
-  Python 側の `_reorder_piece_planes_cshogi_to_pieceid()` で PieceId 順序に並び替える．
+- **Piece ID**: エンジン内部は raw ID (0=空, 1-14=先手, 17-30=後手; cshogi 互換)．
+  Python 側は `shogi.RAW_PIECE_TO_PIECEID` (単一の変換表) で domain PieceId
+  (金角飛の順序と白駒オフセットが異なる) に変換する．
 - **push/pop セマンティクス**: `maou_shogi::Board` の `do_move`/`undo_move` は
   捕獲駒の受け渡しが必要．PyO3 ラッパー側で `Vec<(u32, u8)>` の undo スタックを保持し，
   cshogi 互換の `push()`/`pop()` インターフェースを提供する．
 - **HCP**: Apery 互換の 32 バイトバイナリフォーマット．既存データとの互換性を保証．
-- **特徴量**: 104×9×9 (= `PIECE_TYPES_NUM * 2 + 76`) チャネル．cshogi 互換の出力順序．
+- **特徴量**: 104×9×9 (= `PIECE_TYPES_NUM * 2 + 76`) チャネル．cshogi 互換の出力順序
+  (legacy; 現行 NN は `maou_search::feature` の board ID (9×9) + hands (14) を使用)．
+- **棋譜パーサ**: CSA/KIF パーサは独自実装 (`maou_shogi::kifu`)．出力
+  moves は cshogi の 32-bit エンコーディング (to | from<<7 |
+  promote<<14 | 移動前駒種<<16 | 捕獲駒種<<20，打は from=81+idx) と
+  bit-exact．golden fixture parity (`tests/kifu_parity.rs`，oracle =
+  cshogi 0.9.7) で置換の等価性を実証済み．
 
 ## Using Polars + Rust I/O
 
@@ -691,8 +717,6 @@ datasource = PolarsDataFrameSource(
 # Use with existing KifDataset (no code changes needed!)
 dataset = KifDataset(
     datasource=datasource,
-    transform=None,  # Preprocessing data doesn't need transform
-    cache_transforms=False,
 )
 
 # Create DataLoader as usual

@@ -523,6 +523,44 @@ mod tests {
     }
 
     #[test]
+    fn test_drop_pawn_nifu_file8_rank9() {
+        // 回帰: Bitboard::occupied_files の col 7 (8筋) 分割誤りにより，
+        // 8筋に自歩があっても P*8i (マス 71) が生成されていた．
+        let mut board = Board::empty();
+        board.set_sfen("4k4/9/9/9/9/9/1P7/9/4K4 b P 1").unwrap();
+        let moves = generate_legal_moves(&mut board);
+        for m in &moves {
+            if m.is_drop() && m.drop_piece_type() == Some(PieceType::Pawn) {
+                assert_ne!(
+                    m.to_sq().col(),
+                    7,
+                    "should not be able to drop pawn on file 8 (col 7): {}",
+                    m.to_usi()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_drop_pawn_nifu_pawn_on_rank9() {
+        // 回帰: 8i (マス 71) にいる自歩が二歩マスクから見落とされ，
+        // 8筋の他の段への歩打ちが非合法生成されていた．
+        let mut board = Board::empty();
+        board.set_sfen("4k4/9/9/9/9/9/9/9/1P2K4 b P 1").unwrap();
+        let moves = generate_legal_moves(&mut board);
+        for m in &moves {
+            if m.is_drop() && m.drop_piece_type() == Some(PieceType::Pawn) {
+                assert_ne!(
+                    m.to_sq().col(),
+                    7,
+                    "should not be able to drop pawn on file 8 (col 7): {}",
+                    m.to_usi()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_tsume_complex_position() {
         // 片玉局面: 馬・歩・桂を持つ攻め方の詰将棋
         // cshogiは片玉でバグがあるため(存在しない銀の打ちを生成)，

@@ -1,6 +1,6 @@
 """piece_mappingユーティリティのテスト．
 
-座標系はcshogiに準拠: square = col * 9 + row
+座標系は将棋盤座標規約に準拠: square = col * 9 + row
 - col: 筋（0=1筋，8=9筋）
 - row: 段（0=1段目，8=9段目）
 
@@ -61,7 +61,7 @@ class TestPieceMappingFunctions:
     def test_square_index_to_coords(self) -> None:
         """マスインデックスを(row, col)座標に変換できる．
 
-        cshogi座標系: square = col * 9 + row
+        盤面座標規約: square = col * 9 + row
         """
         # square=0: col=0, row=0 → 1筋1段
         assert square_index_to_coords(0) == (0, 0)
@@ -81,7 +81,7 @@ class TestPieceMappingFunctions:
     def test_square_index_to_coords_all_squares(self) -> None:
         """全81マスのインデックス変換が正しい．
 
-        cshogi座標系: square = col * 9 + row
+        盤面座標規約: square = col * 9 + row
         """
         for col in range(9):
             for row in range(9):
@@ -92,7 +92,7 @@ class TestPieceMappingFunctions:
     def test_coords_to_square_index(self) -> None:
         """(row, col)座標をマスインデックスに変換できる．
 
-        cshogi座標系: square = col * 9 + row
+        盤面座標規約: square = col * 9 + row
         """
         # 1筋1段 → square=0
         assert coords_to_square_index(0, 0) == 0

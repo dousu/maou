@@ -64,7 +64,7 @@ maou build-game-graph \
 | --- | --- | --- |
 | `parent_hash` | UInt64 | 親局面のZobrist hash |
 | `child_hash` | UInt64 | 子局面のZobrist hash |
-| `move16` | UInt16 | cshogi move16形式の指し手 |
+| `move16` | UInt16 | cshogi 互換 move16 形式の指し手 |
 | `move_label` | UInt16 | moveLabelのインデックス(0〜1495) |
 | `probability` | Float32 | moveLabel値(親局面からの相対出現確率) |
 | `win_rate` | Float32 | moveWinRate値(この手の勝率) |

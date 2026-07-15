@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Generator
-from dataclasses import dataclass
+from collections.abc import Generator, Sequence
 from enum import IntEnum, auto
-from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 
@@ -14,25 +12,10 @@ from maou._rust.maou_shogi import (
 )
 from maou._rust.maou_shogi import move_from as _move_from
 from maou._rust.maou_shogi import move_is_drop as _move_is_drop
-from maou._rust.maou_shogi import (
-    move_is_promotion as _move_is_promotion,
-)
 from maou._rust.maou_shogi import move_to as _move_to
 from maou._rust.maou_shogi import move_to_usi as _move_to_usi
 
-if TYPE_CHECKING:
-    import polars as pl
-
-# Eager import for performance-critical paths
-try:
-    import polars as _pl
-
-    _POLARS_AVAILABLE = True
-except ImportError:
-    _POLARS_AVAILABLE = False
-    _pl = None  # type: ignore
-
-# Domain-level constants (not imported from cshogi)
+# Domain-level constants
 MAX_PIECES_IN_HAND: list[int] = [
     18,
     4,
@@ -48,9 +31,6 @@ PIECE_TYPES: int = 14  # 8 unpromoted + 6 promoted piece types
 # MAX_PIECES_IN_HANDの構成
 # 歩18，香車4，桂馬4，銀4，金4，角2，飛車2
 
-# 104
-FEATURES_NUM = PIECE_TYPES * 2 + sum(MAX_PIECES_IN_HAND) * 2
-
 
 class Turn(IntEnum):
     BLACK = 0
@@ -58,9 +38,18 @@ class Turn(IntEnum):
 
 
 class Result(IntEnum):
-    BLACK_WIN = 0
-    WHITE_WIN = 1
-    DRAW = 2
+    """対局結果．
+
+    HCPE の gameResult 列および GameRecord.win と同じ規約
+    (0=引き分け, 1=先手勝ち, 2=後手勝ち)．
+    旧定義 (BLACK_WIN=0, WHITE_WIN=1, DRAW=2) はこの規約とずれており，
+    make_result_value が HCPE の gameResult を誤読して value head の
+    教師値が全て取り違っていた．
+    """
+
+    DRAW = 0
+    BLACK_WIN = 1
+    WHITE_WIN = 2
 
 
 class PieceId(IntEnum):
@@ -95,295 +84,183 @@ class PieceId(IntEnum):
     RYU = auto()
 
 
-# cshogi piece ID constants (for board setup)
-# Black pieces: 1-14, White pieces: 17-30 (black + 16)
-CSHOGI_BLACK_KING = 8  # cshogi.BKING
-CSHOGI_WHITE_KING = 24  # cshogi.WKING
-
 # ============================================================================
-# Piece ID System Constants
+# 駒 ID 規約の定数
 # ============================================================================
 #
-# cshogi形式とdomain形式で白駒オフセットが異なる．
-# マジックナンバーを排除するため，以下の定数を使用すること．
+# Rust エンジン (maou_shogi) の raw 駒 ID と，正規化後の domain PieceId で
+# 白駒オフセットが異なる．マジックナンバーを排除するため以下を使用する．
 #
-#   cshogi形式:  白駒 = 黒駒 + 16  (1-14 → 17-30)
-#   domain形式:  白駒 = 黒駒 + 14  (0-14 → 15-28)
+#   raw 形式 (board.pieces() の生値): 白駒 = 黒駒 + 16  (1-14 → 17-30)
+#   domain 形式 (PieceId):            白駒 = 黒駒 + 14  (0-14 → 15-28)
 #
 
-# cshogi形式の定数
-CSHOGI_WHITE_OFFSET: int = 16
-"""cshogi形式での白駒オフセット．白駒ID = 黒駒ID + 16．"""
-
-CSHOGI_BLACK_MIN: int = 1
-CSHOGI_BLACK_MAX: int = 14
-CSHOGI_WHITE_MIN: int = 17
-CSHOGI_WHITE_MAX: int = 30
-
-# domain形式の定数
+# domain PieceId (正規化後) の定数
 DOMAIN_WHITE_OFFSET: int = 14
 """domain形式での白駒オフセット．白駒ID = 黒駒ID + 14．"""
 
-DOMAIN_BLACK_MIN: int = 0
-DOMAIN_BLACK_MAX: int = 14
 DOMAIN_WHITE_MIN: int = 15
 DOMAIN_WHITE_MAX: int = 28
 
+# raw 駒 ID (Rust エンジン board.pieces() の生値, 0-30) → domain PieceId (0-28) の
+# 変換テーブル (単一の真実)．raw は 金(7)/角(5)/飛(6) の順で白駒 +16，
+# domain PieceId は 金(5)/角(6)/飛(7) の順で白駒 +14．15,16 は raw の未使用ギャップ．
+RAW_PIECE_TO_PIECEID: np.ndarray = np.array(
+    [
+        0,  # 0: EMPTY
+        1,
+        2,
+        3,
+        4,  # 1-4: 歩香桂銀 → FU/KY/KE/GI
+        6,
+        7,
+        5,  # 5-7: 角飛金 → KA/HI/KI
+        8,  # 8: 玉 → OU
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,  # 9-14: と成香成桂成銀馬龍
+        0,
+        0,  # 15,16: 未使用
+        15,
+        16,
+        17,
+        18,  # 17-20: 白歩香桂銀
+        20,
+        21,
+        19,  # 21-23: 白角飛金
+        22,  # 24: 白玉
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,  # 25-30: 白成駒
+    ],
+    dtype=np.uint8,
+)
 
-def is_white_cshogi(cshogi_piece: int) -> bool:
-    """cshogi形式で白駒か判定．
+# 先手 (黒) domain PieceId → SFEN 駒文字の変換表 (単一の真実)．
+# 後手駒 (15-28) は piece_id_to_sfen() が小文字化で導出する．
+PIECE_ID_TO_SFEN: dict[int, str] = {
+    PieceId.FU: "P",
+    PieceId.KY: "L",
+    PieceId.KE: "N",
+    PieceId.GI: "S",
+    PieceId.KI: "G",
+    PieceId.KA: "B",
+    PieceId.HI: "R",
+    PieceId.OU: "K",
+    PieceId.TO: "+P",
+    PieceId.NKY: "+L",
+    PieceId.NKE: "+N",
+    PieceId.NGI: "+S",
+    PieceId.UMA: "+B",
+    PieceId.RYU: "+R",
+}
+
+# 持ち駒インデックス (0-6: 歩香桂銀金角飛) → SFEN 駒文字．
+# 持ち駒順は PieceId 1-7 と一致するため PIECE_ID_TO_SFEN から導出する．
+HAND_PIECE_SFEN_CHARS: list[str] = [
+    PIECE_ID_TO_SFEN[PieceId(piece_id)]
+    for piece_id in range(1, 8)
+]
+
+
+def piece_id_to_sfen(piece_id: int) -> str:
+    """domain PieceId (0-28) を SFEN 駒文字に変換する．
+
+    先手駒 (1-14) は大文字，後手駒 (15-28) は小文字で返す
+    (成駒は "+P" / "+p" のように接頭辞付き)．
 
     Args:
-        cshogi_piece: cshogi駒ID (0=空, 1-14=黒駒, 17-30=白駒)
+        piece_id: domain形式の駒ID (0-28)
 
     Returns:
-        True if cshogi_piece >= 17 (白駒)
+        SFEN 駒文字．EMPTY (0) は空文字列．
 
-    Examples:
-        >>> is_white_cshogi(1)   # 黒歩
-        False
-        >>> is_white_cshogi(17)  # 白歩
-        True
-        >>> is_white_cshogi(0)   # 空
-        False
+    Raises:
+        ValueError: 範囲外の駒IDの場合
     """
-    return cshogi_piece >= CSHOGI_WHITE_MIN
+    if piece_id == PieceId.EMPTY:
+        return ""
+    if DOMAIN_WHITE_MIN <= piece_id <= DOMAIN_WHITE_MAX:
+        return PIECE_ID_TO_SFEN[
+            piece_id - DOMAIN_WHITE_OFFSET
+        ].lower()
+    if piece_id in PIECE_ID_TO_SFEN:
+        return PIECE_ID_TO_SFEN[piece_id]
+    raise ValueError(f"Invalid domain piece id: {piece_id}")
 
 
-def cshogi_to_base_piece(cshogi_piece: int) -> int:
-    """cshogi形式から基本駒ID(1-14)を取得．
+def board_id_positions_to_sfen(
+    board_id_positions: Sequence[Sequence[int]] | np.ndarray,
+    pieces_in_hand: Sequence[int] | np.ndarray,
+    *,
+    turn: Turn = Turn.BLACK,
+    move_number: int = 1,
+) -> str:
+    """9x9 の domain PieceId 配置と持ち駒配列から SFEN 文字列を構築する．
 
-    白駒の場合はオフセットを減算して基本駒IDを返す．
+    boardIdPositions ([row][col] 形式，col=0 が 1 筋) と
+    piecesInHand (14 要素: 先手 7 種 + 後手 7 種，歩香桂銀金角飛順) から
+    SFEN を組み立てる．正規化済みデータの盤面再構築
+    (Board.from_board_id_positions) の下請け．
 
     Args:
-        cshogi_piece: cshogi駒ID (1-14=黒駒, 17-30=白駒)
+        board_id_positions: 9x9 の駒配置 (domain PieceId 値)
+        pieces_in_hand: 持ち駒配列 (14 要素)
+        turn: 手番 (デフォルト: 先手)
+        move_number: 手数 (デフォルト: 1)
 
     Returns:
-        基本駒ID (1-14)
+        SFEN 形式の文字列
 
-    Examples:
-        >>> cshogi_to_base_piece(1)   # 黒歩 → 1
-        1
-        >>> cshogi_to_base_piece(17)  # 白歩 → 1
-        1
-        >>> cshogi_to_base_piece(24)  # 白王 → 8
-        8
+    Raises:
+        ValueError: 範囲外の駒IDを含む場合
     """
-    if is_white_cshogi(cshogi_piece):
-        return cshogi_piece - CSHOGI_WHITE_OFFSET
-    return cshogi_piece
+    ranks = []
+    for row in board_id_positions:
+        # col=0 が 1 筋，SFEN は 9 筋→1 筋の順なので列を反転
+        rank_str = ""
+        empty_count = 0
+        for piece_id in reversed(list(row)):
+            pid = int(piece_id)
+            if pid == 0:
+                empty_count += 1
+            else:
+                if empty_count > 0:
+                    rank_str += str(empty_count)
+                    empty_count = 0
+                rank_str += piece_id_to_sfen(pid)
+        if empty_count > 0:
+            rank_str += str(empty_count)
+        ranks.append(rank_str if rank_str else "9")
 
+    board_sfen = "/".join(ranks)
 
-def is_white_domain(domain_piece: int) -> bool:
-    """domain形式で白駒か判定．
+    # 持ち駒 (先手: 大文字，後手: 小文字)
+    hand_parts: list[str] = []
+    hand = [int(c) for c in pieces_in_hand]
+    for i, count in enumerate(hand[:7]):
+        if count > 0:
+            char = HAND_PIECE_SFEN_CHARS[i]
+            hand_parts.append(
+                f"{count}{char}" if count > 1 else char
+            )
+    for i, count in enumerate(hand[7:14]):
+        if count > 0:
+            char = HAND_PIECE_SFEN_CHARS[i].lower()
+            hand_parts.append(
+                f"{count}{char}" if count > 1 else char
+            )
+    hand_sfen = "".join(hand_parts) if hand_parts else "-"
 
-    Args:
-        domain_piece: domain駒ID (0=空, 1-14=黒駒, 15-28=白駒)
+    turn_sfen = "b" if turn == Turn.BLACK else "w"
 
-    Returns:
-        True if domain_piece >= 15 (白駒)
-
-    Examples:
-        >>> is_white_domain(1)   # 黒歩
-        False
-        >>> is_white_domain(15)  # 白歩
-        True
-        >>> is_white_domain(0)   # 空
-        False
-    """
-    return domain_piece >= DOMAIN_WHITE_MIN
-
-
-def domain_to_base_piece(domain_piece: int) -> int:
-    """domain形式から基本駒ID(0-14)を取得．
-
-    白駒の場合はオフセットを減算して基本駒IDを返す．
-
-    Args:
-        domain_piece: domain駒ID (0-14=黒駒, 15-28=白駒)
-
-    Returns:
-        基本駒ID (0-14)
-
-    Examples:
-        >>> domain_to_base_piece(1)   # 黒歩 → 1
-        1
-        >>> domain_to_base_piece(15)  # 白歩 → 1
-        1
-        >>> domain_to_base_piece(22)  # 白王 → 8
-        8
-    """
-    if is_white_domain(domain_piece):
-        return domain_piece - DOMAIN_WHITE_OFFSET
-    return domain_piece
-
-
-@dataclass(frozen=True, slots=True)
-class ColoredPiece:
-    """手番と駒種類を組み合わせた型安全な駒表現．
-
-    cshogi形式やdomain形式との変換を一元管理し，
-    オフセット計算のバグを防止する．
-
-    Attributes:
-        turn: 駒の所有者(Turn.BLACK または Turn.WHITE)
-        piece_id: 駒の種類(PieceId enum)
-
-    Examples:
-        >>> cp = ColoredPiece.from_cshogi(17)  # 白歩
-        >>> cp.turn
-        <Turn.WHITE: 1>
-        >>> cp.piece_id
-        <PieceId.FU: 1>
-        >>> cp.to_cshogi()
-        17
-    """
-
-    turn: Turn
-    piece_id: PieceId
-
-    # cshogi形式の定数(クラス変数として参照可能)
-    CSHOGI_WHITE_OFFSET: ClassVar[int] = CSHOGI_WHITE_OFFSET
-    CSHOGI_BLACK_MIN: ClassVar[int] = CSHOGI_BLACK_MIN
-    CSHOGI_BLACK_MAX: ClassVar[int] = CSHOGI_BLACK_MAX
-    CSHOGI_WHITE_MIN: ClassVar[int] = CSHOGI_WHITE_MIN
-    CSHOGI_WHITE_MAX: ClassVar[int] = CSHOGI_WHITE_MAX
-
-    # domain形式の定数
-    DOMAIN_WHITE_OFFSET: ClassVar[int] = DOMAIN_WHITE_OFFSET
-    DOMAIN_BLACK_MIN: ClassVar[int] = DOMAIN_BLACK_MIN
-    DOMAIN_BLACK_MAX: ClassVar[int] = DOMAIN_BLACK_MAX
-    DOMAIN_WHITE_MIN: ClassVar[int] = DOMAIN_WHITE_MIN
-    DOMAIN_WHITE_MAX: ClassVar[int] = DOMAIN_WHITE_MAX
-
-    @classmethod
-    def from_cshogi(cls, cshogi_piece: int) -> ColoredPiece:
-        """cshogi形式(0-30)からColoredPieceを生成．
-
-        Args:
-            cshogi_piece: cshogi駒ID (0=空, 1-14=黒駒, 17-30=白駒)
-
-        Returns:
-            ColoredPiece インスタンス
-
-        Raises:
-            ValueError: 無効な駒IDの場合 (15, 16, または範囲外)
-
-        Examples:
-            >>> ColoredPiece.from_cshogi(1)   # 黒歩
-            ColoredPiece(turn=<Turn.BLACK: 0>, piece_id=<PieceId.FU: 1>)
-            >>> ColoredPiece.from_cshogi(17)  # 白歩
-            ColoredPiece(turn=<Turn.WHITE: 1>, piece_id=<PieceId.FU: 1>)
-        """
-        if cshogi_piece == 0:
-            return cls(Turn.BLACK, PieceId.EMPTY)
-
-        if CSHOGI_BLACK_MIN <= cshogi_piece <= CSHOGI_BLACK_MAX:
-            # 黒駒: cshogi 1-14 → PieceId 1-14(同じ)
-            return cls(Turn.BLACK, PieceId(cshogi_piece))
-
-        if CSHOGI_WHITE_MIN <= cshogi_piece <= CSHOGI_WHITE_MAX:
-            # 白駒: cshogi 17-30 → PieceId 1-14
-            base_piece = cshogi_piece - CSHOGI_WHITE_OFFSET
-            return cls(Turn.WHITE, PieceId(base_piece))
-
-        msg = (
-            f"無効なcshogi駒ID: {cshogi_piece}．"
-            f"有効範囲: 0, {CSHOGI_BLACK_MIN}-{CSHOGI_BLACK_MAX}, "
-            f"{CSHOGI_WHITE_MIN}-{CSHOGI_WHITE_MAX}"
-        )
-        raise ValueError(msg)
-
-    @classmethod
-    def from_domain(cls, domain_piece: int) -> ColoredPiece:
-        """domain形式(0-28)からColoredPieceを生成．
-
-        Args:
-            domain_piece: domain駒ID (0=空, 1-14=黒駒, 15-28=白駒)
-
-        Returns:
-            ColoredPiece インスタンス
-
-        Raises:
-            ValueError: 無効な駒IDの場合 (範囲外)
-
-        Examples:
-            >>> ColoredPiece.from_domain(1)   # 黒歩
-            ColoredPiece(turn=<Turn.BLACK: 0>, piece_id=<PieceId.FU: 1>)
-            >>> ColoredPiece.from_domain(15)  # 白歩
-            ColoredPiece(turn=<Turn.WHITE: 1>, piece_id=<PieceId.FU: 1>)
-        """
-        if domain_piece == 0:
-            return cls(Turn.BLACK, PieceId.EMPTY)
-
-        if 1 <= domain_piece <= DOMAIN_BLACK_MAX:
-            # 黒駒: domain 1-14 → PieceId 1-14
-            return cls(Turn.BLACK, PieceId(domain_piece))
-
-        if DOMAIN_WHITE_MIN <= domain_piece <= DOMAIN_WHITE_MAX:
-            # 白駒: domain 15-28 → PieceId 1-14
-            base_piece = domain_piece - DOMAIN_WHITE_OFFSET
-            return cls(Turn.WHITE, PieceId(base_piece))
-
-        msg = (
-            f"無効なdomain駒ID: {domain_piece}．"
-            f"有効範囲: {DOMAIN_BLACK_MIN}-{DOMAIN_BLACK_MAX}, "
-            f"{DOMAIN_WHITE_MIN}-{DOMAIN_WHITE_MAX}"
-        )
-        raise ValueError(msg)
-
-    def to_cshogi(self) -> int:
-        """cshogi形式(0-30)に変換．
-
-        Returns:
-            cshogi駒ID (0=空, 1-14=黒駒, 17-30=白駒)
-
-        Examples:
-            >>> ColoredPiece(Turn.BLACK, PieceId.FU).to_cshogi()
-            1
-            >>> ColoredPiece(Turn.WHITE, PieceId.FU).to_cshogi()
-            17
-        """
-        if self.piece_id == PieceId.EMPTY:
-            return 0
-        base = int(self.piece_id)
-        if self.turn == Turn.WHITE:
-            return base + CSHOGI_WHITE_OFFSET
-        return base
-
-    def to_domain(self) -> int:
-        """domain形式(0-28)に変換．
-
-        Returns:
-            domain駒ID (0=空, 1-14=黒駒, 15-28=白駒)
-
-        Examples:
-            >>> ColoredPiece(Turn.BLACK, PieceId.FU).to_domain()
-            1
-            >>> ColoredPiece(Turn.WHITE, PieceId.FU).to_domain()
-            15
-        """
-        if self.piece_id == PieceId.EMPTY:
-            return 0
-        base = int(self.piece_id)
-        if self.turn == Turn.WHITE:
-            return base + DOMAIN_WHITE_OFFSET
-        return base
-
-    @property
-    def is_black(self) -> bool:
-        """先手の駒か判定．"""
-        return self.turn == Turn.BLACK
-
-    @property
-    def is_white(self) -> bool:
-        """後手の駒か判定．"""
-        return self.turn == Turn.WHITE
-
-    @property
-    def is_empty(self) -> bool:
-        """空のマスか判定．"""
-        return self.piece_id == PieceId.EMPTY
+    return f"{board_sfen} {turn_sfen} {hand_sfen} {move_number}"
 
 
 def move16(move: int) -> int:
@@ -461,18 +338,6 @@ def move_is_drop(move: int) -> bool:
     return _move_is_drop(move)
 
 
-def move_is_promotion(move: int) -> bool:
-    """Check if move includes piece promotion.
-
-    Args:
-        move: Move integer
-
-    Returns:
-        True if move promotes the piece, False otherwise
-    """
-    return _move_is_promotion(move)
-
-
 def move_drop_hand_piece(move: int) -> int:
     """駒打ちの駒種を取得する．
 
@@ -498,111 +363,70 @@ class Board:
     PieceId体系への変換やPolars DataFrame出力などのドメインロジックを提供する．
     """
 
-    _CSHOGI_TO_PIECEID: dict[int, int] = {
-        # Black pieces (1-14)
-        0: 0,  # EMPTY
-        1: 1,  # BPAWN → FU
-        2: 2,  # BLANCE → KY
-        3: 3,  # BKNIGHT → KE
-        4: 4,  # BSILVER → GI
-        5: 6,  # BBISHOP → KA (角)
-        6: 7,  # BROOK → HI (飛)
-        7: 5,  # BGOLD → KI (金)
-        8: 8,  # BKING → OU
-        9: 9,  # BPROM_PAWN → TO
-        10: 10,  # BPROM_LANCE → NKY
-        11: 11,  # BPROM_KNIGHT → NKE
-        12: 12,  # BPROM_SILVER → NGI
-        13: 13,  # BPROM_BISHOP → UMA (馬)
-        14: 14,  # BPROM_ROOK → RYU (龍)
-        # White pieces (17-30)
-        17: 15,  # WPAWN → FU + 14
-        18: 16,  # WLANCE → KY + 14
-        19: 17,  # WKNIGHT → KE + 14
-        20: 18,  # WSILVER → GI + 14
-        21: 20,  # WBISHOP → KA + 14 (角)
-        22: 21,  # WROOK → HI + 14 (飛)
-        23: 19,  # WGOLD → KI + 14 (金)
-        24: 22,  # WKING → OU + 14
-        25: 23,  # WPROM_PAWN → TO + 14
-        26: 24,  # WPROM_LANCE → NKY + 14
-        27: 25,  # WPROM_KNIGHT → NKE + 14
-        28: 26,  # WPROM_SILVER → NGI + 14
-        29: 27,  # WPROM_BISHOP → UMA + 14 (馬)
-        30: 28,  # WPROM_ROOK → RYU + 14 (龍)
-    }
-
     @staticmethod
-    def cshogi_piece_to_piece_id(cshogi_piece: int) -> int:
-        """Convert cshogi piece ID to domain PieceId enum value.
+    def raw_piece_to_piece_id(raw_piece: int) -> int:
+        """raw 駒 ID (Rust エンジン board.pieces() の生値) を domain PieceId に変換する.
 
-        cshogi uses BISHOP=5, ROOK=6, GOLD=7 with white offset +16.
-        PieceId uses KI(金)=5, KA(角)=6, HI(飛)=7 with white offset +14.
+        raw は 角(5)/飛(6)/金(7)・白駒 +16，domain PieceId は 金(5)/角(6)/飛(7)・
+        白駒 +14．変換表は module-level の RAW_PIECE_TO_PIECEID (単一の真実)．
 
         Args:
-            cshogi_piece: cshogi piece ID (0-30)
+            raw_piece: raw 駒 ID (0-30)
 
         Returns:
-            PieceId enum value (0-28)
+            domain PieceId enum value (0-28)
 
         Examples:
-            >>> Board.cshogi_piece_to_piece_id(0)  # EMPTY
+            >>> Board.raw_piece_to_piece_id(0)  # EMPTY
             0
-            >>> Board.cshogi_piece_to_piece_id(5)  # cshogi.BBISHOP -> PieceId.KA
+            >>> Board.raw_piece_to_piece_id(5)  # raw 角 -> PieceId.KA
             6
-            >>> Board.cshogi_piece_to_piece_id(21)  # cshogi.WBISHOP
+            >>> Board.raw_piece_to_piece_id(21)  # raw 白角
             20
         """
-        return Board._CSHOGI_TO_PIECEID.get(cshogi_piece, 0)
-
-    @staticmethod
-    def _reorder_piece_planes_cshogi_to_pieceid(
-        array: np.ndarray,
-    ) -> None:
-        """Reorder piece planes from cshogi ordering to PieceId ordering (in-place).
-
-        cshogi planes: [FU, KY, KE, GI, BISHOP(角), ROOK(飛), GOLD(金), OU, ...]
-        PieceId planes: [FU, KY, KE, GI, KI(金), KA(角), HI(飛), OU, ...]
-
-        This reordering is necessary because cshogi uses standard piece names
-        (BISHOP=角, ROOK=飛車, GOLD=金) in a different order than PieceId enum.
-
-        Args:
-            array: Piece planes array, shape (104, 9, 9) - modified in-place
-
-        Note:
-            Promoted pieces (UMA=馬, RYU=龍) don't need reordering as their
-            relative positions are consistent between cshogi and PieceId.
-        """
-        # Only copy the 6 channels that need reordering (not all 104)
-        black_temp = array[4:7].copy()  # channels 4,5,6
-        white_temp = array[18:21].copy()  # channels 18,19,20
-
-        # Black pieces reordering (indices 4-6)
-        array[4] = black_temp[
-            2
-        ]  # GOLD (cshogi[6]) → KI (PieceId)
-        array[5] = black_temp[
-            0
-        ]  # BISHOP (cshogi[4]) → KA (PieceId)
-        array[6] = black_temp[
-            1
-        ]  # ROOK (cshogi[5]) → HI (PieceId)
-
-        # White pieces reordering (same pattern, offset +14)
-        array[18] = white_temp[
-            2
-        ]  # GOLD (cshogi[20]) → KI (PieceId)
-        array[19] = white_temp[
-            0
-        ]  # BISHOP (cshogi[18]) → KA (PieceId)
-        array[20] = white_temp[
-            1
-        ]  # ROOK (cshogi[19]) → HI (PieceId)
+        if 0 <= raw_piece <= 30:
+            return int(RAW_PIECE_TO_PIECEID[raw_piece])
+        return 0
 
     def __init__(self) -> None:
         """初期局面(平手)でBoardを生成する．"""
         self.board = _PyBoard()
+
+    @classmethod
+    def from_board_id_positions(
+        cls,
+        board_id_positions: Sequence[Sequence[int]]
+        | np.ndarray,
+        pieces_in_hand: Sequence[int] | np.ndarray,
+        *,
+        turn: Turn = Turn.BLACK,
+    ) -> Board:
+        """9x9 の domain PieceId 配置と持ち駒配列から Board を構築する．
+
+        boardIdPositions ([row][col] 形式) と piecesInHand (14 要素) を
+        持つレコード (Stage2 / Preprocessing 等の正規化済みデータ) から
+        Board を再構築する用途を想定している．
+
+        Args:
+            board_id_positions: 9x9 の駒配置 (domain PieceId 値)
+            pieces_in_hand: 持ち駒配列 (14 要素)
+            turn: 手番 (デフォルト: 先手．正規化済みデータは常に先手視点)
+
+        Returns:
+            構築された Board インスタンス
+
+        Raises:
+            ValueError: 不正な配置 (範囲外の駒ID，二歩等) の場合
+        """
+        board = cls()
+        board.set_sfen(
+            board_id_positions_to_sfen(
+                board_id_positions,
+                pieces_in_hand,
+                turn=turn,
+            )
+        )
+        return board
 
     def __copy__(self) -> Board:
         """SFENを経由した安全なコピーを返す．
@@ -726,46 +550,6 @@ class Board:
         """
         self.board.pop()
 
-    def to_piece_planes(self, array: np.ndarray) -> None:
-        """先手視点の駒特徴平面を配列に書き込む(in-place)．
-
-        PieceId順にチャネルを並べ替え，座標系を転置する．
-
-        Args:
-            array: 書き込み先の配列，shape (104, 9, 9)，dtype float32．
-                呼び出し中は他の参照(ビューやスライス)を保持しないこと．
-        """
-        self.board.piece_planes(array)
-        # Reorder channels to match PieceId ordering using centralized method
-        Board._reorder_piece_planes_cshogi_to_pieceid(array)
-        # Rust feature::piece_planes fills array in column-major order (col, row).
-        # Transpose axes (1,2) to convert to row-major (row, col) matching
-        # get_board_id_positions(). See docs/visualization/shogi-conventions.md.
-        # np.ascontiguousarray to avoid aliasing (transpose returns a view of array).
-        array[:] = np.ascontiguousarray(
-            np.transpose(array, (0, 2, 1))
-        )
-
-    def to_piece_planes_rotate(self, array: np.ndarray) -> None:
-        """後手視点(180度回転)の駒特徴平面を配列に書き込む(in-place)．
-
-        PieceId順にチャネルを並べ替え，座標系を転置する．
-
-        Args:
-            array: 書き込み先の配列，shape (104, 9, 9)，dtype float32．
-                呼び出し中は他の参照(ビューやスライス)を保持しないこと．
-        """
-        self.board.piece_planes_rotate(array)
-        # Reorder channels (same as to_piece_planes) using centralized method
-        Board._reorder_piece_planes_cshogi_to_pieceid(array)
-        # Rust feature::piece_planes_rotate fills array in column-major order (col, row).
-        # Transpose axes (1,2) to convert to row-major (row, col) matching
-        # get_board_id_positions(). See docs/visualization/shogi-conventions.md.
-        # np.ascontiguousarray to avoid aliasing (transpose returns a view of array).
-        array[:] = np.ascontiguousarray(
-            np.transpose(array, (0, 2, 1))
-        )
-
     def get_pieces_in_hand(self) -> tuple[list[int], list[int]]:
         """持ち駒を取得する．
 
@@ -783,24 +567,25 @@ class Board:
         return self.board.pieces_in_hand()
 
     def get_piece_at(self, square: int) -> int:
-        """指定マスのcshogi駒IDを返す．
+        """指定マスのraw駒IDを返す．
 
         Args:
             square: マス番号(column-major: col * 9 + row)
 
         Returns:
-            cshogi駒ID(0-30)．駒がない場合は0．
+            raw駒ID(0-30，Rustエンジン内部表現)．駒がない場合は0．
         """
         return self.board.piece(square)
 
     def get_pieces(self) -> list[int]:
         """盤面の駒配列(81要素)を返す．
 
-        cshogiの内部表現をそのまま返す．
-        値はcshogi駒ID(0-30)で，column-major順に格納される．
+        Rustエンジンの内部表現をそのまま返す．
+        値はraw駒ID(0-30，白駒=黒駒+16)で，column-major順に格納される．
+        domain PieceIdへの変換はRAW_PIECE_TO_PIECEIDを使う．
 
         Returns:
-            81要素のリスト(cshogi駒ID)
+            81要素のリスト(raw駒ID)
         """
         return self.board.pieces()
 
@@ -820,23 +605,36 @@ class Board:
         """
         return self.board.zobrist_hash()
 
-    def is_ok(self) -> bool:
-        """盤面状態の整合性を検証する．
+    def get_normalized_board_id_positions(self) -> np.ndarray:
+        """手番視点に正規化した駒ID盤面を(9, 9)のuint8 ndarrayで返す．
 
-        Rust 側は片玉局面(詰将棋)もサポートしており，
-        少なくとも1枚の王が存在すれば有効と判定する．
+        後手番なら180度回転し先手/後手の駒IDを入れ替える．
+        正規化後は手番側の駒が常に1-14，相手側が15-28となる．
+        計算は Rust (maou_search::feature::encode_board_ids) に委譲する．
 
         Returns:
-            bool: 盤面が有効な状態であれば True
+            正規化済み9x9盤面配列([段][筋]形式，domain PieceId値)
         """
-        return self.board.is_ok()
+        return self.board.board_id_positions()
+
+    def get_normalized_pieces_in_hand(self) -> np.ndarray:
+        """手番側を先頭にした持ち駒枚数を(14,)のuint8 ndarrayで返す．
+
+        順序は手番側 [歩香桂銀金角飛] + 相手側 [同]．
+        計算は Rust (maou_search::feature::encode_hand_counts) に委譲する．
+
+        Returns:
+            正規化済み持ち駒配列(14要素)
+        """
+        return self.board.hand_counts()
 
     def get_board_id_positions(self) -> list[list[int]]:
         """Get board piece positions as 9x9 nested list.
 
-        盤面の駒配置を[row][col]形式の二次元リストで返す．
-        cshogiのcolumn-major配置(square = col * 9 + row)を
-        Fortran orderでreshapeして[row][col]形式に変換する．
+        盤面の駒配置を[row][col]形式の二次元リストで返す (手番正規化なし)．
+        Rust エンジンの column-major 配置 (square = col * 9 + row) を
+        Fortran orderでreshapeして[row][col]形式に変換する．raw 駒 ID →
+        domain PieceId 変換は RAW_PIECE_TO_PIECEID の fancy indexing で行う．
 
         Returns:
             9x9のPieceId二次元リスト([row][col]形式)
@@ -849,157 +647,8 @@ class Board:
             >>> len(positions[0])
             9
         """
-        v_map = np.vectorize(
-            Board.cshogi_piece_to_piece_id,
-            otypes=[np.uint8],
+        raw = np.array(self.board.pieces(), dtype=np.uint8)
+        positions = RAW_PIECE_TO_PIECEID[raw].reshape(
+            (9, 9), order="F"
         )
-        positions = v_map(
-            np.array(
-                self.board.pieces(),
-                dtype=np.uint8,
-            )
-        ).reshape((9, 9), order="F")
         return positions.tolist()
-
-    def get_board_id_positions_df(self) -> "pl.DataFrame":
-        """Get board piece positions as 1-row Polars DataFrame．
-
-        盤面の駒配置をPolars DataFrameで取得する．
-        9x9のネストされたリストとして返す．
-
-        Returns:
-            pl.DataFrame: boardIdPositions列を持つ1行のDataFrame
-
-        Example:
-            >>> board = Board()
-            >>> df = board.get_board_id_positions_df()
-            >>> len(df)
-            1
-            >>> df.schema
-            {'boardIdPositions': List(List(UInt8))}
-        """
-        if not _POLARS_AVAILABLE:
-            raise ImportError(
-                "polars is not installed. Install with: uv add polars"
-            )
-
-        positions_list = self.get_board_id_positions()
-
-        # Use pre-imported polars for performance
-        return _pl.DataFrame(
-            {"boardIdPositions": [positions_list]},
-            schema={
-                "boardIdPositions": _pl.List(
-                    _pl.List(_pl.UInt8)
-                )
-            },
-        )
-
-    def get_hcp_df(self) -> "pl.DataFrame":
-        """Get HuffmanCodedPos as 1-row Polars DataFrame．
-
-        HuffmanCodedPos形式の局面データをPolars DataFrameで取得する．
-        32バイトのバイナリデータとして返す．
-
-        Returns:
-            pl.DataFrame: hcp列を持つ1行のDataFrame
-
-        Example:
-            >>> board = Board()
-            >>> board.set_sfen("lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1")
-            >>> df = board.get_hcp_df()
-            >>> len(df)
-            1
-            >>> df.schema
-            {'hcp': Binary}
-        """
-        if not _POLARS_AVAILABLE:
-            raise ImportError(
-                "polars is not installed. Install with: uv add polars"
-            )
-
-        # Get HCP data from board
-        hcp_bytes = self.to_hcp()
-
-        # Use pre-imported polars for performance
-        return _pl.DataFrame(
-            {"hcp": [hcp_bytes]}, schema={"hcp": _pl.Binary()}
-        )
-
-    def get_piece_planes_df(self) -> "pl.DataFrame":
-        """Get piece feature planes as 1-row Polars DataFrame．
-
-        駒の特徴平面をPolars DataFrameで取得する．
-        104x9x9のネストされたリストとして返す．
-
-        Returns:
-            pl.DataFrame: piecePlanes列を持つ1行のDataFrame
-
-        Example:
-            >>> board = Board()
-            >>> df = board.get_piece_planes_df()
-            >>> len(df)
-            1
-            >>> df.schema
-            {'piecePlanes': List(List(List(Float32)))}
-        """
-        if not _POLARS_AVAILABLE:
-            raise ImportError(
-                "polars is not installed. Install with: uv add polars"
-            )
-
-        # Get piece planes from board (reorder + transpose via to_piece_planes)
-        planes = np.zeros(
-            (FEATURES_NUM, 9, 9), dtype=np.float32
-        )
-        self.to_piece_planes(planes)
-        planes_list = planes.tolist()
-
-        # Use pre-imported polars for performance
-        return _pl.DataFrame(
-            {"piecePlanes": [planes_list]},
-            schema={
-                "piecePlanes": _pl.List(
-                    _pl.List(_pl.List(_pl.Float32))
-                )
-            },
-        )
-
-    def get_piece_planes_rotate_df(self) -> "pl.DataFrame":
-        """Get rotated piece feature planes as 1-row Polars DataFrame．
-
-        回転された駒の特徴平面をPolars DataFrameで取得する．
-        後手視点の104x9x9のネストされたリストとして返す．
-
-        Returns:
-            pl.DataFrame: piecePlanes列を持つ1行のDataFrame
-
-        Example:
-            >>> board = Board()
-            >>> df = board.get_piece_planes_rotate_df()
-            >>> len(df)
-            1
-            >>> df.schema
-            {'piecePlanes': List(List(List(Float32)))}
-        """
-        if not _POLARS_AVAILABLE:
-            raise ImportError(
-                "polars is not installed. Install with: uv add polars"
-            )
-
-        # Get rotated piece planes from board (reorder + transpose via to_piece_planes_rotate)
-        planes = np.zeros(
-            (FEATURES_NUM, 9, 9), dtype=np.float32
-        )
-        self.to_piece_planes_rotate(planes)
-        planes_list = planes.tolist()
-
-        # Use pre-imported polars for performance
-        return _pl.DataFrame(
-            {"piecePlanes": [planes_list]},
-            schema={
-                "piecePlanes": _pl.List(
-                    _pl.List(_pl.List(_pl.Float32))
-                )
-            },
-        )

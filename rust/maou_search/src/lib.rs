@@ -41,6 +41,7 @@ pub mod feature;
 pub mod label;
 #[cfg(feature = "onnx")]
 pub mod onnx;
+pub mod preprocess;
 pub mod repetition;
 pub mod search;
 pub mod tree;

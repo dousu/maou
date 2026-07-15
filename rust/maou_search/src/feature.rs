@@ -50,42 +50,62 @@ fn swap_piece_id(id: u8) -> u8 {
     }
 }
 
-/// 盤面を手番視点の駒 ID 配列 (row-major `[段][筋]`) にエンコードする．
+/// 盤面を手番視点の駒 ID 配列 (row-major `[段][筋]`, u8) にエンコードする．
 ///
-/// NN の `board` 入力 (int32) に合わせて i32 で書き込む．
-pub fn encode_board(board: &Board, out: &mut [i32; BOARD_FEATURE_LEN]) {
+/// preprocessing データの `boardIdPositions` (u8) と同じ生 ID．
+/// NN 入力 (i32) が必要な場合は [`encode_board`] を使う．
+pub fn encode_board_ids(board: &Board, out: &mut [u8; BOARD_FEATURE_LEN]) {
     let pieces = board.pieces();
     match board.turn() {
         Color::Black => {
             for (sq, &p) in pieces.iter().enumerate() {
                 let id = PIECE_ID_TABLE[p as usize];
                 let (col, row) = (sq / 9, sq % 9);
-                out[row * 9 + col] = i32::from(id);
+                out[row * 9 + col] = id;
             }
         }
         Color::White => {
             for (sq, &p) in pieces.iter().enumerate() {
                 let id = swap_piece_id(PIECE_ID_TABLE[p as usize]);
                 let (col, row) = (sq / 9, sq % 9);
-                out[(8 - row) * 9 + (8 - col)] = i32::from(id);
+                out[(8 - row) * 9 + (8 - col)] = id;
             }
         }
     }
+}
+
+/// 盤面を手番視点の駒 ID 配列 (row-major `[段][筋]`) にエンコードする．
+///
+/// NN の `board` 入力 (int32) に合わせて i32 で書き込む．
+pub fn encode_board(board: &Board, out: &mut [i32; BOARD_FEATURE_LEN]) {
+    let mut ids = [0u8; BOARD_FEATURE_LEN];
+    encode_board_ids(board, &mut ids);
+    for (o, &id) in out.iter_mut().zip(ids.iter()) {
+        *o = i32::from(id);
+    }
+}
+
+/// 持ち駒を手番側先頭の枚数配列 (u8) にエンコードする．
+///
+/// preprocessing データの `piecesInHand` (u8) と同じ生の枚数．
+/// NN 入力 (f32) が必要な場合は [`encode_hand`] を使う．
+pub fn encode_hand_counts(board: &Board, out: &mut [u8; HAND_FEATURE_LEN]) {
+    let (black, white) = board.pieces_in_hand();
+    let (own, opp) = match board.turn() {
+        Color::Black => (black, white),
+        Color::White => (white, black),
+    };
+    out[..7].copy_from_slice(&own);
+    out[7..].copy_from_slice(&opp);
 }
 
 /// 持ち駒を手番側先頭の枚数配列にエンコードする．
 ///
 /// NN の `hand` 入力 (float32) に合わせて f32 (生の枚数) で書き込む．
 pub fn encode_hand(board: &Board, out: &mut [f32; HAND_FEATURE_LEN]) {
-    let (black, white) = board.pieces_in_hand();
-    let (own, opp) = match board.turn() {
-        Color::Black => (black, white),
-        Color::White => (white, black),
-    };
-    for (o, &c) in out[..7].iter_mut().zip(own.iter()) {
-        *o = f32::from(c);
-    }
-    for (o, &c) in out[7..].iter_mut().zip(opp.iter()) {
+    let mut counts = [0u8; HAND_FEATURE_LEN];
+    encode_hand_counts(board, &mut counts);
+    for (o, &c) in out.iter_mut().zip(counts.iter()) {
         *o = f32::from(c);
     }
 }

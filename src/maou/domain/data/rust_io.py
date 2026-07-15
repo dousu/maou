@@ -25,9 +25,7 @@ try:
         merge_feather_files as _merge_feather_files,
     )
     from maou._rust.maou_io import (
-        save_feather_file,
-        save_hcpe_feather,
-        save_preprocessing_feather,
+        save_feather_batches,
         split_feather_file,
     )
 
@@ -50,19 +48,21 @@ def check_rust_backend() -> None:
 _check_rust_backend = check_rust_backend
 
 
-def df_to_single_batch(df: pl.DataFrame) -> pa.RecordBatch:
-    """Polars DataFrameを単一のArrow RecordBatchに変換する．
+def df_to_batches(df: pl.DataFrame) -> list[pa.RecordBatch]:
+    """Polars DataFrameをArrow RecordBatchのリストに変換する．
 
-    ``pl.concat()`` 等の操作後にDataFrameが複数チャンクを持つ場合，
-    ``to_batches()`` が複数バッチを返し ``[0]`` で先頭以外が失われる
-    データ欠落バグを防ぐため，事前に ``combine_chunks()`` で
-    単一チャンクに統合する．
+    ``pl.concat()`` 等の操作後の複数チャンクをそのまま保持する．
+    旧実装は ``combine_chunks()`` で単一チャンクへ統合してから
+    先頭バッチを取り出しており，大きなDataFrameで統合コピーの
+    メモリピークが発生していた (保存は ``save_feather_batches`` が
+    全バッチを書き，読み込みは ``load_feather`` が統合するため，
+    ここでの統合は不要)．
 
     Args:
         df: 変換するPolars DataFrame
 
     Returns:
-        単一のArrow RecordBatch
+        Arrow RecordBatchのリスト (1つ以上)
 
     Raises:
         ValueError: DataFrameが空(0行)の場合
@@ -71,12 +71,7 @@ def df_to_single_batch(df: pl.DataFrame) -> pa.RecordBatch:
         raise ValueError(
             "Cannot convert empty DataFrame to RecordBatch"
         )
-    arrow_table = df.to_arrow().combine_chunks()
-    return arrow_table.to_batches()[0]
-
-
-# 後方互換エイリアス
-_df_to_single_batch = df_to_single_batch
+    return df.to_arrow().to_batches()
 
 
 def save_generic_df(
@@ -99,8 +94,7 @@ def save_generic_df(
     file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    arrow_batch = _df_to_single_batch(df)
-    save_feather_file(arrow_batch, str(file_path))
+    save_feather_batches(df_to_batches(df), str(file_path))
 
 
 def load_generic_df(file_path: Path | str) -> pl.DataFrame:
@@ -146,11 +140,8 @@ def save_hcpe_df(
     file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Polars → Arrow RecordBatch（単一チャンクに統合）
-    arrow_batch = _df_to_single_batch(df)
-
-    # Rust関数を呼び出し
-    save_hcpe_feather(arrow_batch, str(file_path))
+    # Polars → Arrow RecordBatch 列 (チャンク構造を保持して書き出す)
+    save_feather_batches(df_to_batches(df), str(file_path))
 
 
 def load_hcpe_df(file_path: Path | str) -> pl.DataFrame:
@@ -197,9 +188,8 @@ def save_preprocessing_df(
     file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Polars → Arrow RecordBatch（単一チャンクに統合）
-    arrow_batch = _df_to_single_batch(df)
-    save_preprocessing_feather(arrow_batch, str(file_path))
+    # Polars → Arrow RecordBatch 列 (チャンク構造を保持して書き出す)
+    save_feather_batches(df_to_batches(df), str(file_path))
 
 
 def load_preprocessing_df(
@@ -250,10 +240,8 @@ def save_stage1_df(
     file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Polars → Arrow RecordBatch（単一チャンクに統合）
-    arrow_batch = _df_to_single_batch(df)
-
-    save_feather_file(arrow_batch, str(file_path))
+    # Polars → Arrow RecordBatch 列 (チャンク構造を保持して書き出す)
+    save_feather_batches(df_to_batches(df), str(file_path))
 
 
 def load_stage1_df(file_path: Path | str) -> pl.DataFrame:
@@ -305,10 +293,8 @@ def save_stage2_df(
     file_path = Path(file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Polars → Arrow RecordBatch（単一チャンクに統合）
-    arrow_batch = _df_to_single_batch(df)
-
-    save_feather_file(arrow_batch, str(file_path))
+    # Polars → Arrow RecordBatch 列 (チャンク構造を保持して書き出す)
+    save_feather_batches(df_to_batches(df), str(file_path))
 
 
 def load_stage2_df(file_path: Path | str) -> pl.DataFrame:

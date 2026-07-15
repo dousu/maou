@@ -25,7 +25,7 @@ def is_white_piece(piece_id: int) -> bool:
 
     Note:
         domain形式では白駒は 15-28 の範囲．
-        cshogi形式（17-30）とは異なるので注意．
+        raw形式（Rustエンジン内部表現，17-30）とは異なるので注意．
     """
     return piece_id >= DOMAIN_WHITE_MIN
 
@@ -41,7 +41,7 @@ def get_actual_piece_id(piece_id: int) -> int:
 
     Note:
         domain形式の白駒オフセットは 14．
-        cshogi形式のオフセット（16）とは異なる．
+        raw形式のオフセット（16）とは異なる．
     """
     if is_white_piece(piece_id):
         return piece_id - DOMAIN_WHITE_OFFSET
@@ -97,11 +97,12 @@ def get_piece_name_ja(piece_id: int) -> str:
 def square_index_to_coords(square_idx: int) -> tuple[int, int]:
     """マスインデックス（0-80）を行列座標に変換．
 
-    cshogiの座標系に従う: square = col * 9 + row
+    将棋盤の座標規約に従う: square = col * 9 + row
+    (docs/visualization/shogi-conventions.md 参照)
     詳細は docs/visualization/shogi-conventions.md を参照．
 
     Args:
-        square_idx: マスインデックス（cshogi形式）
+        square_idx: マスインデックス（column-major形式）
 
     Returns:
         (row, col)のタプル（各0-8）
@@ -131,7 +132,8 @@ def square_index_to_coords(square_idx: int) -> tuple[int, int]:
 def coords_to_square_index(row: int, col: int) -> int:
     """行列座標をマスインデックス（0-80）に変換．
 
-    cshogiの座標系に従う: square = col * 9 + row
+    将棋盤の座標規約に従う: square = col * 9 + row
+    (docs/visualization/shogi-conventions.md 参照)
     詳細は docs/visualization/shogi-conventions.md を参照．
 
     Args:
@@ -139,7 +141,7 @@ def coords_to_square_index(row: int, col: int) -> int:
         col: 筋（0=1筋，8=9筋）
 
     Returns:
-        マスインデックス（cshogi形式，0-80）
+        マスインデックス（column-major形式，0-80）
 
     Examples:
         >>> coords_to_square_index(0, 0)  # 1筋1段

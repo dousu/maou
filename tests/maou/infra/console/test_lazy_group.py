@@ -378,7 +378,7 @@ class TestImportErrorFallback:
     csa_parser 等の依存 guard は ModuleNotFoundError ではなく素の
     ImportError (インストール案内つき) に変換して再送出する．LazyGroup が
     ImportError を捕捉しないと，全 lazy command を resolve する
-    `maou --help` が base install (cshogi なし) でクラッシュする (回帰)．
+    `maou --help` が optional 依存なしの base install でクラッシュする (回帰)．
     """
 
     def test_plain_import_error_falls_back(
@@ -397,7 +397,7 @@ class TestImportErrorFallback:
         with patch(
             "maou.infra.console.app.import_module",
             side_effect=ImportError(
-                "CSAParser は cshogi に依存します"
+                "optional 依存が未インストールです"
             ),
         ):
             result = runner.invoke(cli, ["test-cmd"])
@@ -420,7 +420,7 @@ class TestImportErrorFallback:
         with patch(
             "maou.infra.console.app.import_module",
             side_effect=ImportError(
-                "CSAParser は cshogi に依存します"
+                "optional 依存が未インストールです"
             ),
         ):
             result = runner.invoke(cli, ["--help"])

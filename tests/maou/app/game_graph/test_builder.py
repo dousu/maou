@@ -348,7 +348,7 @@ class TestGameGraphBuilder:
         board.pop_move()
 
         # 合流局面: 7g7f→3c3d と 2g2f→3c3d は異なる局面だが
-        # もし同じhashなら合流する(cshogiでは手順が違えば別hash)
+        # もし同じhashなら合流する (zobrist hash は局面ベースで手順に依らない)
         # ここでは各経路の子が独立した局面になることを検証
         board.push_move(move_7g7f)
         board.push_move(move_3c3d_after_7g7f)

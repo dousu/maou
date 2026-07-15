@@ -882,6 +882,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
+name = "encoding_rs"
+version = "0.8.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -899,9 +908,9 @@ dependencies = [
 
 [[package]]
 name = "ethnum"
-version = "1.5.2"
+version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca81e6b4777c89fd810c25a4be2b1bd93ea034fbe58e6a75216a34c6b82c539b"
+checksum = "40404c3f5f511ec4da6fe866ddf6a717c309fdbb69fbbad7b0f3edab8f2e835f"
 
 [[package]]
 name = "event-listener"
@@ -1700,6 +1709,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "maou_convert"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "encoding_rs",
+ "maou_io",
+ "maou_shogi",
+ "rayon",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "maou_index"
 version = "0.1.1"
 dependencies = [
@@ -1712,7 +1734,7 @@ dependencies = [
 
 [[package]]
 name = "maou_io"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "arrow",
  "tempfile",
@@ -1721,10 +1743,11 @@ dependencies = [
 
 [[package]]
 name = "maou_rust"
-version = "0.16.0"
+version = "0.21.1"
 dependencies = [
  "arrow",
  "arrow-pyarrow",
+ "maou_convert",
  "maou_index",
  "maou_io",
  "maou_search",
@@ -1736,7 +1759,7 @@ dependencies = [
 
 [[package]]
 name = "maou_search"
-version = "0.15.2"
+version = "0.17.3"
 dependencies = [
  "maou_shogi",
  "ort",
@@ -1744,7 +1767,7 @@ dependencies = [
 
 [[package]]
 name = "maou_shogi"
-version = "5.6.0"
+version = "5.8.1"
 dependencies = [
  "arrayvec",
  "rustc-hash",

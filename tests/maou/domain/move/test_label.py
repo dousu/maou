@@ -12,18 +12,19 @@ class TestLabel:
         指し手をいくつか指定して想定通りの値が返ってくるかテストする
         成りや打ちも少なくとも1種類テストしておく
         moveとmove16の違いは以下を実行してみると大体わかる
-        parser = cshogi.CSA.Parser.parse_file(
+        from maou._rust.maou_shogi import parse_csa_str
+        (record,) = parse_csa_str(Path(
             "tests/maou/app/converter/resources/test_dir/input/test_data_1.csa"
-        )[0]
-        move16s = [move16(move) for move in parser.moves]
-        for i, move in enumerate(parser.moves):
+        ).read_text())
+        move16s = [shogi.move16(move) for move in record.moves]
+        for i, move in enumerate(record.moves):
             print(i, format(move, '024b'))
             print(i, format(move16s[i], '024b'))
 
         テスト用のmove16はテストしたい指し手が指せる局面をsfenで作って以下のように出した
         board.set_sfen('sfen')
-        for move in board.legal_moves:
-            print(cshogi.move_to_usi(move), cshogi.move16(move))
+        for move in board.get_legal_moves():
+            print(shogi.move_to_usi(move), shogi.move16(move))
 
         テスト項目
         - 1b1a (11と想定) 128
@@ -777,7 +778,7 @@ class TestLabel:
             actual_usi = shogi.move_to_usi(move)
 
             logger.info(
-                f"WHITE Move {move} -> Label {white_label} -> {white_result} (cshogi: {actual_usi})"
+                f"WHITE Move {move} -> Label {white_label} -> {white_result} (move_to_usi: {actual_usi})"
             )
             assert white_result == actual_usi, (
                 f"Expected {actual_usi}, got {white_result}"
@@ -824,7 +825,7 @@ class TestLabel:
         try:
             label.make_usi_move_from_label(board, 999999)
             logger.info(
-                "⚠️ Very large move value accepted (may be valid cshogi move)"
+                "⚠️ Very large move value accepted (may be a valid move encoding)"
             )
         except ValueError:
             logger.info(
@@ -876,3 +877,21 @@ class TestLabel:
             )
             == 1
         )
+
+    def test_make_result_value_hcpe_raw_values(self) -> None:
+        """HCPE の gameResult 生値 (0=引分, 1=先手勝, 2=後手勝) との対応を固定する.
+
+        回帰: shogi.Result の旧定義 (BLACK_WIN=0, WHITE_WIN=1, DRAW=2) が
+        HCPE 規約とずれており，教師値が全て取り違っていた．enum 値を
+        HCPE 規約に揃えたため，生値でも正しい教師値になることを検証する．
+        """
+        assert (
+            label.make_result_value(shogi.Turn.BLACK, 0) == 0.5
+        )
+        assert label.make_result_value(shogi.Turn.BLACK, 1) == 1
+        assert label.make_result_value(shogi.Turn.BLACK, 2) == 0
+        assert (
+            label.make_result_value(shogi.Turn.WHITE, 0) == 0.5
+        )
+        assert label.make_result_value(shogi.Turn.WHITE, 1) == 0
+        assert label.make_result_value(shogi.Turn.WHITE, 2) == 1

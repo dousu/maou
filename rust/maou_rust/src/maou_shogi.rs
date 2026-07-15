@@ -1,27 +1,15 @@
 //! maou_shogi submodule - PyO3 bindings for Shogi board operations
 
-use numpy::{PyArray3, PyArrayMethods};
+use numpy::ndarray::Array2;
+use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::prelude::*;
 
 use maou_shogi::board::Board;
 use maou_shogi::dfpn;
-use maou_shogi::feature;
 use maou_shogi::hcp;
 use maou_shogi::movegen;
 use maou_shogi::moves::{self, Move};
-use maou_shogi::types::{Color, Piece, Square, FEATURES_NUM};
-
-/// PyArray3<f32> の feature planes の形状を検証する．
-fn validate_feature_array_shape(arr: &Bound<'_, PyArray3<f32>>) -> PyResult<()> {
-    let shape = arr.dims();
-    let expected = [FEATURES_NUM, 9, 9];
-    if shape != expected {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "expected array shape {expected:?}, got {shape:?}"
-        )));
-    }
-    Ok(())
-}
+use maou_shogi::types::{Color, Piece, Square};
 
 /// 将棋盤面の Python バインディング．
 ///
@@ -141,35 +129,6 @@ impl PyBoard {
         Ok(())
     }
 
-    /// 先手視点の駒特徴平面 (104x9x9) を書き込む．
-    fn piece_planes<'py>(&self, arr: &Bound<'py, PyArray3<f32>>) -> PyResult<()> {
-        validate_feature_array_shape(arr)?;
-        // SAFETY: The caller must ensure no other Python reference aliases `arr`
-        // during this call. `as_array_mut()` bypasses Python-level aliasing checks;
-        // if another ndarray view shares the same buffer, this is undefined behavior.
-        // In practice, `to_piece_planes()` in shogi.py creates a new local array
-        // that is not shared, satisfying this invariant.
-        let mut rw = unsafe { arr.as_array_mut() };
-        let slice = rw
-            .as_slice_mut()
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("array must be contiguous"))?;
-        feature::piece_planes(&self.board, slice);
-        Ok(())
-    }
-
-    /// 後手視点 (180度回転) の駒特徴平面 (104x9x9) を書き込む．
-    fn piece_planes_rotate<'py>(&self, arr: &Bound<'py, PyArray3<f32>>) -> PyResult<()> {
-        validate_feature_array_shape(arr)?;
-        // SAFETY: Same invariant as `piece_planes` — caller must ensure
-        // exclusive access to `arr`. See comment in `piece_planes` for details.
-        let mut rw = unsafe { arr.as_array_mut() };
-        let slice = rw
-            .as_slice_mut()
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("array must be contiguous"))?;
-        feature::piece_planes_rotate(&self.board, slice);
-        Ok(())
-    }
-
     /// 持ち駒を (先手, 後手) のタプルで返す．
     ///
     /// 各リストは [歩, 香, 桂, 銀, 金, 角, 飛] の順．
@@ -199,6 +158,29 @@ impl PyBoard {
     /// Zobrist ハッシュ値を返す．
     fn zobrist_hash(&self) -> u64 {
         self.board.hash()
+    }
+
+    /// 手番視点に正規化した駒 ID 盤面を (9, 9) uint8 の ndarray で返す．
+    ///
+    /// 後手番なら 180 度回転し先手/後手の駒 ID を入れ替える (正規化後は
+    /// 手番側 1-14 / 相手側 15-28)．メモリ配置は row-major `[段][筋]`．
+    /// Python 側 `Board.get_normalized_board_id_positions` の実体 (maou_search::feature)．
+    fn board_id_positions<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<u8>> {
+        let mut out = [0u8; 81];
+        maou_search::feature::encode_board_ids(&self.board, &mut out);
+        Array2::from_shape_vec((9, 9), out.to_vec())
+            .expect("81 要素は (9, 9) に変形できる")
+            .into_pyarray(py)
+    }
+
+    /// 手番側を先頭にした持ち駒枚数を (14,) uint8 の ndarray で返す．
+    ///
+    /// 順序は手番側 [歩香桂銀金角飛] + 相手側 [同]．
+    /// Python 側 `Board.get_normalized_pieces_in_hand` の実体 (maou_search::feature)．
+    fn hand_counts<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<u8>> {
+        let mut out = [0u8; 14];
+        maou_search::feature::encode_hand_counts(&self.board, &mut out);
+        out.to_vec().into_pyarray(py)
     }
 
     /// 盤面が妥当かどうかを検証する．
@@ -531,6 +513,106 @@ fn solve_tsume(
     })
 }
 
+/// パースした棋譜 1 局分 (`maou_shogi::kifu::GameRecord` の Python 露出)．
+///
+/// `moves` は cshogi 互換の 32-bit int エンコーディング
+/// (`Board.push` / `move16` にそのまま渡せる)．
+#[pyclass(frozen, name = "GameRecord")]
+struct PyGameRecord {
+    /// バージョン行 (CSA "V2.2" 等．KIF は空文字列)
+    #[pyo3(get)]
+    version: String,
+    /// メタ情報 (CSA $KEY / KIF ヘッダ) — (key, value) の出現順リスト
+    #[pyo3(get)]
+    var_info: Vec<(String, String)>,
+    /// 対局者名 [先手/下手, 後手/上手]．KIF で未指定なら None
+    #[pyo3(get)]
+    names: Vec<Option<String>>,
+    /// レーティング [先手, 後手] (CSA 'black_rate:/'white_rate: 行由来)
+    #[pyo3(get)]
+    ratings: Vec<f32>,
+    /// 初期局面 SFEN
+    #[pyo3(get)]
+    sfen: String,
+    /// 指し手 (cshogi 互換 32-bit int)
+    #[pyo3(get)]
+    moves: Vec<u32>,
+    /// 消費時間 (秒)．cshogi 互換 quirk により moves と長さが異なり得る
+    #[pyo3(get)]
+    times: Vec<i32>,
+    /// 評価値 (moves と同長; CSA '** コメント由来，KIF は 0)
+    #[pyo3(get)]
+    scores: Vec<i32>,
+    /// 指し手コメント (moves と同長; 無い手は空文字列)
+    #[pyo3(get)]
+    comments: Vec<String>,
+    /// 指し手より前のコメント行
+    #[pyo3(get)]
+    header_comment: String,
+    /// 終局状態 ("%TORYO" 等)．未終局は None
+    #[pyo3(get)]
+    endgame: Option<String>,
+    /// 勝敗 (0=引き分け, 1=先手勝ち, 2=後手勝ち)．KIF で不明なら None
+    #[pyo3(get)]
+    win: Option<u8>,
+}
+
+#[pymethods]
+impl PyGameRecord {
+    fn __repr__(&self) -> String {
+        format!(
+            "GameRecord(sfen='{}', moves={}, endgame={:?}, win={:?})",
+            self.sfen,
+            self.moves.len(),
+            self.endgame,
+            self.win
+        )
+    }
+}
+
+impl From<maou_shogi::kifu::GameRecord> for PyGameRecord {
+    fn from(r: maou_shogi::kifu::GameRecord) -> Self {
+        let [name_b, name_w] = r.names;
+        PyGameRecord {
+            version: r.version,
+            var_info: r.var_info,
+            names: vec![name_b, name_w],
+            ratings: r.ratings.to_vec(),
+            sfen: r.sfen,
+            moves: r.moves,
+            times: r.times,
+            scores: r.scores,
+            comments: r.comments,
+            header_comment: r.header_comment,
+            endgame: r.endgame,
+            win: r.win,
+        }
+    }
+}
+
+/// CSA 形式棋譜 (複数対局可) をパースする．
+///
+/// cshogi の `CSA.Parser.parse_str` 互換 (parity 検証済み)．
+/// パース失敗時は ValueError．
+#[pyfunction]
+fn parse_csa_str(content: &str) -> PyResult<Vec<PyGameRecord>> {
+    maou_shogi::kifu::parse_csa_multi(content)
+        .map(|records| records.into_iter().map(PyGameRecord::from).collect())
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("CSA parse error: {e}")))
+}
+
+/// KIF 形式棋譜 (単一対局，UTF-8) をパースする．
+///
+/// cshogi の `KIF.Parser.parse_str` 互換 (parity 検証済み)．
+/// Shift_JIS (.kif) のデコードは呼び出し側の責務．
+/// パース失敗時は ValueError．
+#[pyfunction]
+fn parse_kif_str(content: &str) -> PyResult<PyGameRecord> {
+    maou_shogi::kifu::parse_kif_str(content)
+        .map(PyGameRecord::from)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("KIF parse error: {e}")))
+}
+
 /// Create maou_shogi submodule
 pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let m = PyModule::new(py, "maou_shogi")?;
@@ -538,6 +620,7 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_class::<PyBoard>()?;
     m.add_class::<TsumeResult>()?;
     m.add_class::<TsumeProgressSample>()?;
+    m.add_class::<PyGameRecord>()?;
     m.add_function(wrap_pyfunction!(move16, &m)?)?;
     m.add_function(wrap_pyfunction!(move_to, &m)?)?;
     m.add_function(wrap_pyfunction!(move_from, &m)?)?;
@@ -546,6 +629,8 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_function(wrap_pyfunction!(move_is_promotion, &m)?)?;
     m.add_function(wrap_pyfunction!(move_drop_hand_piece, &m)?)?;
     m.add_function(wrap_pyfunction!(solve_tsume, &m)?)?;
+    m.add_function(wrap_pyfunction!(parse_csa_str, &m)?)?;
+    m.add_function(wrap_pyfunction!(parse_kif_str, &m)?)?;
 
     Ok(m)
 }

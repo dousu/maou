@@ -144,7 +144,7 @@ class Stage1DataGenerator:
         Returns:
             Record dict for DataFrame construction
         """
-        # Use custom legal move generation (no cshogi dependency for move calculation)
+        # Use custom legal move generation
         legal_move_coords = get_legal_moves_for_piece(
             piece_id=PieceId(pattern.piece_id),
             row=pattern.row,
@@ -195,7 +195,7 @@ class Stage1DataGenerator:
         Returns:
             Record dict for DataFrame construction
         """
-        # Use custom drop move generation (no cshogi dependency)
+        # Use custom drop move generation
         drop_squares = get_legal_drop_squares_for_piece(
             piece_type_idx=pattern.piece_type_idx
         )

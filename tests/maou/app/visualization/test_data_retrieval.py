@@ -159,8 +159,7 @@ class TestDataRetriever:
         )
 
         # HCPバイナリを取得
-        hcp_df = board.get_hcp_df()
-        hcp_bytes = hcp_df["hcp"][0]
+        hcp_bytes = board.to_hcp()
 
         # テスト用レコード
         record = {
@@ -212,8 +211,7 @@ class TestDataRetriever:
         )
 
         # HCPバイナリを取得
-        hcp_df = board.get_hcp_df()
-        hcp_bytes = hcp_df["hcp"][0]
+        hcp_bytes = board.to_hcp()
 
         # テスト用レコード
         record = {
@@ -278,8 +276,7 @@ class TestDataRetriever:
         )
 
         # HCPバイナリを取得
-        hcp_df = board.get_hcp_df()
-        hcp_bytes = hcp_df["hcp"][0]
+        hcp_bytes = board.to_hcp()
 
         # 複数のフィールドを持つレコード
         record = {
@@ -317,8 +314,7 @@ class TestDataRetriever:
         )
 
         # HCPバイナリを取得
-        hcp_df = board.get_hcp_df()
-        hcp_bytes = hcp_df["hcp"][0]
+        hcp_bytes = board.to_hcp()
 
         record = {"id": "test", "eval": 0, "hcp": hcp_bytes}
         decoded = data_retriever._decode_hcp_to_board_info(
@@ -332,10 +328,10 @@ class TestDataRetriever:
         assert positions[8][4] == PieceId.OU  # 先手王
 
         # 後手の玉の位置を確認（row=0, col=4 = 段a, 筋5）
-        # 後手の駒はPieceId + 15なので、22 = 8 + 14 = OU + 14
-        # ※ map_cshogi_to_piece_idで変換後の値
-        # cshogiのWKING(24) → project ID (24-2=22)
-        white_king_id = 22  # cshogiのWKING(24)がmap後に22になる
+        # 後手の駒は domain PieceId + 14 (22 = OU(8) + 14)．
+        # raw 駒 ID の白玉(24)は RAW_PIECE_TO_PIECEID 変換で
+        # domain 22 になる
+        white_king_id = 22  # domain PieceId: OU + 14
         assert positions[0][4] == white_king_id  # 後手王
 
     def test_white_piece_detection_with_real_data(
@@ -348,8 +344,7 @@ class TestDataRetriever:
             "lnsgkgsnl/1r7/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b B 1"
         )
 
-        hcp_df = board.get_hcp_df()
-        hcp_bytes = hcp_df["hcp"][0]
+        hcp_bytes = board.to_hcp()
 
         record = {"id": "test", "eval": 0, "hcp": hcp_bytes}
         decoded = data_retriever._decode_hcp_to_board_info(

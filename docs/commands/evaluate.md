@@ -20,7 +20,7 @@
 | `--model-path PATH` | conditional | Absolute or relative path to the exported network. Required when `--engine-path` is not specified. `click.Path` checks that it already exists, so you get early feedback when pointing at the wrong file before any GPU context is created.【F:src/maou/infra/console/evaluate_board.py†L16-L24】 |
 | `--cuda/--no-cuda` | default `--no-cuda` | Turns GPU execution on or off for both ONNX Runtime and TensorRT. TensorRT requires `--cuda` (see guardrails below).【F:src/maou/infra/console/evaluate_board.py†L25-L33】【F:src/maou/app/inference/run.py†L80-L139】 |
 | `--num-moves INT` | default `5` | Controls how many candidate moves are requested from the backend. The value is stored inside `InferenceRunner.InferenceOption.num_moves`.【F:src/maou/infra/console/evaluate_board.py†L34-L42】【F:src/maou/app/inference/run.py†L40-L103】 |
-| `--sfen STRING` | ✅ | Full SFEN describing the position (piece placement, side to move, hands, move count). The string is passed to `Board.set_sfen`, so anything accepted by `cshogi` works here.【F:src/maou/infra/console/evaluate_board.py†L43-L51】【F:src/maou/domain/board/shogi.py†L1-L77】 |
+| `--sfen STRING` | ✅ | Full SFEN describing the position (piece placement, side to move, hands, move count). The string is passed to `Board.set_sfen`, so anything accepted by the Rust engine (`maou_shogi`) works here.【F:src/maou/infra/console/evaluate_board.py†L43-L51】【F:src/maou/domain/board/shogi.py†L1-L77】 |
 | `--trt-workspace-size INT` | default `256` | TensorRT workspace size in MB. Default is sufficient for this project's models. Increase for larger models or max speed. Decrease if GPU memory is limited. Only used with `--model-type TENSORRT`. |
 | `--engine-path PATH` | default `None` | Pre-built TensorRT engine file path. When specified, the engine is loaded from this file and ONNX-to-TensorRT build is skipped. Build an engine first with `maou build-engine`. When `--engine-path` is provided, `--model-path` is not required and `--model-type` is automatically treated as `TENSORRT`.【F:src/maou/infra/console/evaluate_board.py†L63-L73】 |
 
@@ -50,7 +50,7 @@
   caught before GPU contexts or TensorRT engines are created.【F:src/maou/infra/console/evaluate_board.py†L16-L24】
 - TensorRT runs fail with `ValueError("TensorRT requires CUDA.")` when `--cuda`
   is omitted; ONNX runs simply stay on CPU if CUDA is off.【F:src/maou/app/inference/run.py†L80-L139】
-- `cshogi.Board.set_sfen` validates the supplied SFEN string and raises when the
+- `Board.set_sfen` (Rust engine) validates the supplied SFEN string and raises when the
   placement or hand descriptors are malformed, preventing undefined board
   states.【F:src/maou/domain/board/shogi.py†L1-L77】
 

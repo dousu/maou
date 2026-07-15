@@ -41,68 +41,55 @@ app --> domain
 
 - ここではentityだけが存在する
 
-## cshogi Library Encapsulation
+## Shogi Engine (Rust) Encapsulation
 
-The project uses the `cshogi` C++ library for Shogi game logic, but it is **completely encapsulated within the domain layer** following Clean Architecture.
+The project uses the in-house Rust engine `maou_shogi` (exposed via the
+`maou._rust` PyO3 extension) for Shogi game logic. Board-level logic is
+**encapsulated within the domain layer** following Clean Architecture.
+See [docs/rust-backend.md](rust-backend.md) for the crate structure.
 
 ### Encapsulation Rules
 
-**Allowed cshogi usage:**
-- ✅ `src/maou/domain/board/shogi.py` - Board wrapper (PRIMARY abstraction point)
-- ✅ `src/maou/domain/parser/csa_parser.py` - CSA parsing (implementation detail)
-- ✅ `src/maou/domain/parser/kif_parser.py` - KIF parsing (implementation detail)
-- ✅ `tests/**` - Direct usage allowed for test simplicity (but Board usage preferred)
+**Board-level logic (single position operations):**
+- ✅ `src/maou/domain/board/shogi.py` - `Board` wrapper around
+  `maou._rust.maou_shogi.PyBoard` (PRIMARY abstraction point) plus
+  move utility functions and piece ID conversions
+- ❌ `src/maou/app/**`, `src/maou/interface/**`, `src/maou/infra/**` -
+  MUST use the domain `Board` class, not `maou._rust.maou_shogi.PyBoard`
+  directly
+- ✅ `tests/**` - Direct usage allowed for test simplicity (but Board
+  usage preferred)
 
-**Prohibited cshogi usage:**
-- ❌ `src/maou/app/**` - MUST use `Board` class, not cshogi directly
-- ❌ `src/maou/interface/**` - MUST use domain abstractions
-- ❌ `src/maou/infra/**` - MUST use domain abstractions
+**Bulk data-pipeline APIs** (`maou._rust.maou_search`,
+`maou._rust.maou_convert`, `maou._rust.maou_io`): app-layer use cases
+and domain data modules call these directly by design — batching in
+Rust avoids per-position Python loops (HCPE conversion, stage2
+generation, preprocessing).
 
 ### Piece ID Mapping (CRITICAL)
 
-cshogi and PieceId enum use **DIFFERENT orderings**:
+The engine's raw piece IDs and the domain `PieceId` enum use
+**DIFFERENT orderings**:
 
-| Piece | cshogi ID | PieceId enum | Conversion |
-|-------|-----------|--------------|------------|
+| Piece | raw ID (engine) | PieceId enum | Conversion |
+|-------|-----------------|--------------|------------|
 | 金(GOLD) | 7 | 5 (KI) | Reordered |
 | 角(BISHOP) | 5 | 6 (KA) | Reordered |
 | 飛(ROOK) | 6 | 7 (HI) | Reordered |
 | 白(WHITE) | black+16 | black+14 | Offset difference |
 
-**Conversion methods:**
-- `Board._cshogi_piece_to_piece_id()` - Convert piece IDs
-- `Board._reorder_piece_planes_cshogi_to_pieceid()` - Reorder feature planes
+**Conversion (single source of truth):**
+- `shogi.RAW_PIECE_TO_PIECEID` - lookup table (module-level, numpy)
+- `Board.raw_piece_to_piece_id()` - scalar conversion helper
 
-**IMPORTANT:** All piece ID conversions MUST go through these centralized methods. Never implement conversion logic elsewhere.
-
-### Replacing cshogi with Another Library
-
-If you need to replace cshogi:
-
-1. **Update Board class** (`src/maou/domain/board/shogi.py`):
-   - Replace `self.board = cshogi.Board()` with new library
-   - Update `_cshogi_piece_to_piece_id()` for new library's piece IDs
-   - Update `_reorder_piece_planes_cshogi_to_pieceid()` if needed
-   - Update move utility functions
-
-2. **Update Parsers**:
-   - Replace `cshogi.CSA.Parser` in `csa_parser.py`
-   - Replace `cshogi.KIF.Parser` in `kif_parser.py`
-
-3. **Verify Constants**:
-   - Check `MAX_PIECES_IN_HAND`, `PIECE_TYPES` still match
-   - Update static assertions if values differ
-
-4. **Run Tests**:
-   - `poetry run pytest tests/maou/domain/board/`
-   - Ensure piece ID conversions are correct
-   - Verify no regressions in app/interface/infra layers
+**IMPORTANT:** All piece ID conversions MUST go through the
+centralized table. Never implement conversion logic elsewhere.
 
 ### Anti-Patterns (DO NOT DO THIS)
 
 ```python
-# ❌ BAD: Direct cshogi import in app layer
-from cshogi import Board as CshogiBoard
+# ❌ BAD: Direct PyBoard usage in app layer
+from maou._rust.maou_shogi import PyBoard
 
 # ✅ GOOD: Use domain Board wrapper
 from maou.domain.board.shogi import Board
@@ -116,7 +103,7 @@ def my_converter(piece):
     # ...
 
 # ✅ GOOD: Use centralized conversion
-piece_id = Board._cshogi_piece_to_piece_id(cshogi_piece)
+piece_id = Board.raw_piece_to_piece_id(raw_piece)
 ```
 
 ## Data I/O Architecture

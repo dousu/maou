@@ -353,9 +353,8 @@ class DataRetriever:
         # 手番を取得（HCPから復元）
         turn = board.get_turn()
 
-        # 盤面の駒配置を取得
-        board_df = board.get_board_id_positions_df()
-        board_id_positions = board_df["boardIdPositions"][0]
+        # 盤面の駒配置を取得 (9x9 のネストリスト)
+        board_id_positions = board.get_board_id_positions()
 
         # 持ち駒を取得
         black_hand, white_hand = board.get_pieces_in_hand()
@@ -595,7 +594,7 @@ class DataRetriever:
         # 空の盤面を初期化
         board: list[list[int]] = [[0] * 9 for _ in range(9)]
 
-        # 駒ID定義（cshogi互換）
+        # 駒ID定義（domain PieceId）
         # 先手: 歩=1, 香=2, 桂=3, 銀=4, 金=5, 角=6, 飛=7, 玉=8
         # 成駒: と=9, 成香=10, 成桂=11, 成銀=12, 馬=13, 竜=14
         # 後手: +DOMAIN_WHITE_OFFSET (14)
@@ -804,7 +803,7 @@ class DataRetriever:
         # 空の盤面を初期化
         board: list[list[int]] = [[0] * 9 for _ in range(9)]
 
-        # 駒ID定義（cshogi互換）
+        # 駒ID定義（domain PieceId）
         # 先手: 歩=1, 香=2, 桂=3, 銀=4, 金=5, 角=6, 飛=7, 玉=8
         # 成駒: と=9, 成香=10, 成桂=11, 成銀=12, 馬=13, 竜=14
         # 後手: +DOMAIN_WHITE_OFFSET (14)

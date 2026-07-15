@@ -7,9 +7,11 @@
 //! - `maou._rust.maou_index` - Search index for data visualization
 //! - `maou._rust.maou_shogi` - Shogi board, move generation, and feature extraction
 //! - `maou._rust.maou_search` - MCTS-based single-position search engine
+//! - `maou._rust.maou_convert` - 棋譜 (CSA/KIF) → HCPE 一括変換パイプライン
 
 use pyo3::prelude::*;
 
+mod maou_convert;
 mod maou_index;
 mod maou_io;
 mod maou_search;
@@ -24,6 +26,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_submodule(&maou_index::create_module(py)?)?;
     m.add_submodule(&maou_shogi::create_module(py)?)?;
     m.add_submodule(&maou_search::create_module(py)?)?;
+    m.add_submodule(&maou_convert::create_module(py)?)?;
 
     // Register submodules in sys.modules for proper importing
     py.import("sys")?
@@ -41,6 +44,10 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     py.import("sys")?
         .getattr("modules")?
         .set_item("maou._rust.maou_search", m.getattr("maou_search")?)?;
+
+    py.import("sys")?
+        .getattr("modules")?
+        .set_item("maou._rust.maou_convert", m.getattr("maou_convert")?)?;
 
     Ok(())
 }

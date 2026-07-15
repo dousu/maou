@@ -1,0 +1,20 @@
+[package]
+name = "maou_convert"
+version = "0.1.0"
+edition = "2021"
+description = "棋譜 (CSA/KIF) → HCPE 一括変換パイプライン (rayon 並列 / Arrow 直出力)"
+
+[lib]
+name = "maou_convert"
+crate-type = ["lib"]
+
+[dependencies]
+maou_shogi = { path = "../maou_shogi" }
+maou_io = { path = "../maou_io" }
+arrow = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true }
+encoding_rs = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

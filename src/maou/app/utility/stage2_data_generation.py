@@ -10,16 +10,12 @@ import logging
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import numpy as np
 import polars as pl
 from tqdm.auto import tqdm
 
 from maou.domain.data.rust_io import load_hcpe_df
-
-if TYPE_CHECKING:
-    from maou.domain.board import shogi
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +37,6 @@ class Stage2DataGenerationUseCase:
     def execute(
         self, config: Stage2DataGenerationConfig
     ) -> dict[str, int | str | list[str]]:
-        from maou.domain.board import shogi  # noqa: F401
-
         logger.info("Starting Stage 2 data generation...")
 
         config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -90,7 +84,7 @@ class Stage2DataGenerationUseCase:
         """
         import duckdb
 
-        from maou.domain.board import shogi
+        from maou._rust.maou_search import hcp_hashes
 
         # Collect feather files
         feather_files = sorted(input_dir.rglob("*.feather"))
@@ -110,7 +104,6 @@ class Stage2DataGenerationUseCase:
                 """
             )
 
-            board = shogi.Board()
             total_input = 0
 
             for file_path in tqdm(
@@ -125,22 +118,15 @@ class Stage2DataGenerationUseCase:
                     )
                     continue
 
-                hcp_series = df["hcp"]
-                batch_size = len(hcp_series)
+                hcp_bytes_list = df["hcp"].to_list()
+                batch_size = len(hcp_bytes_list)
                 total_input += batch_size
 
-                # Compute hash for each HCP
-                hash_ids = np.empty(batch_size, dtype=np.uint64)
-                hcp_bytes_list = []
-
-                for i in range(batch_size):
-                    hcp_bytes = hcp_series[i]
-                    hcp_array = np.frombuffer(
-                        hcp_bytes, dtype=np.uint8
-                    )
-                    board.set_hcp(hcp_array)
-                    hash_ids[i] = board.hash()
-                    hcp_bytes_list.append(hcp_bytes)
+                # Rust 一括計算で全 HCP の zobrist hash を取得
+                hcps = np.frombuffer(
+                    b"".join(hcp_bytes_list), dtype=np.uint8
+                ).reshape(-1, 32)
+                hash_ids = hcp_hashes(hcps)
 
                 # Insert into DuckDB with dedup (INSERT OR IGNORE)
                 batch_df = pl.DataFrame(  # noqa: F841 (used by DuckDB)
@@ -199,18 +185,13 @@ class Stage2DataGenerationUseCase:
         """
         import duckdb
 
-        from maou.app.pre_process.feature import (
-            make_board_id_positions,
-            make_pieces_in_hand,
+        from maou._rust.maou_search import (
+            encode_hcp_features,
+            legal_move_masks,
         )
-        from maou.domain.board import shogi
         from maou.domain.data.rust_io import save_stage2_df
         from maou.domain.data.schema import (
             get_stage2_polars_schema,
-        )
-        from maou.domain.move.label import (
-            MOVE_LABELS_NUM,
-            make_move_label,
         )
 
         schema = get_stage2_polars_schema()
@@ -224,7 +205,6 @@ class Stage2DataGenerationUseCase:
                 count_row[0] if count_row is not None else 0
             )
 
-            board = shogi.Board()
             output_files: list[Path] = []
             chunk_idx = 0
             offset = 0
@@ -249,68 +229,30 @@ class Stage2DataGenerationUseCase:
                     if not rows:
                         break
 
-                    ids: list[int] = []
+                    ids: list[int] = [
+                        hash_id for hash_id, _ in rows
+                    ]
+
+                    # チャンク内の全 HCP を束ねて Rust 一括エンコード
+                    # (特徴量 + 手番視点正規化済み合法手ラベルマスク)
+                    hcps = np.frombuffer(
+                        b"".join(
+                            hcp_bytes for _, hcp_bytes in rows
+                        ),
+                        dtype=np.uint8,
+                    ).reshape(-1, 32)
+                    board_ids, hands = encode_hcp_features(hcps)
+                    legal_masks = legal_move_masks(hcps)
+
                     board_id_positions_list: list[
                         list[list[int]]
-                    ] = []
-                    pieces_in_hand_list: list[list[int]] = []
-                    legal_moves_labels_list: list[
-                        list[int]
-                    ] = []
-
-                    for hash_id, hcp_bytes in rows:
-                        hcp_array = np.frombuffer(
-                            hcp_bytes, dtype=np.uint8
-                        )
-                        board.set_hcp(hcp_array)
-
-                        # Generate features
-                        board_positions = (
-                            make_board_id_positions(board)
-                        )
-                        pieces_in_hand = make_pieces_in_hand(
-                            board
-                        )
-
-                        # Generate legal move labels
-                        # 盤面は先手視点に正規化済みなので，
-                        # 正規化後の盤面の合法手からラベルを生成する
-                        legal_labels = np.zeros(
-                            MOVE_LABELS_NUM,
-                            dtype=np.uint8,
-                        )
-                        if board.get_turn() == shogi.Turn.BLACK:
-                            # 先手番: 正規化なし，元のboardの合法手をそのまま使用
-                            for move in board.get_legal_moves():
-                                label = make_move_label(
-                                    shogi.Turn.BLACK,
-                                    move,
-                                )
-                                legal_labels[label] = 1
-                        else:
-                            # 後手番: 盤面が180度回転されているため，
-                            # 正規化後の盤面を再構築して合法手を取得
-                            normalized_board = self._reconstruct_normalized_board(
-                                board_positions,
-                                pieces_in_hand,
-                            )
-                            for move in normalized_board.get_legal_moves():
-                                label = make_move_label(
-                                    shogi.Turn.BLACK,
-                                    move,
-                                )
-                                legal_labels[label] = 1
-
-                        ids.append(hash_id)
-                        board_id_positions_list.append(
-                            board_positions.tolist()
-                        )
-                        pieces_in_hand_list.append(
-                            pieces_in_hand.tolist()
-                        )
-                        legal_moves_labels_list.append(
-                            legal_labels.tolist()
-                        )
+                    ] = board_ids.tolist()
+                    pieces_in_hand_list: list[list[int]] = (
+                        hands.tolist()
+                    )
+                    legal_moves_labels_list: list[list[int]] = (
+                        legal_masks.tolist()
+                    )
 
                     chunk_df = pl.DataFrame(
                         {
@@ -348,106 +290,3 @@ class Stage2DataGenerationUseCase:
         )
 
         return output_files
-
-    @staticmethod
-    def _reconstruct_normalized_board(
-        board_positions: np.ndarray,
-        pieces_in_hand: np.ndarray,
-    ) -> shogi.Board:
-        """正規化済み盤面からBoardを再構築する．
-
-        make_board_id_positions()で先手視点に正規化された盤面と
-        make_pieces_in_hand()の持ち駒から，Boardを再構築する．
-        再構築されたBoardはturn=BLACKとなる．
-
-        domain PieceIdをSFEN形式に変換し，set_sfenで構築する．
-
-        Args:
-            board_positions: 正規化済み9x9盤面配列(domain PieceId)
-            pieces_in_hand: 正規化済み持ち駒配列(14要素)
-
-        Returns:
-            再構築されたBoardインスタンス(turn=BLACK)
-        """
-        from maou.domain.board import shogi as shogi_module
-
-        # domain PieceId → SFEN文字マッピング
-        _BLACK_PIECE_TO_SFEN = {
-            1: "P",
-            2: "L",
-            3: "N",
-            4: "S",
-            5: "G",
-            6: "B",
-            7: "R",
-            8: "K",
-            9: "+P",
-            10: "+L",
-            11: "+N",
-            12: "+S",
-            13: "+B",
-            14: "+R",
-        }
-        _DOMAIN_WHITE_MIN = 15
-        _DOMAIN_WHITE_OFFSET = 14
-
-        # 盤面をSFEN形式に変換
-        ranks = []
-        for row in board_positions:
-            # col=0が1筋，SFENは9筋→1筋の順なので反転
-            reversed_row = list(reversed(row))
-            rank_str = ""
-            empty_count = 0
-            for piece_id in reversed_row:
-                pid = int(piece_id)
-                if pid == 0:
-                    empty_count += 1
-                else:
-                    if empty_count > 0:
-                        rank_str += str(empty_count)
-                        empty_count = 0
-                    if pid >= _DOMAIN_WHITE_MIN:
-                        # 後手駒: 小文字
-                        black_char = _BLACK_PIECE_TO_SFEN.get(
-                            pid - _DOMAIN_WHITE_OFFSET, ""
-                        )
-                        rank_str += black_char.lower()
-                    else:
-                        # 先手駒: 大文字
-                        rank_str += _BLACK_PIECE_TO_SFEN.get(
-                            pid, ""
-                        )
-            if empty_count > 0:
-                rank_str += str(empty_count)
-            ranks.append(rank_str if rank_str else "9")
-
-        board_sfen = "/".join(ranks)
-
-        # 持ち駒をSFEN形式に変換
-        piece_chars = ["P", "L", "N", "S", "G", "B", "R"]
-        hand_parts: list[str] = []
-
-        pih = pieces_in_hand.tolist()
-        # 先手の持ち駒 (pih[0:7])
-        for i, count in enumerate(pih[:7]):
-            if count > 0:
-                char = piece_chars[i]
-                if count > 1:
-                    hand_parts.append(f"{count}{char}")
-                else:
-                    hand_parts.append(char)
-        # 後手の持ち駒 (pih[7:14])
-        for i, count in enumerate(pih[7:14]):
-            if count > 0:
-                char = piece_chars[i].lower()
-                if count > 1:
-                    hand_parts.append(f"{count}{char}")
-                else:
-                    hand_parts.append(char)
-
-        hand_sfen = "".join(hand_parts) if hand_parts else "-"
-        sfen = f"{board_sfen} b {hand_sfen} 1"
-
-        board = shogi_module.Board()
-        board.set_sfen(sfen)
-        return board

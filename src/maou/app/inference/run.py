@@ -8,10 +8,6 @@ import numpy as np
 
 from maou.app.inference.eval import Evaluation
 from maou.app.inference.onnx_inference import ONNXInference
-from maou.app.pre_process.feature import (
-    make_board_id_positions,
-    make_pieces_in_hand,
-)
 from maou.domain.board.shogi import Board
 from maou.domain.move.label import (
     IllegalMove,
@@ -91,11 +87,15 @@ class InferenceRunner:
             raise ValueError(
                 "Either sfen or board must be provided."
             )
-        board_data = make_board_id_positions(board).astype(
-            np.int32
+        board_data = (
+            board.get_normalized_board_id_positions().astype(
+                np.int32
+            )
         )
-        hand_data = make_pieces_in_hand(board).astype(
-            np.float32
+        hand_data = (
+            board.get_normalized_pieces_in_hand().astype(
+                np.float32
+            )
         )
 
         # 推論

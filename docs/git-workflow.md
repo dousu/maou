@@ -12,7 +12,7 @@ poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run is
 ### Commit Message Examples
 
 - `feat: add shogi board visualization`
-- `fix: correct piece ID mapping in cshogi wrapper`
+- `fix: correct piece ID mapping in board wrapper`
 - `docs: update testing guide with layer structure`
 - `refactor: simplify data loading pipeline`
 - `test: add regression tests for S3 data source`

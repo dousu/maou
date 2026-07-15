@@ -2,27 +2,17 @@ import abc
 import contextlib
 import logging
 from collections.abc import Generator
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 import polars as pl
 from tqdm.auto import tqdm
 
-from maou.domain.board import shogi
-from maou.domain.data.array_io import save_hcpe_df
 from maou.domain.data.rust_io import (
     load_hcpe_df,
     merge_hcpe_feather_files,
 )
-from maou.domain.data.schema import (
-    get_hcpe_polars_schema,
-)
-from maou.domain.parser.csa_parser import CSAParser
-from maou.domain.parser.kif_parser import KifParser
-from maou.domain.parser.parser import Parser
 
 
 class FeatureStore(metaclass=abc.ABCMeta):
@@ -50,10 +40,6 @@ class FeatureStore(metaclass=abc.ABCMeta):
 
 
 class NotApplicableFormat(Exception):
-    pass
-
-
-class IllegalMove(Exception):
     pass
 
 
@@ -90,282 +76,82 @@ class HCPEConverter:
         max_workers: int
         chunk_size: int = 500_000
 
-    @staticmethod
-    def _process_single_file(
-        file: Path,
-        input_format: str,
-        output_dir: Path,
-        min_rating: int | None,
-        min_moves: int | None,
-        max_moves: int | None,
-        allowed_endgame_status: list[str] | None,
-        exclude_moves: list[int] | None,
-    ) -> tuple[str, str]:
-        """Process a single file using Polars DataFrames (outputs .feather files)．"""
-        logger = logging.getLogger(__name__)
-
-        def game_filter(
-            parser: Parser,
-            min_rating: int | None = None,
-            min_moves: int | None = None,
-            max_moves: int | None = None,
-            allowed_endgame_status: list[str] | None = None,
-        ) -> bool:
-            """指定された条件を満たす場合Trueを返す"""
-            moves: int = len(parser.moves())
-            if (
-                (
-                    min_rating is not None
-                    and min(parser.ratings()) < min_rating
-                )
-                or (min_moves is not None and moves < min_moves)
-                or (max_moves is not None and moves > max_moves)
-                or (
-                    allowed_endgame_status is not None
-                    and not len(allowed_endgame_status) == 0
-                    and parser.endgame()
-                    not in allowed_endgame_status
-                )
-            ):
-                return False
-            return True
-
-        try:
-            parser: Parser
-            if input_format == "csa":
-                parser = CSAParser()
-                parser.parse(file.read_text())
-            elif input_format == "kif":
-                parser = KifParser()
-                parser.parse(file.read_text())
-            else:
-                raise NotApplicableFormat(
-                    f"undefined format {input_format}"
-                )
-
-            logger.debug(
-                f"棋譜:{file} "
-                f"終局状況:{parser.endgame()} "
-                f"レーティング:{parser.ratings()} "
-                f"手数:{len(parser.moves())}"
-            )
-
-            # 指定された条件を満たしたら変換をスキップ
-            if not game_filter(
-                parser,
-                min_rating,
-                min_moves,
-                max_moves,
-                allowed_endgame_status,
-            ):
-                logger.debug(f"skip the file {file}")
-                return (str(file), "skipped")
-
-            # movesの数が0であればそもそもHCPEは作れないのでスキップ
-            if len(parser.moves()) == 0:
-                logger.debug(
-                    f"skip the file {file} because of no moves"
-                )
-                return (str(file), "skipped (no moves)")
-
-            # Polars用にデータをリストで収集
-            hcpe_data: dict[str, list] = {
-                "hcp": [],
-                "eval": [],
-                "bestMove16": [],
-                "gameResult": [],
-                "id": [],
-                "partitioningKey": [],
-                "ratings": [],
-                "endgameStatus": [],
-                "moves": [],
-            }
-
-            board = shogi.Board()
-            board.set_sfen(parser.init_pos_sfen())
-
-            # 棋譜共通情報を取得する
-            partitioning_key_value = (
-                parser.partitioning_key_value()
-            )
-            ratings = parser.ratings()
-            endgame = parser.endgame()
-            moves = len(parser.moves())
-
-            # 1手毎に代わる情報を取得する
-            for idx, (move, score, comment) in enumerate(
-                zip(
-                    parser.moves(),
-                    parser.scores(),
-                    parser.comments(),
-                )
-            ):
-                logger.debug(f"{move} : {score} : {comment}")
-
-                if move < 0 or move > 16777215:
-                    raise IllegalMove(
-                        f"moveの値が想定外 path: {file}"
-                    )
-
-                if (
-                    exclude_moves is not None
-                    and move in exclude_moves
-                ):
-                    logger.info(
-                        f"skip the move {move} in {file} at {idx + 1}. "
-                        f"exclude moves: {exclude_moves}"
-                    )
-                    continue
-
-                # HCP (Huffman Coded Position)
-                hcp_bytes = board.to_hcp()
-                hcpe_data["hcp"].append(hcp_bytes)
-
-                # 評価値（16bitに収める）
-                eval = min(32767, max(score, -32767))
-                # 手番側の評価値にする
-                if board.get_turn() == shogi.Turn.BLACK:
-                    hcpe_data["eval"].append(eval)
-                else:
-                    hcpe_data["eval"].append(-eval)
-
-                # moveは32bitになっているので16bitに変換する
-                hcpe_data["bestMove16"].append(
-                    shogi.move16(move)
-                )
-                hcpe_data["gameResult"].append(parser.winner())
-                hcpe_data["id"].append(
-                    f"{file.with_suffix('.hcpe').name}_{idx}"
-                )
-
-                # 棋譜共通情報を記録
-                hcpe_data["partitioningKey"].append(
-                    datetime.fromisoformat(
-                        partitioning_key_value.isoformat()
-                    ).date()
-                )
-                # Convert ratings to uint16
-                hcpe_data["ratings"].append(
-                    [int(r) for r in ratings]
-                )
-                hcpe_data["endgameStatus"].append(endgame)
-                hcpe_data["moves"].append(moves)
-
-                # 局面に指し手を反映させる
-                board.push_move(move)
-
-            # Polars DataFrameを作成
-            df = pl.DataFrame(
-                hcpe_data, schema=get_hcpe_polars_schema()
-            )
-
-            # ファイルを保存（.feather形式）
-            save_hcpe_df(
-                df,
-                output_dir / file.with_suffix(".feather").name,
-            )
-            return (str(file), f"success {len(df)} rows")
-
-        except Exception as e:
-            logger.error(f"Error processing file {file}: {e}")
-            return (str(file), f"error: {str(e)}")
+    # Rust 一括変換に渡すファイル数のバッチ粒度 (tqdm 進捗の更新単位)．
+    _FILE_BATCH_SIZE = 200
 
     def convert(self, option: ConvertOption) -> dict[str, str]:
-        """HCPEファイルを作成する (並列処理版)．
+        """HCPEファイルを作成する (Rust 一括変換パイプライン版)．
 
         処理フロー:
-        1. 各入力ファイルを個別の .feather に変換
+        1. maou._rust.maou_convert で各ファイルを .feather に一括変換
+           (ファイル直読み + UTF-8→cp932 fallback + rayon 並列)
         2. chunk_size > 0 の場合，個別ファイルをチャンクにマージ
         3. feature_store が設定されている場合，チャンクをアップロード
+
+        cshogi 時代の per-move PyO3 往復 (~3N/局) と ProcessPoolExecutor は
+        Rust 側の一括処理に置き換えられた．複数局 CSA は全局変換され，
+        cp932 の .kif も読める (従来は先頭 1 局のみ / UTF-8 固定だった)．
         """
+        from maou._rust.maou_convert import convert_hcpe_files
+
+        # 入力フォーマット検証 (Rust も検証するが，直接 convert を呼ぶ
+        # 消費者のために NotApplicableFormat を明示送出する)
+        if option.input_format not in ("csa", "kif"):
+            raise NotApplicableFormat(
+                f"undefined format {option.input_format}"
+            )
+
         conversion_result: dict[str, str] = {}
         self.logger.debug(
             f"変換対象のファイル {option.input_paths}"
         )
 
-        # Determine number of workers
-        max_workers = option.max_workers
+        # 出力先を作成 (従来は save_hcpe_df の mkdir に依存していた)
+        option.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.logger.info(
-            f"Using {max_workers} workers for parallel processing"
+        # max_workers を rayon スレッド数にマップ (0/None はグローバルプール)
+        threads = (
+            option.max_workers
+            if option.max_workers and option.max_workers >= 1
+            else None
+        )
+        # 単一ワーカー / 単一ファイルのとき，欠損ファイル等を例外で
+        # 再送出する (従来の sequential 互換規約)
+        raise_on_error = (
+            option.max_workers == 1
+            or len(option.input_paths) == 1
         )
 
         with self.__context():
-            # Phase 1: 各入力ファイルを個別の .feather に変換
-            if max_workers == 1 or len(option.input_paths) == 1:
-                # Sequential processing for single worker or single file
-                for file in tqdm(
-                    option.input_paths, desc="HCPE (single)"
+            # Phase 1: Rust 一括変換 (tqdm 進捗のためバッチ分割して呼ぶ)
+            paths = [str(p) for p in option.input_paths]
+            with tqdm(
+                total=len(paths), desc="HCPE (rust)"
+            ) as pbar:
+                for start in range(
+                    0, len(paths), self._FILE_BATCH_SIZE
                 ):
-                    file_path, result = (
-                        self._process_single_file(
-                            file,
-                            option.input_format,
-                            option.output_dir,
-                            option.min_rating,
-                            option.min_moves,
-                            option.max_moves,
-                            option.allowed_endgame_status,
-                            option.exclude_moves,
-                        )
+                    batch = paths[
+                        start : start + self._FILE_BATCH_SIZE
+                    ]
+                    results = convert_hcpe_files(
+                        batch,
+                        option.input_format,
+                        str(option.output_dir),
+                        min_rating=option.min_rating,
+                        min_moves=option.min_moves,
+                        max_moves=option.max_moves,
+                        allowed_endgame_status=option.allowed_endgame_status,
+                        exclude_moves=option.exclude_moves,
+                        threads=threads,
                     )
-
-                    # For sequential processing, re-raise exceptions for compatibility
-                    if result.startswith("error:"):
-                        error_msg = result[
-                            7:
-                        ]  # Remove "error: " prefix
-                        if (
-                            "No such file or directory"
-                            in error_msg
+                    for file_path, result in results:
+                        if raise_on_error and result.startswith(
+                            "error:"
                         ):
-                            raise FileNotFoundError(error_msg)
-                        elif "undefined format" in error_msg:
-                            raise NotApplicableFormat(error_msg)
-                        else:
-                            raise Exception(error_msg)
-
-                    conversion_result[file_path] = result
-            else:
-                # Parallel processing
-                with ProcessPoolExecutor(
-                    max_workers=max_workers
-                ) as executor:
-                    # Submit all jobs
-                    future_to_file = {
-                        executor.submit(
-                            self._process_single_file,
-                            file,
-                            option.input_format,
-                            option.output_dir,
-                            option.min_rating,
-                            option.min_moves,
-                            option.max_moves,
-                            option.allowed_endgame_status,
-                            option.exclude_moves,
-                        ): file
-                        for file in option.input_paths
-                    }
-
-                    # Process completed futures with progress bar
-                    for future in tqdm(
-                        as_completed(future_to_file),
-                        total=len(option.input_paths),
-                        desc=f"HCPE (parallel {max_workers} workers)",
-                    ):
-                        file = future_to_file[future]
-                        try:
-                            file_path, result = future.result()
-                            conversion_result[file_path] = (
-                                result
-                            )
-                        except Exception as exc:
-                            self.logger.error(
-                                f"File {file} generated an exception: {exc}"
-                            )
-                            conversion_result[str(file)] = (
-                                f"error: {str(exc)}"
-                            )
+                            self._reraise_error(result[7:])
+                        conversion_result[file_path] = result
+                    pbar.update(len(batch))
 
             # Phase 2: チャンキングとアップロード
             self._chunk_and_upload(
@@ -375,6 +161,19 @@ class HCPEConverter:
             )
 
         return conversion_result
+
+    @staticmethod
+    def _reraise_error(error_msg: str) -> None:
+        """Rust の error status を従来の例外型に再送出する (sequential 互換)．"""
+        if (
+            "No such file or directory" in error_msg
+            or "os error 2" in error_msg
+        ):
+            raise FileNotFoundError(error_msg)
+        elif "undefined format" in error_msg:
+            raise NotApplicableFormat(error_msg)
+        else:
+            raise Exception(error_msg)
 
     def _chunk_and_upload(
         self,

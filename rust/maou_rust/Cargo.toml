@@ -1,6 +1,6 @@
 [package]
 name = "maou_rust"
-version = "0.16.0"
+version = "0.21.1"
 edition = "2021"
 
 [lib]
@@ -25,6 +25,7 @@ maou_io = { path = "../maou_io" }
 maou_index = { path = "../maou_index" }
 maou_shogi = { path = "../maou_shogi" }
 maou_search = { path = "../maou_search" }
+maou_convert = { path = "../maou_convert" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

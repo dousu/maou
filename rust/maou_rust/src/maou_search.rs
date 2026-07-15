@@ -4,13 +4,21 @@
 //! 実 NN (ONNX) 探索は cargo feature `onnx` (CUDA は `onnx-cuda`，TensorRT は
 //! `onnx-tensorrt`) を付けてビルドした場合のみ有効 (wheel 可搬性の維持)．
 
+use numpy::ndarray::{Array2, Array3};
+use numpy::{
+    IntoPyArray, PyArray1, PyArray2, PyArray3, PyReadonlyArray1, PyReadonlyArray2,
+    PyUntypedArrayMethods,
+};
 use pyo3::prelude::*;
 
+use maou_search::preprocess;
 use maou_search::{
     Evaluator, HistoryEntry, SearchLimits, SearchOptions, SearchResult, Searcher, StopCause,
 };
 use maou_shogi::board::Board;
 use maou_shogi::movegen::generate_legal_moves;
+use maou_shogi::moves::Move;
+use maou_shogi::types::Color;
 
 /// ルート直下の候補手 1 つの統計．
 #[pyclass(frozen, skip_from_py_object)]
@@ -368,6 +376,172 @@ fn search(
     }
 }
 
+/// (N, 32) の HCP 配列を検証し，(N, フラットな Vec) に変換する．
+fn hcp_array_to_vec(hcp: &PyReadonlyArray2<'_, u8>) -> PyResult<(usize, Vec<u8>)> {
+    let shape = hcp.shape();
+    if shape[1] != 32 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "hcp array must have shape (N, 32), got (N, {})",
+            shape[1]
+        )));
+    }
+    let n = shape[0];
+    // 非 contiguous でも論理順 (row-major) で吸い出す
+    let data: Vec<u8> = hcp.as_array().iter().copied().collect();
+    Ok((n, data))
+}
+
+/// PreprocessError を Python ValueError に変換する．
+fn preprocess_err(e: preprocess::PreprocessError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(e.to_string())
+}
+
+/// `preprocess_hcpes` の返り値 (hashes, move_labels, result_values)．
+type ProcessedArrays<'py> = (
+    Bound<'py, PyArray1<u64>>,
+    Bound<'py, PyArray1<u16>>,
+    Bound<'py, PyArray1<f32>>,
+);
+
+/// `encode_hcp_features` の返り値 (board_id_positions, pieces_in_hand)．
+type FeatureArrays<'py> = (Bound<'py, PyArray3<u8>>, Bound<'py, PyArray2<u8>>);
+
+/// N 局面の (zobrist hash, move label, result value) を一括計算する．
+///
+/// HCPE 前処理 (`_process_single_array`) の per-position ループの置き換え．
+/// GIL を解放して計算する．
+///
+/// # 引数
+///
+/// - `hcp`: HCP 配列 (N, 32) uint8
+/// - `move16`: 16-bit move 配列 (N,) int16 (HCPE の bestMove16)
+/// - `game_result`: 勝敗配列 (N,) int8 (cshogi 規約: 0=引き分け, 1=先手勝ち,
+///   2=後手勝ち)
+///
+/// # 返り値
+///
+/// `(hashes (N,) uint64, move_labels (N,) uint16, result_values (N,) float32)`
+///
+/// 不正な HCP や move label に変換できない指し手が含まれる場合は ValueError．
+#[pyfunction]
+fn preprocess_hcpes<'py>(
+    py: Python<'py>,
+    hcp: PyReadonlyArray2<'py, u8>,
+    move16: PyReadonlyArray1<'py, i16>,
+    game_result: PyReadonlyArray1<'py, i8>,
+) -> PyResult<ProcessedArrays<'py>> {
+    let (_, hcp_vec) = hcp_array_to_vec(&hcp)?;
+    let move16_vec = move16.as_array().to_vec();
+    let game_result_vec = game_result.as_array().to_vec();
+    let (hashes, labels, results) = py
+        .detach(move || preprocess::process_hcpes(&hcp_vec, &move16_vec, &game_result_vec))
+        .map_err(preprocess_err)?;
+    Ok((
+        hashes.into_pyarray(py),
+        labels.into_pyarray(py),
+        results.into_pyarray(py),
+    ))
+}
+
+/// N 局面の NN 入力特徴量を一括エンコードする．
+///
+/// Python `Board.get_normalized_board_id_positions` /
+/// `get_normalized_pieces_in_hand` の一括版
+/// (手番視点正規化込み)．GIL を解放して計算する．
+///
+/// # 引数
+///
+/// - `hcp`: HCP 配列 (N, 32) uint8
+///
+/// # 返り値
+///
+/// `(board_id_positions (N, 9, 9) uint8, pieces_in_hand (N, 14) uint8)`
+#[pyfunction]
+fn encode_hcp_features<'py>(
+    py: Python<'py>,
+    hcp: PyReadonlyArray2<'py, u8>,
+) -> PyResult<FeatureArrays<'py>> {
+    let (n, hcp_vec) = hcp_array_to_vec(&hcp)?;
+    let (boards, hands) = py
+        .detach(move || preprocess::encode_hcp_features(&hcp_vec))
+        .map_err(preprocess_err)?;
+    let boards =
+        Array3::from_shape_vec((n, 9, 9), boards).expect("encode_hcp_features は N*81 要素を返す");
+    let hands =
+        Array2::from_shape_vec((n, 14), hands).expect("encode_hcp_features は N*14 要素を返す");
+    Ok((boards.into_pyarray(py), hands.into_pyarray(py)))
+}
+
+/// N 局面の合法手ラベルマスクを一括生成する．
+///
+/// stage2 データ生成の合法手ラベル計算の置き換え (手番視点正規化込み)．
+/// GIL を解放して計算する．
+///
+/// # 引数
+///
+/// - `hcp`: HCP 配列 (N, 32) uint8
+///
+/// # 返り値
+///
+/// `legal_move_mask (N, 1496) uint8` (1=合法手ラベル)
+#[pyfunction]
+fn legal_move_masks<'py>(
+    py: Python<'py>,
+    hcp: PyReadonlyArray2<'py, u8>,
+) -> PyResult<Bound<'py, PyArray2<u8>>> {
+    let (n, hcp_vec) = hcp_array_to_vec(&hcp)?;
+    let masks = py
+        .detach(move || preprocess::legal_move_masks(&hcp_vec))
+        .map_err(preprocess_err)?;
+    let masks = Array2::from_shape_vec((n, maou_search::label::MOVE_LABELS_NUM), masks)
+        .expect("legal_move_masks は N*1496 要素を返す");
+    Ok(masks.into_pyarray(py))
+}
+
+/// N 局面の zobrist hash を一括計算する．
+///
+/// stage2 データ生成の重複排除 (unique HCP 収集) の置き換え．
+/// GIL を解放して計算する．
+///
+/// # 引数
+///
+/// - `hcp`: HCP 配列 (N, 32) uint8
+///
+/// # 返り値
+///
+/// `hashes (N,) uint64`
+#[pyfunction]
+fn hcp_hashes<'py>(
+    py: Python<'py>,
+    hcp: PyReadonlyArray2<'py, u8>,
+) -> PyResult<Bound<'py, PyArray1<u64>>> {
+    let (_, hcp_vec) = hcp_array_to_vec(&hcp)?;
+    let hashes = py
+        .detach(move || preprocess::hcp_hashes(&hcp_vec))
+        .map_err(preprocess_err)?;
+    Ok(hashes.into_pyarray(py))
+}
+
+/// 指し手 1 つを policy ラベル (0..1496) に変換する．
+///
+/// Python `make_move_label` の Rust 委譲先 (手番視点正規化込み)．
+///
+/// # 引数
+///
+/// - `turn`: 手番 (0=先手, 1=後手)
+/// - `m`: 指し手 (32-bit move / 16-bit move のどちらでも可 —
+///   ラベルは下位 15 bit のみから決まる)
+///
+/// ラベルに変換できない指し手 (盤の端への行き止まり成らず等) は ValueError．
+#[pyfunction]
+fn move_label(turn: u8, m: u32) -> PyResult<u16> {
+    let color = Color::from_u8(turn)
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("turn must be 0 or 1"))?;
+    maou_search::label::try_move_label(color, Move::from_raw_u32(m)).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err("Can not transform illegal move to move label.")
+    })
+}
+
 /// Create maou_search submodule
 pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let m = PyModule::new(py, "maou_search")?;
@@ -375,6 +549,12 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_class::<PySearchResult>()?;
     m.add_class::<SearchRootChild>()?;
     m.add_function(wrap_pyfunction!(search, &m)?)?;
+    m.add_function(wrap_pyfunction!(preprocess_hcpes, &m)?)?;
+    m.add_function(wrap_pyfunction!(encode_hcp_features, &m)?)?;
+    m.add_function(wrap_pyfunction!(legal_move_masks, &m)?)?;
+    m.add_function(wrap_pyfunction!(hcp_hashes, &m)?)?;
+    m.add_function(wrap_pyfunction!(move_label, &m)?)?;
+    m.add("MOVE_LABELS_NUM", maou_search::label::MOVE_LABELS_NUM)?;
 
     Ok(m)
 }

@@ -165,38 +165,20 @@ impl Bitboard {
     /// ビットボードが返る(二歩チェックに使用)．
     #[inline]
     pub fn occupied_files(self) -> Bitboard {
-        let mut result_lo = 0u64;
-        let mut result_hi = 0u64;
-        let mut col = 0u8;
-        while col < 7 {
-            // col 0-6: 各筋9ビットが lo に収まる (col*9 .. col*9+8, max = 62)
-            let shift = col as u64 * 9;
-            let file_bits = (self.lo >> shift) & 0x1FF;
-            if file_bits != 0 {
-                result_lo |= 0x1FFu64 << shift;
+        // FILE_MASKS (lo=マス0-62 / hi=マス63-80 の正規約で構築済み) を
+        // 単一真実として使う．旧実装は col 7 (8筋) を「lo bit63 + hi bits0-7」
+        // という誤った分割で見ており，マス71 (8i) が二歩マスクから漏れていた．
+        let mut result = Bitboard::EMPTY;
+        let mut col = 0usize;
+        while col < 9 {
+            let mask = FILE_MASKS[col];
+            if (self.lo & mask.lo) | (self.hi & mask.hi) != 0 {
+                result.lo |= mask.lo;
+                result.hi |= mask.hi;
             }
             col += 1;
         }
-        // col 7: bits 63-71 → lo に bit63, hi に bits 0-7
-        {
-            let lo_bit = self.lo >> 63; // 1 bit
-            let hi_bits = self.hi & 0xFF; // 8 bits
-            if lo_bit != 0 || hi_bits != 0 {
-                result_lo |= 1u64 << 63;
-                result_hi |= 0xFFu64;
-            }
-        }
-        // col 8: bits 72-80 → hi bits 9-17
-        {
-            let hi_bits = (self.hi >> 9) & 0x1FF;
-            if hi_bits != 0 {
-                result_hi |= 0x1FFu64 << 9;
-            }
-        }
-        Bitboard {
-            lo: result_lo,
-            hi: result_hi,
-        }
+        result
     }
 }
 
@@ -410,6 +392,39 @@ mod tests {
         for row in 0..9 {
             assert!(fm.contains(Square::new(0, row)));
         }
+    }
+
+    #[test]
+    fn test_occupied_files_all_squares() {
+        // 全 81 マスについて，そのマス 1 つだけのビットボードが
+        // 該当する筋全体をマークすることを検証する．
+        // 回帰: 旧実装は col 7 (8筋) の分割を誤っており，マス 71 (8i) の
+        // 歩を見落とし，また 8筋の occupied_files がマス 71 を含まなかった
+        // (二歩チェック漏れ → P*8i の非合法生成)．
+        for col in 0..9u8 {
+            for row in 0..9u8 {
+                let mut bb = Bitboard::EMPTY;
+                bb.set(Square::new(col, row));
+                let files = bb.occupied_files();
+                assert_eq!(
+                    files,
+                    Bitboard::file_mask(col),
+                    "occupied_files mismatch for col={col} row={row}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_occupied_files_multiple() {
+        let mut bb = Bitboard::EMPTY;
+        bb.set(Square::new(0, 4));
+        bb.set(Square::new(7, 8)); // マス 71 (8i) — 旧実装の見落とし箇所
+        bb.set(Square::new(8, 0));
+        let files = bb.occupied_files();
+        let expected = Bitboard::file_mask(0) | Bitboard::file_mask(7) | Bitboard::file_mask(8);
+        assert_eq!(files, expected);
+        assert_eq!(Bitboard::EMPTY.occupied_files(), Bitboard::EMPTY);
     }
 
     #[test]

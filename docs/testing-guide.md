@@ -69,11 +69,6 @@ src/maou/infra/s3/s3_data_source.py
 - Naming: `test_{workflow}_{scenario}.py`
 - Examples: `test_app_hcpe_converter.py`, `test_convert_and_preprocess.py`
 
-**Benchmark Tests:** `tests/benchmarks/`
-- Purpose: Performance validation and regression detection
-- Naming: `test_{component}_performance.py`
-- Run explicitly: `poetry run pytest tests/benchmarks/ -v -s`
-
 ### Test Resource Files
 
 **Rule:** Co-locate test resources with the test files that use them.

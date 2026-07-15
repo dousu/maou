@@ -105,7 +105,6 @@ class Learning:
         dataloader_workers: int
         pin_memory: bool
         prefetch_factor: int
-        cache_transforms: bool
         gce_parameter: float
         policy_loss_ratio: float
         value_loss_ratio: float
@@ -190,7 +189,6 @@ class Learning:
                 TrainingSetup.setup_training_components(
                     training_datasource=training_datasource,
                     validation_datasource=validation_datasource,
-                    cache_transforms=config.cache_transforms,
                     gpu=config.gpu,
                     model_architecture=config.model_architecture,
                     batch_size=config.batch_size,

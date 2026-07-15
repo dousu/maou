@@ -138,7 +138,7 @@ class TestStage2DataGenerationUseCase:
     def test_legal_moves_labels_correctness(
         self, tmp_path: Path
     ) -> None:
-        """合法手ラベルがcshogiの合法手と一致することを検証する．"""
+        """合法手ラベルが Board の合法手と一致することを検証する．"""
         input_dir = tmp_path / "input"
         input_dir.mkdir()
         output_dir = tmp_path / "output"
@@ -165,7 +165,7 @@ class TestStage2DataGenerationUseCase:
         # 出力された合法手ラベルを取得
         legal_labels = df["legalMovesLabel"][0].to_list()
 
-        # cshogiから期待される合法手ラベルを計算
+        # Board から期待される合法手ラベルを計算
         expected_labels = np.zeros(
             MOVE_LABELS_NUM, dtype=np.uint8
         )
@@ -320,17 +320,13 @@ class TestStage2DataGenerationUseCase:
         ]
 
         # 正規化後の盤面を再構築し，その合法手ラベルと比較
-        from maou.app.pre_process.feature import (
-            make_board_id_positions,
-            make_pieces_in_hand,
-        )
 
         board_verify = shogi.Board()
         board_verify.push_move(moves[0])
-        bp = make_board_id_positions(board_verify)
-        pih = make_pieces_in_hand(board_verify)
+        bp = board_verify.get_normalized_board_id_positions()
+        pih = board_verify.get_normalized_pieces_in_hand()
 
-        normalized = Stage2DataGenerationUseCase._reconstruct_normalized_board(
+        normalized = shogi.Board.from_board_id_positions(
             bp, pih
         )
 

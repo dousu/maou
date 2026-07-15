@@ -2,23 +2,37 @@
 
 ## Overview
 
-- Converts CSA/KIF game records into HCPE `.npy` shards and optionally streams
-  them to BigQuery, GCS, or S3. Every flag defined in
+- Converts CSA/KIF game records into HCPE `.feather` shards and optionally
+  streams them to BigQuery, GCS, or S3. Every flag defined in
   `src/maou/infra/console/hcpe_convert.py` maps directly to the interface layer,
   so operators can drive filtering, concurrency, and output destinations without
   touching Python code.【F:src/maou/infra/console/hcpe_convert.py†L1-L150】
 - The interface gathers the requested filters and worker counts into
-  `HCPEConverter.ConvertOption`, then `HCPEConverter.convert` fans out across the
-  discovered files, emitting per-file status strings plus optional feature store
-  uploads.【F:src/maou/interface/converter.py†L60-L117】【F:src/maou/app/converter/hcpe_converter.py†L58-L236】
+  `HCPEConverter.ConvertOption`, then `HCPEConverter.convert` delegates the whole
+  file set to the `maou_convert` Rust pipeline, emitting per-file status strings
+  plus optional feature store uploads.【F:src/maou/interface/converter.py†L60-L117】【F:src/maou/app/converter/hcpe_converter.py†L79-L170】
 
 ## Requirements
 
-- CSA/KIF parsing uses `cshogi`, which is **not** installed by default (it pins
-  `numpy<1.27` on Python 3.12; production search/inference uses the Rust backend
-  and does not need it). Install the `hcpe` extra before running this command:
-  `uv sync --extra hcpe` (dev) or `pip install 'maou[hcpe]'` (wheel). Running
-  `hcpe-convert` without it raises an `ImportError` pointing here.
+- CSA/KIF → HCPE conversion runs entirely in the in-house Rust pipeline
+  (`maou_convert`, exposed as `maou._rust.maou_convert.convert_hcpe_files`).
+  Files are read, decoded, replayed, and written to `.feather` on the Rust
+  side (rayon-parallel, GIL released); no extra dependency is required —
+  `hcpe-convert` works on a base install. The output is parity-verified
+  bit-exact against the previous Python/cshogi implementation
+  (`tests/maou/app/converter/test_rust_convert_parity.py`,
+  `rust/maou_shogi/tests/kifu_parity.rs`).
+  cshogi is no longer a runtime or optional dependency; it remains only in
+  the `dev` dependency group as the parity oracle for regenerating fixtures.
+- **Multi-game CSA files are fully converted.** A file containing several
+  games (separated by `/`) yields rows for every game; game 0 keeps the
+  legacy id form `{stem}.hcpe_{ply}` and games ≥ 1 use
+  `{stem}.hcpe_g{game}_{ply}`. (The previous implementation converted only
+  the first game.)
+- **Shift_JIS (cp932) `.kif` files are supported.** The Rust decoder tries
+  UTF-8 first and falls back to cp932, so `.kif` exports from ShogiGUI etc.
+  are read without manual re-encoding. (The previous `read_text()` was
+  UTF-8-only.)
 
 ## CLI options
 
@@ -33,7 +47,7 @@
 | `--allowed-endgame-status` | repeatable | Restrict CSA/KIF terminal markers (e.g., `%TORYO`). An empty list means "any".【F:src/maou/infra/console/hcpe_convert.py†L72-L90】【F:src/maou/app/converter/hcpe_converter.py†L90-L158】 |
 | `--exclude-moves` | repeatable | Skip specific move IDs even inside accepted games.【F:src/maou/infra/console/hcpe_convert.py†L90-L102】【F:src/maou/app/converter/hcpe_converter.py†L158-L214】 |
 | `--chunk-size INT` | default `500000` | Number of rows per chunked output file. After individual files are converted, they are merged into chunked files of this size. Set to `0` to disable chunking and keep one file per game.【F:src/maou/infra/console/hcpe_convert.py†L143-L150】 |
-| `--process-max-workers INT` | default `4` | Caps the CPU workers used for parsing/conversion. Negative values raise before work starts; omitting the flag defaults to `min(4, cpu_count)`.【F:src/maou/infra/console/hcpe_convert.py†L150-L158】【F:src/maou/interface/converter.py†L75-L110】 |
+| `--process-max-workers INT` | default `4` | Number of rayon threads used by the Rust conversion pipeline. `1` runs single-threaded; negative values raise before work starts; omitting the flag defaults to `min(4, cpu_count)`.【F:src/maou/infra/console/hcpe_convert.py†L150-L158】【F:src/maou/interface/converter.py†L75-L110】 |
 
 ### Cloud outputs and batching
 
@@ -60,9 +74,11 @@
    provider is active, then builds the appropriate feature store. Missing
    optional extras trigger warnings instead of crashes so local-only runs keep
    going.【F:src/maou/infra/console/hcpe_convert.py†L150-L232】
-5. **Conversion** – `HCPEConverter.convert` iterates through every
-   path and generates individual `.feather` files, aggregating per-file status
-   strings.【F:src/maou/app/converter/hcpe_converter.py†L58-L370】
+5. **Conversion** – `HCPEConverter.convert` hands the discovered paths (in
+   batches, for progress reporting) to `maou._rust.maou_convert.convert_hcpe_files`,
+   which reads/decodes/replays each file and writes an individual `.feather`
+   on the Rust side using `--process-max-workers` rayon threads, returning
+   per-file status strings.【F:src/maou/app/converter/hcpe_converter.py†L79-L170】
 6. **Chunking and uploads** – After all files are converted, individual `.feather`
    files are merged into chunked files via `merge_hcpe_feather_files` (controlled
    by `--chunk-size`). When a feature store is configured, each chunk is loaded

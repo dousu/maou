@@ -20,6 +20,7 @@ from maou.app.game_graph.layout import (
 )
 from maou.app.game_graph.query import GameGraphQuery
 from maou.domain.board.shogi import (
+    HAND_PIECE_SFEN_CHARS,
     Board,
     Turn,
     move_drop_hand_piece,
@@ -95,14 +96,13 @@ class GameGraphVisualizationInterface:
         "i": "九",
     }
 
+    # USI 駒打ち文字 → 日本語駒名 (駒文字表 HAND_PIECE_SFEN_CHARS と
+    # 駒名表 get_piece_name_ja から導出し，独自の駒名表を持たない)
     _DROP_PIECE_MAP: dict[str, str] = {
-        "P": "歩",
-        "L": "香",
-        "N": "桂",
-        "S": "銀",
-        "G": "金",
-        "B": "角",
-        "R": "飛",
+        char: get_piece_name_ja(piece_id)
+        for piece_id, char in enumerate(
+            HAND_PIECE_SFEN_CHARS, start=1
+        )
     }
 
     def __init__(
@@ -980,10 +980,10 @@ class GameGraphVisualizationInterface:
 
     @staticmethod
     def _move_to_arrow(move: int) -> MoveArrow:
-        """cshogiの指し手をMoveArrowに変換する．
+        """指し手 (32-bit move) をMoveArrowに変換する．
 
         Args:
-            move: cshogiの指し手(get_move_from_move16の返り値)
+            move: 32-bit move (get_move_from_move16の返り値)
 
         Returns:
             MoveArrowオブジェクト
@@ -1045,8 +1045,8 @@ class GameGraphVisualizationInterface:
         """
         move = board.get_move_from_move16(move16)
         from_sq = move_from(move)
-        cshogi_piece = board.get_piece_at(from_sq)
-        piece_id = Board.cshogi_piece_to_piece_id(cshogi_piece)
+        raw_piece = board.get_piece_at(from_sq)
+        piece_id = Board.raw_piece_to_piece_id(raw_piece)
         return get_piece_name_ja(piece_id)
 
     @classmethod

@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from tqdm.auto import tqdm
 
-from maou.app.pre_process.transform import Transform
 from maou.domain.data.array_io import save_preprocessing_df
 
 if TYPE_CHECKING:
@@ -199,10 +198,13 @@ class PreProcess:
     def _process_single_array(
         data: np.ndarray,
     ) -> dict[int, dict]:
-        """Process a chunk of records (optimized: sparse + 1-pass).
+        """Process a chunk of records (Rust 一括エンコード + numpy 集計).
 
-        統合ループでhash + move_label + game_resultを1パスで計算し，
-        set_hcpの呼び出しを4N+U回からN+U回に削減する．
+        hash / move label / result value の計算と特徴量エンコードを
+        maou._rust.maou_search の一括 API 2 呼び出し (GIL 解放) に委譲し，
+        per-position の PyO3 往復 (set_hcp + hash + label + result で
+        ~4N 回 + 特徴量 U 回) を排除する．集計 (argsort / unique /
+        bincount) は numpy のまま維持する．
 
         メモリ最適化: 指し手ラベルをスパース形式(非ゼロ要素のみ)で保持する．
         将棋では1局面あたり合法手が約20-30手(全1496手中)であるため，
@@ -212,29 +214,19 @@ class PreProcess:
         Returns:
             Dictionary mapping board hash to aggregated sparse data
         """
-        from maou.domain.board import shogi
+        from maou._rust.maou_search import (
+            encode_hcp_features,
+            preprocess_hcpes,
+        )
 
-        # 一度だけBoardオブジェクトを作成し，全ての盤面で再利用
-        board = shogi.Board()
-
-        # 統合ループ: hash + move_label + game_result を1パスで (N回のset_hcp)
-        n = len(data)
-        hashs = np.empty(n, dtype=np.uint64)
-        move_labels = np.empty(n, dtype=np.int32)
-        wins = np.empty(n, dtype=np.float32)
-        for i in range(n):
-            board.set_hcp(data["hcp"][i])
-            hashs[i] = board.hash()
-            move_labels[i] = (
-                Transform.board_move_label_from_board(
-                    board,
-                    data["bestMove16"][i],  # type: ignore
-                )
-            )
-            wins[i] = Transform.board_game_result_from_board(
-                board,
-                data["gameResult"][i],  # type: ignore
-            )
+        # Rust 一括計算: hash + move_label + result_value (1 往復)
+        hcp = np.ascontiguousarray(data["hcp"])
+        hashs, labels_u16, wins = preprocess_hcpes(
+            hcp,
+            np.ascontiguousarray(data["bestMove16"]),
+            np.ascontiguousarray(data["gameResult"]),
+        )
+        move_labels = labels_u16.astype(np.int32)
 
         # ソートしてユニーク盤面を特定
         idx = np.argsort(hashs, kind="mergesort")
@@ -242,23 +234,27 @@ class PreProcess:
         sorted_move_labels = move_labels[idx]
         sorted_wins = wins[idx]
 
-        # ユニーク値を取得
-        uniq_hash, _ = np.unique(
-            sorted_hash, return_inverse=True
+        # ユニーク値と各グループの範囲 (sorted 内の先頭位置 + 件数)
+        uniq_hash, first_pos, counts = np.unique(
+            sorted_hash,
+            return_index=True,
+            return_counts=True,
         )
 
-        # ユニーク盤面ごとに集計 (U回のset_hcp)
-        result = {}
-        start_idx = 0
-        for u_idx, hash_val in enumerate(uniq_hash):
-            # このハッシュ値に対応する範囲を見つける
-            end_idx = start_idx
-            while (
-                end_idx < n and sorted_hash[end_idx] == hash_val
-            ):
-                end_idx += 1
+        # 各ユニーク盤面の代表 (元配列での最初の出現) を束ねて
+        # 特徴量を一括エンコード (1 往復)．argsort が stable
+        # (mergesort) なので idx[first_pos] は元配列の最初の出現になる
+        rep_indices = idx[first_pos]
+        boards, hands = encode_hcp_features(
+            np.ascontiguousarray(hcp[rep_indices])
+        )
 
-            # この範囲のデータをスパース形式で集計
+        # ユニーク盤面ごとにスパース集計 (numpy のみ)
+        result = {}
+        for u_idx, hash_val in enumerate(uniq_hash):
+            start_idx = int(first_pos[u_idx])
+            end_idx = start_idx + int(counts[u_idx])
+
             moves_in_range = sorted_move_labels[
                 start_idx:end_idx
             ]
@@ -276,29 +272,18 @@ class PreProcess:
             ).astype(np.float32)
 
             win_sum = np.sum(wins_in_range)
-            count = end_idx - start_idx
-
-            # 最初の出現位置のHCPを使って特徴量を計算 (set_hcp 1回)
-            orig_idx = idx[start_idx]
-            board.set_hcp(data["hcp"][orig_idx])
-            (
-                board_id_positions,
-                pieces_in_hand,
-            ) = Transform.board_feature_from_board(board)
 
             result[int(hash_val)] = {
-                "count": count,
+                "count": end_idx - start_idx,
                 "winCount": win_sum,
                 "moveLabelIndices": unique_moves.astype(
                     np.uint16
                 ),
                 "moveLabelValues": move_counts,
                 "moveWinValues": move_win_counts,
-                "boardIdPositions": board_id_positions,
-                "piecesInHand": pieces_in_hand,
+                "boardIdPositions": boards[u_idx],
+                "piecesInHand": hands[u_idx],
             }
-
-            start_idx = end_idx
 
         return result
 
