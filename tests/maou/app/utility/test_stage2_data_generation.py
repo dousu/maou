@@ -138,7 +138,7 @@ class TestStage2DataGenerationUseCase:
     def test_legal_moves_labels_correctness(
         self, tmp_path: Path
     ) -> None:
-        """合法手ラベルがcshogiの合法手と一致することを検証する．"""
+        """合法手ラベルが Board の合法手と一致することを検証する．"""
         input_dir = tmp_path / "input"
         input_dir.mkdir()
         output_dir = tmp_path / "output"
@@ -165,7 +165,7 @@ class TestStage2DataGenerationUseCase:
         # 出力された合法手ラベルを取得
         legal_labels = df["legalMovesLabel"][0].to_list()
 
-        # cshogiから期待される合法手ラベルを計算
+        # Board から期待される合法手ラベルを計算
         expected_labels = np.zeros(
             MOVE_LABELS_NUM, dtype=np.uint8
         )

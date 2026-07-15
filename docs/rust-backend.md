@@ -542,13 +542,15 @@ let report = solve_tsume_report_with_timeout(
 
 - **Move エンコーディング**: cshogi 互換の 16-bit/32-bit ビットレイアウトを採用．
   打ち手は bit 15 フラグではなく `from_field >= 81` で識別する．
-- **Piece ID**: cshogi 互換 ID を使用 (0=空, 1-14=先手, 17-30=後手)．
-  Python 側の `_reorder_piece_planes_cshogi_to_pieceid()` で PieceId 順序に並び替える．
+- **Piece ID**: エンジン内部は raw ID (0=空, 1-14=先手, 17-30=後手; cshogi 互換)．
+  Python 側は `shogi.RAW_PIECE_TO_PIECEID` (単一の変換表) で domain PieceId
+  (金角飛の順序と白駒オフセットが異なる) に変換する．
 - **push/pop セマンティクス**: `maou_shogi::Board` の `do_move`/`undo_move` は
   捕獲駒の受け渡しが必要．PyO3 ラッパー側で `Vec<(u32, u8)>` の undo スタックを保持し，
   cshogi 互換の `push()`/`pop()` インターフェースを提供する．
 - **HCP**: Apery 互換の 32 バイトバイナリフォーマット．既存データとの互換性を保証．
-- **特徴量**: 104×9×9 (= `PIECE_TYPES_NUM * 2 + 76`) チャネル．cshogi 互換の出力順序．
+- **特徴量**: 104×9×9 (= `PIECE_TYPES_NUM * 2 + 76`) チャネル．cshogi 互換の出力順序
+  (legacy; 現行 NN は `maou_search::feature` の board ID (9×9) + hands (14) を使用)．
 - **棋譜パーサ**: CSA/KIF パーサは独自実装 (`maou_shogi::kifu`)．出力
   moves は cshogi の 32-bit エンコーディング (to | from<<7 |
   promote<<14 | 移動前駒種<<16 | 捕獲駒種<<20，打は from=81+idx) と

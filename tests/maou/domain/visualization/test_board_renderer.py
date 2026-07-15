@@ -318,6 +318,6 @@ class TestDrawPiecesWhitePieces:
 
         assert "?" not in svg, (
             "Some white pieces rendered as '?' - "
-            "board_renderer may be using cshogi constants "
-            "instead of domain constants"
+            "board_renderer may be using raw piece IDs "
+            "instead of domain PieceId constants"
         )

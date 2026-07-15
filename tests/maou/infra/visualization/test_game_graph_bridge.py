@@ -127,7 +127,7 @@ def _build_test_graph(graph_dir: Path) -> None:
           │   └── C(400, depth=2, prob=0.3)  △3四歩 (move16=2581)
           └── B(300, depth=1, prob=0.4)  ▲2六歩 (move16=1934)
 
-    move16 は cshogi の実際の指し手エンコーディング値を使用する．
+    move16 は cshogi 互換エンコーディングの実際の指し手値を使用する．
     """
     nodes = _make_nodes(
         [
@@ -165,7 +165,7 @@ def _build_test_graph(graph_dir: Path) -> None:
             },
         ]
     )
-    # cshogi move16 エンコーディング:
+    # cshogi 互換 move16 エンコーディング:
     # ▲7六歩 (7g7f): move16=7739
     # ▲2六歩 (2g2f): move16=1934
     # △3四歩 (3c3d): move16=2581

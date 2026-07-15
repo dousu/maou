@@ -138,8 +138,10 @@ pub trait Evaluator: Send + Sync {
 探索側には「合法手ごとの事前確率 + 手番側勝率」だけを渡す．**モデル固有の変換は
 すべて evaluator 実装側の責務**とする:
 
-- 特徴量エンコード: 現行 NN 入力は board ID `(B,9,9)` int32 + hand `(B,14)` f32
-  (Python 実装 `feature.py`)．**Rust 移植済み** (`maou_search/src/feature.rs`．
+- 特徴量エンコード: 現行 NN 入力は board ID `(B,9,9)` int32 + hand `(B,14)` f32．
+  **Rust 実装** (`maou_search/src/feature.rs`; Python は
+  `Board.get_normalized_board_id_positions()` /
+  `get_normalized_pieces_in_hand()` が委譲，旧 `feature.py` は削除済み．
   maou_shogi の 104 プレーン `feature.rs` は legacy で現行 NN 未使用)．
 - move→policy label: 1496 ラベル (`label.py` の `make_move_label`)．
   **Rust 移植済み** (`maou_search/src/label.rs`)．

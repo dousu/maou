@@ -94,13 +94,12 @@ Reading left-to-right in SFEN:
 - **Screen left side**: 角 (Bishop)
 - **Screen right side**: 飛車 (Rook)
 
-**cshogi Integration:**
+**Board Engine Integration:**
 
-The cshogi library uses square numbering: `square = col * 9 + row` where `col=0→筋1, col=8→筋9`. The `Board` class in `shogi.py` encapsulates cshogi and handles piece ID conversions.
+The Rust engine (`maou_shogi`) uses square numbering: `square = col * 9 + row` where `col=0→筋1, col=8→筋9`. The `Board` class in `shogi.py` encapsulates the engine and handles piece ID conversions.
 
 **References:**
-- `src/maou/domain/board/shogi.py:425` - SFEN example in docstring
-- `src/maou/domain/board/shogi.py` - cshogi encapsulation and piece ID mapping
+- `src/maou/domain/board/shogi.py` - Rust engine encapsulation and piece ID mapping
 
 ### 3. Captured Pieces (持ち駒) Display Order
 
@@ -156,7 +155,7 @@ pieces_in_hand[7:14]  # White's hand (後手の持ち駒)
 
 **Core Implementation Files:**
 - `src/maou/domain/visualization/board_renderer.py` - Complete SVG rendering logic with coordinate transformations
-- `src/maou/domain/board/shogi.py` - Board abstraction, cshogi encapsulation, piece ID conversions
+- `src/maou/domain/board/shogi.py` - Board abstraction, Rust engine encapsulation, piece ID conversions
 - `src/maou/domain/visualization/piece_mapping.py` - Piece rendering and rotation logic
 
 **Design Documentation:**

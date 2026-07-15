@@ -328,10 +328,10 @@ class TestDataRetriever:
         assert positions[8][4] == PieceId.OU  # 先手王
 
         # 後手の玉の位置を確認（row=0, col=4 = 段a, 筋5）
-        # 後手の駒はPieceId + 15なので、22 = 8 + 14 = OU + 14
-        # ※ map_cshogi_to_piece_idで変換後の値
-        # cshogiのWKING(24) → project ID (24-2=22)
-        white_king_id = 22  # cshogiのWKING(24)がmap後に22になる
+        # 後手の駒は domain PieceId + 14 (22 = OU(8) + 14)．
+        # raw 駒 ID の白玉(24)は RAW_PIECE_TO_PIECEID 変換で
+        # domain 22 になる
+        white_king_id = 22  # domain PieceId: OU + 14
         assert positions[0][4] == white_king_id  # 後手王
 
     def test_white_piece_detection_with_real_data(

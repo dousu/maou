@@ -101,7 +101,7 @@ class TestHCPERecordRendererArrow:
     ) -> None:
         """通常の移動から矢印を生成できる．"""
         # 7g7f (7七から7六への移動)
-        # cshogi format: to_sq | (from_sq << 7) | (promote << 14)
+        # cshogi 互換 32-bit move: to_sq | (from_sq << 7) | (promote << 14)
         # 7g = square 48 (file 7, rank 7 -> 6*9 + 6 = 60... actually need to verify)
         # Let's use a simpler approach - create a move and check the result
         # For now, test with a known move value
@@ -112,7 +112,7 @@ class TestHCPERecordRendererArrow:
 
         assert arrow is not None
         assert arrow.is_drop is False
-        # The exact squares depend on cshogi encoding
+        # The exact squares depend on the move encoding
 
     def test_create_move_arrow_missing_field(
         self, renderer: HCPERecordRenderer
