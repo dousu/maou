@@ -20,6 +20,7 @@ from maou.app.game_graph.layout import (
 )
 from maou.app.game_graph.query import GameGraphQuery
 from maou.domain.board.shogi import (
+    HAND_PIECE_SFEN_CHARS,
     Board,
     Turn,
     move_drop_hand_piece,
@@ -95,14 +96,13 @@ class GameGraphVisualizationInterface:
         "i": "九",
     }
 
+    # USI 駒打ち文字 → 日本語駒名 (駒文字表 HAND_PIECE_SFEN_CHARS と
+    # 駒名表 get_piece_name_ja から導出し，独自の駒名表を持たない)
     _DROP_PIECE_MAP: dict[str, str] = {
-        "P": "歩",
-        "L": "香",
-        "N": "桂",
-        "S": "銀",
-        "G": "金",
-        "B": "角",
-        "R": "飛",
+        char: get_piece_name_ja(piece_id)
+        for piece_id, char in enumerate(
+            HAND_PIECE_SFEN_CHARS, start=1
+        )
     }
 
     def __init__(

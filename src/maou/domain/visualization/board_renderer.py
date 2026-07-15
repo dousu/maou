@@ -10,12 +10,12 @@
 from dataclasses import dataclass
 
 from maou.domain.board.shogi import (
-    DOMAIN_WHITE_MIN,
-    DOMAIN_WHITE_OFFSET,
     PieceId,
     Turn,
 )
 from maou.domain.visualization.piece_mapping import (
+    get_piece_name_ja,
+    is_white_piece,
     square_index_to_coords,
 )
 
@@ -82,34 +82,10 @@ class SVGBoardRenderer:
     GAP_BETWEEN_HAND_AND_BOARD = 30  # 持ち駒と盤面の間の隙間
     MARGIN = 20  # マージン
 
-    # 駒の日本語表記（PieceId → 文字）
-    PIECE_SYMBOLS = {
-        PieceId.EMPTY: "",
-        PieceId.FU: "歩",
-        PieceId.KY: "香",
-        PieceId.KE: "桂",
-        PieceId.GI: "銀",
-        PieceId.KI: "金",
-        PieceId.KA: "角",
-        PieceId.HI: "飛",
-        PieceId.OU: "王",
-        PieceId.TO: "と",
-        PieceId.NKY: "杏",  # 成香
-        PieceId.NKE: "圭",  # 成桂
-        PieceId.NGI: "全",  # 成銀
-        PieceId.UMA: "馬",
-        PieceId.RYU: "龍",
-    }
-
-    # 持ち駒の種類（インデックス順）
+    # 持ち駒の種類（インデックス0-6: 歩香桂銀金角飛．
+    # piece_mapping.get_piece_name_ja から導出し駒名表を一本化）
     HAND_PIECE_NAMES = [
-        "歩",
-        "香",
-        "桂",
-        "銀",
-        "金",
-        "角",
-        "飛",
+        get_piece_name_ja(piece_id) for piece_id in range(1, 8)
     ]
 
     # 手番の日本語表記
@@ -445,17 +421,11 @@ class SVGBoardRenderer:
                     continue
 
                 # 駒の描画
-                # domain形式の駒ID: 先手=1-14, 後手=15-28（先手+14）
                 # boardIdPositionsはdomain PieceId形式
-                is_white = piece_id >= DOMAIN_WHITE_MIN
-                actual_piece_id = (
-                    piece_id - DOMAIN_WHITE_OFFSET
-                    if is_white
-                    else piece_id
-                )
-                symbol = self.PIECE_SYMBOLS.get(
-                    actual_piece_id, "?"
-                )
+                # (先手=1-14, 後手=15-28)．判定・駒名変換は
+                # piece_mapping に一本化
+                is_white = is_white_piece(piece_id)
+                symbol = get_piece_name_ja(piece_id)
 
                 x = (
                     board_x_start

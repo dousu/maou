@@ -668,56 +668,53 @@ def _make_drop_move_from_label(
     board: shogi.Board,
     label: int,
 ) -> str:
-    turn = board.get_turn()
     """駒打ちの逆変換."""
-    # Determine piece type
+    turn = board.get_turn()
+    # Determine hand piece index (0-6: 歩香桂銀金角飛)
     if label < MoveCategoryStartLabel.KY:
-        piece = "FU"
+        hand_idx = 0  # FU
         offset = label - MoveCategoryStartLabel.FU
     elif label < MoveCategoryStartLabel.KE:
-        piece = "KY"
+        hand_idx = 1  # KY
         offset = label - MoveCategoryStartLabel.KY
     elif label < MoveCategoryStartLabel.GI:
-        piece = "KE"
+        hand_idx = 2  # KE
         offset = label - MoveCategoryStartLabel.KE
     elif label < MoveCategoryStartLabel.KI:
-        piece = "GI"
+        hand_idx = 3  # GI
         offset = label - MoveCategoryStartLabel.GI
     elif label < MoveCategoryStartLabel.KA:
-        piece = "KI"
+        hand_idx = 4  # KI
         offset = label - MoveCategoryStartLabel.KI
     elif label < MoveCategoryStartLabel.HI:
-        piece = "KA"
+        hand_idx = 5  # KA
         offset = label - MoveCategoryStartLabel.KA
     else:
-        piece = "HI"
+        hand_idx = 6  # HI
         offset = label - MoveCategoryStartLabel.HI
 
     # Decode target square based on piece type
-    to_sq = _decode_drop_target(piece, offset)
+    to_sq = _decode_drop_target(hand_idx, offset)
 
     # Handle turn-based coordinate transformation
     if turn == shogi.Turn.WHITE:
         to_sq = 80 - to_sq
 
-    # Convert to USI format
-    piece_usi = {
-        "FU": "P",
-        "KY": "L",
-        "KE": "N",
-        "GI": "S",
-        "KI": "G",
-        "KA": "B",
-        "HI": "R",
-    }[piece]
+    # Convert to USI format (駒文字は shogi.HAND_PIECE_SFEN_CHARS に一本化)
+    piece_usi = shogi.HAND_PIECE_SFEN_CHARS[hand_idx]
     to_usi = _square_to_usi(to_sq)
 
     return f"{piece_usi}*{to_usi}"
 
 
-def _decode_drop_target(piece: str, offset: int) -> int:
-    """駒打ち対象マスのデコード."""
-    if piece in ["FU", "KY"]:
+def _decode_drop_target(hand_idx: int, offset: int) -> int:
+    """駒打ち対象マスのデコード.
+
+    Args:
+        hand_idx: 持ち駒インデックス (0-6: 歩香桂銀金角飛)
+        offset: 駒種カテゴリ先頭からのラベルオフセット
+    """
+    if hand_idx <= 1:
         # FU, KY: to_sq - (to_x + 1) = offset, y != 0
         for to_sq in range(81):
             to_x, to_y = _COORDINATE_CACHE[
@@ -727,7 +724,7 @@ def _decode_drop_target(piece: str, offset: int) -> int:
                 to_y > 0 and to_sq - (to_x + 1) == offset
             ):  # y != 0
                 return to_sq
-    elif piece == "KE":
+    elif hand_idx == 2:
         # KE: to_sq - (to_x + 1) * 2 = offset, y >= 2
         for to_sq in range(81):
             to_x, to_y = _COORDINATE_CACHE[
@@ -741,7 +738,10 @@ def _decode_drop_target(piece: str, offset: int) -> int:
         if 0 <= to_sq <= 80:
             return to_sq
 
-    raise ValueError(f"Invalid {piece} drop offset: {offset}")
+    raise ValueError(
+        f"Invalid {shogi.HAND_PIECE_SFEN_CHARS[hand_idx]} drop"
+        f" offset: {offset}"
+    )
 
 
 def _square_to_usi(square: int) -> str:
