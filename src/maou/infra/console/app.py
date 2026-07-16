@@ -303,6 +303,18 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
         "maou.infra.console.analyze_game",
         "analyze_game",
     ),
+    # 棋譜解析 GUI (Gradio．コマンド本体は遅延 import で追加依存なし)
+    "analyze-gui": LazyCommandSpec(
+        "maou.infra.console.analyze_gui",
+        "analyze_gui",
+        missing_help=(
+            "Command 'analyze-gui' requires visualization "
+            "dependencies. Install with `uv sync --extra visualize`."
+        ),
+        required_packages=(
+            PackageRequirement("gradio", ("visualize",)),
+        ),
+    ),
     "evaluate": LazyCommandSpec(
         "maou.infra.console.evaluate_board",
         "evaluate_board",

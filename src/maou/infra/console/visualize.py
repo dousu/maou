@@ -9,22 +9,14 @@ from pathlib import Path
 import click
 
 from maou.infra.app_logging import app_logger
-from maou.infra.console.common import handle_exception
+from maou.infra.console.common import (
+    handle_exception,
+    is_google_colab,
+)
 from maou.infra.file_system.path_utils import collect_files
 
-
-def _is_google_colab() -> bool:
-    """Google Colab環境で実行されているか検出する．
-
-    Returns:
-        bool: Google Colab環境の場合True
-    """
-    try:
-        import google.colab  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
+# 後方互換の別名 (実体は common.is_google_colab)
+_is_google_colab = is_google_colab
 
 
 @click.command("visualize")

@@ -67,7 +67,23 @@ __all__ = [
     "S3FeatureStore",
     "validate_cloud_provider_exclusivity",
     "handle_exception",
+    "is_google_colab",
 ]
+
+
+def is_google_colab() -> bool:
+    """Google Colab環境で実行されているか検出する．
+
+    Returns:
+        bool: Google Colab環境の場合True
+    """
+    try:
+        import google.colab  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
 
 # 必要なライブラリが利用可能かどうかをチェックする変数
 HAS_BIGQUERY = False

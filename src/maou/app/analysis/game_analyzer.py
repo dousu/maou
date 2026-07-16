@@ -23,6 +23,40 @@ from maou.domain.board.shogi import Board, Turn, move_to_usi
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+def parse_single_game_record(
+    content: str, input_format: str
+) -> Any:
+    """棋譜文字列をパースして単一の GameRecord を返す．
+
+    CSA はファイル内に複数局を含み得るが，解析系機能は 1 局のみ対応
+    (複数局は ValueError)．
+
+    Args:
+        content: 棋譜ファイルのデコード済み文字列．
+        input_format: 棋譜形式 ("csa" / "kif")．
+
+    Returns:
+        ``maou._rust.maou_shogi`` の GameRecord．
+
+    Raises:
+        ValueError: パース失敗，複数局の CSA，未対応形式の場合．
+    """
+    if input_format == "csa":
+        records = parse_csa_str(content)
+        if len(records) != 1:
+            raise ValueError(
+                f"CSA ファイルに {len(records)} 局が含まれています．"
+                "analyze-game は 1 局のみ対応です "
+                "(複数局は 1 局ずつのファイルに分割してください)"
+            )
+        return records[0]
+    if input_format == "kif":
+        return parse_kif_str(content)
+    raise ValueError(
+        f"未対応の棋譜形式です: {input_format} (csa / kif のみ)"
+    )
+
+
 def decode_kifu_bytes(data: bytes) -> str:
     """棋譜ファイルの bytes を UTF-8 先行で文字列にデコードする．
 
@@ -366,23 +400,10 @@ class GameAnalyzer:
     ) -> Any:
         """棋譜文字列をパースして GameRecord を返す．
 
-        CSA はファイル内に複数局を含み得るが，本コマンドは 1 局のみ対応
-        (複数局は ValueError)．
+        実体はモジュール関数 :func:`parse_single_game_record`
+        (analyze-gui 系と共用)．
         """
-        if input_format == "csa":
-            records = parse_csa_str(content)
-            if len(records) != 1:
-                raise ValueError(
-                    f"CSA ファイルに {len(records)} 局が含まれています．"
-                    "analyze-game は 1 局のみ対応です "
-                    "(複数局は 1 局ずつのファイルに分割してください)"
-                )
-            return records[0]
-        if input_format == "kif":
-            return parse_kif_str(content)
-        raise ValueError(
-            f"未対応の棋譜形式です: {input_format} (csa / kif のみ)"
-        )
+        return parse_single_game_record(content, input_format)
 
     def _budget_meta(
         self,

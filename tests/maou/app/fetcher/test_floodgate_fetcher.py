@@ -475,8 +475,19 @@ class TestAutoStrategy:
         assert summary["days_fetched"] == 2
 
     def test_archive_404_falls_back_to_daily(
-        self, tmp_path: Path
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        # py7zr の有無 (fetch extra) に依存しないよう「利用可能」に固定．
+        # py7zr が無い環境では .tar.xz 404 → ArchiveToolMissingError と
+        # なり，このテストの対象 (両アーカイブ 404 → daily フォール
+        # バック) を検証できない
+        import maou.app.fetcher.floodgate_fetcher as mod
+
+        monkeypatch.setattr(
+            mod, "find_spec", lambda _name: object()
+        )
         start = date(2031, 1, 1)
         end = date(2031, 2, 15)
         day = date(2031, 1, 5)
