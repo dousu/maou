@@ -4,6 +4,7 @@ import pytest
 
 from maou.domain.board.shogi import PieceId, Turn
 from maou.domain.visualization.board_renderer import (
+    ArrowSpec,
     BoardPosition,
     MoveArrow,
     SVGBoardRenderer,
@@ -265,6 +266,131 @@ class TestSVGBoardRendererArrow:
         assert "<svg" in svg
         assert "</svg>" in svg
         assert "marker" in svg
+
+
+class TestSVGBoardRendererMultiArrow:
+    """SVGBoardRendererの複数矢印（ArrowSpec）描画テスト．"""
+
+    def _empty_position(self) -> BoardPosition:
+        return BoardPosition(
+            board_id_positions=[
+                [0 for _ in range(9)] for _ in range(9)
+            ],
+            pieces_in_hand=[0 for _ in range(14)],
+        )
+
+    def test_render_with_multiple_arrows(self) -> None:
+        """スタイルの異なる複数矢印を描画できる．"""
+        renderer = SVGBoardRenderer()
+        arrows = [
+            ArrowSpec(
+                move=MoveArrow(from_square=76, to_square=67),
+                color="rgba(200, 30, 30, 0.9)",
+                width=6,
+                label="1",
+            ),
+            ArrowSpec(
+                move=MoveArrow(from_square=16, to_square=15),
+                opacity=0.4,
+                label="2",
+            ),
+        ]
+
+        svg = renderer.render(
+            self._empty_position(), move_arrows=arrows
+        )
+
+        # 矢印の線が 2 本（グリッド線と区別するため marker-end で数える）
+        assert svg.count("marker-end") == 2
+        # スタイルが異なるためマーカー定義は 2 つ
+        assert 'id="arrowhead-0"' in svg
+        assert 'id="arrowhead-1"' in svg
+        # スタイル属性が反映される
+        assert 'stroke-width="6"' in svg
+        assert 'stroke-opacity="0.4"' in svg
+        # 順位ラベルが描画される
+        assert ">1</text>" in svg
+        assert ">2</text>" in svg
+
+    def test_same_style_arrows_share_marker(self) -> None:
+        """同一スタイルの矢印はマーカー定義を共有する．"""
+        renderer = SVGBoardRenderer()
+        arrows = [
+            ArrowSpec(
+                move=MoveArrow(from_square=76, to_square=67)
+            ),
+            ArrowSpec(
+                move=MoveArrow(from_square=16, to_square=15)
+            ),
+        ]
+
+        svg = renderer.render(
+            self._empty_position(), move_arrows=arrows
+        )
+
+        assert svg.count("marker-end") == 2
+        assert 'id="arrowhead-0"' in svg
+        assert 'id="arrowhead-1"' not in svg
+
+    def test_move_arrow_and_move_arrows_combined(self) -> None:
+        """後方互換の move_arrow と move_arrows を併用できる．"""
+        renderer = SVGBoardRenderer()
+        svg = renderer.render(
+            self._empty_position(),
+            move_arrow=MoveArrow(from_square=76, to_square=67),
+            move_arrows=[
+                ArrowSpec(
+                    move=MoveArrow(
+                        from_square=16, to_square=15
+                    ),
+                    color="#00aa00",
+                )
+            ],
+        )
+
+        assert svg.count("marker-end") == 2
+
+    def test_drop_arrow_spec(self) -> None:
+        """ArrowSpec 経由の駒打ち矢印も描画できる．"""
+        renderer = SVGBoardRenderer()
+        hand = [0 for _ in range(14)]
+        hand[0] = 1  # 先手の歩
+        position = BoardPosition(
+            board_id_positions=[
+                [0 for _ in range(9)] for _ in range(9)
+            ],
+            pieces_in_hand=hand,
+        )
+
+        svg = renderer.render(
+            position,
+            move_arrows=[
+                ArrowSpec(
+                    move=MoveArrow(
+                        from_square=None,
+                        to_square=40,
+                        is_drop=True,
+                        drop_piece_type=0,
+                    )
+                )
+            ],
+        )
+
+        assert svg.count("marker-end") == 1
+
+    def test_invalid_square_arrow_skipped(self) -> None:
+        """不正なマス番号の矢印はスキップされる．"""
+        renderer = SVGBoardRenderer()
+        svg = renderer.render(
+            self._empty_position(),
+            move_arrows=[
+                ArrowSpec(
+                    move=MoveArrow(from_square=76, to_square=99)
+                )
+            ],
+        )
+
+        assert svg.count("marker-end") == 0
 
 
 class TestDrawPiecesWhitePieces:

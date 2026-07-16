@@ -37,6 +37,34 @@ class MoveArrow:
     drop_piece_type: int | None = None
 
 
+# 矢印のデフォルトスタイル (ArrowSpec と SVGBoardRenderer で共有)
+DEFAULT_ARROW_COLOR = "rgba(0, 100, 200, 0.6)"  # 半透明の青
+DEFAULT_ARROW_WIDTH = 4  # 矢印の線幅
+
+
+@dataclass(frozen=True)
+class ArrowSpec:
+    """スタイル付きの指し手矢印．
+
+    候補手の複数表示など，色・太さ・不透明度・ラベルを矢印ごとに
+    変えたい場合に使う．
+
+    Attributes:
+        move: 矢印にする指し手．
+        color: 矢印の色 (CSS color 文字列)．
+        width: 矢印の線幅 (ピクセル)．
+        opacity: 不透明度 (0.0-1.0)．
+        label: 矢印の始点寄りに描く短いラベル (候補手の順位等)．
+            None で非表示．
+    """
+
+    move: MoveArrow
+    color: str = DEFAULT_ARROW_COLOR
+    width: float = DEFAULT_ARROW_WIDTH
+    opacity: float = 1.0
+    label: str | None = None
+
+
 @dataclass(frozen=True)
 class BoardPosition:
     """不変な将棋盤の状態表現．
@@ -106,9 +134,9 @@ class SVGBoardRenderer:
         "rgba(0,112,243,0.12)"  # ハイライト（モダンブルー）
     )
 
-    # 矢印の色設定
-    COLOR_ARROW = "rgba(0, 100, 200, 0.6)"  # 半透明の青
-    ARROW_WIDTH = 4  # 矢印の線幅
+    # 矢印の色設定 (module-level のデフォルトを共有)
+    COLOR_ARROW = DEFAULT_ARROW_COLOR
+    ARROW_WIDTH = DEFAULT_ARROW_WIDTH
 
     def render(
         self,
@@ -117,6 +145,7 @@ class SVGBoardRenderer:
         turn: Turn | None = None,
         record_id: str | None = None,
         move_arrow: MoveArrow | None = None,
+        move_arrows: list[ArrowSpec] | None = None,
     ) -> str:
         """将棋盤をSVGとして描画する．
 
@@ -125,37 +154,62 @@ class SVGBoardRenderer:
             highlight_squares: ハイライトするマス（0-80のインデックス）
             turn: 手番（Turn.BLACK または Turn.WHITE）
             record_id: レコードID
-            move_arrow: 描画する指し手矢印（Noneの場合は矢印なし）
+            move_arrow: 描画する指し手矢印（Noneの場合は矢印なし）．
+                デフォルトスタイルの ArrowSpec 1 本と等価な後方互換引数
+            move_arrows: スタイル付き矢印のリスト（候補手の複数表示等）．
+                move_arrow と併用した場合は move_arrow が先に描画される
 
         Returns:
             完全なSVG文字列（HTML埋め込み可能）
         """
         highlight_set = set(highlight_squares or [])
+        arrows: list[ArrowSpec] = []
+        if move_arrow is not None:
+            arrows.append(ArrowSpec(move=move_arrow))
+        if move_arrows:
+            arrows.extend(move_arrows)
 
         svg_parts = [
-            self._svg_header(move_arrow is not None),
+            self._svg_header(arrows),
             self._draw_header(turn, record_id),
             self._draw_grid(),
             self._draw_pieces(
                 position.board_id_positions, highlight_set
             ),
             self._draw_pieces_in_hand(position.pieces_in_hand),
-            self._draw_arrow(
-                move_arrow, position.pieces_in_hand
-            ),
+            self._draw_arrows(arrows, position.pieces_in_hand),
             self._draw_coordinates(),
             self._svg_footer(),
         ]
 
         return "\n".join(svg_parts)
 
-    def _svg_header(
-        self, include_arrow_marker: bool = False
-    ) -> str:
+    @staticmethod
+    def _marker_id(style_index: int) -> str:
+        """矢じりマーカーのSVG id（矢印スタイルごとに一意）．"""
+        return f"arrowhead-{style_index}"
+
+    @staticmethod
+    def _arrow_styles(
+        arrows: list[ArrowSpec],
+    ) -> list[tuple[str, float]]:
+        """矢印リストから一意な（色，不透明度）スタイル列を出現順で返す．
+
+        矢じりマーカーはスタイルごとに 1 定義を共有する．
+        """
+        styles: list[tuple[str, float]] = []
+        for spec in arrows:
+            style = (spec.color, spec.opacity)
+            if style not in styles:
+                styles.append(style)
+        return styles
+
+    def _svg_header(self, arrows: list[ArrowSpec]) -> str:
         """SVGヘッダー（開始タグと設定）を生成．
 
         Args:
-            include_arrow_marker: 矢印マーカーを含めるかどうか
+            arrows: 描画する矢印のリスト．スタイル（色，不透明度）ごとに
+                矢じりマーカー定義を生成する
         """
         total_width = (
             self.MARGIN * 2
@@ -169,13 +223,15 @@ class SVGBoardRenderer:
             + self.HEADER_HEIGHT
         )
 
-        # 矢印マーカー定義（必要な場合のみ）
+        # 矢印マーカー定義（スタイルごとに 1 つ）
         arrow_marker = ""
-        if include_arrow_marker:
-            arrow_marker = f"""
-        <marker id="arrowhead" markerWidth="6" markerHeight="4"
+        for i, (color, opacity) in enumerate(
+            self._arrow_styles(arrows)
+        ):
+            arrow_marker += f"""
+        <marker id="{self._marker_id(i)}" markerWidth="6" markerHeight="4"
                 refX="5" refY="2" orient="auto" markerUnits="strokeWidth">
-            <polygon points="0 0, 6 2, 0 4" fill="{self.COLOR_ARROW}"/>
+            <polygon points="0 0, 6 2, 0 4" fill="{color}" fill-opacity="{opacity}"/>
         </marker>"""
 
         # ヘッダー (レコードID/手番バッジ) は盤面上端より上の負 y 領域
@@ -644,35 +700,87 @@ class SVGBoardRenderer:
 
         return "\n".join(coord_parts)
 
-    def _draw_arrow(
+    def _draw_arrows(
         self,
-        move_arrow: MoveArrow | None,
+        arrows: list[ArrowSpec],
         pieces_in_hand: list[int],
     ) -> str:
-        """指し手を表す矢印を描画する．
+        """指し手を表す矢印群を描画する．
 
         Args:
-            move_arrow: 描画する矢印データ（Noneの場合は空文字列を返す）
+            arrows: 描画する矢印のリスト（空の場合は空文字列を返す）
             pieces_in_hand: 持ち駒配列（駒打ちの矢印の始点計算に使用）
 
         Returns:
-            矢印のSVG文字列
+            矢印群のSVG文字列（不正なマス番号の矢印はスキップ）
         """
-        if move_arrow is None:
+        if not arrows:
             return ""
 
+        styles = self._arrow_styles(arrows)
+        parts: list[str] = []
+        for spec in arrows:
+            endpoints = self._arrow_endpoints(
+                spec.move, pieces_in_hand
+            )
+            if endpoints is None:
+                continue
+            (from_x, from_y), (to_x, to_y) = endpoints
+            marker = self._marker_id(
+                styles.index((spec.color, spec.opacity))
+            )
+            parts.append(
+                f'<line x1="{from_x}" y1="{from_y}" '
+                f'x2="{to_x}" y2="{to_y}" '
+                f'stroke="{spec.color}" '
+                f'stroke-opacity="{spec.opacity}" '
+                f'stroke-width="{spec.width}" '
+                f'marker-end="url(#{marker})"/>'
+            )
+            if spec.label is not None:
+                # ラベルは始点寄り（25%地点）に置き，矢じりと重ねない
+                label_x = from_x + (to_x - from_x) * 0.25
+                label_y = from_y + (to_y - from_y) * 0.25
+                parts.append(
+                    f'<circle cx="{label_x}" cy="{label_y}" r="9" '
+                    f'fill="#ffffff" stroke="{spec.color}" '
+                    f'stroke-width="1.5" opacity="0.9"/>'
+                )
+                parts.append(
+                    f'<text x="{label_x}" y="{label_y + 4}" '
+                    f'text-anchor="middle" font-size="12" '
+                    f'font-weight="700" fill="#1a1a1a">'
+                    f"{spec.label}</text>"
+                )
+        return "\n".join(parts)
+
+    def _arrow_endpoints(
+        self,
+        move_arrow: MoveArrow,
+        pieces_in_hand: list[int],
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        """矢印の始点・終点のSVG座標を計算する．
+
+        Args:
+            move_arrow: 対象の指し手
+            pieces_in_hand: 持ち駒配列（駒打ちの始点計算に使用）
+
+        Returns:
+            ``((from_x, from_y), (to_x, to_y))``．
+            マス番号が不正（0-80の範囲外）の場合は None
+        """
         # Validate square indices (valid range is 0-80)
         if (
             move_arrow.to_square < 0
             or move_arrow.to_square > 80
         ):
-            return ""
+            return None
         if move_arrow.from_square is not None:
             if (
                 move_arrow.from_square < 0
                 or move_arrow.from_square > 80
             ):
-                return ""
+                return None
 
         # 盤面のX座標開始位置
         board_x_start = (
@@ -740,14 +848,7 @@ class SVGBoardRenderer:
                 + self.CELL_SIZE / 2
             )
 
-        # 矢印を描画
-        return (
-            f'<line x1="{from_x}" y1="{from_y}" '
-            f'x2="{to_x}" y2="{to_y}" '
-            f'stroke="{self.COLOR_ARROW}" '
-            f'stroke-width="{self.ARROW_WIDTH}" '
-            f'marker-end="url(#arrowhead)"/>'
-        )
+        return ((from_x, from_y), (to_x, to_y))
 
     def _get_hand_piece_display_index(
         self,
