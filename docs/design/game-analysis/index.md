@@ -1,12 +1,12 @@
 # 棋譜解析コマンド (analyze-game) 設計ドキュメント
 
-> **状態: 設計確定・実装中 (living document)**．実装の進行に合わせて本ドキュメントを
+> **状態: 実装済み (v0.43.0 / PR #387) — living document**．実装の進行に合わせて本ドキュメントを
 > 更新する．各節に「実装済み」「設計方針 (未実装)」「未決」のいずれかを明記する．
 > 実装済み記述の正は常にコード (`src/maou/app/analysis/` ほか) であり，乖離を
 > 見つけたら本ドキュメント側を直す．
 > 提案・承認の経緯: reviews/2026-07-16-analyze-game-command-design.md
 
-## 1. 目的とスコープ (設計方針)
+## 1. 目的とスコープ (実装済み)
 
 CSA / KIF ファイルの **1 局の棋譜を丸ごと受け取り，1 手ずつ 1 局面探索を行う
 自動解析コマンド** `maou analyze-game`．各局面のエンジン最善手・勝率・PV と
@@ -21,7 +21,7 @@ CSA / KIF ファイルの **1 局の棋譜を丸ごと受け取り，1 手ずつ
 - **スコープ外**: 複数局を含む CSA の一括解析 (当面はエラー，将来拡張)，
   最終手後の局面の解析，対局機能．
 
-## 2. CLI (設計方針)
+## 2. CLI (実装済み)
 
 ```
 maou analyze-game --input-path FILE
@@ -48,7 +48,7 @@ maou analyze-game --input-path FILE
   (+ `--trt-cache-dir`)．analyze-game 側で特定 EP を前提・固定しない．
   TensorRT はエンジンキャッシュ利用時，初回ビルド以降の warmup がほぼ 0 になる．
 
-## 3. レイヤー構成 (設計方針)
+## 3. レイヤー構成 (実装済み)
 
 fetch-floodgate と同型の Clean Architecture 構成:
 
@@ -64,7 +64,7 @@ fetch-floodgate と同型の Clean Architecture 構成:
   `parse_kif_str` (単一局) を用いる．`GameRecord.moves` (cshogi 互換 32-bit) は
   domain `Board.push_move` にそのまま渡せ，`move_to_usi` で USI に変換できる．
 
-## 4. 永続エンジン binding `SearchEngine` (設計方針)
+## 4. 永続エンジン binding `SearchEngine` (実装済み)
 
 現行 `maou._rust.maou_search.search` は呼び出しごとに ONNX モデルをロードする
 (1 局面 1 回)．N 局面の連続解析でこれを排除するため，評価器を保持する pyclass を
@@ -93,7 +93,7 @@ class SearchEngine:
 - バッチ関数 (1 call で全局面) ではなくハンドル型にした理由: 時間配分・進捗表示
   (tqdm)・中断を Python 側ループに残せるため．
 
-## 5. 時間配分戦略 `BudgetAllocator` (設計方針)
+## 5. 時間配分戦略 `BudgetAllocator` (実装済み)
 
 ```python
 @dataclass(frozen=True)
@@ -112,7 +112,7 @@ class BudgetAllocator(abc):  # 戦略
 - 将来の傾斜配分 (難局面・終盤重視) は Allocator の戦略追加のみで実現し，
   探索側 API は変えない．
 
-## 6. 解析ループ (設計方針)
+## 6. 解析ループ (実装済み)
 
 1. ファイルを bytes で読み，UTF-8 先行 → 失敗時 cp932 でデコード
    (cp932 はほぼ任意バイト列で成功するため UTF-8 先行判定が本質)．
@@ -124,7 +124,7 @@ class BudgetAllocator(abc):  # 戦略
    を `push_move` で進め，記録用の SFEN・手番を得る．
 5. 不正手 (push / パース失敗) は ply を明示して fail-loud．
 
-## 7. 出力スキーマ (設計方針)
+## 7. 出力スキーマ (実装済み)
 
 JSON (機械可読, per-position 全記録):
 
@@ -168,7 +168,7 @@ JSON (機械可読, per-position 全記録):
   winrate 損失，worst_moves 一覧，詰み発見，総所要時間．
 - 進捗は tqdm (stderr) で局面単位に表示．
 
-## 8. テスト (設計方針)
+## 8. テスト (実装済み)
 
 - allocator 単体 (等分・端数・最小値 1ms 保証)
 - デコード (UTF-8 / cp932 fallback / 不正トレイル)
