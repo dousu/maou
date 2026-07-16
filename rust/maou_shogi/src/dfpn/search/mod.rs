@@ -138,6 +138,14 @@ fn no_dag() -> bool {
     *C.get_or_init(|| std::env::var("NODAG").is_ok())
 }
 
+/// `DFPN_STATS` env: solve 終了時の統計サマリ (`[dfpn] root ...`) を stderr に出す診断用
+/// (process 内 1 回読み)．default OFF — leaf-mate 統合探索や棋譜解析では solve が
+/// 局面ごと・葉ごとに大量に走るため，常時出力だと stderr が診断行で溢れる．
+fn dfpn_stats_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("DFPN_STATS").is_ok())
+}
+
 thread_local! {
     /// do_moves per-site breakdown (DMBREAK 報告用; solve 毎に reset)．
     /// [0]=step_best_child(再帰) [1]=eliminate_double_count(DAG) [2]=look-ahead [3]=proof-hand(1手詰).
@@ -620,19 +628,21 @@ impl DfPnSolver {
         // 2 指標を併記: nodes = 探索ノード訪問数 (Emplace 毎に 1),
         // do_moves = do_move 数 (nodes_searched)．混同しないこと．
         let search_do_moves = crate::board::do_move_count();
-        eprintln!(
-            "[dfpn] root pn={} dn={} mate_len={} nodes={} do_moves={} dm/node={:.2} tt_cap={} gc={} dag={} dom={}",
-            last.pn(),
-            last.dn(),
-            last.len().len(),
-            self.nodes,
-            search_do_moves,
-            search_do_moves as f64 / (self.nodes.max(1)) as f64,
-            tt.capacity(),
-            tt.gc_count(),
-            self.dag_fires,
-            self.dom_fires
-        );
+        if dfpn_stats_enabled() {
+            eprintln!(
+                "[dfpn] root pn={} dn={} mate_len={} nodes={} do_moves={} dm/node={:.2} tt_cap={} gc={} dag={} dom={}",
+                last.pn(),
+                last.dn(),
+                last.len().len(),
+                self.nodes,
+                search_do_moves,
+                search_do_moves as f64 / (self.nodes.max(1)) as f64,
+                tt.capacity(),
+                tt.gc_count(),
+                self.dag_fires,
+                self.dom_fires
+            );
+        }
         super::movegen::mate1ply::report_mate_cand_stats();
         super::movegen::mate1ply::report_mate1ply_stats();
         if std::env::var("DMBREAK").is_ok() {
