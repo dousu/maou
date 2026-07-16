@@ -1,10 +1,12 @@
 ---
 title: analyze-gui コマンド新設 (棋譜解析 GUI, Gradio) の設計
 date: 2026-07-16
-status: approved
-applied_in:
-# user 承認 2026-07-16 (修正付き)．修正内容と適用状況は本文末尾
-# 「承認記録」を参照．docs/commands/analyze_gui.md は実装 PR で適用予定．
+status: applied
+applied_in: 5ddb6c1
+# user 承認 2026-07-16 (修正付き — 本文末尾「承認記録」参照)．
+# docs/design/game-analysis/gui.md + index.md §9 は 585654b で適用，
+# docs/commands/analyze_gui.md は閲覧機能の実装コミット 5ddb6c1 で適用．
+# 対話解析機能 (マイルストーン 2) は gui.md を設計の正として別 PR．
 target:
   - docs/design/game-analysis/gui.md
   - docs/design/game-analysis/index.md
