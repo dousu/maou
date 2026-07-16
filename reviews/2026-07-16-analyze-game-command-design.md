@@ -1,10 +1,10 @@
 ---
 title: analyze-game コマンド新設 (棋譜 1 局の自動解析) の設計
 date: 2026-07-16
-status: approved
-applied_in:
-# user 承認 2026-07-16．docs/design/game-analysis/index.md は 38482cc で適用済み．
-# docs/commands/analyze_game.md が実装コミットで揃った時点で applied に遷移する．
+status: applied
+applied_in: 411fec2
+# user 承認 2026-07-16．docs/design/game-analysis/index.md は 38482cc で適用，
+# docs/commands/analyze_game.md は実装コミット 411fec2 で適用．
 target:
   - docs/design/game-analysis/index.md
   - docs/commands/analyze_game.md
