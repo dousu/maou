@@ -179,6 +179,46 @@ fn run_search<E: Evaluator>(
     to_py_result(result)
 }
 
+/// 基準局面 SFEN + USI 指し手列から root 局面と対局履歴 (千日手判定用) を構築する．
+fn build_board_and_history(
+    sfen: &str,
+    moves: Option<&[String]>,
+) -> PyResult<(Board, Vec<HistoryEntry>)> {
+    let mut board = Board::empty();
+    board
+        .set_sfen(sfen)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("不正な SFEN: {e:?}")))?;
+    let mut history: Vec<HistoryEntry> = Vec::new();
+    if let Some(moves) = moves {
+        for usi in moves {
+            let mut probe = board.clone();
+            let mv = generate_legal_moves(&mut probe)
+                .into_iter()
+                .find(|m| m.to_usi() == *usi)
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "非合法または不正な指し手: {usi}"
+                    ))
+                })?;
+            history.push(HistoryEntry::from_board(&board));
+            board.do_move(mv);
+        }
+    }
+    Ok((board, history))
+}
+
+/// dfpn は depth >= 2048 で panic するため ValueError に変換する．
+fn validate_root_dfpn_depth(root_dfpn_depth: Option<u32>) -> PyResult<()> {
+    if let Some(d) = root_dfpn_depth {
+        if !(1..=2047).contains(&d) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "root_dfpn_depth must be in 1..=2047, got {d}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// 1 局面を MCTS で探索して最有力手・勝率・読み筋を返す．
 ///
 /// 返り値: [`PySearchResult`] (`SearchResult`) オブジェクト．
@@ -257,35 +297,9 @@ fn search(
     intra_threads: Option<usize>,
 ) -> PyResult<PySearchResult> {
     // 基準局面 + 対局履歴 (千日手判定用) を構築する
-    let mut board = Board::empty();
-    board
-        .set_sfen(sfen)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("不正な SFEN: {e:?}")))?;
-    let mut history: Vec<HistoryEntry> = Vec::new();
-    if let Some(moves) = &moves {
-        for usi in moves {
-            let mut probe = board.clone();
-            let mv = generate_legal_moves(&mut probe)
-                .into_iter()
-                .find(|m| m.to_usi() == *usi)
-                .ok_or_else(|| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "非合法または不正な指し手: {usi}"
-                    ))
-                })?;
-            history.push(HistoryEntry::from_board(&board));
-            board.do_move(mv);
-        }
-    }
+    let (board, history) = build_board_and_history(sfen, moves.as_deref())?;
 
-    if let Some(d) = root_dfpn_depth {
-        // dfpn は depth >= 2048 で panic するため ValueError に変換する
-        if !(1..=2047).contains(&d) {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "root_dfpn_depth must be in 1..=2047, got {d}"
-            )));
-        }
-    }
+    validate_root_dfpn_depth(root_dfpn_depth)?;
 
     let mut options = SearchOptions::default();
     if let Some(v) = threads {
@@ -373,6 +387,165 @@ fn search(
              `maturin develop --features onnx` (CUDA: onnx-cuda / TensorRT: onnx-tensorrt) \
              でビルドしてください",
         )),
+    }
+}
+
+/// [`SearchEngine`] が保持する評価器 (mock または ONNX)．
+enum EngineEvaluator {
+    Mock(maou_search::MockEvaluator),
+    #[cfg(feature = "onnx")]
+    Onnx(maou_search::OnnxEvaluator),
+}
+
+/// 評価器を 1 回だけ構築・保持して複数局面を連続探索する永続エンジン．
+///
+/// 関数 [`search`] は呼び出しごとに ONNX モデルをロードするため，棋譜解析の
+/// ように N 局面を連続探索する用途では本クラスを使う (モデルロードは
+/// `__init__` の 1 回のみ．TensorRT はプロセス内でエンジンを使い回せる)．
+///
+/// 予算 (時間/ノード数) は `search` の引数として毎回受け取る — 時間配分の
+/// 計画は上位レイヤーの責務であり本クラスは持たない
+/// (docs/design/game-analysis/index.md §4)．
+///
+/// # コンストラクタ引数
+///
+/// - `model_path` (str, optional): ONNX モデルのパス．未指定なら決定論的な
+///   mock 評価器 (API 検証/開発用 — 指し手の品質は無意味)．指定時は `onnx`
+///   feature 付きの wheel が必要 (無ければ `RuntimeError`)．
+/// - `threads` (int, optional): 探索スレッド数．
+/// - `batch_size` (int, optional): 評価バッチサイズ (TensorRT の padding
+///   サイズもこれに固定される)．
+/// - `use_cuda` (bool, optional): CUDA Execution Provider (`onnx-cuda` feature 必要)．
+/// - `use_tensorrt` (bool, optional): TensorRT Execution Provider
+///   (`onnx-tensorrt` feature 必要)．
+/// - `trt_engine_cache_dir` (str, optional): TensorRT エンジンキャッシュ保存先．
+#[pyclass(frozen)]
+struct SearchEngine {
+    evaluator: EngineEvaluator,
+    threads: usize,
+    batch_size: usize,
+}
+
+#[pymethods]
+impl SearchEngine {
+    #[new]
+    #[pyo3(signature = (*, model_path=None, threads=None, batch_size=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None))]
+    fn new(
+        model_path: Option<String>,
+        threads: Option<usize>,
+        batch_size: Option<usize>,
+        use_cuda: Option<bool>,
+        use_tensorrt: Option<bool>,
+        trt_engine_cache_dir: Option<String>,
+    ) -> PyResult<Self> {
+        let defaults = SearchOptions::default();
+        let threads = threads.unwrap_or(defaults.threads);
+        let batch_size = batch_size.unwrap_or(defaults.batch_size);
+        let evaluator = match model_path {
+            None => {
+                // mock 評価器 (決定論的擬似乱数)．API 検証/開発用
+                let _ = (use_cuda, use_tensorrt, trt_engine_cache_dir);
+                EngineEvaluator::Mock(maou_search::MockEvaluator::new(0))
+            }
+            #[cfg(feature = "onnx")]
+            Some(path) => {
+                let onnx_options = maou_search::onnx::OnnxOptions {
+                    intra_threads: 1,
+                    use_cuda: use_cuda.unwrap_or(false),
+                    use_tensorrt: use_tensorrt.unwrap_or(false),
+                    trt_engine_cache_dir,
+                    // TensorRT は shape ごとにエンジンをビルドするため batch_size に固定する
+                    pad_to: if use_tensorrt.unwrap_or(false) {
+                        Some(batch_size)
+                    } else {
+                        None
+                    },
+                };
+                EngineEvaluator::Onnx(
+                    maou_search::OnnxEvaluator::from_file(&path, &onnx_options).map_err(|e| {
+                        pyo3::exceptions::PyRuntimeError::new_err(format!(
+                            "ONNX モデルの読み込みに失敗: {e}"
+                        ))
+                    })?,
+                )
+            }
+            #[cfg(not(feature = "onnx"))]
+            Some(_) => {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "この wheel は onnx feature なしでビルドされているため model_path を使えません．\
+                     `maturin develop --features onnx` (CUDA: onnx-cuda / TensorRT: onnx-tensorrt) \
+                     でビルドしてください",
+                ));
+            }
+        };
+        Ok(SearchEngine {
+            evaluator,
+            threads,
+            batch_size,
+        })
+    }
+
+    /// 保持している評価器で 1 局面を探索する．
+    ///
+    /// 引数・返り値の意味は関数 [`search`] と同じ (評価器系オプションは
+    /// コンストラクタで固定済みのため受け取らない)．探索中は GIL を解放する．
+    #[pyo3(signature = (sfen, *, moves=None, max_playouts=None, time_ms=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn search(
+        &self,
+        py: Python<'_>,
+        sfen: &str,
+        moves: Option<Vec<String>>,
+        max_playouts: Option<u64>,
+        time_ms: Option<u64>,
+        root_dfpn: Option<bool>,
+        root_dfpn_nodes: Option<u64>,
+        root_dfpn_depth: Option<u32>,
+        leaf_mate: Option<bool>,
+        leaf_mate_nodes: Option<u64>,
+        leaf_mate_threads: Option<usize>,
+    ) -> PyResult<PySearchResult> {
+        let (board, history) = build_board_and_history(sfen, moves.as_deref())?;
+        validate_root_dfpn_depth(root_dfpn_depth)?;
+
+        let mut options = SearchOptions {
+            threads: self.threads,
+            batch_size: self.batch_size,
+            ..SearchOptions::default()
+        };
+        if let Some(v) = root_dfpn {
+            options.root_dfpn = v;
+        }
+        if let Some(v) = root_dfpn_nodes {
+            options.root_dfpn_nodes = v;
+        }
+        if let Some(v) = root_dfpn_depth {
+            options.root_dfpn_depth = v;
+        }
+        if let Some(v) = leaf_mate {
+            options.leaf_mate = v;
+        }
+        if let Some(v) = leaf_mate_nodes {
+            options.leaf_mate_nodes = v;
+        }
+        if let Some(v) = leaf_mate_threads {
+            options.leaf_mate_threads = v;
+        }
+        let limits = SearchLimits {
+            max_playouts,
+            time_ms,
+        };
+
+        let result = match &self.evaluator {
+            EngineEvaluator::Mock(ev) => py.detach(move || {
+                Searcher::new(ev, options).search_with_history(&board, &history, &limits)
+            }),
+            #[cfg(feature = "onnx")]
+            EngineEvaluator::Onnx(ev) => py.detach(move || {
+                Searcher::new(ev, options).search_with_history(&board, &history, &limits)
+            }),
+        };
+        Ok(to_py_result(result))
     }
 }
 
@@ -548,6 +721,7 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
 
     m.add_class::<PySearchResult>()?;
     m.add_class::<SearchRootChild>()?;
+    m.add_class::<SearchEngine>()?;
     m.add_function(wrap_pyfunction!(search, &m)?)?;
     m.add_function(wrap_pyfunction!(preprocess_hcpes, &m)?)?;
     m.add_function(wrap_pyfunction!(encode_hcp_features, &m)?)?;
