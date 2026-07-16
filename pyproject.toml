@@ -55,7 +55,7 @@ cpu-infer = [
 #   (libonnxruntime_providers_{shared,cuda,tensorrt}.so) は onnxruntime-gpu
 #   pip パッケージの capi/ から供給できるが，**静的コアと同一版でないと
 #   ABI 不一致でロードに失敗する**ため onnxruntime-gpu==1.22.* に固定する．
-#   これにより GPU wheel + `maou[tensorrt-infer]` だけで provider が揃い，
+#   これにより配布 wheel (latest) + `maou[tensorrt-infer]` だけで provider が揃い，
 #   provider tarball の別途 wget が不要になる (Colab 手順を簡素化)．
 #   TensorRT ランタイム (libnvinfer.so.10) は onnxruntime 1.22 が要求する
 #   10 系に固定する (pin なしだと 11 系が入り解決不能)．

@@ -1,5 +1,10 @@
 name: Build Wheel
 
+# 統合 wheel (単一配布): cargo features onnx-cuda + onnx-tensorrt を同梱した
+# manylinux_2_28 wheel を Release latest に添付する (旧 latest-gpu は廃止 —
+# reviews/2026-07-16-unified-wheel-build.md)．HW 依存は実行時フラグで opt-in
+# し，CUDA/TensorRT の実行時ライブラリは pip extra (onnx-gpu-infer /
+# tensorrt-infer) が供給するため，この wheel は CPU-only 環境でもそのまま動く．
 on:
   push:
     branches: [main]
@@ -24,8 +29,9 @@ jobs:
           target: x86_64-unknown-linux-gnu
           manylinux: "2_28"
           sccache: "true"
-          args: --release --out dist -i python3.11 python3.12
-          before-script-linux: yum install -y clang lld
+          args: --release --out dist -i python3.11 python3.12 --features pyo3/extension-module,onnx-cuda,onnx-tensorrt
+          # openssl-devel/perl は ort crate のバイナリ取得 (TLS) に必要
+          before-script-linux: yum install -y clang lld openssl-devel perl
 
       - name: Delete existing release
         env:
@@ -50,12 +56,17 @@ jobs:
           ls dist/*.whl 1>/dev/null 2>&1 || { echo "::error::No wheel files found in dist/"; exit 1; }
           gh release create latest \
             --title "Development Build (v${{ steps.version.outputs.version }})" \
-            --notes "Prebuilt wheels for development use (Colab, etc.).
+            --notes "Prebuilt unified wheels for development use (Colab, etc.).
 
           - **Version**: ${{ steps.version.outputs.version }}
           - **Commit**: ${{ github.sha }}
           - **Built at**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
           - **Platform**: manylinux_2_28 x86_64
-          - **Python**: CPython 3.11, 3.12" \
+          - **Python**: CPython 3.11, 3.12
+          - **Cargo features**: onnx-cuda, onnx-tensorrt (単一配布 wheel．
+            CPU-only 環境でもそのまま動作し，ONNX CPU 推論可)
+          - GPU 実行時要件: \`pip install 'maou[tensorrt-infer] @ <wheel>'\` が
+            onnxruntime-gpu 1.22 (provider .so) + tensorrt-cu12 10 系を版一致で
+            揃える (CUDA 12 環境)．手順: docs/design/position-search/benchmarking.md" \
             --latest \
             dist/*.whl

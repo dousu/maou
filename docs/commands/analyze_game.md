@@ -29,7 +29,7 @@
 | --- | --- | --- |
 | `--input-path PATH` | ✅ | Game record file (CSA / KIF). |
 | `--input-format csa\|kif` | | Record format. Auto-detected from the file extension (`.csa` → csa, `.kif` / `.kifu` → kif) when omitted; unknown extensions require this flag. |
-| `--model-path PATH` | | ONNX model file path. When omitted, a deterministic mock evaluator is used (API verification only — analysis quality is meaningless). Requires a wheel built with the `onnx` cargo feature (see `docs/commands/search.md`). |
+| `--model-path PATH` | | ONNX model file path. When omitted, a deterministic mock evaluator is used (API verification only — analysis quality is meaningless). Published wheels (Release `latest`) support this out of the box; local development builds need the `onnx` cargo feature (see `docs/commands/search.md`). |
 | `--time-ms INT` | | Time budget per position in milliseconds. Mutually exclusive with `--total-time-ms` / `--playouts`. Defaults to 1000 when no budget option is given. |
 | `--total-time-ms INT` | | Total time budget for the whole game, divided equally across positions (floor division, min 1 ms per position). |
 | `--playouts INT` | | Playout budget per position. |
