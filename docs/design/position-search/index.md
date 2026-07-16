@@ -39,10 +39,20 @@ maou (Python)
 
 ### 2.2 wheel 可搬性 (binding)
 
-デフォルトビルドは可搬な pure Rust を維持する．ONNX Runtime / CUDA EP / TensorRT
-などの platform 依存推論は **optional feature / 別 extra として分離**する
-(user veto: native build 禁止，HW 命令は runtime gate のみ)．Python 側には既に
-`cpu-infer` / `onnx-gpu-infer` / `tensorrt-infer` の extras 分離パターンがある．
+配布 wheel は**単一**とする (user 決定 2026-07-16 —
+reviews/2026-07-16-unified-wheel-build.md)．cargo features onnx-cuda +
+onnx-tensorrt を同梱した manylinux_2_28 wheel を Release `latest` に main push
+ごとに添付し，旧 `latest-gpu` (別管理の GPU wheel) は廃止．
+
+- HW 依存は従来どおり**実行時フラグ** (`use_cuda` / `use_tensorrt`) で opt-in
+  する (native build 禁止，HW 命令は runtime gate のみ — 不変)
+- CUDA / TensorRT の実行時ライブラリは wheel に同梱せず，pip extra
+  (`onnx-gpu-infer` / `tensorrt-infer`) で供給する
+- **CPU-only 環境で配布 wheel がそのまま動作すること**を回帰条件とする
+  (2026-07-16 実測: ONNX CPU 推論可 / `use_cuda` は明示エラー / ロード時に
+  CUDA 非依存で NEEDED は libc 系 + libstdc++ のみ)
+- ローカル開発のデフォルトビルド (`maturin develop` / crate default) は
+  pure Rust を維持する
 
 ### 2.3 モジュール構成 (実装済み)
 

@@ -47,9 +47,18 @@
 
 ## Wheel build requirements (cargo features)
 
-The default wheel is pure Rust and portable: `maou search` works with the
-mock evaluator only. Real NN search requires building the extension with the
-corresponding cargo feature of `maou_rust`:
+**Published wheels** (GitHub Release `latest`, rebuilt on every main push)
+bundle the ONNX evaluator with CUDA / TensorRT support (cargo features
+`onnx-cuda` + `onnx-tensorrt`, manylinux_2_28): `--model-path` works out of
+the box for CPU inference, and the GPU execution providers are enabled at
+runtime via `--cuda` / `--tensorrt` (the provider libraries are supplied by
+pip — `maou[onnx-gpu-infer]` / `maou[tensorrt-infer]`). See the Colab
+procedure in
+[docs/design/position-search/benchmarking.md](../design/position-search/benchmarking.md).
+
+**Local development builds** default to pure Rust and portable: `maou search`
+works with the mock evaluator only. Real NN search in a local build requires
+the corresponding cargo feature of `maou_rust`:
 
 ```bash
 uv run maturin develop --features onnx            # CPU inference
@@ -57,15 +66,8 @@ uv run maturin develop --features onnx-cuda       # + CUDA EP
 uv run maturin develop --features onnx-tensorrt   # + TensorRT EP
 ```
 
-Passing `--model-path` to a wheel built without `onnx` raises a
-`RuntimeError` with this instruction.
-
-**Prebuilt GPU wheels**: the GitHub Actions workflow **Build GPU Wheel**
-(workflow_dispatch) publishes release-built GPU wheels
-(onnx-cuda + onnx-tensorrt) and the ONNX Runtime provider libraries to the
-GitHub Release `latest-gpu`, so no Rust build is needed on Colab. See the
-Colab procedure in
-[docs/design/position-search/benchmarking.md](../design/position-search/benchmarking.md).
+Passing `--model-path` to a build without `onnx` raises a `RuntimeError`
+with this instruction.
 
 ## Outputs
 
