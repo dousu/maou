@@ -1,8 +1,13 @@
 ---
 title: wheel 配布の一本化 (通常 wheel と GPU wheel の統合)
 date: 2026-07-16
-status: pending
+status: approved
 applied_in:
+# user 承認 2026-07-16．workflow 統合 = 6d9f0f4，docs 3 件 (index.md /
+# benchmarking.md / search.md) = a41af07 で適用済み．残る
+# docs/commands/analyze_game.md は PR #387 マージ後に本ブランチを rebase して
+# 適用し，その時点で applied に遷移する．latest-gpu Release の削除は本 PR
+# マージ後，統合 latest ビルドの初回成功を確認してから実施する．
 target:
   - docs/design/position-search/index.md
   - docs/design/position-search/benchmarking.md
