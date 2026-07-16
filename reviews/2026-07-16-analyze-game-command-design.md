@@ -80,6 +80,11 @@ maou analyze-game --input-path FILE
 予算 3 オプションは相互排他 (2 つ以上指定はエラー)．探索 passthrough の
 名前・デフォルトは既存 `maou search` に揃える．
 
+実行プロバイダの選択肢は `maou search` と同一に維持する (user 指示
+2026-07-16): デフォルト = CPU，`--cuda` = CUDA EP，`--tensorrt` =
+TensorRT EP (+ `--trt-cache-dir`)．analyze-game 側で特定 EP を前提と
+したり固定したりしない．
+
 ### レイヤー構成 (fetch-floodgate と同型)
 
 | 層 | ファイル | 内容 |
@@ -113,6 +118,10 @@ class SearchEngine:
 - 探索中は GIL を解放する (`py.allow_threads`)．戻り値は既存
   `SearchResult` をそのまま使う
 - 予算は毎回引数で受け取る — 時間配分の判断は一切持たない (VETO 整合)
+- 実行プロバイダ (CPU / CUDA EP / TensorRT EP) は `__init__` 引数で
+  選択し，既存 `search` 関数と同じ cargo feature gate
+  (`onnx` / `onnx-cuda` / `onnx-tensorrt`) に従う — デフォルト wheel の
+  可搬性を維持 (VETO「wheel 可搬性維持」整合)
 - 既存の関数 `search` は互換のため残す (内部を `SearchEngine` 経由に
   リファクタするかは実装時判断)
 - 局面ごとの `search` 呼び出しが Python 側ループに残るので，進捗表示
