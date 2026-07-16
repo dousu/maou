@@ -1,15 +1,14 @@
 name: Claude Code Review
 
+# 手動実行のみ (PR push ごとの自動レビューはトークン浪費のため廃止 —
+# ローカルでの確認を正とする．必要な PR にだけ番号指定で実行する)
 on:
-  pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
-    paths:
-      - "src/**/*.py"
-      - "rust/src/**/*.rs"
-      - "tests/**/*.py"
-      - "pyproject.toml"
-      - "Cargo.toml"
-      - "rust/**/Cargo.toml"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "レビュー対象の PR 番号"
+        required: true
+        type: string
 
 jobs:
   claude-review:
@@ -36,7 +35,7 @@ jobs:
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: |
-            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+            /code-review:code-review ${{ github.repository }}/pull/${{ inputs.pr_number }}
 
             このプロジェクト固有のルールも確認してください:
             - Clean Architecture の依存方向を守る: infra → interface → app → domain
