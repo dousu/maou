@@ -6,13 +6,34 @@ from typing import Any
 
 import pytest
 
+from maou.app.analysis.analysis_session import (
+    _snapshot,
+    legal_move_infos,
+)
+from maou.domain.board.shogi import Board
 from maou.interface.analysis_gui import (
+    ClickState,
     SessionView,
+    advance_move,
     board_svg,
+    breadcrumb_markdown,
+    build_variation_tree,
+    candidate_usi,
     candidates_table,
+    click_overlays,
+    click_status_text,
+    current_node,
     eval_figure,
+    goto_node,
+    handle_board_click,
+    legal_move_choices,
     load_session,
+    mainline_ply,
     move_table,
+    node_board_svg,
+    node_candidates_table,
+    node_legal_moves,
+    node_position_info,
     position_analysis,
     position_info,
     sente_eval_cp,
@@ -419,3 +440,262 @@ class TestSummaryAndInfo:
         _, _, note = position_info(analyzed_view, 1)
         assert "エンジン最善: ▲2六歩" in note
         assert "0.030" in note
+
+
+@pytest.fixture
+def plain_tree(plain_view: SessionView) -> Any:
+    """レポートなしの分岐木を作る．"""
+    return build_variation_tree(plain_view.document, None)
+
+
+@pytest.fixture
+def analyzed_tree(analyzed_view: SessionView) -> Any:
+    """レポート取込済みの分岐木を作る．"""
+    return build_variation_tree(
+        analyzed_view.document, analyzed_view.report
+    )
+
+
+class TestBoardClickStateMachine:
+    """盤面クリック入力の状態機械のテスト．"""
+
+    def test_select_then_play(self, plain_tree: Any) -> None:
+        """自駒選択 → 行き先クリックで USI が確定する．"""
+        legal = node_legal_moves(plain_tree)
+        state, usi = handle_board_click(
+            legal, ClickState(), "sq:60", "b"
+        )
+        assert usi is None
+        assert state.selected == "sq:60"
+        state, usi = handle_board_click(
+            legal, state, "sq:59", "b"
+        )
+        assert usi == "7g7f"
+        assert state.selected is None
+
+    def test_click_empty_square_noop(
+        self, plain_tree: Any
+    ) -> None:
+        """起点にならないマスのクリックは何も起きない．"""
+        legal = node_legal_moves(plain_tree)
+        state, usi = handle_board_click(
+            legal, ClickState(), "sq:40", "b"
+        )
+        assert usi is None
+        assert state.selected is None
+
+    def test_reclick_deselects(self, plain_tree: Any) -> None:
+        """同じ起点の再クリックで選択解除される．"""
+        legal = node_legal_moves(plain_tree)
+        state, _ = handle_board_click(
+            legal, ClickState(), "sq:60", "b"
+        )
+        state, usi = handle_board_click(
+            legal, state, "sq:60", "b"
+        )
+        assert usi is None
+        assert state.selected is None
+
+    def test_switch_selection(self, plain_tree: Any) -> None:
+        """別の自駒クリックで選択が切り替わる．"""
+        legal = node_legal_moves(plain_tree)
+        state, _ = handle_board_click(
+            legal, ClickState(), "sq:60", "b"
+        )
+        # 2g = (2-1)*9 + (7-1) = 15
+        state, usi = handle_board_click(
+            legal, state, "sq:15", "b"
+        )
+        assert usi is None
+        assert state.selected == "sq:15"
+
+    def test_promotion_pending(self) -> None:
+        """成/不成の両方が合法な行き先で選択待ちに入る．"""
+        board = Board()
+        board.set_sfen("4k4/9/9/4P4/9/9/9/9/4K4 b - 1")
+        snapshot = _snapshot(board, 0, None)
+        legal = legal_move_infos(snapshot)
+        # 5d = 39, 5c = 38
+        state, _ = handle_board_click(
+            legal, ClickState(), "sq:39", "b"
+        )
+        state, usi = handle_board_click(
+            legal, state, "sq:38", "b"
+        )
+        assert usi is None
+        assert state.pending_usis == ("5d5c+", "5d5c")
+
+    def test_pending_cancelled_by_board_click(self) -> None:
+        """選択待ち中の盤面クリックはキャンセルして再解釈する．"""
+        board = Board()
+        board.set_sfen("4k4/9/9/4P4/9/9/9/9/4K4 b - 1")
+        snapshot = _snapshot(board, 0, None)
+        legal = legal_move_infos(snapshot)
+        state, _ = handle_board_click(
+            legal, ClickState(), "sq:39", "b"
+        )
+        state, _ = handle_board_click(
+            legal, state, "sq:38", "b"
+        )
+        assert state.pending_usis
+        state, usi = handle_board_click(
+            legal, state, "sq:39", "b"
+        )
+        assert usi is None
+        assert state.pending_usis == ()
+        assert state.selected == "sq:39"
+
+    def test_hand_drop(self) -> None:
+        """持ち駒クリック → 空きマスで駒打ちが確定する．"""
+        board = Board()
+        board.set_sfen("4k4/9/9/9/9/9/9/9/4K4 b P 1")
+        snapshot = _snapshot(board, 0, None)
+        legal = legal_move_infos(snapshot)
+        state, _ = handle_board_click(
+            legal, ClickState(), "hand:b:0", "b"
+        )
+        assert state.selected == "hand:b:0"
+        # 5e = (5-1)*9 + (5-1) = 40
+        state, usi = handle_board_click(
+            legal, state, "sq:40", "b"
+        )
+        assert usi == "P*5e"
+
+    def test_opponent_hand_ignored(self) -> None:
+        """相手側の持ち駒クリックは選択されない．"""
+        board = Board()
+        board.set_sfen("4k4/9/9/9/9/9/9/9/4K4 b P 1")
+        snapshot = _snapshot(board, 0, None)
+        legal = legal_move_infos(snapshot)
+        state, usi = handle_board_click(
+            legal, ClickState(), "hand:w:0", "b"
+        )
+        assert usi is None
+        assert state.selected is None
+
+    def test_click_overlays(self, plain_tree: Any) -> None:
+        """選択中は選択マスと行き先が row-major で得られる．"""
+        legal = node_legal_moves(plain_tree)
+        state, _ = handle_board_click(
+            legal, ClickState(), "sq:60", "b"
+        )
+        selected, destinations = click_overlays(
+            legal, state, "b"
+        )
+        # 7g: col=6, row=6 → row-major 6*9+6 = 60 (対角なので同値)
+        assert selected == [60]
+        # 7f: col=6, row=5 → 5*9+6 = 51
+        assert destinations == [51]
+        # 未選択は空
+        assert click_overlays(legal, ClickState(), "b") == (
+            [],
+            [],
+        )
+
+    def test_click_status_text(self, plain_tree: Any) -> None:
+        """クリック状態の説明テキスト．"""
+        snapshot = current_node(plain_tree).snapshot
+        assert "クリック" in click_status_text(
+            snapshot, ClickState()
+        )
+        text = click_status_text(
+            snapshot, ClickState(selected="sq:60")
+        )
+        assert "7七歩" in text
+        text = click_status_text(
+            snapshot, ClickState(selected="hand:b:0")
+        )
+        assert "持ち駒の歩" in text
+        text = click_status_text(
+            snapshot,
+            ClickState(pending_usis=("5d5c+", "5d5c")),
+        )
+        assert "成" in text
+
+
+class TestLegalMoveChoices:
+    """合法手 Dropdown 選択肢のテスト．"""
+
+    def test_choices_labels(self, plain_tree: Any) -> None:
+        snapshot = current_node(plain_tree).snapshot
+        legal = node_legal_moves(plain_tree)
+        choices = legal_move_choices(snapshot, legal)
+        assert len(choices) == 30
+        labels = {label for label, _usi in choices}
+        values = {usi for _label, usi in choices}
+        assert "7g7f" in values
+        assert any("▲7六歩" in label for label in labels)
+
+
+class TestVariationNavigation:
+    """分岐木ナビゲーション表示のテスト．"""
+
+    def test_breadcrumb_mainline(self, plain_tree: Any) -> None:
+        assert "初期局面" in breadcrumb_markdown(plain_tree)
+        goto_node(plain_tree, plain_tree.mainline_ids[2])
+        assert "2手目" in breadcrumb_markdown(plain_tree)
+
+    def test_breadcrumb_branch(self, plain_tree: Any) -> None:
+        advance_move(plain_tree, "7g7f")
+        advance_move(plain_tree, "8c8d")  # 分岐
+        text = breadcrumb_markdown(plain_tree)
+        assert "本譜 1手目" in text
+        assert "▶" in text
+        assert "△8四歩" in text
+
+    def test_mainline_ply(self, plain_tree: Any) -> None:
+        advance_move(plain_tree, "7g7f")
+        assert mainline_ply(plain_tree) == 1
+        advance_move(plain_tree, "8c8d")  # 分岐
+        assert mainline_ply(plain_tree) == 1
+
+    def test_node_board_svg_interactive(
+        self, analyzed_tree: Any
+    ) -> None:
+        legal = node_legal_moves(analyzed_tree)
+        svg = node_board_svg(
+            analyzed_tree,
+            click_state=ClickState(selected="sq:60"),
+            legal=legal,
+            interactive=True,
+        )
+        assert 'data-click="sq:60"' in svg
+        assert "rgba(255,152,0,0.35)" in svg  # 選択マス
+        assert "rgba(76,175,80,0.28)" in svg  # 行き先
+
+    def test_node_candidates_table(
+        self, analyzed_tree: Any
+    ) -> None:
+        rows = node_candidates_table(analyzed_tree, top_n=5)
+        assert rows
+        assert rows[0][0] == "1"
+
+    def test_candidate_usi(self, analyzed_tree: Any) -> None:
+        analysis = current_node(analyzed_tree).analysis
+        assert candidate_usi(analysis, 0, 5) == "2g2f"
+        assert candidate_usi(analysis, 99, 5) is None
+        assert candidate_usi(None, 0, 5) is None
+
+    def test_node_position_info_mainline(
+        self, analyzed_view: SessionView, analyzed_tree: Any
+    ) -> None:
+        goto_node(analyzed_tree, analyzed_tree.mainline_ids[1])
+        sfen, position_str, _note = node_position_info(
+            analyzed_view, analyzed_tree
+        )
+        assert position_str.endswith("moves 7g7f")
+        assert sfen == (
+            analyzed_view.document.snapshots[1].sfen
+        )
+
+    def test_node_position_info_branch(
+        self, analyzed_view: SessionView, analyzed_tree: Any
+    ) -> None:
+        advance_move(analyzed_tree, "2g2f")  # 本譜は 7g7f
+        sfen, position_str, note = node_position_info(
+            analyzed_view, analyzed_tree
+        )
+        assert position_str.endswith("moves 2g2f")
+        assert "分岐" in note
+        assert "未解析" in note
+        assert sfen.split(" ")[1] == "w"

@@ -18,11 +18,41 @@ from typing import Any
 
 import plotly.graph_objects as go
 
+# infra 層 (analysis_gui_server) が本モジュール経由で使う app 層 API の
+# 再エクスポート (サーバーは interface 層のみを import する)
 from maou.app.analysis.analysis_session import (
     GameDocument,
+    LegalMoveInfo,
     PositionSnapshot,
+    VariationTree,
+)
+from maou.app.analysis.analysis_session import (  # noqa: F401
+    advance_move as advance_move,
+)
+from maou.app.analysis.analysis_session import (
+    build_variation_tree as build_variation_tree,
+)
+from maou.app.analysis.analysis_session import (
+    current_node,
+)
+from maou.app.analysis.analysis_session import (
+    goto_node as goto_node,
+)
+from maou.app.analysis.analysis_session import (
+    legal_move_infos,
     load_game,
+    mainline_ancestor,
+    path_moves_usi,
     validate_report,
+)
+from maou.app.analysis.interactive_analyzer import (  # noqa: F401
+    DEFAULT_TIME_MS as DEFAULT_TIME_MS,
+)
+from maou.app.analysis.interactive_analyzer import (
+    EngineSettings as EngineSettings,
+)
+from maou.app.analysis.interactive_analyzer import (
+    InteractiveAnalyzer as InteractiveAnalyzer,
 )
 from maou.domain.board.shogi import (
     HAND_PIECE_SFEN_CHARS,
@@ -82,11 +112,14 @@ class SessionView:
         document: 棋譜の per-ply スナップショット表現．
         report: analyze-game の JSON レポート (dict)．未読込は None．
         move_labels: 本譜の日本語表記 (▲/△ 付き，手数分)．
+        source_name: 読み込んだ棋譜のファイル名 (GUI 内で生成する
+            レポートの ``input.path`` に記録する)．
     """
 
     document: GameDocument
     report: dict[str, Any] | None
     move_labels: list[str]
+    source_name: str = ""
 
 
 def sente_winrate(winrate: float, side_to_move: str) -> float:
@@ -206,6 +239,7 @@ def load_session(
         document=document,
         report=report,
         move_labels=move_labels,
+        source_name=filename,
     )
 
 
@@ -247,7 +281,41 @@ def board_svg(
     Returns:
         SVG 文字列．
     """
-    snapshot = view.document.snapshots[ply]
+    return snapshot_board_svg(
+        view.document.snapshots[ply],
+        position_analysis(view, ply),
+        show_candidates=show_candidates,
+        show_pv=show_pv,
+        top_n=top_n,
+    )
+
+
+def snapshot_board_svg(
+    snapshot: PositionSnapshot,
+    analysis: dict[str, Any] | None,
+    *,
+    show_candidates: bool = True,
+    show_pv: bool = False,
+    top_n: int = 5,
+    selected_squares: list[int] | None = None,
+    destination_squares: list[int] | None = None,
+    interactive: bool = False,
+) -> str:
+    """スナップショット局面の盤面 SVG を返す (分岐局面にも使える)．
+
+    Args:
+        snapshot: 対象局面のスナップショット．
+        analysis: この局面の解析記録 (候補手矢印の元．None で矢印なし)．
+        show_candidates: 候補手矢印を描画するか．
+        show_pv: 最善手の PV 先頭 3 手を連鎖矢印で描画するか．
+        top_n: 描画する候補手の数．
+        selected_squares: クリック選択中として塗るマス (row-major)．
+        destination_squares: 行き先候補として塗るマス (row-major)．
+        interactive: クリック標的 rect を重ねるか．
+
+    Returns:
+        SVG 文字列．
+    """
     position = BoardPosition(
         board_id_positions=snapshot.board_id_positions,
         pieces_in_hand=snapshot.pieces_in_hand,
@@ -264,7 +332,6 @@ def board_svg(
             )
 
     arrows: list[ArrowSpec] = []
-    analysis = position_analysis(view, ply)
     if analysis is not None and show_candidates:
         arrows = _candidate_arrows(
             analysis, top_n=top_n, show_pv=show_pv
@@ -276,6 +343,9 @@ def board_svg(
         highlight_squares=highlights,
         turn=turn,
         move_arrows=arrows,
+        selected_squares=selected_squares,
+        destination_squares=destination_squares,
+        interactive=interactive,
     )
 
 
@@ -512,10 +582,21 @@ def candidates_table(
     view: SessionView, ply: int, top_n: int = 5
 ) -> list[list[str]]:
     """局面 ply の候補手テーブル (上位 top_n) の行リストを返す．"""
-    analysis = position_analysis(view, ply)
+    return _candidate_rows(
+        view.document.snapshots[ply],
+        position_analysis(view, ply),
+        top_n,
+    )
+
+
+def _candidate_rows(
+    snapshot: PositionSnapshot,
+    analysis: dict[str, Any] | None,
+    top_n: int,
+) -> list[list[str]]:
+    """解析記録から候補手テーブルの行リストを作る．"""
     if analysis is None:
         return []
-    snapshot = view.document.snapshots[ply]
     rows: list[list[str]] = []
     candidates = list(analysis.get("candidates") or [])[
         : max(top_n, 0)
@@ -650,3 +731,365 @@ def position_info(
         ):
             notes.append(f"コメント: {doc.comments[ply - 1]}")
     return sfen, position_str, "\n\n".join(notes)
+
+
+# ----------------------------------------------------------------------
+# 対話解析 (分岐木 + 盤面クリック入力)
+# ----------------------------------------------------------------------
+
+# 段の漢数字 (指し手・マス表記用)
+_RANK_KANJI = "一二三四五六七八九"
+
+
+@dataclass(frozen=True)
+class ClickState:
+    """盤面クリック入力の進行状態 (plain data)．
+
+    2 クリック方式 (docs/design/game-analysis/gui.md §10) の状態機械:
+    選択なし → 自駒/持ち駒クリックで選択 → 行き先クリックで確定．
+    成/不成が両方合法な行き先では ``pending_usis`` に両候補を保持し，
+    UI の確認ボタンで確定する．
+
+    Attributes:
+        selected: 選択中の起点 (``data-click`` 値: "sq:60" /
+            "hand:b:0")．未選択は None．
+        pending_usis: 成/不成の選択待ち USI (成る手, 成らない手)．
+    """
+
+    selected: str | None = None
+    pending_usis: tuple[str, ...] = ()
+
+
+def node_legal_moves(
+    tree: VariationTree,
+) -> list[LegalMoveInfo]:
+    """現在ノードの局面の合法手を列挙する．"""
+    return legal_move_infos(current_node(tree).snapshot)
+
+
+def _moves_from_origin(
+    legal: list[LegalMoveInfo], origin: str, turn: str
+) -> list[LegalMoveInfo]:
+    """クリック値 (起点) に対応する合法手を返す．
+
+    "sq:N" は移動元マス N の手，"hand:{side}:{type}" は手番側の
+    その駒種の駒打ち (相手側の持ち駒は空リスト)．
+    """
+    parts = origin.split(":")
+    try:
+        if parts[0] == "sq" and len(parts) == 2:
+            square = int(parts[1])
+            return [
+                m
+                for m in legal
+                if not m.is_drop and m.from_square == square
+            ]
+        if parts[0] == "hand" and len(parts) == 3:
+            if parts[1] != turn:
+                return []
+            piece_type = int(parts[2])
+            return [
+                m
+                for m in legal
+                if m.is_drop and m.drop_piece_type == piece_type
+            ]
+    except ValueError:
+        logger.warning("不正なクリック値です: %s", origin)
+    return []
+
+
+def handle_board_click(
+    legal: list[LegalMoveInfo],
+    state: ClickState,
+    value: str,
+    turn: str,
+) -> tuple[ClickState, str | None]:
+    """盤面クリック 1 回分の状態遷移を計算する (純関数)．
+
+    Args:
+        legal: 現局面の合法手．
+        state: 現在のクリック状態．
+        value: クリックされた標的の ``data-click`` 値．
+        turn: 手番 ("b" / "w")．
+
+    Returns:
+        ``(新しい ClickState, 指す USI or None)``．成/不成の選択待ちに
+        入った場合は USI は None で ``pending_usis`` に両候補が入る．
+    """
+    value = (value or "").strip()
+    if not value:
+        return ClickState(), None
+    if state.pending_usis:
+        # 確認ボタン以外のクリックはキャンセルし，新規クリックとして解釈
+        state = ClickState()
+
+    clicked_origin_moves = _moves_from_origin(
+        legal, value, turn
+    )
+    if state.selected is None:
+        if clicked_origin_moves:
+            return ClickState(selected=value), None
+        return ClickState(), None
+
+    if value == state.selected:
+        # 同じ起点の再クリックで選択解除
+        return ClickState(), None
+
+    selected_moves = _moves_from_origin(
+        legal, state.selected, turn
+    )
+    if value.startswith("sq:"):
+        try:
+            to_square = int(value.split(":")[1])
+        except ValueError:
+            return ClickState(), None
+        matches = [
+            m
+            for m in selected_moves
+            if m.to_square == to_square
+        ]
+        if len(matches) == 1:
+            return ClickState(), matches[0].usi
+        if len(matches) >= 2:
+            promo = next(
+                (m.usi for m in matches if m.is_promotion),
+                None,
+            )
+            nonpromo = next(
+                (m.usi for m in matches if not m.is_promotion),
+                None,
+            )
+            if promo is not None and nonpromo is not None:
+                return (
+                    ClickState(
+                        selected=state.selected,
+                        pending_usis=(promo, nonpromo),
+                    ),
+                    None,
+                )
+
+    # 行き先ではない → 有効な起点なら選択切替，そうでなければ解除
+    if clicked_origin_moves:
+        return ClickState(selected=value), None
+    return ClickState(), None
+
+
+def click_overlays(
+    legal: list[LegalMoveInfo],
+    state: ClickState,
+    turn: str,
+) -> tuple[list[int], list[int]]:
+    """クリック状態から盤面の塗り分け (選択/行き先) を作る．
+
+    Returns:
+        ``(selected_squares, destination_squares)``．いずれも
+        renderer の row-major 索引．
+    """
+    if state.selected is None:
+        return [], []
+    selected: list[int] = []
+    if state.selected.startswith("sq:"):
+        try:
+            selected.append(
+                _highlight_index(
+                    int(state.selected.split(":")[1])
+                )
+            )
+        except ValueError:
+            return [], []
+    destinations = sorted(
+        {
+            _highlight_index(m.to_square)
+            for m in _moves_from_origin(
+                legal, state.selected, turn
+            )
+        }
+    )
+    return selected, destinations
+
+
+def click_status_text(
+    snapshot: PositionSnapshot, state: ClickState
+) -> str:
+    """クリック状態の説明テキストを返す (手入力状態の表示用)．"""
+    if state.pending_usis:
+        return "成 / 不成を選択してください"
+    if state.selected is None:
+        return (
+            "盤面クリック: 動かす駒 (または持ち駒) をクリック"
+        )
+    parts = state.selected.split(":")
+    if parts[0] == "sq":
+        try:
+            square = int(parts[1])
+        except ValueError:
+            return ""
+        row, col = square % 9, square // 9
+        piece = get_piece_name_ja(
+            snapshot.board_id_positions[row][col]
+        )
+        return (
+            f"選択中: {col + 1}{_RANK_KANJI[row]}{piece} — "
+            "行き先をクリック"
+        )
+    if parts[0] == "hand" and len(parts) == 3:
+        try:
+            piece = get_piece_name_ja(int(parts[2]) + 1)
+        except ValueError:
+            return ""
+        return f"選択中: 持ち駒の{piece} — 打つマスをクリック"
+    return ""
+
+
+def legal_move_choices(
+    snapshot: PositionSnapshot,
+    legal: list[LegalMoveInfo],
+) -> list[tuple[str, str]]:
+    """合法手 Dropdown の選択肢 (日本語表記, USI) を返す．
+
+    盤面クリックが使えない環境向けのフォールバック入力
+    (docs/design/game-analysis/gui.md §10)．
+    """
+    choices: list[tuple[str, str]] = []
+    for move in legal:
+        try:
+            label = _move_label(snapshot, move.usi)
+        except (ValueError, IndexError):
+            label = move.usi
+        choices.append((f"{label} ({move.usi})", move.usi))
+    return choices
+
+
+def breadcrumb_markdown(tree: VariationTree) -> str:
+    """分岐パンくず (本譜 N手目 ▶ △8四飛 ▶ …) の Markdown を返す．"""
+    node = current_node(tree)
+    if node.is_mainline:
+        if node.snapshot.ply == 0:
+            return "**本譜** 初期局面"
+        return f"**本譜** {node.snapshot.ply}手目"
+    chain = []
+    cursor = node
+    while not cursor.is_mainline:
+        assert cursor.parent_id is not None
+        parent = tree.nodes[cursor.parent_id]
+        assert cursor.move_usi is not None
+        try:
+            label = _move_label(
+                parent.snapshot, cursor.move_usi
+            )
+        except (ValueError, IndexError):
+            label = cursor.move_usi
+        chain.append(label)
+        cursor = parent
+    chain.reverse()
+    base = (
+        f"**本譜 {cursor.snapshot.ply}手目**"
+        if cursor.snapshot.ply > 0
+        else "**本譜 初期局面**"
+    )
+    return base + " ▶ " + " ▶ ".join(chain)
+
+
+def mainline_ply(tree: VariationTree) -> int:
+    """現在ノードに最も近い本譜局面の ply を返す．
+
+    分岐中はスライダー・評価値グラフの現在位置線を分岐点に保つ．
+    """
+    return mainline_ancestor(tree).snapshot.ply
+
+
+def node_board_svg(
+    tree: VariationTree,
+    *,
+    show_candidates: bool = True,
+    show_pv: bool = False,
+    top_n: int = 5,
+    click_state: ClickState | None = None,
+    legal: list[LegalMoveInfo] | None = None,
+    interactive: bool = False,
+) -> str:
+    """現在ノードの盤面 SVG (解析キャッシュの候補手矢印付き) を返す．"""
+    node = current_node(tree)
+    selected: list[int] = []
+    destinations: list[int] = []
+    if click_state is not None and legal is not None:
+        selected, destinations = click_overlays(
+            legal, click_state, node.snapshot.turn
+        )
+    return snapshot_board_svg(
+        node.snapshot,
+        node.analysis,
+        show_candidates=show_candidates,
+        show_pv=show_pv,
+        top_n=top_n,
+        selected_squares=selected,
+        destination_squares=destinations,
+        interactive=interactive,
+    )
+
+
+def node_candidates_table(
+    tree: VariationTree, top_n: int = 5
+) -> list[list[str]]:
+    """現在ノードの候補手テーブル (上位 top_n) の行リストを返す．"""
+    node = current_node(tree)
+    return _candidate_rows(node.snapshot, node.analysis, top_n)
+
+
+def candidate_usi(
+    analysis: dict[str, Any] | None,
+    row_index: int,
+    top_n: int,
+) -> str | None:
+    """候補手テーブルの行番号から USI を引く (行クリック → 分岐用)．
+
+    行の並びは :func:`_candidate_rows` と同じ
+    (``candidates`` の先頭 top_n 件)．
+    """
+    if analysis is None:
+        return None
+    candidates = list(analysis.get("candidates") or [])[
+        : max(top_n, 0)
+    ]
+    if 0 <= row_index < len(candidates):
+        usi = candidates[row_index].get("usi")
+        return str(usi) if usi else None
+    return None
+
+
+def node_position_info(
+    view: SessionView, tree: VariationTree
+) -> tuple[str, str, str]:
+    """現在ノードの局面情報 (SFEN / position 文字列 / 注記) を返す．
+
+    本譜ノードは :func:`position_info` に委譲し，分岐ノードは分岐点と
+    分岐手順の注記を作る．
+    """
+    node = current_node(tree)
+    if node.is_mainline:
+        return position_info(view, node.snapshot.ply)
+    doc = view.document
+    path = path_moves_usi(tree, node.node_id)
+    position_str = (
+        f"position sfen {doc.snapshots[0].sfen} "
+        f"moves {' '.join(path)}"
+    )
+    ancestor = mainline_ancestor(tree, node.node_id)
+    notes = [
+        f"**分岐** (本譜 {ancestor.snapshot.ply}手目から "
+        f"{node.snapshot.ply - ancestor.snapshot.ply} 手)"
+    ]
+    assert node.parent_id is not None
+    assert node.move_usi is not None
+    parent = tree.nodes[node.parent_id]
+    try:
+        label = _move_label(parent.snapshot, node.move_usi)
+    except (ValueError, IndexError):
+        label = node.move_usi
+    notes.append(f"**{node.snapshot.ply}手目**: {label}")
+    if node.analysis is None:
+        notes.append(
+            "この局面は未解析です "
+            "(「この局面を解析」で解析できます)"
+        )
+    return node.snapshot.sfen, position_str, "\n\n".join(notes)

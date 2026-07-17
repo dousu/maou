@@ -487,3 +487,116 @@ class TestHeaderVisibility:
             f"header band (top={header_top}) is clipped: "
             f"viewBox min-y={min_y}"
         )
+
+
+class TestInteractiveRendering:
+    """クリック標的・選択/行き先塗りのテスト．"""
+
+    @staticmethod
+    def _empty_position(
+        hand: list[int] | None = None,
+    ) -> BoardPosition:
+        return BoardPosition(
+            board_id_positions=[[0] * 9 for _ in range(9)],
+            pieces_in_hand=hand or [0] * 14,
+        )
+
+    def test_interactive_click_targets(self) -> None:
+        """interactive=True で盤上 81 マスの標的が付く．"""
+        renderer = SVGBoardRenderer()
+        svg = renderer.render(
+            self._empty_position(), interactive=True
+        )
+        assert svg.count('data-click="sq:') == 81
+        assert 'data-click="sq:0"' in svg
+        assert 'data-click="sq:80"' in svg
+        # 持ち駒なしなら hand 標的は出ない
+        assert 'data-click="hand:' not in svg
+
+    def test_interactive_hand_targets(self) -> None:
+        """枚数 > 0 の持ち駒行にのみ標的が付く．"""
+        hand = [0] * 14
+        hand[0] = 2  # 先手の歩
+        hand[7 + 4] = 1  # 後手の金
+        renderer = SVGBoardRenderer()
+        svg = renderer.render(
+            self._empty_position(hand), interactive=True
+        )
+        assert 'data-click="hand:b:0"' in svg
+        assert 'data-click="hand:w:4"' in svg
+        assert svg.count('data-click="hand:') == 2
+
+    def test_not_interactive_by_default(self) -> None:
+        """デフォルトでは標的なし (後方互換)．"""
+        renderer = SVGBoardRenderer()
+        svg = renderer.render(self._empty_position())
+        assert "data-click" not in svg
+
+    def test_selected_and_destination_fills(self) -> None:
+        """選択マスと行き先マスが専用色で塗られる．"""
+        renderer = SVGBoardRenderer()
+        svg = renderer.render(
+            self._empty_position(),
+            selected_squares=[60],
+            destination_squares=[51],
+        )
+        assert SVGBoardRenderer.COLOR_SELECTED in svg
+        assert SVGBoardRenderer.COLOR_DESTINATION in svg
+
+
+class TestDropArrowSide:
+    """駒打ち矢印の始点が手番側の持ち駒エリアになるテスト．"""
+
+    @staticmethod
+    def _position_with_hands() -> BoardPosition:
+        hand = [0] * 14
+        hand[0] = 1  # 先手の歩
+        hand[7] = 1  # 後手の歩
+        return BoardPosition(
+            board_id_positions=[[0] * 9 for _ in range(9)],
+            pieces_in_hand=hand,
+        )
+
+    def test_black_drop_from_right_area(self) -> None:
+        """先手番の駒打ちは右側 (先手持ち駒) から引く．"""
+        arrow = MoveArrow(
+            from_square=None,
+            to_square=40,
+            is_drop=True,
+            drop_piece_type=0,
+        )
+        svg = SVGBoardRenderer().render(
+            self._position_with_hands(),
+            turn=Turn.BLACK,
+            move_arrow=arrow,
+        )
+        assert 'x1="755.0"' in svg
+
+    def test_white_drop_from_left_area(self) -> None:
+        """後手番の駒打ちは左側 (後手持ち駒) から引く．"""
+        arrow = MoveArrow(
+            from_square=None,
+            to_square=40,
+            is_drop=True,
+            drop_piece_type=0,
+        )
+        svg = SVGBoardRenderer().render(
+            self._position_with_hands(),
+            turn=Turn.WHITE,
+            move_arrow=arrow,
+        )
+        assert 'x1="95.0"' in svg
+
+    def test_no_turn_defaults_to_black_side(self) -> None:
+        """turn なし (後方互換) は先手側から引く．"""
+        arrow = MoveArrow(
+            from_square=None,
+            to_square=40,
+            is_drop=True,
+            drop_piece_type=0,
+        )
+        svg = SVGBoardRenderer().render(
+            self._position_with_hands(),
+            move_arrow=arrow,
+        )
+        assert 'x1="755.0"' in svg
