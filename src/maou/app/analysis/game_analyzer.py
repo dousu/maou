@@ -199,6 +199,240 @@ def _turn_char(turn: Turn) -> str:
     return "b" if turn == Turn.BLACK else "w"
 
 
+def build_search_engine(
+    *,
+    model_path: Path | None = None,
+    threads: int = 1,
+    batch_size: int = 8,
+    cuda: bool = False,
+    tensorrt: bool = False,
+    trt_engine_cache_dir: Path | None = None,
+) -> SearchEngine:
+    """評価器を 1 回ロードして再利用する SearchEngine を構築する．
+
+    Args:
+        model_path: ONNX モデルのパス．None なら決定論的な mock 評価器
+            (API 検証/開発用)．
+        threads: 探索スレッド数．
+        batch_size: 評価バッチサイズ．
+        cuda: CUDA Execution Provider を使うか．
+        tensorrt: TensorRT Execution Provider を使うか．
+        trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
+
+    Returns:
+        構築済みの SearchEngine．
+    """
+    return SearchEngine(
+        model_path=(
+            str(model_path) if model_path is not None else None
+        ),
+        threads=threads,
+        batch_size=batch_size,
+        use_cuda=cuda,
+        use_tensorrt=tensorrt,
+        trt_engine_cache_dir=(
+            str(trt_engine_cache_dir)
+            if trt_engine_cache_dir is not None
+            else None
+        ),
+    )
+
+
+def position_record(
+    *,
+    ply: int,
+    side: str,
+    sfen: str,
+    result: Any,
+    num_candidates: int,
+    played_usi: str | None = None,
+    record_time_s: int | None = None,
+    record_score: int | None = None,
+    record_comment: str | None = None,
+) -> dict[str, Any]:
+    """1 局面分の解析記録 (JSON 化可能な dict) を作る．
+
+    ``played_move_winrate`` / ``winrate_loss`` は同一局面の
+    root_children 統計から取る (未訪問の手は winrate が「データなし」
+    のため null)．``winrate_loss`` は best との差を 0 で下限クランプ
+    する (訪問数基準の最終手選択では played の Q が best を僅かに
+    上回り得るが，その場合も「損失なし」と扱う)．
+
+    Args:
+        ply: 手数 (この局面から指す手の番号)．
+        side: 手番 ("b" / "w")．
+        sfen: 局面の SFEN．
+        result: SearchEngine.search の結果オブジェクト．
+        num_candidates: 記録する候補手数．
+        played_usi: 実戦で指された手 (USI)．GUI の任意局面解析など
+            実戦手が存在しない場合は None (match=False /
+            winrate_loss=None になる)．
+        record_time_s: 棋譜記載の消費時間 (秒)．
+        record_score: 棋譜記載の評価値．
+        record_comment: 棋譜記載のコメント．
+
+    Returns:
+        analyze-game の ``positions[i]`` スキーマの dict．
+    """
+    best_move = result.best_move
+    children = list(result.root_children)
+    played_child = (
+        next((c for c in children if c.usi == played_usi), None)
+        if played_usi is not None
+        else None
+    )
+    played_winrate = (
+        float(played_child.winrate)
+        if played_child is not None
+        and int(played_child.visits) > 0
+        else None
+    )
+    winrate = float(result.winrate)
+    best_child = (
+        next(
+            (c for c in children if c.usi == best_move),
+            None,
+        )
+        if best_move is not None
+        else None
+    )
+    best_winrate = (
+        float(best_child.winrate)
+        if best_child is not None and int(best_child.visits) > 0
+        else winrate
+    )
+    match = (
+        best_move is not None
+        and played_usi is not None
+        and played_usi == best_move
+    )
+    winrate_loss: float | None
+    if played_usi is None:
+        winrate_loss = None
+    elif match:
+        winrate_loss = 0.0
+    elif played_winrate is not None:
+        winrate_loss = max(best_winrate - played_winrate, 0.0)
+    else:
+        winrate_loss = None
+
+    # 候補手: best を先頭に，残りは訪問回数の降順 (SearchRunner と同じ整列)
+    children_sorted = sorted(
+        children, key=lambda c: int(c.visits), reverse=True
+    )
+    best_first = [
+        c for c in children_sorted if c.usi == best_move
+    ]
+    rest = [c for c in children_sorted if c.usi != best_move]
+    candidates: list[dict[str, Any]] = []
+    for child in (best_first + rest)[:num_candidates]:
+        candidates.append(
+            {
+                "usi": child.usi,
+                "visits": int(child.visits),
+                "winrate": (
+                    float(child.winrate)
+                    if int(child.visits) > 0
+                    else None
+                ),
+                "prior": float(child.prior),
+                "proven": (
+                    float(child.proven)
+                    if child.proven is not None
+                    else None
+                ),
+            }
+        )
+
+    return {
+        "ply": ply,
+        "side_to_move": side,
+        "sfen": sfen,
+        "played_move": played_usi,
+        "best_move": best_move,
+        "match": match,
+        "winrate": winrate,
+        "eval_cp": float(
+            Evaluation.get_eval_from_winrate(winrate)
+        ),
+        "played_move_winrate": played_winrate,
+        "winrate_loss": winrate_loss,
+        "pv": list(result.pv),
+        "candidates": candidates,
+        "mate_found": result.stop == "root_proven",
+        "playouts": int(result.playouts),
+        "elapsed_ms": int(result.elapsed_ms),
+        "stop": result.stop,
+        "record_time_s": record_time_s,
+        "record_score": record_score,
+        "record_comment": record_comment,
+    }
+
+
+def summarize_positions(
+    positions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """per-position 記録から対局サマリを作る．
+
+    worst_moves は winrate_loss の大きい順に上位 5 手 (null は除外)．
+
+    Args:
+        positions: :func:`position_record` の dict のリスト．
+
+    Returns:
+        analyze-game の ``summary`` スキーマの dict．
+    """
+    sides = {"b": "black", "w": "white"}
+    match_rate: dict[str, float | None] = {}
+    mean_winrate_loss: dict[str, float | None] = {}
+    for side, label in sides.items():
+        side_positions = [
+            p for p in positions if p["side_to_move"] == side
+        ]
+        match_rate[label] = (
+            sum(1 for p in side_positions if p["match"])
+            / len(side_positions)
+            if side_positions
+            else None
+        )
+        losses = [
+            p["winrate_loss"]
+            for p in side_positions
+            if p["winrate_loss"] is not None
+        ]
+        mean_winrate_loss[label] = (
+            sum(losses) / len(losses) if losses else None
+        )
+    worst = sorted(
+        (p for p in positions if p["winrate_loss"] is not None),
+        key=lambda p: p["winrate_loss"],
+        reverse=True,
+    )[:5]
+    return {
+        "match_rate": match_rate,
+        "mean_winrate_loss": mean_winrate_loss,
+        "worst_moves": [
+            {
+                "ply": p["ply"],
+                "side": p["side_to_move"],
+                "played": p["played_move"],
+                "best": p["best_move"],
+                "winrate_loss": p["winrate_loss"],
+            }
+            for p in worst
+        ],
+        "mates_found": [
+            {"ply": p["ply"], "side": p["side_to_move"]}
+            for p in positions
+            if p["mate_found"]
+        ],
+        "total_elapsed_ms": sum(
+            p["elapsed_ms"] for p in positions
+        ),
+        "total_playouts": sum(p["playouts"] for p in positions),
+    }
+
+
 class GameAnalyzer:
     """棋譜 1 局を 1 手ずつ 1 局面探索で解析するユースケース．
 
@@ -275,21 +509,13 @@ class GameAnalyzer:
         usi_moves = [move_to_usi(m) for m in moves]
         budgets = option.allocator.allocate(len(moves))
 
-        engine = SearchEngine(
-            model_path=(
-                str(option.model_path)
-                if option.model_path is not None
-                else None
-            ),
+        engine = build_search_engine(
+            model_path=option.model_path,
             threads=option.threads,
             batch_size=option.batch_size,
-            use_cuda=option.cuda,
-            use_tensorrt=option.tensorrt,
-            trt_engine_cache_dir=(
-                str(option.trt_engine_cache_dir)
-                if option.trt_engine_cache_dir is not None
-                else None
-            ),
+            cuda=option.cuda,
+            tensorrt=option.tensorrt,
+            trt_engine_cache_dir=option.trt_engine_cache_dir,
         )
 
         record_times: list[int] = list(record.times)
@@ -329,7 +555,7 @@ class GameAnalyzer:
                     f"の探索に失敗: {e}"
                 ) from e
             positions.append(
-                self._position_record(
+                position_record(
                     ply=ply,
                     side=side,
                     sfen=sfen,
@@ -392,7 +618,7 @@ class GameAnalyzer:
                 option.allocator, budgets
             ),
             "positions": positions,
-            "summary": self._summary(positions),
+            "summary": summarize_positions(positions),
         }
 
     def _parse_record(
@@ -421,182 +647,3 @@ class GameAnalyzer:
                 "time_ms": budgets[0].time_ms,
             }
         return meta
-
-    def _position_record(
-        self,
-        *,
-        ply: int,
-        side: str,
-        sfen: str,
-        played_usi: str,
-        result: Any,
-        num_candidates: int,
-        record_time_s: int | None,
-        record_score: int | None,
-        record_comment: str | None,
-    ) -> dict[str, Any]:
-        """1 局面分の解析記録 (JSON 化可能な dict) を作る．
-
-        ``played_move_winrate`` / ``winrate_loss`` は同一局面の
-        root_children 統計から取る (未訪問の手は winrate が「データなし」
-        のため null)．``winrate_loss`` は best との差を 0 で下限クランプ
-        する (訪問数基準の最終手選択では played の Q が best を僅かに
-        上回り得るが，その場合も「損失なし」と扱う)．
-        """
-        best_move = result.best_move
-        children = list(result.root_children)
-        played_child = next(
-            (c for c in children if c.usi == played_usi), None
-        )
-        played_winrate = (
-            float(played_child.winrate)
-            if played_child is not None
-            and int(played_child.visits) > 0
-            else None
-        )
-        winrate = float(result.winrate)
-        best_child = (
-            next(
-                (c for c in children if c.usi == best_move),
-                None,
-            )
-            if best_move is not None
-            else None
-        )
-        best_winrate = (
-            float(best_child.winrate)
-            if best_child is not None
-            and int(best_child.visits) > 0
-            else winrate
-        )
-        match = (
-            best_move is not None and played_usi == best_move
-        )
-        winrate_loss: float | None
-        if match:
-            winrate_loss = 0.0
-        elif played_winrate is not None:
-            winrate_loss = max(
-                best_winrate - played_winrate, 0.0
-            )
-        else:
-            winrate_loss = None
-
-        # 候補手: best を先頭に，残りは訪問回数の降順 (SearchRunner と同じ整列)
-        children_sorted = sorted(
-            children, key=lambda c: int(c.visits), reverse=True
-        )
-        best_first = [
-            c for c in children_sorted if c.usi == best_move
-        ]
-        rest = [
-            c for c in children_sorted if c.usi != best_move
-        ]
-        candidates: list[dict[str, Any]] = []
-        for child in (best_first + rest)[:num_candidates]:
-            candidates.append(
-                {
-                    "usi": child.usi,
-                    "visits": int(child.visits),
-                    "winrate": (
-                        float(child.winrate)
-                        if int(child.visits) > 0
-                        else None
-                    ),
-                    "prior": float(child.prior),
-                    "proven": (
-                        float(child.proven)
-                        if child.proven is not None
-                        else None
-                    ),
-                }
-            )
-
-        return {
-            "ply": ply,
-            "side_to_move": side,
-            "sfen": sfen,
-            "played_move": played_usi,
-            "best_move": best_move,
-            "match": match,
-            "winrate": winrate,
-            "eval_cp": float(
-                Evaluation.get_eval_from_winrate(winrate)
-            ),
-            "played_move_winrate": played_winrate,
-            "winrate_loss": winrate_loss,
-            "pv": list(result.pv),
-            "candidates": candidates,
-            "mate_found": result.stop == "root_proven",
-            "playouts": int(result.playouts),
-            "elapsed_ms": int(result.elapsed_ms),
-            "stop": result.stop,
-            "record_time_s": record_time_s,
-            "record_score": record_score,
-            "record_comment": record_comment,
-        }
-
-    def _summary(
-        self, positions: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        """per-position 記録から対局サマリを作る．
-
-        worst_moves は winrate_loss の大きい順に上位 5 手 (null は除外)．
-        """
-        sides = {"b": "black", "w": "white"}
-        match_rate: dict[str, float | None] = {}
-        mean_winrate_loss: dict[str, float | None] = {}
-        for side, label in sides.items():
-            side_positions = [
-                p
-                for p in positions
-                if p["side_to_move"] == side
-            ]
-            match_rate[label] = (
-                sum(1 for p in side_positions if p["match"])
-                / len(side_positions)
-                if side_positions
-                else None
-            )
-            losses = [
-                p["winrate_loss"]
-                for p in side_positions
-                if p["winrate_loss"] is not None
-            ]
-            mean_winrate_loss[label] = (
-                sum(losses) / len(losses) if losses else None
-            )
-        worst = sorted(
-            (
-                p
-                for p in positions
-                if p["winrate_loss"] is not None
-            ),
-            key=lambda p: p["winrate_loss"],
-            reverse=True,
-        )[:5]
-        return {
-            "match_rate": match_rate,
-            "mean_winrate_loss": mean_winrate_loss,
-            "worst_moves": [
-                {
-                    "ply": p["ply"],
-                    "side": p["side_to_move"],
-                    "played": p["played_move"],
-                    "best": p["best_move"],
-                    "winrate_loss": p["winrate_loss"],
-                }
-                for p in worst
-            ],
-            "mates_found": [
-                {"ply": p["ply"], "side": p["side_to_move"]}
-                for p in positions
-                if p["mate_found"]
-            ],
-            "total_elapsed_ms": sum(
-                p["elapsed_ms"] for p in positions
-            ),
-            "total_playouts": sum(
-                p["playouts"] for p in positions
-            ),
-        }

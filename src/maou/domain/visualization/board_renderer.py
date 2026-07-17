@@ -133,6 +133,10 @@ class SVGBoardRenderer:
     COLOR_HIGHLIGHT = (
         "rgba(0,112,243,0.12)"  # ハイライト（モダンブルー）
     )
+    COLOR_SELECTED = "rgba(255,152,0,0.35)"  # クリック選択中のマス（アンバー）
+    COLOR_DESTINATION = (
+        "rgba(76,175,80,0.28)"  # 選択駒の行き先候補（グリーン）
+    )
 
     # 矢印の色設定 (module-level のデフォルトを共有)
     COLOR_ARROW = DEFAULT_ARROW_COLOR
@@ -146,23 +150,34 @@ class SVGBoardRenderer:
         record_id: str | None = None,
         move_arrow: MoveArrow | None = None,
         move_arrows: list[ArrowSpec] | None = None,
+        selected_squares: list[int] | None = None,
+        destination_squares: list[int] | None = None,
+        interactive: bool = False,
     ) -> str:
         """将棋盤をSVGとして描画する．
 
         Args:
             position: 描画する盤面状態
-            highlight_squares: ハイライトするマス（0-80のインデックス）
+            highlight_squares: ハイライトするマス（0-80のインデックス．
+                highlight/selected/destination は row * 9 + col の
+                行優先索引 — 矢印の column-major とは異なる既存仕様）
             turn: 手番（Turn.BLACK または Turn.WHITE）
             record_id: レコードID
             move_arrow: 描画する指し手矢印（Noneの場合は矢印なし）．
                 デフォルトスタイルの ArrowSpec 1 本と等価な後方互換引数
             move_arrows: スタイル付き矢印のリスト（候補手の複数表示等）．
                 move_arrow と併用した場合は move_arrow が先に描画される
+            selected_squares: クリック選択中として塗るマス
+            destination_squares: 選択駒の行き先候補として塗るマス
+            interactive: True でクリック標的の透明 rect
+                (``data-click`` 属性付き) を盤上マスと持ち駒に重ねる
 
         Returns:
             完全なSVG文字列（HTML埋め込み可能）
         """
         highlight_set = set(highlight_squares or [])
+        selected_set = set(selected_squares or [])
+        destination_set = set(destination_squares or [])
         arrows: list[ArrowSpec] = []
         if move_arrow is not None:
             arrows.append(ArrowSpec(move=move_arrow))
@@ -174,13 +189,24 @@ class SVGBoardRenderer:
             self._draw_header(turn, record_id),
             self._draw_grid(),
             self._draw_pieces(
-                position.board_id_positions, highlight_set
+                position.board_id_positions,
+                highlight_set,
+                selected_set,
+                destination_set,
             ),
             self._draw_pieces_in_hand(position.pieces_in_hand),
-            self._draw_arrows(arrows, position.pieces_in_hand),
+            self._draw_arrows(
+                arrows, position.pieces_in_hand, turn
+            ),
             self._draw_coordinates(),
-            self._svg_footer(),
         ]
+        if interactive:
+            svg_parts.append(
+                self._draw_click_targets(
+                    position.pieces_in_hand
+                )
+            )
+        svg_parts.append(self._svg_footer())
 
         return "\n".join(svg_parts)
 
@@ -435,6 +461,8 @@ class SVGBoardRenderer:
         self,
         board_id_positions: list[list[int]],
         highlight_set: set,
+        selected_set: set | None = None,
+        destination_set: set | None = None,
     ) -> str:
         """盤上の駒を描画．
 
@@ -444,8 +472,12 @@ class SVGBoardRenderer:
                 - col: 0=右端(筋9), 8=左端(筋1) ← 将棋の筋は右から左
                 - row: 0=上端(段a), 8=下端(段i) ← 段は上から下
             highlight_set: ハイライトするマスのセット
+            selected_set: クリック選択中として塗るマスのセット
+            destination_set: 行き先候補として塗るマスのセット
         """
         piece_parts = []
+        selected_set = selected_set or set()
+        destination_set = destination_set or set()
 
         # 盤面のX座標開始位置
         board_x_start = (
@@ -462,8 +494,15 @@ class SVGBoardRenderer:
                 # 将棋の筋は右から左なので，描画時に列を反転
                 visual_col = 8 - col  # col 0 → visual 8 (右端)
 
-                # マスのハイライト（駒の有無に関係なく描画）
+                # マスの塗り（駒の有無に関係なく描画）
+                fills = []
                 if square_idx in highlight_set:
+                    fills.append((self.COLOR_HIGHLIGHT, 0.5))
+                if square_idx in selected_set:
+                    fills.append((self.COLOR_SELECTED, 1.0))
+                if square_idx in destination_set:
+                    fills.append((self.COLOR_DESTINATION, 1.0))
+                for fill_color, fill_opacity in fills:
                     x_rect = (
                         board_x_start
                         + visual_col * self.CELL_SIZE
@@ -472,7 +511,7 @@ class SVGBoardRenderer:
                     piece_parts.append(
                         f'<rect x="{x_rect}" y="{y_rect}" '
                         f'width="{self.CELL_SIZE}" height="{self.CELL_SIZE}" '
-                        f'fill="{self.COLOR_HIGHLIGHT}" opacity="0.5"/>'
+                        f'fill="{fill_color}" opacity="{fill_opacity}"/>'
                     )
 
                 # 駒がない場合はスキップ
@@ -704,12 +743,15 @@ class SVGBoardRenderer:
         self,
         arrows: list[ArrowSpec],
         pieces_in_hand: list[int],
+        turn: Turn | None = None,
     ) -> str:
         """指し手を表す矢印群を描画する．
 
         Args:
             arrows: 描画する矢印のリスト（空の場合は空文字列を返す）
             pieces_in_hand: 持ち駒配列（駒打ちの矢印の始点計算に使用）
+            turn: 手番．駒打ち矢印の始点をどちらの持ち駒エリアから
+                引くかの判定に使用（None は先手側）
 
         Returns:
             矢印群のSVG文字列（不正なマス番号の矢印はスキップ）
@@ -721,7 +763,7 @@ class SVGBoardRenderer:
         parts: list[str] = []
         for spec in arrows:
             endpoints = self._arrow_endpoints(
-                spec.move, pieces_in_hand
+                spec.move, pieces_in_hand, turn
             )
             if endpoints is None:
                 continue
@@ -758,12 +800,15 @@ class SVGBoardRenderer:
         self,
         move_arrow: MoveArrow,
         pieces_in_hand: list[int],
+        turn: Turn | None = None,
     ) -> tuple[tuple[float, float], tuple[float, float]] | None:
         """矢印の始点・終点のSVG座標を計算する．
 
         Args:
             move_arrow: 対象の指し手
             pieces_in_hand: 持ち駒配列（駒打ちの始点計算に使用）
+            turn: 手番．後手番の駒打ちは後手持ち駒エリア（左側）を
+                始点にする（None は先手側）
 
         Returns:
             ``((from_x, from_y), (to_x, to_y))``．
@@ -813,20 +858,30 @@ class SVGBoardRenderer:
             move_arrow.is_drop
             and move_arrow.from_square is None
         ):
-            # 駒打ちの場合: 持ち駒エリアから矢印を引く
+            # 駒打ちの場合: 手番側の持ち駒エリアから矢印を引く
+            is_white_drop = turn == Turn.WHITE
+            hand_pieces = (
+                pieces_in_hand[7:14]
+                if is_white_drop
+                else pieces_in_hand[:7]
+            )
             display_index = self._get_hand_piece_display_index(
-                pieces_in_hand[:7],  # 先手の持ち駒
+                hand_pieces,
                 move_arrow.drop_piece_type or 0,
             )
-            # 持ち駒エリア（右側）の座標
-            from_x = (
-                self.MARGIN
-                + self.HAND_AREA_WIDTH
-                + self.GAP_BETWEEN_HAND_AND_BOARD
-                + self.BOARD_WIDTH
-                + self.GAP_BETWEEN_HAND_AND_BOARD
-                + self.HAND_AREA_WIDTH / 2
-            )
+            if is_white_drop:
+                # 後手持ち駒エリア（左側）の座標
+                from_x = self.MARGIN + self.HAND_AREA_WIDTH / 2
+            else:
+                # 先手持ち駒エリア（右側）の座標
+                from_x = (
+                    self.MARGIN
+                    + self.HAND_AREA_WIDTH
+                    + self.GAP_BETWEEN_HAND_AND_BOARD
+                    + self.BOARD_WIDTH
+                    + self.GAP_BETWEEN_HAND_AND_BOARD
+                    + self.HAND_AREA_WIDTH / 2
+                )
             # タイトル(30px) + 余白(20px) + 各駒の位置
             from_y = self.MARGIN + 50 + display_index * 30
         else:
@@ -872,3 +927,75 @@ class SVGBoardRenderer:
             if hand_pieces[i] > 0:
                 display_index += 1
         return display_index
+
+    def _draw_click_targets(
+        self, pieces_in_hand: list[int]
+    ) -> str:
+        """クリック標的の透明 rect レイヤーを描画する．
+
+        盤上の各マスに ``data-click="sq:{square}"`` (square は
+        column-major = col * 9 + row)，持ち駒の各表示行に
+        ``data-click="hand:{b|w}:{piece_type}"`` (piece_type は
+        0=歩...6=飛) を持つ透明 rect を重ねる．矢印より後に描画する
+        ことでクリックが常に標的に当たる．値の解釈は interface 層
+        (analysis_gui) が行う．
+
+        Args:
+            pieces_in_hand: 14要素の持ち駒配列（表示行の計算に使用）
+
+        Returns:
+            クリック標的群のSVG文字列
+        """
+        parts: list[str] = []
+        board_x_start = (
+            self.MARGIN
+            + self.HAND_AREA_WIDTH
+            + self.GAP_BETWEEN_HAND_AND_BOARD
+        )
+
+        # 盤上のマス（描画は visual_col = 8 - col で反転）
+        for row in range(9):
+            for col in range(9):
+                square = col * 9 + row  # column-major
+                x = board_x_start + (8 - col) * self.CELL_SIZE
+                y = self.MARGIN + row * self.CELL_SIZE
+                parts.append(
+                    f'<rect x="{x}" y="{y}" '
+                    f'width="{self.CELL_SIZE}" '
+                    f'height="{self.CELL_SIZE}" '
+                    f'fill="transparent" '
+                    f'data-click="sq:{square}" '
+                    f'style="cursor:pointer"/>'
+                )
+
+        # 持ち駒（枚数 > 0 の表示行のみ．_draw_single_hand と同じ配置）
+        hand_areas = [
+            (
+                "b",
+                pieces_in_hand[:7],
+                board_x_start
+                + self.BOARD_WIDTH
+                + self.GAP_BETWEEN_HAND_AND_BOARD,
+            ),
+            ("w", pieces_in_hand[7:14], self.MARGIN),
+        ]
+        for side, pieces, x_base in hand_areas:
+            display_index = 0
+            for piece_type, count in enumerate(pieces):
+                if count == 0:
+                    continue
+                # テキスト行 (y_base + 50 + display_index * 30,
+                # text-anchor=middle) を覆う矩形
+                y_text = self.MARGIN + 50 + display_index * 30
+                parts.append(
+                    f'<rect x="{x_base + 10}" '
+                    f'y="{y_text - 20}" '
+                    f'width="{self.HAND_AREA_WIDTH - 20}" '
+                    f'height="28" '
+                    f'fill="transparent" '
+                    f'data-click="hand:{side}:{piece_type}" '
+                    f'style="cursor:pointer"/>'
+                )
+                display_index += 1
+
+        return "\n".join(parts)

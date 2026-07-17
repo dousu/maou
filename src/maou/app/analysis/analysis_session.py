@@ -1,14 +1,15 @@
 """棋譜解析 GUI のセッション基盤ユースケース．
 
 棋譜 (CSA / KIF) を per-ply の盤面スナップショット列 (plain data) に展開し，
-`maou analyze-game` の JSON レポートとの整合検証を提供する．
+`maou analyze-game` の JSON レポートとの整合検証，および継盤 (分岐) 検討の
+ための分岐木 (:class:`VariationTree`) を提供する．
 
-スナップショットは PyO3 オブジェクト (Board 等) を保持しない plain data と
-する — Gradio の ``gr.State`` はセッションごとに初期値を deepcopy するため
-(docs/design/game-analysis/gui.md §11)．
+スナップショット・分岐木は PyO3 オブジェクト (Board 等) を保持しない
+plain data とする — Gradio の ``gr.State`` はセッションごとに初期値を
+deepcopy するため (docs/design/game-analysis/gui.md §11)．
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from maou.app.analysis.game_analyzer import (
@@ -256,3 +257,270 @@ def validate_report(
                 f"{i + 1} 手目の直前局面 SFEN が一致しません "
                 f"(棋譜と別の対局のレポートの可能性があります)"
             )
+
+
+@dataclass(frozen=True)
+class LegalMoveInfo:
+    """合法手 1 つ分の情報 (plain data, 盤面クリック入力用)．
+
+    Attributes:
+        usi: USI 表記 (例: "7g7f", "7g7f+", "P*5e")．
+        from_square: 移動元マス (0-80, column-major)．駒打ちは None．
+        to_square: 移動先マス (0-80, column-major)．
+        is_drop: 駒打ちかどうか．
+        drop_piece_type: 駒打ちの駒種 (0=歩, 1=香, ...)．通常手は None．
+        piece_id: 動かした駒の domain PieceId (移動前の駒種)．
+        is_promotion: 成る手かどうか．
+    """
+
+    usi: str
+    from_square: int | None
+    to_square: int
+    is_drop: bool
+    drop_piece_type: int | None
+    piece_id: int
+    is_promotion: bool
+
+
+def legal_move_infos(
+    snapshot: PositionSnapshot,
+) -> list[LegalMoveInfo]:
+    """スナップショット局面の合法手を列挙する．
+
+    Args:
+        snapshot: 対象局面のスナップショット．
+
+    Returns:
+        合法手の LegalMoveInfo リスト (Rust 側の列挙順)．
+    """
+    board = Board()
+    board.set_sfen(snapshot.sfen)
+    infos: list[LegalMoveInfo] = []
+    for move in board.get_legal_moves():
+        base = _move_info(board, move)
+        infos.append(
+            LegalMoveInfo(
+                usi=base.usi,
+                from_square=base.from_square,
+                to_square=base.to_square,
+                is_drop=base.is_drop,
+                drop_piece_type=base.drop_piece_type,
+                piece_id=base.piece_id,
+                is_promotion=base.usi.endswith("+"),
+            )
+        )
+    return infos
+
+
+@dataclass
+class VariationNode:
+    """分岐木の 1 ノード = 1 局面 (plain data)．
+
+    本譜も分岐もすべて同じ木構造で表す (docs/design/game-analysis/gui.md
+    §8)．解析キャッシュ ``analysis`` は「このノードの局面を探索した結果」
+    (analyze-game の ``positions[i]`` と同スキーマ) を保持する — レポートの
+    ``positions[i]`` は「i+1 手目を指す直前の局面 = 本譜ノード i」に対応する．
+
+    Attributes:
+        node_id: ノード ID (:attr:`VariationTree.nodes` の索引)．
+        parent_id: 親ノード ID (root は None)．
+        move_usi: このノードに至った指し手 (root は None)．
+        snapshot: このノードの局面スナップショット．
+        children: 子ノード ID のリスト (追加順)．
+        is_mainline: 本譜のノードかどうか．
+        analysis: この局面の解析結果キャッシュ (未解析は None)．
+    """
+
+    node_id: int
+    parent_id: int | None
+    move_usi: str | None
+    snapshot: PositionSnapshot
+    children: list[int] = field(default_factory=list)
+    is_mainline: bool = False
+    analysis: dict[str, Any] | None = None
+
+
+@dataclass
+class VariationTree:
+    """継盤 (分岐) 検討の分岐木 (plain data)．
+
+    Attributes:
+        nodes: 全ノード (索引 = node_id)．
+        mainline_ids: 本譜ノード ID 列 (索引 = ply)．
+        current_id: 現在表示中のノード ID．
+    """
+
+    nodes: list[VariationNode]
+    mainline_ids: list[int]
+    current_id: int
+
+
+def build_variation_tree(
+    document: GameDocument,
+    report: dict[str, Any] | None = None,
+) -> VariationTree:
+    """棋譜の本譜チェーンから分岐木を構築する．
+
+    Args:
+        document: 棋譜の GameDocument．
+        report: analyze-game の JSON レポート (検証済みのもの)．
+            指定時は ``positions[i]`` を本譜ノード i のキャッシュに
+            取り込む．
+
+    Returns:
+        本譜のみからなる VariationTree (current は root)．
+    """
+    nodes: list[VariationNode] = [
+        VariationNode(
+            node_id=0,
+            parent_id=None,
+            move_usi=None,
+            is_mainline=True,
+            snapshot=document.snapshots[0],
+        )
+    ]
+    mainline_ids = [0]
+    for i, usi in enumerate(document.moves_usi):
+        node = VariationNode(
+            node_id=i + 1,
+            parent_id=i,
+            move_usi=usi,
+            is_mainline=True,
+            snapshot=document.snapshots[i + 1],
+        )
+        nodes[i].children.append(node.node_id)
+        nodes.append(node)
+        mainline_ids.append(node.node_id)
+    tree = VariationTree(
+        nodes=nodes, mainline_ids=mainline_ids, current_id=0
+    )
+    if report is not None:
+        apply_report_to_tree(tree, report)
+    return tree
+
+
+def apply_report_to_tree(
+    tree: VariationTree, report: dict[str, Any]
+) -> None:
+    """レポートの ``positions`` を本譜ノードの解析キャッシュに取り込む．
+
+    ``positions[i]`` は「i+1 手目を指す直前の局面」= 本譜ノード i の解析．
+
+    Args:
+        tree: 対象の分岐木．
+        report: analyze-game の JSON レポート (検証済みのもの)．
+    """
+    positions = report.get("positions") or []
+    for i, pos in enumerate(positions):
+        if i < len(tree.mainline_ids):
+            tree.nodes[tree.mainline_ids[i]].analysis = pos
+
+
+def current_node(tree: VariationTree) -> VariationNode:
+    """現在表示中のノードを返す．"""
+    return tree.nodes[tree.current_id]
+
+
+def goto_node(
+    tree: VariationTree, node_id: int
+) -> VariationNode:
+    """指定ノードへ移動する．
+
+    Raises:
+        ValueError: node_id が範囲外の場合．
+    """
+    if not 0 <= node_id < len(tree.nodes):
+        raise ValueError(f"不正なノード ID です: {node_id}")
+    tree.current_id = node_id
+    return tree.nodes[node_id]
+
+
+def advance_move(
+    tree: VariationTree, usi: str
+) -> VariationNode:
+    """現在ノードから指し手 usi で 1 手進める．
+
+    同じ手の子ノードが既にあれば再利用して移動し，なければ合法手検証の
+    うえ子ノードを追加する (本譜から外れた時点で自動的に分岐になる —
+    docs/design/game-analysis/gui.md §8)．
+
+    Args:
+        tree: 対象の分岐木．
+        usi: 指し手 (USI 表記)．
+
+    Returns:
+        移動先のノード．
+
+    Raises:
+        ValueError: usi が現局面の合法手でない場合．
+    """
+    node = tree.nodes[tree.current_id]
+    for child_id in node.children:
+        child = tree.nodes[child_id]
+        if child.move_usi == usi:
+            tree.current_id = child_id
+            return child
+
+    board = Board()
+    board.set_sfen(node.snapshot.sfen)
+    try:
+        move = board.move_from_usi(usi)
+    except ValueError as e:
+        raise ValueError(
+            f"指し手を解釈できません: {usi} ({e})"
+        ) from e
+    if move not in set(board.get_legal_moves()):
+        raise ValueError(
+            f"合法手ではありません: {usi} "
+            f"(局面 {node.snapshot.sfen})"
+        )
+    info = _move_info(board, move)
+    board.push_move(move)
+    child = VariationNode(
+        node_id=len(tree.nodes),
+        parent_id=node.node_id,
+        move_usi=info.usi,
+        is_mainline=False,
+        snapshot=_snapshot(board, node.snapshot.ply + 1, info),
+    )
+    tree.nodes.append(child)
+    node.children.append(child.node_id)
+    tree.current_id = child.node_id
+    return child
+
+
+def path_moves_usi(
+    tree: VariationTree, node_id: int | None = None
+) -> list[str]:
+    """root から指定ノード (省略時は現在ノード) までの USI 経路を返す．
+
+    エンジンには「初期局面 SFEN + この経路」を渡す (千日手履歴を正しく
+    効かせるため — docs/design/game-analysis/gui.md §9)．
+    """
+    node = tree.nodes[
+        tree.current_id if node_id is None else node_id
+    ]
+    moves: list[str] = []
+    while node.parent_id is not None:
+        assert node.move_usi is not None
+        moves.append(node.move_usi)
+        node = tree.nodes[node.parent_id]
+    moves.reverse()
+    return moves
+
+
+def mainline_ancestor(
+    tree: VariationTree, node_id: int | None = None
+) -> VariationNode:
+    """指定ノード (省略時は現在ノード) から最も近い本譜ノードを返す．
+
+    本譜ノード自身を渡した場合はそのノードを返す．「本譜へ戻る」と
+    評価値グラフの現在位置線に使う．
+    """
+    node = tree.nodes[
+        tree.current_id if node_id is None else node_id
+    ]
+    while not node.is_mainline:
+        assert node.parent_id is not None
+        node = tree.nodes[node.parent_id]
+    return node

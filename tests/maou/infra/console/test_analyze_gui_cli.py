@@ -49,6 +49,33 @@ class TestAnalyzeGuiCli:
         assert result.exit_code != 0
         assert "--num-candidates" in result.output
 
+    def test_cuda_requires_model_path(self) -> None:
+        """--cuda はモデル指定が必須．"""
+        runner = CliRunner()
+        result = runner.invoke(
+            analyze_gui,
+            ["--input-path", str(MINI_CSA), "--cuda"],
+        )
+        assert result.exit_code != 0
+        assert "--model-path" in result.output
+
+    def test_time_ms_and_playouts_exclusive(self) -> None:
+        """--time-ms と --playouts は同時指定不可．"""
+        runner = CliRunner()
+        result = runner.invoke(
+            analyze_gui,
+            [
+                "--input-path",
+                str(MINI_CSA),
+                "--time-ms",
+                "1000",
+                "--playouts",
+                "100",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "--time-ms" in result.output
+
     def test_launch_invoked_with_options(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -71,6 +98,11 @@ class TestAnalyzeGuiCli:
                 str(MINI_CSA),
                 "--num-candidates",
                 "7",
+                "--playouts",
+                "64",
+                "--threads",
+                "2",
+                "--no-root-dfpn",
                 "--port",
                 "7999",
                 "--server-name",
@@ -83,3 +115,10 @@ class TestAnalyzeGuiCli:
         assert recorded["num_candidates"] == 7
         assert recorded["port"] == 7999
         assert recorded["server_name"] == "0.0.0.0"
+        assert recorded["default_playouts"] == 64
+        assert recorded["default_time_ms"] is None
+        settings = recorded["engine_settings"]
+        assert settings.model_path is None
+        assert settings.threads == 2
+        assert settings.root_dfpn is False
+        assert settings.num_candidates == 7
