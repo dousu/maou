@@ -39,19 +39,46 @@ def test_usi_help() -> None:
 
 
 def test_usi_session_e2e() -> None:
-    """usi→isready→position→go→quit の 1 手番セッションが完走する．"""
-    lines = _run_engine(
-        "usi\n"
-        "setoption name RootDfpn value false\n"
-        "setoption name LeafMate value false\n"
-        "setoption name NodeCapacity value 16384\n"
-        "setoption name NetworkDelay value 0\n"
-        "isready\n"
-        "usinewgame\n"
-        "position startpos moves 7g7f\n"
-        "go btime 0 wtime 0 byoyomi 300\n"
-        "quit\n"
+    """usi→isready→position→go の 1 手番セッションが実思考して完走する．
+
+    quit を go と同時に送ると reader が stop フラグを先に立てて 0 playout
+    経路になるため，bestmove を待ってから quit を送る (GUI の実挙動と同じ)．
+    """
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _ENTRY],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
     )
+    assert proc.stdin is not None and proc.stdout is not None
+    lines: list[str] = []
+    try:
+        proc.stdin.write(
+            "usi\n"
+            "setoption name RootDfpn value false\n"
+            "setoption name LeafMate value false\n"
+            "setoption name NodeCapacity value 16384\n"
+            "setoption name NetworkDelay value 0\n"
+            "isready\n"
+            "usinewgame\n"
+            "position startpos moves 7g7f\n"
+            "go btime 0 wtime 0 byoyomi 300\n"
+        )
+        proc.stdin.flush()
+        # bestmove まで読む (byoyomi 300ms + mock 評価器なので即返る)
+        for line in proc.stdout:
+            lines.append(line.rstrip("\n"))
+            if line.startswith("bestmove "):
+                break
+        proc.stdin.write("quit\n")
+        proc.stdin.flush()
+        proc.wait(timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 0
     assert any(
         line.startswith("id name maou") for line in lines
     )
@@ -67,13 +94,15 @@ def test_usi_session_e2e() -> None:
     )
     move = bestmove.split()[1]
     assert move not in ("resign", "win"), "平手序盤で投了しない"
-    # info サマリ: pv は行末尾 (score より後)
+    # info サマリ: 実思考している (playout > 0) こと，pv は行末尾
     info = next(
         line
         for line in lines
         if line.startswith("info ") and " pv " in line
     )
     assert " score " in info.split(" pv ")[0]
+    nodes = int(info.split(" nodes ")[1].split()[0])
+    assert nodes > 0, f"実思考していない: {info}"
 
 
 def test_usi_option_declarations() -> None:
