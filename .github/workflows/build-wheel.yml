@@ -36,7 +36,21 @@ jobs:
       - name: Delete existing release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release delete latest --yes --cleanup-tag || true
+        # 削除は API の伝播遅延・一時失敗で「成功したように見えて残る」ことが
+        # ある (run 29539610667: delete が "release not found" を返した直後に
+        # create が "already exists" で失敗し release は残存)．削除を試みた後に
+        # 消えたことを検証し，残っていてもここでは fail せず後続ステップの
+        # in-place 更新にフォールバックする．
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          for _ in $(seq 1 12); do
+            if ! gh release view latest >/dev/null 2>&1; then
+              echo "Release 'latest' deleted."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::warning::Release 'latest' still exists after delete; falling back to in-place update."
 
       - name: Extract version
         id: version
@@ -54,19 +68,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls dist/*.whl 1>/dev/null 2>&1 || { echo "::error::No wheel files found in dist/"; exit 1; }
-          gh release create latest \
-            --title "Development Build (v${{ steps.version.outputs.version }})" \
-            --notes "Prebuilt unified wheels for development use (Colab, etc.).
+          built_at=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF
+          Prebuilt unified wheels for development use (Colab, etc.).
 
           - **Version**: ${{ steps.version.outputs.version }}
           - **Commit**: ${{ github.sha }}
-          - **Built at**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          - **Built at**: ${built_at}
           - **Platform**: manylinux_2_28 x86_64
           - **Python**: CPython 3.11, 3.12
           - **Cargo features**: onnx-cuda, onnx-tensorrt (単一配布 wheel．
             CPU-only 環境でもそのまま動作し，ONNX CPU 推論可)
           - GPU 実行時要件: \`pip install 'maou[tensorrt-infer] @ <wheel>'\` が
             onnxruntime-gpu 1.22 (provider .so) + tensorrt-cu12 10 系を版一致で
-            揃える (CUDA 12 環境)．手順: docs/design/position-search/benchmarking.md" \
-            --latest \
-            dist/*.whl
+            揃える (CUDA 12 環境)．手順: docs/design/position-search/benchmarking.md
+          EOF
+          if gh release view latest >/dev/null 2>&1; then
+            # delete が反映されなかった場合の in-place 更新フォールバック．
+            # 旧版数の asset が残ると取得手順 (cp タグ名でのマッチ) が誤った
+            # wheel を掴み得るため，全 asset を削除してから upload する．
+            # tag も現行コミットへ force 更新して notes の Commit と一致させる
+            gh release view latest --json assets --jq '.assets[].name' \
+              | xargs -r -n1 -I{} gh release delete-asset latest '{}' --yes
+            git push --force origin "HEAD:refs/tags/latest"
+            gh release upload latest dist/*.whl
+            gh release edit latest \
+              --title "Development Build (v${{ steps.version.outputs.version }})" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              --latest
+          else
+            gh release create latest \
+              --title "Development Build (v${{ steps.version.outputs.version }})" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              --latest \
+              dist/*.whl
+          fi
