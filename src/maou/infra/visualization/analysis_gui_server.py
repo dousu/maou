@@ -1136,9 +1136,17 @@ class AnalysisGuiServer:
                             choices=[
                                 ("勝率 (先手)", "winrate"),
                                 ("評価値 (先手)", "eval_cp"),
+                                (
+                                    "勝率 (後手)",
+                                    "winrate_gote",
+                                ),
+                                (
+                                    "評価値 (後手)",
+                                    "eval_cp_gote",
+                                ),
                             ],
                             value="winrate",
-                            label="縦軸",
+                            label="縦軸 (後手視点は先手の鏡映)",
                         )
                         plot = gr.Plot(initial_fig)
                     with gr.Tab("棋譜"):

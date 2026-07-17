@@ -423,15 +423,17 @@ def eval_figure(
     current_ply: int,
     y_mode: str = "winrate",
 ) -> go.Figure:
-    """評価値グラフ (先手視点) を作る．
+    """評価値グラフを作る (視点は y_mode で先手/後手を選択)．
 
     x 軸は手数 (positions[i].ply = 「その手を指す直前の局面」)．
     現在表示中のスナップショット p は x = p + 1 に対応する縦線で示す．
+    後手視点は先手視点の鏡映 (勝率は 1 - x，評価値は符号反転)．
 
     Args:
         view: セッション状態．
         current_ply: 表示中のスナップショット番号．
-        y_mode: "winrate" (先手勝率) または "eval_cp" (先手評価値)．
+        y_mode: "winrate" (先手勝率) / "eval_cp" (先手評価値) /
+            "winrate_gote" (後手勝率) / "eval_cp_gote" (後手評価値)．
 
     Returns:
         Plotly Figure (レポート未読込時は案内文のみ)．
@@ -456,14 +458,18 @@ def eval_figure(
 
     positions = view.report["positions"]
     x = [int(p["ply"]) for p in positions]
-    if y_mode == "eval_cp":
+    gote = y_mode.endswith("_gote")
+    side_label = "後手視点" if gote else "先手視点"
+    if y_mode.startswith("eval_cp"):
         y = [
             sente_eval_cp(
                 float(p["eval_cp"]), p["side_to_move"]
             )
             for p in positions
         ]
-        y_title = "評価値 (先手視点, cp)"
+        if gote:
+            y = [-v for v in y]
+        y_title = f"評価値 ({side_label}, cp)"
         center = 0.0
     else:
         y = [
@@ -472,7 +478,9 @@ def eval_figure(
             )
             for p in positions
         ]
-        y_title = "勝率 (先手視点)"
+        if gote:
+            y = [1.0 - v for v in y]
+        y_title = f"勝率 ({side_label})"
         center = 0.5
 
     hover = [
@@ -524,7 +532,7 @@ def eval_figure(
             line_color="rgba(214, 69, 65, 0.6)",
         )
 
-    if y_mode != "eval_cp":
+    if not y_mode.startswith("eval_cp"):
         fig.update_yaxes(range=[0.0, 1.0])
     fig.update_layout(
         xaxis_title="手数 (指す直前の局面)",
@@ -1057,17 +1065,59 @@ def candidate_usi(
     return None
 
 
+def _evaluation_note(
+    analysis: dict[str, Any] | None, turn: str
+) -> str | None:
+    """現局面の解析キャッシュから局面評価行 (Markdown) を作る．
+
+    勝率/評価値は手番視点 (生値) と先手視点の両方を併記する
+    (候補手テーブルは手番視点，グラフは先手/後手視点のため)．
+    """
+    if not analysis:
+        return None
+    winrate = analysis.get("winrate")
+    eval_cp = analysis.get("eval_cp")
+    if winrate is None or eval_cp is None:
+        return None
+    winrate = float(winrate)
+    eval_cp = float(eval_cp)
+    line = (
+        f"**この局面のエンジン評価**: "
+        f"勝率 {winrate:.3f} / 評価値 {eval_cp:+.0f}cp (手番視点)"
+        f" ｜ 先手視点: 勝率 "
+        f"{sente_winrate(winrate, turn):.3f} / "
+        f"{sente_eval_cp(eval_cp, turn):+.0f}cp"
+        f" ({int(analysis.get('playouts', 0))} playouts)"
+    )
+    if analysis.get("mate_found"):
+        line += " ★詰み発見"
+    return line
+
+
 def node_position_info(
     view: SessionView, tree: VariationTree
 ) -> tuple[str, str, str]:
     """現在ノードの局面情報 (SFEN / position 文字列 / 注記) を返す．
 
     本譜ノードは :func:`position_info` に委譲し，分岐ノードは分岐点と
-    分岐手順の注記を作る．
+    分岐手順の注記を作る．いずれもノードの解析キャッシュがあれば
+    現局面のエンジン評価行 (勝率/評価値) を末尾に付ける．
     """
     node = current_node(tree)
+    evaluation = _evaluation_note(
+        node.analysis, node.snapshot.turn
+    )
     if node.is_mainline:
-        return position_info(view, node.snapshot.ply)
+        sfen, position_str, note = position_info(
+            view, node.snapshot.ply
+        )
+        if evaluation:
+            note = (
+                f"{note}\n\n{evaluation}"
+                if note
+                else evaluation
+            )
+        return sfen, position_str, note
     doc = view.document
     path = path_moves_usi(tree, node.node_id)
     position_str = (
@@ -1087,7 +1137,9 @@ def node_position_info(
     except (ValueError, IndexError):
         label = node.move_usi
     notes.append(f"**{node.snapshot.ply}手目**: {label}")
-    if node.analysis is None:
+    if evaluation:
+        notes.append(evaluation)
+    else:
         notes.append(
             "この局面は未解析です "
             "(「この局面を解析」で解析できます)"

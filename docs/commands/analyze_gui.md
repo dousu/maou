@@ -9,9 +9,10 @@
   - Board view (SVG) with last-move highlight and **candidate-move arrows**
     (best move in red with rank labels, others in blue with opacity scaled by
     visit count; optional PV chain arrows for the best move).
-  - **Win-rate / eval graph from the sente perspective** (the JSON stores
-    side-to-move values; the UI converts them), with mate markers (★) and a
-    current-position indicator. Plotly-based.
+  - **Win-rate / eval graph with selectable perspective** (sente / gote ×
+    win rate / eval; the JSON stores side-to-move values and the UI
+    converts them — the gote view is the mirror of the sente view), with
+    mate markers (★) and a current-position indicator. Plotly-based.
   - Move list (Japanese notation, engine match ✓, sente win rate / eval,
     win-rate loss, mate ★) — clicking a row jumps to the position after that
     move.
@@ -19,7 +20,10 @@
     (side-to-move) / prior / proven value) — clicking a row plays that move
     as a variation.
   - Position info: SFEN and USI `position` string for hand-off to other
-    tools, per-move notes (engine best vs played, recorded time / comments).
+    tools, per-move notes (engine best vs played, recorded time / comments),
+    and the engine evaluation of the current position (win rate / eval in
+    side-to-move and sente perspectives) whenever an analysis is cached —
+    including freshly analyzed variation positions.
   - Files can be loaded at startup (CLI flags) or uploaded from the UI.
 - Interactive analysis features:
   - **Board click input**: click a piece (or a piece in hand) then a
