@@ -699,3 +699,71 @@ class TestVariationNavigation:
         assert "分岐" in note
         assert "未解析" in note
         assert sfen.split(" ")[1] == "w"
+
+
+class TestGotePerspective:
+    """後手視点グラフと局面評価行のテスト．"""
+
+    def test_eval_figure_winrate_gote_mirrors_sente(
+        self, analyzed_view: SessionView
+    ) -> None:
+        """後手勝率は先手勝率の鏡映 (1 - x)．"""
+        fig_s = eval_figure(analyzed_view, 0, "winrate")
+        fig_g = eval_figure(analyzed_view, 0, "winrate_gote")
+        ys = list(fig_s.data[0].y)
+        yg = list(fig_g.data[0].y)
+        assert all(
+            abs((1.0 - s) - g) < 1e-9 for s, g in zip(ys, yg)
+        )
+        assert "後手視点" in fig_g.layout.yaxis.title.text
+
+    def test_eval_figure_eval_cp_gote_flips_sign(
+        self, analyzed_view: SessionView
+    ) -> None:
+        """後手評価値は先手評価値の符号反転．"""
+        fig_s = eval_figure(analyzed_view, 0, "eval_cp")
+        fig_g = eval_figure(analyzed_view, 0, "eval_cp_gote")
+        ys = list(fig_s.data[0].y)
+        yg = list(fig_g.data[0].y)
+        assert all(abs(s + g) < 1e-9 for s, g in zip(ys, yg))
+        assert "後手視点" in fig_g.layout.yaxis.title.text
+
+    def test_node_position_info_shows_evaluation(
+        self, analyzed_view: SessionView, analyzed_tree: Any
+    ) -> None:
+        """解析済みノードの注記に局面評価行が付く (本譜)．"""
+        goto_node(analyzed_tree, analyzed_tree.mainline_ids[0])
+        _, _, note = node_position_info(
+            analyzed_view, analyzed_tree
+        )
+        assert "この局面のエンジン評価" in note
+        assert "手番視点" in note
+        assert "先手視点" in note
+
+    def test_branch_evaluation_note_after_analysis(
+        self, analyzed_view: SessionView, analyzed_tree: Any
+    ) -> None:
+        """分岐ノードは解析キャッシュを載せると評価行に変わる．"""
+        advance_move(analyzed_tree, "2g2f")
+        _, _, note = node_position_info(
+            analyzed_view, analyzed_tree
+        )
+        assert "未解析" in note
+        node = current_node(analyzed_tree)
+        node.analysis = {
+            "winrate": 0.4,
+            "eval_cp": -70.0,
+            "playouts": 128,
+            "mate_found": True,
+        }
+        _, _, note = node_position_info(
+            analyzed_view, analyzed_tree
+        )
+        assert "この局面のエンジン評価" in note
+        assert "勝率 0.400" in note
+        assert "-70cp" in note
+        # 後手番の分岐ノードなので先手視点は鏡映
+        assert "勝率 0.600" in note
+        assert "+70cp" in note
+        assert "★詰み発見" in note
+        assert "未解析" not in note
