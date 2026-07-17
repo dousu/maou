@@ -1,7 +1,10 @@
 ---
 title: USI エンジン (対局エージェント) の設計
 date: 2026-07-17
-status: pending
+status: approved
+# user 承認 2026-07-17 (未決事項 1-6 すべて提案どおり — 本文末尾「承認記録」参照)．
+# docs/design/usi-engine/index.md + position-search/index.md の相互参照は承認直後に適用．
+# docs/commands/usi.md は M1 実装 PR 内で適用予定．
 target:
   - docs/design/usi-engine/index.md
   - docs/design/position-search/index.md
@@ -397,6 +400,19 @@ expose) / Python `maou` 0.46.0 → 0.47.0 (M1)．
    強制手順専用で定跡ではない) でよいか
 6. 自己対局は「driver + 棋譜出力 + smoke」まで．学習データ生成 (HCPE)
    への接続は次 campaign，でよいか
+
+## 承認記録 (2026-07-17)
+
+user は本提案を**無修正で承認**した．未決事項 1-6 はすべて提案どおり:
+
+1. エントリポイントは `maou usi` + 引数なし `maou-usi` の 2 本立て
+2. `USI_Ponder` default true (M3 まで option 宣言自体を出さない)
+3. 投了は default off (`ResignValue` 0 = 投了しない)
+4. MaxMovesToDraw の in-search 対応は M4 で効果計測後に採否判断
+5. 定跡 (opening book) は本 campaign のスコープ外
+6. 自己対局は driver + 棋譜出力 + smoke まで．HCPE 生成接続は次 campaign
+
+設計の正は docs/design/usi-engine/index.md (適用済み)．
 
 ## 根拠
 
