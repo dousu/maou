@@ -16,7 +16,6 @@ use maou_search::{
     Evaluator, HistoryEntry, SearchLimits, SearchOptions, SearchResult, Searcher, StopCause,
 };
 use maou_shogi::board::Board;
-use maou_shogi::movegen::generate_legal_moves;
 use maou_shogi::moves::Move;
 use maou_shogi::types::Color;
 
@@ -127,6 +126,7 @@ fn stop_cause_str(stop: StopCause) -> &'static str {
         StopCause::PoolExhausted => "pool_exhausted",
         StopCause::RootTerminal => "root_terminal",
         StopCause::RootProven => "root_proven",
+        StopCause::External => "external",
     }
 }
 
@@ -180,31 +180,15 @@ fn run_search<E: Evaluator>(
 }
 
 /// 基準局面 SFEN + USI 指し手列から root 局面と対局履歴 (千日手判定用) を構築する．
+///
+/// 実装は [`maou_search::build_board_and_history`] (単一実装) への委譲．
+/// エラーメッセージは従来どおり `ValueError` に載せる．
 fn build_board_and_history(
     sfen: &str,
     moves: Option<&[String]>,
 ) -> PyResult<(Board, Vec<HistoryEntry>)> {
-    let mut board = Board::empty();
-    board
-        .set_sfen(sfen)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("不正な SFEN: {e:?}")))?;
-    let mut history: Vec<HistoryEntry> = Vec::new();
-    if let Some(moves) = moves {
-        for usi in moves {
-            let mut probe = board.clone();
-            let mv = generate_legal_moves(&mut probe)
-                .into_iter()
-                .find(|m| m.to_usi() == *usi)
-                .ok_or_else(|| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "非合法または不正な指し手: {usi}"
-                    ))
-                })?;
-            history.push(HistoryEntry::from_board(&board));
-            board.do_move(mv);
-        }
-    }
-    Ok((board, history))
+    maou_search::build_board_and_history(sfen, moves.unwrap_or(&[]))
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
 }
 
 /// dfpn は depth >= 2048 で panic するため ValueError に変換する．
@@ -344,6 +328,7 @@ fn search(
     let limits = SearchLimits {
         max_playouts,
         time_ms,
+        ..SearchLimits::default()
     };
 
     match model_path {
@@ -534,6 +519,7 @@ impl SearchEngine {
         let limits = SearchLimits {
             max_playouts,
             time_ms,
+            ..SearchLimits::default()
         };
 
         let result = match &self.evaluator {

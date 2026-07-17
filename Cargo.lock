@@ -1743,7 +1743,7 @@ dependencies = [
 
 [[package]]
 name = "maou_rust"
-version = "0.22.0"
+version = "0.23.0"
 dependencies = [
  "arrow",
  "arrow-pyarrow",
@@ -1752,6 +1752,7 @@ dependencies = [
  "maou_io",
  "maou_search",
  "maou_shogi",
+ "maou_usi",
  "numpy",
  "pyo3",
  "tempfile",
@@ -1759,7 +1760,7 @@ dependencies = [
 
 [[package]]
 name = "maou_search"
-version = "0.17.3"
+version = "0.18.0"
 dependencies = [
  "maou_shogi",
  "ort",
@@ -1774,6 +1775,14 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "maou_usi"
+version = "0.1.0"
+dependencies = [
+ "maou_search",
+ "maou_shogi",
 ]
 
 [[package]]

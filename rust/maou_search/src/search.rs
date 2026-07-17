@@ -195,7 +195,11 @@ impl Default for SearchOptions {
 
 /// 探索の停止条件 (予算)．
 ///
-/// 両方 `None` の場合は playout 上限 [`DEFAULT_MAX_PLAYOUTS`] が適用される．
+/// `max_playouts` / `time_ms` が両方 `None` の場合は playout 上限
+/// [`DEFAULT_MAX_PLAYOUTS`] が適用される．無期限探索 (USI の
+/// `go ponder` / `go infinite` — 外部 stop でのみ停止) は
+/// `max_playouts: Some(u64::MAX)` + `stop` で表現する (予算未指定の
+/// 既定丸めを変えないため)．
 #[derive(Clone, Debug, Default)]
 pub struct SearchLimits {
     /// playout 数の上限．バッチ処理の粒度により最大
@@ -203,6 +207,10 @@ pub struct SearchLimits {
     pub max_playouts: Option<u64>,
     /// 時間の上限 (ミリ秒)．
     pub time_ms: Option<u64>,
+    /// 外部からの協調停止フラグ (USI `stop`/`quit` 等)．探索中に別スレッド
+    /// から立てると [`StopCause::External`] で停止する．応答性は worker の
+    /// ループ粒度 (評価バッチ 1 回分) に律速される．
+    pub stop: Option<Arc<AtomicBool>>,
 }
 
 /// 探索が停止した理由．
@@ -219,6 +227,8 @@ pub enum StopCause {
     RootTerminal,
     /// ルートの勝敗/引き分けが AND-OR 伝播で確定した (探索継続は不要)．
     RootProven,
+    /// 外部の停止フラグ ([`SearchLimits::stop`]) が立てられた．
+    External,
 }
 
 impl StopCause {
@@ -229,6 +239,7 @@ impl StopCause {
             StopCause::PoolExhausted => 3,
             StopCause::RootTerminal => 4,
             StopCause::RootProven => 5,
+            StopCause::External => 6,
         }
     }
 
@@ -239,6 +250,7 @@ impl StopCause {
             3 => Some(StopCause::PoolExhausted),
             4 => Some(StopCause::RootTerminal),
             5 => Some(StopCause::RootProven),
+            6 => Some(StopCause::External),
             _ => None,
         }
     }
@@ -364,6 +376,8 @@ struct Shared<'a, E: Evaluator> {
     opts: &'a SearchOptions,
     deadline: Option<Instant>,
     max_playouts: u64,
+    /// 外部からの協調停止フラグ ([`SearchLimits::stop`])．
+    ext_stop: Option<Arc<AtomicBool>>,
     stop: AtomicBool,
     stop_cause: AtomicU8,
     playouts: AtomicU64,
@@ -446,7 +460,18 @@ impl<E: Evaluator> Shared<'_, E> {
     }
 
     fn stopped(&self) -> bool {
-        self.stop.load(Ordering::Acquire)
+        if self.stop.load(Ordering::Acquire) {
+            return true;
+        }
+        // 外部停止フラグは worker のループ粒度で観測し，内部フラグへ昇格して
+        // 全スレッドを止める (cause は最初の 1 回だけ記録される)
+        if let Some(ext) = &self.ext_stop {
+            if ext.load(Ordering::Acquire) {
+                self.set_stop(StopCause::External);
+                return true;
+            }
+        }
+        false
     }
 
     /// playout 完了を n 件計上し，上限到達なら停止フラグを立てる．
@@ -995,6 +1020,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             } else {
                 DEFAULT_MAX_PLAYOUTS
             }),
+            ext_stop: limits.stop.clone(),
             stop: AtomicBool::new(false),
             stop_cause: AtomicU8::new(CAUSE_NONE),
             playouts: AtomicU64::new(0),
@@ -2020,5 +2046,64 @@ mod tests {
         let result = searcher.search(&board, &SearchLimits::default());
         assert_eq!(result.stop, StopCause::RootTerminal);
         assert!(result.best_move.is_none());
+    }
+
+    #[test]
+    fn test_external_stop_terminates_unbounded_search() {
+        // 無期限探索 (playout 上限 u64::MAX = USI go ponder/infinite 相当) を
+        // 外部 stop token で打ち切れること．token なしでは事実上終わらない
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let setter = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            flag.store(true, Ordering::Release);
+        });
+        let started = Instant::now();
+        let result = run(
+            STARTPOS,
+            SearchOptions {
+                threads: 2,
+                batch_size: 4,
+                ..pure_mcts_opts()
+            },
+            SearchLimits {
+                max_playouts: Some(u64::MAX),
+                stop: Some(stop),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        setter.join().expect("setter スレッドは正常終了する");
+        assert_eq!(result.stop, StopCause::External);
+        assert!(result.best_move.is_some());
+        // mock 評価器なら停止観測はミリ秒オーダ (雑な上限で退行だけ検出)
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "外部 stop 後に探索が長時間返らない: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn test_external_stop_preset_returns_immediately() {
+        // 探索開始前から立っている token は最初の worker ループで観測され，
+        // root 展開のみで返る (bestmove は返せる = USI stop 即応の下限保証)
+        let stop = Arc::new(AtomicBool::new(true));
+        let result = run(
+            STARTPOS,
+            SearchOptions {
+                threads: 1,
+                batch_size: 4,
+                ..pure_mcts_opts()
+            },
+            SearchLimits {
+                max_playouts: Some(u64::MAX),
+                stop: Some(stop),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        assert_eq!(result.stop, StopCause::External);
+        assert!(result.best_move.is_some(), "停止時も指し手は返す");
     }
 }

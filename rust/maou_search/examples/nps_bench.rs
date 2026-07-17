@@ -62,6 +62,7 @@ fn main() {
     let limits = SearchLimits {
         max_playouts: arg_value(&args, "--playouts"),
         time_ms: arg_value(&args, "--time-ms").or(Some(5000)),
+        ..SearchLimits::default()
     };
     let seed: u64 = arg_value(&args, "--seed").unwrap_or(42);
 
