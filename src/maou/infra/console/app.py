@@ -298,6 +298,11 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
         "maou.infra.console.search_board",
         "search_board",
     ),
+    # USI 対局エージェント (将棋所/ShogiGUI/ShogiHome 用; 追加依存なし)
+    "usi": LazyCommandSpec(
+        "maou.infra.console.usi",
+        "usi",
+    ),
     # 棋譜 1 局の自動解析 (1 手ずつ 1 局面探索; 追加依存なし)
     "analyze-game": LazyCommandSpec(
         "maou.infra.console.analyze_game",

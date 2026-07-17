@@ -1,6 +1,6 @@
 [package]
 name = "maou_rust"
-version = "0.22.0"
+version = "0.23.0"
 edition = "2021"
 
 [lib]
@@ -12,9 +12,9 @@ crate-type = ["cdylib"]
 # 実 NN 探索は feature 付きビルドで opt-in する — wheel 可搬性の維持)．
 # cuda/tensorrt は自 crate の onnx を含意する (バインディングの cfg は
 # maou_rust 自身の feature を見るため)
-onnx = ["maou_search/onnx"]
-onnx-cuda = ["onnx", "maou_search/onnx-cuda"]
-onnx-tensorrt = ["onnx", "maou_search/onnx-tensorrt"]
+onnx = ["maou_search/onnx", "maou_usi/onnx"]
+onnx-cuda = ["onnx", "maou_search/onnx-cuda", "maou_usi/onnx-cuda"]
+onnx-tensorrt = ["onnx", "maou_search/onnx-tensorrt", "maou_usi/onnx-tensorrt"]
 
 [dependencies]
 pyo3 = { workspace = true }
@@ -26,6 +26,7 @@ maou_index = { path = "../maou_index" }
 maou_shogi = { path = "../maou_shogi" }
 maou_search = { path = "../maou_search" }
 maou_convert = { path = "../maou_convert" }
+maou_usi = { path = "../maou_usi" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

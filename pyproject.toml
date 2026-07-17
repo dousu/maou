@@ -1,6 +1,6 @@
 [project]
 name = "maou"
-version = "0.46.0"
+version = "0.47.0"
 description = "Shogi AI"
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
@@ -91,6 +91,8 @@ fetch = [
 
 [project.scripts]
 maou = "maou.infra.console.app:main"
+# USI エンジンの引数なしエントリポイント (起動引数を渡せない GUI 向け)
+maou-usi = "maou.infra.console.usi:main"
 
 [tool.uv]
 package = true

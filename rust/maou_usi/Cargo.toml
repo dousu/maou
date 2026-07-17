@@ -1,0 +1,18 @@
+[package]
+name = "maou_usi"
+version = "0.1.0"
+edition = "2021"
+description = "USI (Universal Shogi Interface) game-playing agent for maou (protocol / agent / stdio layers)"
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+# maou_search の ONNX 評価器を有効化する (デフォルトビルドは pure Rust = mock 評価器のみ)
+onnx = ["maou_search/onnx"]
+onnx-cuda = ["onnx", "maou_search/onnx-cuda"]
+onnx-tensorrt = ["onnx", "maou_search/onnx-tensorrt"]
+
+[dependencies]
+maou_shogi = { path = "../maou_shogi" }
+maou_search = { path = "../maou_search" }

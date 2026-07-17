@@ -78,6 +78,7 @@ fn main() {
     let limits = SearchLimits {
         max_playouts: arg_value(&args, "--playouts"),
         time_ms: arg_value(&args, "--time-ms").or(Some(10000)),
+        ..SearchLimits::default()
     };
     let use_tensorrt = args.iter().any(|a| a == "--tensorrt");
     let onnx_options = OnnxOptions {

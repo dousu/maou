@@ -41,6 +41,7 @@ pub mod feature;
 pub mod label;
 #[cfg(feature = "onnx")]
 pub mod onnx;
+pub mod position;
 pub mod preprocess;
 pub mod repetition;
 pub mod search;
@@ -49,6 +50,7 @@ pub mod tree;
 pub use evaluator::{EvalItem, EvalResult, Evaluator, MockEvaluator};
 #[cfg(feature = "onnx")]
 pub use onnx::OnnxEvaluator;
+pub use position::{build_board_and_history, PositionSetupError};
 pub use repetition::{HistoryEntry, RepetitionOutcome};
 pub use search::{
     RootChildStat, SearchLimits, SearchOptions, SearchResult, SearchStats, Searcher, StopCause,
