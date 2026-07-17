@@ -69,14 +69,32 @@ where
             }
             Err(e) => {
                 // 致命的エラー (モデルロード失敗・不正局面)．詳細は stderr，
-                // GUI へは ASCII の info string で通知して終了する
+                // GUI へは理由を ASCII 化した info string で通知して終了する
+                // (subprocess の stderr が見えない環境 — Colab 等 — でも
+                // 原因が stdout 側から分かるように)
                 eprintln!("maou usi fatal: {e}");
-                let _ = writeln!(out, "info string ERROR: engine aborted (see stderr)");
+                let _ = writeln!(out, "info string ERROR: {}", sanitize_ascii(&e));
                 let _ = out.flush();
                 return Err(e);
             }
         }
     }
+}
+
+/// `info string` 用にエラーメッセージを 1 行の ASCII へ丸める
+/// (GUI のエンコーディング差と行指向プロトコルの保護)．
+fn sanitize_ascii(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii() && !c.is_ascii_control() {
+                c
+            } else if c.is_whitespace() {
+                ' '
+            } else {
+                '?'
+            }
+        })
+        .collect()
 }
 
 /// 標準入出力で USI エンジンを実行する (quit / EOF まで戻らない)．
@@ -161,6 +179,13 @@ mod tests {
             .expect("探索サマリ info がある");
         let pv_pos = info.find(" pv ").expect("pv がある");
         assert!(!info[pv_pos..].contains(" score "), "pv は末尾に置く");
+    }
+
+    #[test]
+    fn test_sanitize_ascii() {
+        assert_eq!(sanitize_ascii("plain error 123"), "plain error 123");
+        // 非 ASCII は '?'，改行は空白 (1 行の info string を壊さない)
+        assert_eq!(sanitize_ascii("不正な SFEN\nrow2"), "??? SFEN row2");
     }
 
     #[test]
