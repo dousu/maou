@@ -1,10 +1,13 @@
 ---
 title: USI エンジン (対局エージェント) の設計
 date: 2026-07-17
-status: approved
+status: applied
+applied_in: 94476af
 # user 承認 2026-07-17 (未決事項 1-6 すべて提案どおり — 本文末尾「承認記録」参照)．
-# docs/design/usi-engine/index.md + position-search/index.md の相互参照は承認直後に適用．
-# docs/commands/usi.md は M1 実装 PR 内で適用予定．
+# docs/design/usi-engine/index.md + position-search/index.md の相互参照は
+# 承認直後 (270d4c6) に適用，docs/commands/usi.md は M1 実装 94476af で適用．
+# M2-M4 (時間戦略完全版/宣言勝ち/ponder/大会手順/自己対局) は
+# docs/design/usi-engine/index.md を設計の正として後続 PR．
 target:
   - docs/design/usi-engine/index.md
   - docs/design/position-search/index.md
