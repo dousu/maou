@@ -106,6 +106,16 @@ impl OnnxEvaluator {
                 .trt_engine_cache_dir
                 .clone()
                 .unwrap_or_else(|| "trt_cache".to_string());
+            // TensorRT provider はキャッシュディレクトリの親を作らず，不在だと
+            // "filesystem error: cannot create directory" で session 構築ごと
+            // 失敗する (Colab の Drive 未マウントで実際に発生)．ここで作成し，
+            // 作れない場合は原因が分かるエラーにする
+            std::fs::create_dir_all(&cache_dir).map_err(|e| {
+                ort::Error::new(format!(
+                    "TensorRT engine cache dir cannot be created: {cache_dir} ({e}) \
+                     — check that the parent path exists (e.g. Google Drive mounted)"
+                ))
+            })?;
             let ep = TensorRTExecutionProvider::default()
                 .with_fp16(true)
                 .with_engine_cache(true)

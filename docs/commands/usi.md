@@ -60,7 +60,7 @@
 | `--leaf-mate-threads INT` | default `1` | Number of dedicated leaf-mate threads. |
 | `--cuda/--no-cuda` | default off | Enable CUDA Execution Provider (requires a wheel built with `onnx-cuda`). |
 | `--tensorrt/--no-tensorrt` | default off | Enable TensorRT Execution Provider (requires a wheel built with `onnx-tensorrt`). |
-| `--trt-cache-dir PATH` | | TensorRT engine cache directory. |
+| `--trt-cache-dir PATH` | | TensorRT engine cache directory. Created automatically if missing; startup fails with a clear error when the parent path is unavailable (e.g. Google Drive not mounted on Colab). |
 
 ## USI options (`setoption`)
 
