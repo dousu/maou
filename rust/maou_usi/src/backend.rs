@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use maou_search::{
-    build_board_and_history, EvalItem, Evaluator, MockEvaluator, RootSnapshot, SearchLimits,
-    SearchOptions, SearchResult, Searcher, StopCause,
+    build_board_and_history, EvalItem, Evaluator, MockEvaluator, ReusableTree, RootSnapshot,
+    SearchLimits, SearchOptions, SearchResult, Searcher, StopCause,
 };
 use maou_shogi::board::Board;
 use maou_shogi::movegen::generate_legal_moves;
@@ -34,6 +34,9 @@ enum EngineEvaluator {
 pub struct MaouSearchBackend {
     evaluator: EngineEvaluator,
     options: SearchOptions,
+    /// 対局手番間で保持する探索木 (subtree 再利用)．手番進行で局面が前進した
+    /// ときに reroot して warm start する．`reset` (usinewgame/gameover) で破棄．
+    retained: Option<ReusableTree>,
 }
 
 impl MaouSearchBackend {
@@ -96,7 +99,11 @@ impl MaouSearchBackend {
             }
         };
 
-        let backend = MaouSearchBackend { evaluator, options };
+        let backend = MaouSearchBackend {
+            evaluator,
+            options,
+            retained: None,
+        };
         backend.warmup()?;
         Ok(backend)
     }
@@ -133,7 +140,6 @@ impl SearchBackend for MaouSearchBackend {
         stop: &Arc<AtomicBool>,
         observer: &mut dyn SearchObserver,
     ) -> Result<SearchOutcome, String> {
-        let (board, history) = build_board_and_history(sfen, moves).map_err(|e| e.to_string())?;
         // 千日手戦略: 手番視点の引き分け価値を探索へ渡す
         let mut options = self.options.clone();
         options.draw_value = draw_value;
@@ -157,18 +163,21 @@ impl SearchBackend for MaouSearchBackend {
             stop: Some(Arc::clone(stop)),
             progress: Some(Arc::clone(&progress)),
         };
+        // 前回の探索木を取り出す — 手番進行で局面が前進していれば search_reusing
+        // が reroot して warm start する (前進していなければ fresh)．
+        let retained = self.retained.take();
         // 探索を専用スレッドで走らせ，呼び出しスレッド (dispatcher) が monitor
         // ループを回す (progress をポーリング → observer 駆動 → 早期停止)．
         // GIL/GC を挟まない Rust 内で完結する (設計 §5)．
         let evaluator = &self.evaluator;
-        let result = std::thread::scope(|s| {
+        let outcome = std::thread::scope(|s| {
             let handle =
-                s.spawn(|| match evaluator {
+                s.spawn(move || match evaluator {
                     EngineEvaluator::Mock(e) => Searcher::new(e, options.clone())
-                        .search_with_history(&board, &history, &limits),
+                        .search_reusing(sfen, moves, &limits, retained),
                     #[cfg(feature = "onnx")]
                     EngineEvaluator::Onnx(e) => Searcher::new(e, options.clone())
-                        .search_with_history(&board, &history, &limits),
+                        .search_reusing(sfen, moves, &limits, retained),
                 });
             let start = Instant::now();
             while !handle.is_finished() {
@@ -183,6 +192,9 @@ impl SearchBackend for MaouSearchBackend {
             }
             handle.join().expect("探索スレッドは panic しない")
         });
+        // 更新後の木を保持して次回の subtree 再利用に備える (fresh でも保持する)
+        let (result, tree) = outcome.map_err(|e| e.to_string())?;
+        self.retained = Some(tree);
         Ok(to_outcome(&result))
     }
 
@@ -193,6 +205,11 @@ impl SearchBackend for MaouSearchBackend {
 
     fn is_mock(&self) -> bool {
         matches!(self.evaluator, EngineEvaluator::Mock(_))
+    }
+
+    fn reset(&mut self) {
+        // 対局リセット: 保持木を破棄する (次の探索は fresh)
+        self.retained = None;
     }
 }
 
@@ -331,5 +348,65 @@ mod tests {
             .err()
             .expect("非合法手はエラー");
         assert!(err.contains("7g7e"));
+    }
+
+    #[test]
+    fn test_reuse_across_moves_stays_sound_and_resets() {
+        let mut backend = MaouSearchBackend::build(&config()).expect("mock 構築は成功する");
+        let stop = Arc::new(AtomicBool::new(false));
+        let budget = SearchBudget {
+            time: None,
+            max_playouts: Some(500),
+            unbounded: false,
+        };
+        // 1 手目後を探索して木を保持する
+        let o1 = backend
+            .search(
+                STARTPOS_SFEN,
+                &["7g7f".to_string()],
+                &budget,
+                0.5,
+                &stop,
+                &mut NoopObserver,
+            )
+            .expect("探索成功");
+        let best1 = o1.best_usi.expect("合法手がある");
+        // best1 と PV の続きで前進 = 探索済みの筋 → reroot して再利用する経路
+        let mut moves = vec!["7g7f".to_string(), best1];
+        if let Some(reply) = o1.pv.get(1) {
+            moves.push(reply.clone());
+        }
+        let o2 = backend
+            .search(
+                STARTPOS_SFEN,
+                &moves,
+                &budget,
+                0.5,
+                &stop,
+                &mut NoopObserver,
+            )
+            .expect("再利用探索成功");
+        // soundness: 新局面の合法手を返す
+        let best2 = o2.best_usi.expect("合法手がある");
+        let (board, _) = build_board_and_history(STARTPOS_SFEN, &moves).expect("正当");
+        let legal: Vec<String> = generate_legal_moves(&mut board.clone())
+            .into_iter()
+            .map(|m| m.to_usi())
+            .collect();
+        assert!(legal.contains(&best2), "{best2} は合法手であるべき");
+
+        // reset (usinewgame 相当) 後も fresh 探索が正当に動く
+        backend.reset();
+        let o3 = backend
+            .search(
+                STARTPOS_SFEN,
+                &["2g2f".to_string()],
+                &budget,
+                0.5,
+                &stop,
+                &mut NoopObserver,
+            )
+            .expect("reset 後の探索成功");
+        assert!(o3.best_usi.is_some());
     }
 }

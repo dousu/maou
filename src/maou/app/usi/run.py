@@ -38,6 +38,9 @@ class UsiRunner:
             resign_value: 投了する root 勝率 (千分率，既定 0 = 投了しない)．
             resign_consecutive: 投了に必要な連続手数．
             max_moves_to_draw: 引き分け最大手数 (既定 0 = 無効)．
+            usi_ponder: ponder (先読み) を有効にするか (既定 True)．True の
+                とき `USI_Ponder` option を宣言し `bestmove` に予想相手手を
+                付ける (GUI からの `setoption name USI_Ponder` が上書きする)．
             root_dfpn: ルート並行 dfpn 詰み探索を有効にするか．
             root_dfpn_nodes: ルート dfpn のノード予算．
             root_dfpn_depth: ルート dfpn の探索深さ上限 (最大 2047)．
@@ -61,6 +64,7 @@ class UsiRunner:
         resign_value: int = 0
         resign_consecutive: int = 3
         max_moves_to_draw: int = 0
+        usi_ponder: bool = True
         root_dfpn: bool = True
         root_dfpn_nodes: int = 2_000_000
         root_dfpn_depth: int = 2047
@@ -108,6 +112,7 @@ class UsiRunner:
             resign_value=option.resign_value,
             resign_consecutive=option.resign_consecutive,
             max_moves_to_draw=option.max_moves_to_draw,
+            usi_ponder=option.usi_ponder,
             root_dfpn=option.root_dfpn,
             root_dfpn_nodes=option.root_dfpn_nodes,
             root_dfpn_depth=option.root_dfpn_depth,

@@ -420,6 +420,108 @@ impl NodePool {
         }
     }
 
+    /// 保持木を `path` (旧 root からの指し手列) が指す局面へ reroot して，
+    /// 到達可能なサブツリーだけを index 0 起点に詰め直す (reachability
+    /// mark-compact — 対局手番間の subtree 再利用)．成功で `true`．
+    ///
+    /// 旧 root (index 0) から `path` の各手に対応する辺を辿って新 root を求め，
+    /// そこから到達可能なノードを BFS 順 (新 root = 0) に前方へ move する．
+    /// 刈られたノードへの辺は [`NULL_NODE`] に戻る．新 root の統計 (visits /
+    /// wins / proven / edges) はそのまま保存され，次の探索で warm start する．
+    ///
+    /// 再利用しない (= `false` を返し木を変更しない) のは:
+    /// - 経路の途中/末尾のノードが [`node_state::EXPANDED`] でない (未評価・終端)
+    /// - 経路の手に対応する辺が無い / 子が未生成 ([`NULL_NODE`]) = その筋は未探索
+    ///
+    /// 保存されるサブツリーの各ノードは，ゲーム開始からの完全な局面列が reroot
+    /// 前後で不変 (`path` の手が探索経路から対局履歴側へ移るだけ) なため，千日手
+    /// 由来の終端・確定値も含めて健全性が保たれる — 呼び出し側は新 root の完全な
+    /// 対局履歴を渡すこと (`build_board_and_history` が自動で満たす)．
+    ///
+    /// # 前提
+    ///
+    /// 全探索スレッドが停止した quiescent 状態でのみ呼べる (`&mut self` を
+    /// 要求するためコンパイル時に強制される．[`NodePool::compact`] と同じ)．
+    pub fn reroot(&mut self, path: &[Move]) -> bool {
+        // 1. 旧 root から path を辿って新 root index を求める
+        let mut cur: u32 = 0;
+        for &mv in path {
+            let node = &self.nodes[cur as usize];
+            if node.state.load(Ordering::Acquire) != node_state::EXPANDED {
+                return false;
+            }
+            let Some(edge) = node.edges().iter().find(|e| e.mv == mv) else {
+                return false;
+            };
+            let child = edge.child.load(Ordering::Acquire);
+            if child == NULL_NODE {
+                return false;
+            }
+            cur = child;
+        }
+        let new_root = cur;
+        // 新 root は展開済みでなければ MCTS を回せない (終端は edges を持たない)
+        if self.nodes[new_root as usize].state.load(Ordering::Acquire) != node_state::EXPANDED {
+            return false;
+        }
+
+        // 2. 新 root から到達可能なノードを BFS でマークする (旧 index → 新 index)．
+        //    新 root が新 index 0．EXPANDED ノードのみ子を辿る (終端は葉)
+        let cap = self.nodes.len();
+        let mut map = vec![NULL_NODE; cap];
+        let mut order: Vec<u32> = Vec::with_capacity(self.used() as usize);
+        map[new_root as usize] = 0;
+        order.push(new_root);
+        let mut head = 0usize;
+        while head < order.len() {
+            let old = order[head] as usize;
+            head += 1;
+            if self.nodes[old].state.load(Ordering::Acquire) == node_state::EXPANDED {
+                for e in self.nodes[old].edges() {
+                    let c = e.child.load(Ordering::Acquire);
+                    if c != NULL_NODE && map[c as usize] == NULL_NODE {
+                        map[c as usize] = order.len() as u32;
+                        order.push(c);
+                    }
+                }
+            }
+        }
+        let kept = order.len();
+
+        // 3. 生存ノードを BFS 順に新しい配列へ move する (Node は非 Clone なので
+        //    mem::replace で取り出す)．残りは新規ノードで埋めて容量を維持する
+        let old_nodes = std::mem::replace(&mut self.nodes, Vec::new().into_boxed_slice());
+        let mut old_vec: Vec<Node> = old_nodes.into_vec();
+        let mut new_vec: Vec<Node> = Vec::with_capacity(cap);
+        for &old_idx in &order {
+            new_vec.push(std::mem::replace(
+                &mut old_vec[old_idx as usize],
+                Node::new(),
+            ));
+        }
+        for _ in kept..cap {
+            new_vec.push(Node::new());
+        }
+
+        // 4. 生存ノードの辺を新 index に張り替える (刈られた子は NULL_NODE)．
+        //    排他参照下なので Relaxed で十分 (探索再開側との happens-before は
+        //    スレッド spawn が与える — compact と同じ)
+        for node in &new_vec[..kept] {
+            if let Some(edges) = node.edges.get() {
+                for e in edges.iter() {
+                    let c = e.child.load(Ordering::Relaxed);
+                    if c != NULL_NODE {
+                        e.child.store(map[c as usize], Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+
+        self.nodes = new_vec.into_boxed_slice();
+        self.next.store(kept as u32, Ordering::Relaxed);
+        true
+    }
+
     /// プール容量を返す．
     pub fn capacity(&self) -> u32 {
         self.nodes.len() as u32
@@ -555,5 +657,115 @@ mod tests {
         assert_eq!(st.freed, 0);
         assert_eq!(pool.used(), 1);
         assert_eq!(pool.get(0).state(), node_state::UNEXPANDED);
+    }
+
+    /// reroot テスト用の木を作る: root(v10) ──mv0── a(v6) ──mv0── c(v4, win.75)，
+    /// root ──mv1── b(v1)．(a, b, c) = pool index (1, 2, 3)．
+    fn build_reroot_pool() -> (NodePool, Vec<maou_shogi::moves::Move>) {
+        use maou_shogi::board::Board;
+        use maou_shogi::movegen::generate_legal_moves;
+
+        let mut board = Board::empty();
+        board
+            .set_sfen("lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1")
+            .expect("正当な SFEN");
+        let mvs = generate_legal_moves(&mut board);
+
+        let pool = NodePool::new(8);
+        let root = pool.alloc().unwrap();
+        let a = pool.alloc().unwrap();
+        let b = pool.alloc().unwrap();
+        let c = pool.alloc().unwrap();
+
+        let e_a = Edge::new(mvs[0], 0.6);
+        e_a.child.store(a, Ordering::Relaxed);
+        let e_b = Edge::new(mvs[1], 0.4);
+        e_b.child.store(b, Ordering::Relaxed);
+        pool.get(root).finish_expansion(Box::new([e_a, e_b]));
+        let e_c = Edge::new(mvs[0], 1.0);
+        e_c.child.store(c, Ordering::Relaxed);
+        pool.get(a).finish_expansion(Box::new([e_c]));
+        pool.get(c).finish_expansion(Box::new([])); // 展開済みの葉
+
+        for _ in 0..10 {
+            pool.get(root).add_visit();
+        }
+        for _ in 0..6 {
+            pool.get(a).add_visit();
+        }
+        pool.get(b).add_visit();
+        for _ in 0..4 {
+            pool.get(c).add_visit();
+        }
+        pool.get(c).add_win(0.75);
+        (pool, mvs)
+    }
+
+    #[test]
+    fn test_reroot_keeps_subtree_and_prunes_siblings() {
+        let (mut pool, mvs) = build_reroot_pool();
+        // mv0 で前進 → 新 root = a．到達可能は {a, c}，b は刈られる
+        assert!(pool.reroot(&[mvs[0]]));
+        assert_eq!(pool.used(), 2, "a, c のみ残る");
+
+        // 新 root (index 0) = 旧 a: 統計と辺が保存され，辺は c の新 index を指す
+        let new_root = pool.get(0);
+        assert_eq!(new_root.visits(), 6, "a の visits が保存される");
+        assert_eq!(new_root.state(), node_state::EXPANDED);
+        let edges = new_root.edges();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].mv, mvs[0]);
+        let c_idx = edges[0].child.load(Ordering::Relaxed);
+        assert_eq!(c_idx, 1, "c は新 index 1 に再配置される");
+
+        // c の統計も保存される
+        let c_node = pool.get(1);
+        assert_eq!(c_node.visits(), 4);
+        assert!((c_node.wins() - 0.75).abs() < 1e-3);
+
+        // 解放スロットは再割り当てできる
+        assert_eq!(pool.alloc(), Some(2));
+    }
+
+    #[test]
+    fn test_reroot_two_ply() {
+        let (mut pool, mvs) = build_reroot_pool();
+        // mv0, mv0 で 2 手前進 → 新 root = c (葉，子なし)
+        assert!(pool.reroot(&[mvs[0], mvs[0]]));
+        assert_eq!(pool.used(), 1, "c のみ残る");
+        let new_root = pool.get(0);
+        assert_eq!(new_root.visits(), 4);
+        assert!((new_root.wins() - 0.75).abs() < 1e-3);
+        assert_eq!(new_root.state(), node_state::EXPANDED);
+        assert!(new_root.edges().is_empty());
+    }
+
+    #[test]
+    fn test_reroot_fails_on_unexplored_move() {
+        let (mut pool, mvs) = build_reroot_pool();
+        // mvs[2] は root の辺に無い (未探索の筋) → 再利用不能，木は不変
+        assert!(!pool.reroot(&[mvs[2]]));
+        assert_eq!(pool.used(), 4, "木は変更されない");
+        assert_eq!(pool.get(0).visits(), 10);
+    }
+
+    #[test]
+    fn test_reroot_fails_on_null_child() {
+        use maou_shogi::board::Board;
+        use maou_shogi::movegen::generate_legal_moves;
+
+        let mut board = Board::empty();
+        board
+            .set_sfen("lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1")
+            .expect("正当な SFEN");
+        let mvs = generate_legal_moves(&mut board);
+        // root は展開済みだが辺の子は未生成 (NULL_NODE) = その筋は未探索
+        let mut pool = NodePool::new(4);
+        let _root = pool.alloc().unwrap();
+        let e = Edge::new(mvs[0], 1.0); // child は NULL_NODE のまま
+        pool.get(0).finish_expansion(Box::new([e]));
+        pool.get(0).add_visit();
+        assert!(!pool.reroot(&[mvs[0]]), "子未生成の筋は再利用不能");
+        assert_eq!(pool.used(), 1);
     }
 }

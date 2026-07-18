@@ -53,6 +53,6 @@ pub use onnx::OnnxEvaluator;
 pub use position::{build_board_and_history, PositionSetupError};
 pub use repetition::{HistoryEntry, RepetitionOutcome};
 pub use search::{
-    RootChildStat, RootSnapshot, SearchLimits, SearchOptions, SearchResult, SearchStats, Searcher,
-    StopCause,
+    ReusableTree, RootChildStat, RootSnapshot, SearchLimits, SearchOptions, SearchResult,
+    SearchStats, Searcher, StopCause,
 };

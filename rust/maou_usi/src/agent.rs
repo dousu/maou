@@ -4,7 +4,7 @@
 //! 探索は [`SearchBackend`] trait 越しに呼ぶため，fake backend で状態機械を
 //! 単体テストできる．時間管理は [`crate::time`] (戦略レイヤー) に委譲する．
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use maou_shogi::types::Color;
@@ -68,6 +68,10 @@ pub struct EngineConfig {
     /// 引き分けになる最大手数 (既定 0 = 無効．電竜戦は 512)．到達局面では入玉
     /// 宣言を必ず確認し，可能なら宣言勝ちする．
     pub max_moves_to_draw: u32,
+    /// ponder (先読み) を有効にするか (既定 true)．true のとき `USI_Ponder`
+    /// option を宣言し，`bestmove` に予想相手手 (自探索 PV の 2 手目) を付ける．
+    /// GUI はこれを見て相手番中に `go ponder` を送る (設計 doc §8.4)．
+    pub usi_ponder: bool,
     /// ルート並行 dfpn (None = maou_search 既定)．
     pub root_dfpn: Option<bool>,
     /// ルート dfpn ノード予算．
@@ -101,6 +105,7 @@ impl Default for EngineConfig {
             resign_value: 0,
             resign_consecutive: 3,
             max_moves_to_draw: 0,
+            usi_ponder: true,
             root_dfpn: None,
             root_dfpn_nodes: None,
             root_dfpn_depth: None,
@@ -215,6 +220,11 @@ pub trait SearchBackend {
 
     /// mock 評価器か (isready 時の明示に使う)．
     fn is_mock(&self) -> bool;
+
+    /// 対局リセット時に保持している探索状態 (subtree 再利用の木など) を破棄する
+    /// (`usinewgame` / `gameover`)．次の探索は fresh になる．保持状態を持たない
+    /// 実装は既定の no-op でよい．
+    fn reset(&mut self) {}
 }
 
 /// 対局状態．
@@ -290,6 +300,11 @@ where
     /// root 勝率が投了閾値未満だった連続手数 (`resign_value` 用)．usinewgame /
     /// gameover でリセットする．
     resign_streak: u32,
+    /// ponder 的中シグナル．transport (stdio reader) が行の到着順で更新する:
+    /// `go` 行で false，`ponderhit` 行で true (stop フラグと同じ race-free 規約)．
+    /// 探索中の [`GoObserver`] がポーリングし，的中したら無期限の ponder 探索を
+    /// 時間予算へ切り替える (探索木はそのまま引き継がれる — ponder の主利得)．
+    ponderhit: Arc<AtomicBool>,
 }
 
 impl<B, F> Agent<B, F>
@@ -306,6 +321,7 @@ where
             game: GameState::default(),
             stop: Arc::new(AtomicBool::new(false)),
             resign_streak: 0,
+            ponderhit: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -315,6 +331,14 @@ where
     /// `go` 行を読んだら false，`stop`/`quit` 行を読んだら true を store する．
     pub fn stop_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.stop)
+    }
+
+    /// ponder 的中フラグのハンドル ([`Agent::ponderhit`] の規約参照)．
+    ///
+    /// transport 側の規約 (stop フラグと同じ行順更新): `go` 行で false，
+    /// `ponderhit` 行で true を store する．探索中の observer がこれを拾う．
+    pub fn ponderhit_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.ponderhit)
     }
 
     /// コマンドを 1 つ処理して応答列を返す．
@@ -332,6 +356,11 @@ where
             GuiCommand::UsiNewGame => {
                 self.game = GameState::default();
                 self.resign_streak = 0;
+                // 保持している探索木 (subtree 再利用) を破棄する (別対局の木を
+                // 引き継がない)
+                if let Some(b) = self.backend.as_mut() {
+                    b.reset();
+                }
                 Ok(Vec::new())
             }
             GuiCommand::Position { sfen, moves } => {
@@ -348,15 +377,22 @@ where
                 self.handle_go_stream(&params, &mut |c| out.push(c))?;
                 Ok(out)
             }
-            // M1: 同期探索のため Stop 処理時点で探索は終わっている
-            // (bestmove は Go の応答として送信済み)．ここでは何もしない
+            // Stop は探索中に transport (reader スレッド) が stop フラグへ即
+            // 反映する (行の到着順規約)．dispatcher が Go でブロック中に処理
+            // されるのはブロック解除後 = 探索終了後で，bestmove は Go の応答
+            // として送信済み．ここでは何もしない
             GuiCommand::Stop => Ok(Vec::new()),
-            // M1: ponder 未対応 (USI_Ponder を宣言しないため通常来ない)
+            // PonderHit も reader スレッドが ponderhit フラグへ反映し，探索中の
+            // GoObserver が拾って時間予算へ切り替える (agent 内で完結する)．
+            // dispatcher へ届く頃には探索終了後なので，ここでは何もしない
             GuiCommand::PonderHit(_) => Ok(Vec::new()),
             GuiCommand::GameOver(result) => {
                 let _: GameResult = result;
                 self.game = GameState::default();
                 self.resign_streak = 0;
+                if let Some(b) = self.backend.as_mut() {
+                    b.reset();
+                }
                 Ok(Vec::new())
             }
             GuiCommand::Quit => Ok(Vec::new()),
@@ -437,6 +473,12 @@ where
                 name: "TrtCacheDir",
                 kind: OptionKind::String {
                     default: c.trt_cache_dir.clone().unwrap_or_default(),
+                },
+            },
+            OptionDecl {
+                name: "USI_Ponder",
+                kind: OptionKind::Check {
+                    default: c.usi_ponder,
                 },
             },
             OptionDecl {
@@ -617,6 +659,10 @@ where
                 }
                 invalidate = false;
             }
+            "USI_Ponder" => {
+                self.config.usi_ponder = parse_bool();
+                invalidate = false;
+            }
             // 未知のオプションは無視 (GUI 側の拡張への耐性)
             _ => invalidate = false,
         }
@@ -656,19 +702,29 @@ where
 
         let draw_value = self.draw_value_for(self.game.side_to_move());
         let budget = self.decide_budget(params);
+        // ponder (`go ponder`) は無期限探索で始め，`ponderhit` を拾ったら時間
+        // 予算へ切り替える (探索木は引き継がれる)．的中後に使う予算 = この局面を
+        // 通常 go したときと同じ配分をここで計算して observer へ渡す．
+        let ponder_switch = params.ponder.then(|| {
+            (
+                Arc::clone(&self.ponderhit),
+                self.timed_budget(&params.clock),
+            )
+        });
         let sfen = self.game.sfen.clone();
         let moves = self.game.moves.clone();
         let stop = Arc::clone(&self.stop);
         let outcome = {
             let backend = self.backend.as_mut().expect("直前で構築済み");
-            let mut observer = GoObserver::new(emit, budget.time);
+            let mut observer = GoObserver::new(emit, budget.time, ponder_switch);
             backend.search(&sfen, &moves, &budget, draw_value, &stop, &mut observer)?
         };
 
-        // 探索サマリ info (最終) → bestmove
+        // 探索サマリ info (最終) → bestmove (予想相手手 = 自探索 PV の 2 手目)
         emit(EngineCommand::Info(build_info(&outcome)));
         let mv = self.decide_bestmove(&outcome);
-        emit(EngineCommand::BestMove { mv, ponder: None });
+        let ponder = self.ponder_move(&mv, &outcome);
+        emit(EngineCommand::BestMove { mv, ponder });
         Ok(())
     }
 
@@ -717,6 +773,18 @@ where
         BestMoveKind::Move(usi.clone())
     }
 
+    /// bestmove に付ける予想相手手 (ponder 対象 = 自探索 PV の 2 手目)．
+    ///
+    /// `USI_Ponder` が無効・指し手が resign/win・PV が 2 手未満なら `None`
+    /// (設計 doc §8.4)．GUI はこの手を相手が指すと仮定して相手番中に
+    /// `go ponder` を送る．
+    fn ponder_move(&self, mv: &BestMoveKind, outcome: &SearchOutcome) -> Option<String> {
+        if !self.config.usi_ponder || !matches!(mv, BestMoveKind::Move(_)) {
+            return None;
+        }
+        outcome.pv.get(1).cloned()
+    }
+
     /// go パラメータ → 探索予算 (時間戦略は crate::time)．
     fn decide_budget(&self, params: &GoParams) -> SearchBudget {
         if params.infinite || params.ponder {
@@ -747,17 +815,23 @@ where
                 unbounded: false,
             };
         }
-        let mut budget = allocate(&self.config.time, &params.clock, self.game.side_to_move());
+        SearchBudget {
+            time: Some(self.timed_budget(&params.clock)),
+            max_playouts: None,
+            unbounded: false,
+        }
+    }
+
+    /// 持ち時間 → 時間予算 (soft/hard)．`allocate` に MaxMovesToDraw 目前の絞り
+    /// (§8.3) を重ねたもの．通常 go と ponderhit 後の予算計算で共有する．
+    fn timed_budget(&self, clock: &crate::protocol::ClockParams) -> TimeBudget {
+        let mut budget = allocate(&self.config.time, clock, self.game.side_to_move());
         // MaxMovesToDraw が近ければ予算を絞る (引き分け目前で深追いしない．§8.3)
         if let Some(cap) = self.max_moves_draw_cap() {
             budget.soft_ms = budget.soft_ms.min(cap);
             budget.hard_ms = budget.hard_ms.min(cap).max(budget.soft_ms);
         }
-        SearchBudget {
-            time: Some(budget),
-            max_playouts: None,
-            unbounded: false,
-        }
+        budget
     }
 
     /// MaxMovesToDraw リミットが目前 (残り 4 手以内) なら思考予算の上限
@@ -793,18 +867,31 @@ fn has_time_remaining(clock: &crate::protocol::ClockParams, side: Color) -> bool
 /// ([`crate::time::should_stop`])．
 struct GoObserver<'a, 'e> {
     emit: &'a mut Emit<'e>,
-    /// 時間予算 (`None` = 無期限探索: 時間による停止要求はしない)．
+    /// 現在有効な時間予算 (`None` = 無期限: `go infinite` / ponder 中で未的中)．
     budget: Option<TimeBudget>,
     /// 次に info を出す経過時刻 (ミリ秒)．
     next_info_ms: u64,
+    /// ponder (`go ponder`) 用の的中スイッチ: (的中フラグ, 的中後の時間予算)．
+    /// 非 ponder go は `None`．的中フラグが立ったら `budget` を的中後予算へ
+    /// 切り替える (探索木はそのまま引き継がれる — ponder の主利得)．
+    ponder: Option<(Arc<AtomicBool>, TimeBudget)>,
+    /// 時間計測の起点 (ミリ秒)．ponder 的中時に「今」へ更新する — 的中後の
+    /// 予算は的中時点から計測する (ponder 中の思考は相手の持ち時間ゆえ無料)．
+    baseline_ms: u64,
 }
 
 impl<'a, 'e> GoObserver<'a, 'e> {
-    fn new(emit: &'a mut Emit<'e>, budget: Option<TimeBudget>) -> GoObserver<'a, 'e> {
+    fn new(
+        emit: &'a mut Emit<'e>,
+        budget: Option<TimeBudget>,
+        ponder: Option<(Arc<AtomicBool>, TimeBudget)>,
+    ) -> GoObserver<'a, 'e> {
         GoObserver {
             emit,
             budget,
             next_info_ms: 0,
+            ponder,
+            baseline_ms: 0,
         }
     }
 }
@@ -818,11 +905,24 @@ impl SearchObserver for GoObserver<'_, '_> {
             )));
             self.next_info_ms = elapsed_ms + INFO_INTERVAL_MS;
         }
-        // 時間延長判断 (無期限探索なら停止要求しない = 外部 stop のみで止まる)
+        // ponder 的中: 無期限探索を時間予算へ切り替え，計測起点を的中時点に置く
+        // (それまでに積んだ playout = 探索木はそのまま活きる = ponder の主利得)
+        if self.budget.is_none() {
+            let hit = self
+                .ponder
+                .as_ref()
+                .is_some_and(|(flag, _)| flag.load(Ordering::Acquire));
+            if hit {
+                self.budget = self.ponder.as_ref().map(|(_, b)| *b);
+                self.baseline_ms = elapsed_ms;
+            }
+        }
+        // 時間延長判断 (無期限探索なら停止要求しない = 外部 stop のみで止まる)．
+        // 経過は計測起点 (通常 0，ponder 的中後は的中時点) からの差分で見る
         match self.budget {
             Some(b) => should_stop(
                 &b,
-                elapsed_ms,
+                elapsed_ms.saturating_sub(self.baseline_ms),
                 snapshot.best_visits,
                 snapshot.second_visits,
                 snapshot.proven.is_some(),
@@ -1022,13 +1122,13 @@ mod tests {
                 ..GoParams::default()
             }))
             .unwrap();
-        // info (pv 付き) → bestmove の順
+        // info (pv 付き) → bestmove の順．PV = [7g7f, 3c3d] → 予想相手手 3c3d
         assert!(matches!(&out[0], EngineCommand::Info(i) if !i.pv.is_empty()));
         assert_eq!(
             out.last(),
             Some(&EngineCommand::BestMove {
                 mv: BestMoveKind::Move("7g7f".to_string()),
-                ponder: None
+                ponder: Some("3c3d".to_string())
             })
         );
         // バックエンドへは SFEN + USI 経路 (千日手履歴規約) が渡る
@@ -1403,5 +1503,117 @@ mod tests {
                 "{name} オプションが宣言される"
             );
         }
+    }
+
+    #[test]
+    fn test_usi_ponder_option_declared() {
+        let (mut agent, _) = agent_with_fake(default_outcome());
+        let out = agent.handle(GuiCommand::Usi).unwrap();
+        // M3: USI_Ponder は check 型・既定 true で宣言される (GUI が ponder を
+        // 送る trigger)．M1/M2 では宣言していなかった
+        assert!(out.iter().any(|c| matches!(
+            c,
+            EngineCommand::OptionDecl(OptionDecl {
+                name: "USI_Ponder",
+                kind: OptionKind::Check { default: true }
+            })
+        )));
+    }
+
+    #[test]
+    fn test_bestmove_carries_ponder_move() {
+        // default_outcome の PV = [7g7f, 3c3d] → 予想相手手 = 3c3d
+        let (mut agent, _) = agent_with_fake(default_outcome());
+        agent.handle(GuiCommand::IsReady).unwrap();
+        let out = agent.handle(GuiCommand::Go(GoParams::default())).unwrap();
+        assert_eq!(
+            out.last(),
+            Some(&EngineCommand::BestMove {
+                mv: BestMoveKind::Move("7g7f".to_string()),
+                ponder: Some("3c3d".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn test_no_ponder_when_disabled() {
+        let (mut agent, _) = agent_with_fake(default_outcome());
+        agent.handle(GuiCommand::IsReady).unwrap();
+        set(&mut agent, "USI_Ponder", "false");
+        let out = agent.handle(GuiCommand::Go(GoParams::default())).unwrap();
+        assert_eq!(
+            out.last(),
+            Some(&EngineCommand::BestMove {
+                mv: BestMoveKind::Move("7g7f".to_string()),
+                ponder: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_no_ponder_when_pv_too_short() {
+        // PV が 1 手のみ → 予想相手手なし
+        let short = SearchOutcome {
+            best_usi: Some("7g7f".to_string()),
+            winrate: 0.6,
+            pv: vec!["7g7f".to_string()],
+            ..SearchOutcome::default()
+        };
+        let (mut agent, _) = agent_with_fake(short);
+        agent.handle(GuiCommand::IsReady).unwrap();
+        let out = agent.handle(GuiCommand::Go(GoParams::default())).unwrap();
+        assert!(matches!(
+            out.last(),
+            Some(EngineCommand::BestMove {
+                mv: BestMoveKind::Move(_),
+                ponder: None,
+            })
+        ));
+    }
+
+    #[test]
+    fn test_go_ponder_is_unbounded() {
+        // go ponder は無期限探索 (的中/stop まで止まらない)
+        let (mut agent, calls) = agent_with_fake(default_outcome());
+        agent.handle(GuiCommand::IsReady).unwrap();
+        agent
+            .handle(GuiCommand::Go(GoParams {
+                ponder: true,
+                clock: crate::protocol::ClockParams {
+                    btime: Some(60_000),
+                    wtime: Some(60_000),
+                    byoyomi: Some(10_000),
+                    ..Default::default()
+                },
+                ..GoParams::default()
+            }))
+            .unwrap();
+        assert!(calls.borrow()[0].2.unbounded);
+    }
+
+    #[test]
+    fn test_go_observer_ponderhit_switches_to_timed() {
+        // ponder observer の核心: 未的中は無期限 (停止しない)，的中したら以後は
+        // 「的中時点からの経過」で時間予算を判定する (それまでの木は活きる)
+        let hit = Arc::new(AtomicBool::new(false));
+        let budget = TimeBudget {
+            soft_ms: 1_000,
+            hard_ms: 2_000,
+        };
+        let mut sink = |_c: EngineCommand| {};
+        let mut obs = GoObserver::new(&mut sink, None, Some((Arc::clone(&hit), budget)));
+        let snap = ProgressSnapshot {
+            best_visits: 100,
+            second_visits: 90,
+            ..ProgressSnapshot::default()
+        };
+        // 未的中: 経過が長くても無期限のまま停止しない
+        assert!(!obs.on_progress(&snap, 5_000));
+        // 的中: 計測起点が的中時点 (5000ms) に更新される
+        hit.store(true, Ordering::Release);
+        // 的中直後 (since = 0) はまだ停止しない
+        assert!(!obs.on_progress(&snap, 5_000));
+        // since = 7000 − 5000 = 2000 ≥ hard → 停止する
+        assert!(obs.on_progress(&snap, 7_000));
     }
 }
