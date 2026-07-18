@@ -109,6 +109,17 @@ from maou.infra.console.common import (
     required=False,
 )
 @click.option(
+    "--usi-ponder/--no-usi-ponder",
+    type=bool,
+    is_flag=True,
+    help="Enable pondering (thinking on the opponent's turn). When on, the "
+    "engine declares the USI_Ponder option and appends the predicted reply "
+    "to bestmove so the GUI sends `go ponder` (default on). Also "
+    "`setoption name USI_Ponder`.",
+    default=True,
+    required=False,
+)
+@click.option(
     "--root-dfpn/--no-root-dfpn",
     type=bool,
     is_flag=True,
@@ -195,6 +206,7 @@ def usi(
     resign_value: int,
     resign_consecutive: int,
     max_moves_to_draw: int,
+    usi_ponder: bool,
     root_dfpn: bool,
     root_dfpn_nodes: int,
     root_dfpn_depth: int,
@@ -229,6 +241,7 @@ def usi(
         resign_value: Resign win-rate threshold in permille (0 = never).
         resign_consecutive: Consecutive below-threshold moves to resign.
         max_moves_to_draw: Move count for a drawn game (0 = disabled).
+        usi_ponder: Enable pondering on the opponent's turn (default on).
         root_dfpn: Run dfpn mate search on the root position in parallel.
         root_dfpn_nodes: Node budget for the root dfpn mate search.
         root_dfpn_depth: Search depth limit for the root dfpn mate search.
@@ -251,6 +264,7 @@ def usi(
         resign_value=resign_value,
         resign_consecutive=resign_consecutive,
         max_moves_to_draw=max_moves_to_draw,
+        usi_ponder=usi_ponder,
         root_dfpn=root_dfpn,
         root_dfpn_nodes=root_dfpn_nodes,
         root_dfpn_depth=root_dfpn_depth,

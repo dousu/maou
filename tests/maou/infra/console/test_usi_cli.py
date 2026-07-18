@@ -121,8 +121,72 @@ def test_usi_option_declarations() -> None:
         "NetworkDelay",
         "USI_Hash",
     } <= names
-    # M3 (ponder) まで USI_Ponder は宣言しない (設計 doc §8.4)
-    assert "USI_Ponder" not in names
+    # M3: USI_Ponder を宣言する (GUI が go ponder を送る trigger．設計 doc §8.4)
+    assert "USI_Ponder" in names
+
+
+def test_usi_ponder_session_e2e() -> None:
+    """go ponder → ponderhit で先読み木を引き継いで bestmove を返す．
+
+    ponder を実時間で少し走らせてから ponderhit を送る (GUI の実挙動と同じ)．
+    的中後は byoyomi 由来の時間予算で停止し，合法手の bestmove を返す．
+    """
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _ENTRY],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stdin is not None and proc.stdout is not None
+    lines: list[str] = []
+    try:
+        proc.stdin.write(
+            "usi\n"
+            "setoption name RootDfpn value false\n"
+            "setoption name LeafMate value false\n"
+            "setoption name NodeCapacity value 16384\n"
+            "setoption name NetworkDelay value 0\n"
+            "isready\n"
+            "usinewgame\n"
+            "position startpos moves 7g7f\n"
+            "go ponder btime 0 wtime 0 byoyomi 500\n"
+        )
+        proc.stdin.flush()
+        # ponder を実時間で走らせて木を積む
+        time.sleep(0.3)
+        # 予想手が指された = ponder 的中 → 時間予算へ切り替わる
+        proc.stdin.write(
+            "ponderhit btime 0 wtime 0 byoyomi 500\n"
+        )
+        proc.stdin.flush()
+        for line in proc.stdout:
+            lines.append(line.rstrip("\n"))
+            if line.startswith("bestmove "):
+                break
+        proc.stdin.write("quit\n")
+        proc.stdin.flush()
+        proc.wait(timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 0
+    bestmove = next(
+        line for line in lines if line.startswith("bestmove ")
+    )
+    move = bestmove.split()[1]
+    assert move not in ("resign", "win"), "平手序盤で投了しない"
+    # 的中後の探索で木を積んでいる (playout > 0)
+    info = next(
+        line
+        for line in lines
+        if line.startswith("info ") and " nodes " in line
+    )
+    nodes = int(info.split(" nodes ")[1].split()[0])
+    assert nodes > 0, (
+        f"ponder + 的中後に実思考していない: {info}"
+    )
 
 
 def test_usi_stop_responds_quickly() -> None:

@@ -29,6 +29,9 @@ use maou_usi::{EngineConfig, TimeStrategyConfig};
 /// - `resign_value` (int, optional): 投了する root 勝率 (千分率，デフォルト
 ///   0 = 投了しない)．`resign_consecutive` (int, optional): 投了に必要な連続手数．
 /// - `max_moves_to_draw` (int, optional): 引き分け最大手数 (デフォルト 0 = 無効)．
+/// - `usi_ponder` (bool, optional): ponder (先読み) を有効にするか (デフォルト
+///   true)．true のとき `USI_Ponder` option を宣言し `bestmove` に予想相手手を
+///   付ける (`setoption name USI_Ponder` で上書き可)．
 /// - `root_dfpn` / `root_dfpn_nodes` / `root_dfpn_depth`: ルート並行 dfpn．
 /// - `leaf_mate` / `leaf_mate_nodes` / `leaf_mate_threads`: leaf-mate．
 ///
@@ -36,7 +39,7 @@ use maou_usi::{EngineConfig, TimeStrategyConfig};
 ///
 /// モデルロード失敗・不正局面などの致命的エラーは `RuntimeError`．
 #[pyfunction]
-#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, network_delay_ms=None, min_think_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, max_moves_to_draw=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, network_delay_ms=None, min_think_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, max_moves_to_draw=None, usi_ponder=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_usi(
     py: Python<'_>,
@@ -56,6 +59,7 @@ fn run_usi(
     resign_value: Option<u32>,
     resign_consecutive: Option<u32>,
     max_moves_to_draw: Option<u32>,
+    usi_ponder: Option<bool>,
     root_dfpn: Option<bool>,
     root_dfpn_nodes: Option<u64>,
     root_dfpn_depth: Option<u32>,
@@ -101,6 +105,9 @@ fn run_usi(
     }
     if let Some(v) = max_moves_to_draw {
         config.max_moves_to_draw = v;
+    }
+    if let Some(v) = usi_ponder {
+        config.usi_ponder = v;
     }
     config.root_dfpn = root_dfpn;
     config.root_dfpn_nodes = root_dfpn_nodes;

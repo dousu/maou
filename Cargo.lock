@@ -1743,7 +1743,7 @@ dependencies = [
 
 [[package]]
 name = "maou_rust"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "arrow",
  "arrow-pyarrow",
@@ -1779,7 +1779,7 @@ dependencies = [
 
 [[package]]
 name = "maou_usi"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "maou_search",
  "maou_shogi",

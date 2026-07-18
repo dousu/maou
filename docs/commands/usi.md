@@ -17,7 +17,7 @@
 - When no model is configured, a deterministic **mock evaluator** is used and
   announced with `info string mock evaluator (development only) ...` on
   `isready` (development/verification only — move quality is meaningless).
-- Supported through milestone M2: full game loop (`usi` / `isready` /
+- Supported through milestone M3: full game loop (`usi` / `isready` /
   `setoption` / `usinewgame` / `position` / `go` with
   `btime wtime byoyomi binc winc`, `go infinite`, `go nodes`, `go movetime` /
   `stop` / `gameover` / `quit`); time strategy with soft/hard budgets and
@@ -26,9 +26,14 @@
   (`DrawValueBlack` / `DrawValueWhite`); nyugyoku declaration win
   (`bestmove win`, 27-point rule); resign threshold (`ResignValue` /
   `ResignConsecutive`, off by default); `MaxMovesToDraw` (declaration check +
-  budget narrowing near the limit); root-dfpn + leaf-mate search.
-  Not yet implemented (later milestones): ponder (`USI_Ponder` is not
-  declared) and subtree reuse (M3), tournament opening scripts and the
+  budget narrowing near the limit); root-dfpn + leaf-mate search; **pondering**
+  (`USI_Ponder`, `go ponder` / `ponderhit`, and `bestmove <move> ponder
+  <reply>` with the predicted reply = PV's 2nd move) — a ponder hit *continues*
+  the same unbounded search under a fresh time budget, so the tree built while
+  pondering carries over (the main ponder benefit).
+  Not yet implemented (later milestones): general MCTS subtree reuse across
+  root advances (still under evaluation per the design's open item — a ponder
+  *miss* re-searches from scratch), tournament opening scripts and the
   self-play driver (M4), the in-search `MaxMovesToDraw` draw terminal (M4),
   `go mate` (answers `checkmate notimplemented`).
 
@@ -62,6 +67,7 @@
 | `--resign-value INT` | default `0` | Resign when the root win rate stays below this permille for `--resign-consecutive` moves. `0` = never resign. |
 | `--resign-consecutive INT` | default `3` | Consecutive below-threshold moves required to resign (with `--resign-value > 0`). |
 | `--max-moves-to-draw INT` | default `0` | Move count for a drawn game (`0` = disabled; Denryu-sen `512`). At/near the limit the engine always checks nyugyoku declaration and narrows its search budget. |
+| `--usi-ponder/--no-usi-ponder` | **default on** | Enable pondering (thinking on the opponent's turn). When on, the engine declares `USI_Ponder` and appends the predicted reply to `bestmove` so the GUI sends `go ponder`. |
 | `--root-dfpn/--no-root-dfpn` | **default on** | Run dfpn mate search on the root position in parallel with MCTS. |
 | `--root-dfpn-nodes INT` | default `2000000` | Node budget for the root dfpn mate search. |
 | `--root-dfpn-depth INT` | default `2047` | Search depth limit for the root dfpn mate search (max 2047). |
@@ -89,6 +95,7 @@ Declared in the `usi` response; defaults reflect the CLI flags above.
 | `ResignValue` | spin (permille) | Resign win-rate threshold (0 = never). |
 | `ResignConsecutive` | spin | Consecutive below-threshold moves required to resign. |
 | `MaxMovesToDraw` | spin | Move count for a drawn game (0 = disabled; Denryu-sen 512). |
+| `USI_Ponder` | check | Enable pondering (default on). Declared so the GUI sends `go ponder`; `bestmove` carries the predicted reply (PV's 2nd move). |
 | `RootDfpn` / `LeafMate` | check | Mate search toggles. |
 
 ## Example
