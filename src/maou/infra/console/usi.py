@@ -61,6 +61,54 @@ from maou.infra.console.common import (
     required=False,
 )
 @click.option(
+    "--draw-value-black",
+    help="Draw value for Black in permille (default 500). The repetition / "
+    "max-moves draw terminal is valued at this from the side-to-move view "
+    "(Denryu-sen Black 0.4 win = 400). Also `setoption name DrawValueBlack`.",
+    type=int,
+    default=500,
+    show_default=True,
+    required=False,
+)
+@click.option(
+    "--draw-value-white",
+    help="Draw value for White in permille (default 500. Denryu-sen White "
+    "0.6 win = 600). Also `setoption name DrawValueWhite`.",
+    type=int,
+    default=500,
+    show_default=True,
+    required=False,
+)
+@click.option(
+    "--resign-value",
+    help="Resign when the root win rate stays below this permille for "
+    "--resign-consecutive moves (default 0 = never resign). Also "
+    "`setoption name ResignValue`.",
+    type=int,
+    default=0,
+    show_default=True,
+    required=False,
+)
+@click.option(
+    "--resign-consecutive",
+    help="Consecutive below-threshold moves required to resign "
+    "(with --resign-value > 0).",
+    type=int,
+    default=3,
+    show_default=True,
+    required=False,
+)
+@click.option(
+    "--max-moves-to-draw",
+    help="Move count for a drawn game (default 0 = disabled; Denryu-sen "
+    "512). At/near the limit the engine always checks nyugyoku declaration "
+    "and narrows its budget. Also `setoption name MaxMovesToDraw`.",
+    type=int,
+    default=0,
+    show_default=True,
+    required=False,
+)
+@click.option(
     "--root-dfpn/--no-root-dfpn",
     type=bool,
     is_flag=True,
@@ -142,6 +190,11 @@ def usi(
     node_capacity: int | None,
     network_delay_ms: int,
     min_think_ms: int,
+    draw_value_black: int,
+    draw_value_white: int,
+    resign_value: int,
+    resign_consecutive: int,
+    max_moves_to_draw: int,
     root_dfpn: bool,
     root_dfpn_nodes: int,
     root_dfpn_depth: int,
@@ -171,6 +224,11 @@ def usi(
         node_capacity: Node pool capacity.
         network_delay_ms: Communication overhead margin in milliseconds.
         min_think_ms: Minimum thinking time in milliseconds.
+        draw_value_black: Draw value for Black in permille (default 500).
+        draw_value_white: Draw value for White in permille (default 500).
+        resign_value: Resign win-rate threshold in permille (0 = never).
+        resign_consecutive: Consecutive below-threshold moves to resign.
+        max_moves_to_draw: Move count for a drawn game (0 = disabled).
         root_dfpn: Run dfpn mate search on the root position in parallel.
         root_dfpn_nodes: Node budget for the root dfpn mate search.
         root_dfpn_depth: Search depth limit for the root dfpn mate search.
@@ -188,6 +246,11 @@ def usi(
         node_capacity=node_capacity,
         network_delay_ms=network_delay_ms,
         min_think_ms=min_think_ms,
+        draw_value_black=draw_value_black,
+        draw_value_white=draw_value_white,
+        resign_value=resign_value,
+        resign_consecutive=resign_consecutive,
+        max_moves_to_draw=max_moves_to_draw,
         root_dfpn=root_dfpn,
         root_dfpn_nodes=root_dfpn_nodes,
         root_dfpn_depth=root_dfpn_depth,

@@ -17,15 +17,20 @@
 - When no model is configured, a deterministic **mock evaluator** is used and
   announced with `info string mock evaluator (development only) ...` on
   `isready` (development/verification only — move quality is meaningless).
-- Supported in milestone M1: full game loop (`usi` / `isready` / `setoption` /
-  `usinewgame` / `position` / `go` with `btime wtime byoyomi binc winc`,
-  `go infinite`, `go nodes`, `go movetime` / `stop` / `gameover` / `quit`),
-  simple time strategy (byoyomi / Fischer / sudden death with a network-delay
-  margin), root-dfpn + leaf-mate search, resign on mated positions.
+- Supported through milestone M2: full game loop (`usi` / `isready` /
+  `setoption` / `usinewgame` / `position` / `go` with
+  `btime wtime byoyomi binc winc`, `go infinite`, `go nodes`, `go movetime` /
+  `stop` / `gameover` / `quit`); time strategy with soft/hard budgets and
+  best-move-instability extension (byoyomi / Fischer / sudden death, network
+  delay margin); streaming `info` during search; draw-value strategy
+  (`DrawValueBlack` / `DrawValueWhite`); nyugyoku declaration win
+  (`bestmove win`, 27-point rule); resign threshold (`ResignValue` /
+  `ResignConsecutive`, off by default); `MaxMovesToDraw` (declaration check +
+  budget narrowing near the limit); root-dfpn + leaf-mate search.
   Not yet implemented (later milestones): ponder (`USI_Ponder` is not
-  declared), nyugyoku declaration win (`bestmove win`), resign threshold,
-  max-move-limit strategy, tournament opening scripts, `go mate`
-  (answers `checkmate notimplemented`).
+  declared) and subtree reuse (M3), tournament opening scripts and the
+  self-play driver (M4), the in-search `MaxMovesToDraw` draw terminal (M4),
+  `go mate` (answers `checkmate notimplemented`).
 
 ## Engine registration in a GUI
 
@@ -52,6 +57,11 @@
 | `--node-capacity INT` | | Node pool capacity (default 2^20 nodes). |
 | `--network-delay-ms INT` | default `1000` | Communication overhead margin in milliseconds. The GUI/server measures elapsed time including transport, so the per-move budget is reduced by this amount. |
 | `--min-think-ms INT` | default `100` | Minimum thinking time in milliseconds. |
+| `--draw-value-black INT` | default `500` | Draw value for Black in permille. Repetition / max-moves draw terminals are valued at this (root side-to-move view). Denryu-sen Black 0.4 win = `400`. |
+| `--draw-value-white INT` | default `500` | Draw value for White in permille (Denryu-sen White 0.6 win = `600`). |
+| `--resign-value INT` | default `0` | Resign when the root win rate stays below this permille for `--resign-consecutive` moves. `0` = never resign. |
+| `--resign-consecutive INT` | default `3` | Consecutive below-threshold moves required to resign (with `--resign-value > 0`). |
+| `--max-moves-to-draw INT` | default `0` | Move count for a drawn game (`0` = disabled; Denryu-sen `512`). At/near the limit the engine always checks nyugyoku declaration and narrows its search budget. |
 | `--root-dfpn/--no-root-dfpn` | **default on** | Run dfpn mate search on the root position in parallel with MCTS. |
 | `--root-dfpn-nodes INT` | default `2000000` | Node budget for the root dfpn mate search. |
 | `--root-dfpn-depth INT` | default `2047` | Search depth limit for the root dfpn mate search (max 2047). |
@@ -75,6 +85,10 @@ Declared in the `usi` response; defaults reflect the CLI flags above.
 | `TrtCacheDir` | string | TensorRT engine cache directory. |
 | `NetworkDelay` | spin (ms) | Communication margin subtracted from each move budget. |
 | `MinimumThinkingTime` | spin (ms) | Minimum thinking time. |
+| `DrawValueBlack` / `DrawValueWhite` | spin (permille) | Draw value per side (default 500; Denryu-sen 400 / 600). Converted to the search's side-to-move `draw_value`. |
+| `ResignValue` | spin (permille) | Resign win-rate threshold (0 = never). |
+| `ResignConsecutive` | spin | Consecutive below-threshold moves required to resign. |
+| `MaxMovesToDraw` | spin | Move count for a drawn game (0 = disabled; Denryu-sen 512). |
 | `RootDfpn` / `LeafMate` | check | Mate search toggles. |
 
 ## Example

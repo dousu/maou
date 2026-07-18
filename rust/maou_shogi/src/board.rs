@@ -40,6 +40,16 @@ pub(crate) fn bump_mate1ply_none_dm() {
     MATE1PLY_NONE_DM.with(|c| c.set(c.get() + 1));
 }
 
+/// 入玉宣言 (27 点法) の駒点数: 大駒 (飛角龍馬) は 5 点，その他小駒は 1 点．
+/// 玉は呼び出し側で除外済みとする ([`Board::nyugyoku_declarable`])．
+#[inline]
+fn nyugyoku_piece_points(pt: PieceType) -> u32 {
+    match pt {
+        PieceType::Rook | PieceType::Bishop | PieceType::Dragon | PieceType::Horse => 5,
+        _ => 1,
+    }
+}
+
 /// `EFFECT_VERIFY` 環境変数の有無を一度だけ読み込みキャッシュする．
 ///
 /// 設定時は `do_move`/`undo_move` 毎に incremental 利き == フルスキャンを検査する
@@ -307,6 +317,71 @@ impl Board {
         } else {
             false
         }
+    }
+
+    /// 入玉宣言勝ち (27 点法) が手番側 (宣言側) について成立するかを判定する．
+    ///
+    /// 電竜戦本戦・CSA の宣言法 (docs/design/usi-engine/index.md §3/§8.3) の
+    /// うち，盤面で完結する 5 条件を判定する:
+    ///
+    /// 1. 玉が敵陣三段目以内にある
+    /// 2. 玉に王手がかかっていない
+    /// 3. 敵陣三段目以内に，玉を除く手番側の駒が 10 枚以上ある
+    /// 4. 点数 (大駒 = 飛角龍馬 5 点・小駒 1 点，玉を除く「敵陣三段目以内の駒
+    ///    ＋持ち駒」) が先手 28 点以上・後手 27 点以上
+    ///
+    /// 「宣言側の手番であること」は手番 (`turn()`) を宣言側とみなすことで満たす
+    /// (手番側しか宣言できない)．残る「持ち時間が残っている」条件は盤面外の
+    /// 情報のため，時間管理レイヤー (USI エージェント) が別途確認する．
+    pub fn nyugyoku_declarable(&self) -> bool {
+        let us = self.turn;
+        // 条件 1: 玉が敵陣三段目以内にある
+        let Some(king_sq) = self.king_square(us) else {
+            return false;
+        };
+        if !king_sq.is_promotion_zone(us) {
+            return false;
+        }
+        // 条件 2: 玉に王手がかかっていない
+        if self.is_in_check(us) {
+            return false;
+        }
+        // 条件 3/4: 敵陣三段目以内の駒 (玉を除く) の枚数と点数を数える
+        let mut camp_count = 0u32;
+        let mut points = 0u32;
+        for i in 0..Square::NUM as u8 {
+            let sq = Square::from_raw_u8(i);
+            if !sq.is_promotion_zone(us) {
+                continue;
+            }
+            let piece = self.squares[sq.index()];
+            if piece.color() != Some(us) {
+                continue;
+            }
+            match piece.piece_type() {
+                // 玉は枚数にも点数にも数えない
+                Some(PieceType::King) | None => continue,
+                Some(pt) => {
+                    camp_count += 1;
+                    points += nyugyoku_piece_points(pt);
+                }
+            }
+        }
+        // 条件 3: 敵陣三段目以内に玉を除き 10 枚以上
+        if camp_count < 10 {
+            return false;
+        }
+        // 条件 4 の持ち駒分: HAND_PIECES 順 (歩香桂銀金角飛) で idx5=角/idx6=飛
+        // が大駒 (5 点)，それ以外は小駒 (1 点)
+        for (i, &count) in self.hand[us.index()].iter().enumerate() {
+            let pts = if i >= 5 { 5 } else { 1 };
+            points += u32::from(count) * pts;
+        }
+        let required = match us {
+            Color::Black => 28,
+            Color::White => 27,
+        };
+        points >= required
     }
 
     /// 指定した玉に王手している相手駒のビットボードを返す．
@@ -3137,5 +3212,52 @@ mod tests {
             output.contains("後手の持駒：角 銀"),
             "should show bishop and silver"
         );
+    }
+
+    /// 入玉宣言 (27 点法) の 5 条件を境界で検証する golden fixture
+    /// (docs/design/usi-engine/index.md §3/§8.3)．合成局面のため駒数の
+    /// 大局的整合 (二歩・在庫上限) は問わない — 判定ロジックの境界のみを見る．
+    fn declarable(sfen: &str) -> bool {
+        let mut board = Board::empty();
+        board.set_sfen(sfen).expect("fixture SFEN must parse");
+        board.nyugyoku_declarable()
+    }
+
+    #[test]
+    fn test_nyugyoku_black_exactly_28_declares() {
+        // 敵陣 (row0-2) の玉除く駒: 龍馬(5+5) 金4 銀2 歩4 = 12 枚 / 20 点
+        // 持ち駒 角(5)+歩3 = 8 点 → 計 28 点 (先手ちょうど閾値)．王手なし
+        assert!(declarable("K+R+BGGGGSS/PPPP5/9/9/9/9/9/9/8k b B3P 1"));
+    }
+
+    #[test]
+    fn test_nyugyoku_black_27_is_one_point_short() {
+        // 同型で持ち駒を 角+歩2 = 7 点にして計 27 点 → 先手は 28 未満で不成立
+        assert!(!declarable("K+R+BGGGGSS/PPPP5/9/9/9/9/9/9/8k b B2P 1"));
+    }
+
+    #[test]
+    fn test_nyugyoku_white_27_declares() {
+        // 後手鏡像: 敵陣 (row6-8) に 12 枚 / 20 点 + 持ち駒 角+歩2 = 7 点 → 27 点
+        // 後手は 27 点で成立
+        assert!(declarable("8K/9/9/9/9/9/9/pppp5/k+r+bggggss w b2p 1"));
+    }
+
+    #[test]
+    fn test_nyugyoku_king_outside_camp_fails() {
+        // 点数は 28 点あるが玉が敵陣にいない (row8) → 不成立
+        assert!(!declarable("+R+BGGGGSS1/PPPP5/9/9/9/9/9/9/K7k b B3P 1"));
+    }
+
+    #[test]
+    fn test_nyugyoku_in_check_fails() {
+        // 玉 (col4,row0) の直下に後手飛車 → 王手中は宣言不成立 (点数・枚数は充足)
+        assert!(!declarable("+R+BGGKGGSS/PPPPrPPP1/9/9/9/9/9/9/8k b B3P 1"));
+    }
+
+    #[test]
+    fn test_nyugyoku_fewer_than_ten_camp_pieces_fails() {
+        // 持ち駒だけで 28 点あるが敵陣の盤上駒 (玉除く) が 0 枚 (< 10) → 不成立
+        assert!(!declarable("4K4/9/9/9/9/9/9/9/8k b 2R2B4G4S 1"));
     }
 }
