@@ -189,6 +189,66 @@ def test_usi_ponder_session_e2e() -> None:
     )
 
 
+def test_usi_multi_turn_reuse_e2e() -> None:
+    """複数手番の連続 go で subtree 再利用経路が full-stack で動く．
+
+    局面が探索済みの筋を前進すれば保持木を reroot して warm start，さもなくば
+    fresh 探索にフォールバックする．どちらでも合法手を返しクリーン終了する．
+    """
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _ENTRY],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stdin is not None and proc.stdout is not None
+    bestmoves: list[str] = []
+    try:
+        proc.stdin.write(
+            "usi\n"
+            "setoption name RootDfpn value false\n"
+            "setoption name LeafMate value false\n"
+            "setoption name NodeCapacity value 16384\n"
+            "setoption name NetworkDelay value 0\n"
+            "isready\n"
+            "usinewgame\n"
+        )
+        proc.stdin.flush()
+        # 手番を進めながら 3 回思考する (each go の後 bestmove を待つ)
+        turns = [
+            "position startpos moves 7g7f 3c3d\n"
+            "go btime 0 wtime 0 byoyomi 250\n",
+            "position startpos moves 7g7f 3c3d 2g2f 8c8d\n"
+            "go btime 0 wtime 0 byoyomi 250\n",
+            "position startpos moves 7g7f 3c3d 2g2f 8c8d 2f2e 8d8e\n"
+            "go btime 0 wtime 0 byoyomi 250\n",
+        ]
+        for turn in turns:
+            proc.stdin.write(turn)
+            proc.stdin.flush()
+            for line in proc.stdout:
+                if line.startswith("bestmove "):
+                    bestmoves.append(line.rstrip("\n"))
+                    break
+        proc.stdin.write("quit\n")
+        proc.stdin.flush()
+        proc.wait(timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 0
+    assert len(bestmoves) == 3, (
+        f"3 手番ぶんの bestmove が返る: {bestmoves}"
+    )
+    for bm in bestmoves:
+        move = bm.split()[1]
+        assert move not in ("resign", "win"), (
+            f"序盤で投了/宣言しない: {bm}"
+        )
+
+
 def test_usi_stop_responds_quickly() -> None:
     """go infinite 中の stop に短時間で bestmove が返り quit で終了する．"""
     proc = subprocess.Popen(

@@ -220,6 +220,11 @@ pub trait SearchBackend {
 
     /// mock 評価器か (isready 時の明示に使う)．
     fn is_mock(&self) -> bool;
+
+    /// 対局リセット時に保持している探索状態 (subtree 再利用の木など) を破棄する
+    /// (`usinewgame` / `gameover`)．次の探索は fresh になる．保持状態を持たない
+    /// 実装は既定の no-op でよい．
+    fn reset(&mut self) {}
 }
 
 /// 対局状態．
@@ -351,6 +356,11 @@ where
             GuiCommand::UsiNewGame => {
                 self.game = GameState::default();
                 self.resign_streak = 0;
+                // 保持している探索木 (subtree 再利用) を破棄する (別対局の木を
+                // 引き継がない)
+                if let Some(b) = self.backend.as_mut() {
+                    b.reset();
+                }
                 Ok(Vec::new())
             }
             GuiCommand::Position { sfen, moves } => {
@@ -380,6 +390,9 @@ where
                 let _: GameResult = result;
                 self.game = GameState::default();
                 self.resign_streak = 0;
+                if let Some(b) = self.backend.as_mut() {
+                    b.reset();
+                }
                 Ok(Vec::new())
             }
             GuiCommand::Quit => Ok(Vec::new()),

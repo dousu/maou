@@ -30,10 +30,12 @@
   (`USI_Ponder`, `go ponder` / `ponderhit`, and `bestmove <move> ponder
   <reply>` with the predicted reply = PV's 2nd move) — a ponder hit *continues*
   the same unbounded search under a fresh time budget, so the tree built while
-  pondering carries over (the main ponder benefit).
-  Not yet implemented (later milestones): general MCTS subtree reuse across
-  root advances (still under evaluation per the design's open item — a ponder
-  *miss* re-searches from scratch), tournament opening scripts and the
+  pondering carries over (the main ponder benefit); and **subtree reuse across
+  moves** — when the game advances along an explored line, the retained search
+  tree is rerooted to the new position so its subtree warm-starts the next
+  search instead of rebuilding from scratch (a ponder *miss*, or any advance
+  the tree did not explore, falls back to a fresh search).
+  Not yet implemented (later milestones): tournament opening scripts and the
   self-play driver (M4), the in-search `MaxMovesToDraw` draw terminal (M4),
   `go mate` (answers `checkmate notimplemented`).
 

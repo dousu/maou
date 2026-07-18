@@ -63,6 +63,7 @@ use maou_shogi::movegen::generate_legal_moves;
 use maou_shogi::moves::Move;
 
 use crate::evaluator::{EvalItem, Evaluator};
+use crate::position::{build_board_and_history, PositionSetupError};
 use crate::repetition::{find_repetition, HistoryEntry, RepetitionOutcome};
 use crate::tree::{node_state, proven, Edge, NodePool, NULL_NODE};
 
@@ -487,6 +488,52 @@ pub struct RootSnapshot {
     pub pv: Vec<Move>,
     /// root の確定値 (詰み等)．未確定は `None`．
     pub proven: Option<f64>,
+}
+
+/// 対局手番間で保持する探索木 (subtree 再利用のための不透明ハンドル)．
+///
+/// [`Searcher::search_reusing`] が返し，次回に渡すと前回 root からの指し手で
+/// reroot して再利用する ([`NodePool::reroot`])．内部プールは maou_search が
+/// 管理し，呼び出し側は中身に触れない (index/ノード表現に依存させない)．
+pub struct ReusableTree {
+    /// 保持する探索木．
+    pool: NodePool,
+    /// この木の root に対応する基準 SFEN．
+    sfen: String,
+    /// 基準 SFEN からこの木の root までの USI 指し手列 (reroot の advance 計算用)．
+    moves: Vec<String>,
+}
+
+/// 保持木 `prev` を今回の局面 (`sfen` + `moves`) に再利用できるか判定し，
+/// できれば reroot 済みプールを返す (できなければ `None` = fresh 探索)．
+///
+/// 再利用条件: 基準 SFEN が一致し，`moves` が保持木の経路を prefix 拡張して
+/// いる (= root が手番進行で前進した関係)．差分の手を保持木の root 局面から
+/// パースして [`NodePool::reroot`] する (辺は生成順の `Move` で照合するため，
+/// 同一局面の movegen が同一 `Move` を返す決定性に依存する)．
+fn reuse_pool(prev: ReusableTree, sfen: &str, moves: &[String]) -> Option<NodePool> {
+    // 同一基準局面で，今回の経路が前回の経路を真に prefix 拡張していること
+    if prev.sfen != sfen || moves.len() <= prev.moves.len() {
+        return None;
+    }
+    if moves[..prev.moves.len()] != prev.moves[..] {
+        return None;
+    }
+    let advance_usi = &moves[prev.moves.len()..];
+    // 差分の手を保持木の root 局面から `Move` へパースする (辺照合に必要)．
+    // 前回経路は探索済みで合法なので build は成功するはず
+    let (mut board, _) = build_board_and_history(sfen, &prev.moves).ok()?;
+    let mut advance: Vec<Move> = Vec::with_capacity(advance_usi.len());
+    for usi in advance_usi {
+        let mut probe = board.clone();
+        let mv = generate_legal_moves(&mut probe)
+            .into_iter()
+            .find(|m| m.to_usi() == *usi)?;
+        advance.push(mv);
+        board.do_move(mv);
+    }
+    let mut pool = prev.pool;
+    pool.reroot(&advance).then_some(pool)
 }
 
 /// スレッド間共有の探索状態．
@@ -1190,6 +1237,24 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         game_history: &[HistoryEntry],
         limits: &SearchLimits,
     ) -> SearchResult {
+        self.run_search(root_board, game_history, limits, None).0
+    }
+
+    /// [`Searcher::search_with_history`] の本体 + subtree 再利用の入口．
+    ///
+    /// `reused` に前回探索の (reroot 済み) プールを渡すと，その root が展開済み
+    /// なら root の同期評価を省いて warm start する (統計・辺を引き継ぐ = 対局
+    /// 手番間の subtree 再利用)．`None` または root 未展開なら従来どおり新規
+    /// プールで root を同期評価する — このとき挙動は `reused` 導入前と
+    /// **bit-identical** (canonical 29te/39te で担保)．戻り値のプールは次回に
+    /// `reused` として渡せる (呼び出し側で保持する)．
+    fn run_search(
+        &self,
+        root_board: &Board,
+        game_history: &[HistoryEntry],
+        limits: &SearchLimits,
+        reused: Option<NodePool>,
+    ) -> (SearchResult, NodePool) {
         // ルート評価 (初回推論 = TensorRT エンジンビルド等) は 1 回限りの固定
         // コストなので計測区間の外で済ませ，warmup_ms として別掲する
         // (onnx_bench の out-of-timer warmup と同義)．計測 (start/deadline) は
@@ -1201,7 +1266,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         let mut probe = root_board.clone();
         let root_moves = generate_legal_moves(&mut probe);
         if root_moves.is_empty() {
-            return SearchResult {
+            let result = SearchResult {
                 best_move: None,
                 winrate: 0.0,
                 pv: Vec::new(),
@@ -1226,37 +1291,49 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                     gc_freed_nodes: 0,
                 },
             };
+            // 終端局面の木は再利用価値がない (次回は fresh になる)．大きな
+            // 空プールを確保しないため最小プールを返す
+            return (result, reused.unwrap_or_else(|| NodePool::new(1)));
         }
 
-        // ルートを同期的に評価して展開する
-        let pool = NodePool::new(opts.node_capacity);
-        let root_idx = pool.alloc().expect("capacity >= 1 なので必ず確保できる");
-        debug_assert_eq!(root_idx, ROOT_IDX);
-        let root_item = [EvalItem {
-            board: root_board.clone(),
-            moves: root_moves,
-        }];
-        let mut root_results = self.evaluator.evaluate_batch(&root_item);
-        let root_result = root_results.pop().expect("バッチ 1 件の結果");
-        let [root_item] = root_item;
-        assert_eq!(
-            root_result.priors.len(),
-            root_item.moves.len(),
-            "evaluator は moves と同数の priors を返すこと"
-        );
-        let edges: Box<[Edge]> = root_item
-            .moves
-            .iter()
-            .zip(root_result.priors.iter())
-            .map(|(&mv, &p)| Edge::new(mv, p))
-            .collect();
-        {
-            let root_node = pool.get(ROOT_IDX);
-            root_node.finish_expansion(edges);
-            root_node.add_visit();
-        }
+        // プール準備: 再利用可能 (保持木の root が展開済み) なら warm start —
+        // root の同期評価を省き，引き継いだ統計・辺から探索を継続する．さもなくば
+        // 新規プールで root を同期評価して展開する (従来経路 = bit-identical)．
+        let pool = match reused {
+            Some(p) if p.used() > 0 && p.get(ROOT_IDX).state() == node_state::EXPANDED => p,
+            _ => {
+                let pool = NodePool::new(opts.node_capacity);
+                let root_idx = pool.alloc().expect("capacity >= 1 なので必ず確保できる");
+                debug_assert_eq!(root_idx, ROOT_IDX);
+                let root_item = [EvalItem {
+                    board: root_board.clone(),
+                    moves: root_moves,
+                }];
+                let mut root_results = self.evaluator.evaluate_batch(&root_item);
+                let root_result = root_results.pop().expect("バッチ 1 件の結果");
+                let [root_item] = root_item;
+                assert_eq!(
+                    root_result.priors.len(),
+                    root_item.moves.len(),
+                    "evaluator は moves と同数の priors を返すこと"
+                );
+                let edges: Box<[Edge]> = root_item
+                    .moves
+                    .iter()
+                    .zip(root_result.priors.iter())
+                    .map(|(&mv, &p)| Edge::new(mv, p))
+                    .collect();
+                {
+                    let root_node = pool.get(ROOT_IDX);
+                    root_node.finish_expansion(edges);
+                    root_node.add_visit();
+                }
+                pool
+            }
+        };
 
-        // ルート評価 (初回推論のエンジンビルド含む) はここで完了．計測を開始する
+        // ルート評価 (初回推論のエンジンビルド含む) はここで完了 (warm start なら
+        // 評価は走っていない)．計測を開始する
         let warmup_ms = warmup_start.elapsed().as_millis() as u64;
         let start = Instant::now();
 
@@ -1380,7 +1457,39 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             dfpn_stop.store(true, Ordering::Release);
         });
 
-        self.collect_result(&shared, warmup_ms, start, gc_runs, gc_freed_nodes)
+        let result = self.collect_result(&shared, warmup_ms, start, gc_runs, gc_freed_nodes);
+        // 更新後のプールを取り出して返す (次回の subtree 再利用に渡せる)
+        let Shared { pool, .. } = shared;
+        (result, pool)
+    }
+
+    /// 局面 (基準 SFEN + USI 経路) を，前回の保持木を可能なら再利用して探索する．
+    ///
+    /// `prev` が「同一基準 SFEN で `moves` がその経路を prefix 拡張している」=
+    /// root が手番進行で前進した関係なら，差分の手で保持木を reroot して
+    /// warm start する (subtree 再利用)．できなければ fresh 探索する．結果と
+    /// 更新後の保持木を返す (次回に `prev` として渡すと再利用される)．
+    ///
+    /// 保持木の各ノードはゲーム開始からの完全な局面列が reroot 前後で不変な
+    /// ため，千日手由来の終端・確定値も含め健全性が保たれる ([`NodePool::reroot`])．
+    pub fn search_reusing(
+        &self,
+        sfen: &str,
+        moves: &[String],
+        limits: &SearchLimits,
+        prev: Option<ReusableTree>,
+    ) -> Result<(SearchResult, ReusableTree), PositionSetupError> {
+        let (board, history) = build_board_and_history(sfen, moves)?;
+        let reused = prev.and_then(|t| reuse_pool(t, sfen, moves));
+        let (result, pool) = self.run_search(&board, &history, limits, reused);
+        Ok((
+            result,
+            ReusableTree {
+                pool,
+                sfen: sfen.to_string(),
+                moves: moves.to_vec(),
+            },
+        ))
     }
 
     /// 探索終了後の木からベストムーブ・PV・統計を集計する．
@@ -2368,5 +2477,77 @@ mod tests {
         // progress None でも通常どおり探索は完了する
         assert!(result.best_move.is_some());
         assert!(result.stats.playouts >= 4096);
+    }
+
+    #[test]
+    fn test_search_reusing_warm_starts_and_stays_sound() {
+        // 単一スレッド + mock なので決定論的．手番進行で subtree を再利用する
+        let evaluator = MockEvaluator::new(0);
+        let opts = SearchOptions {
+            threads: 1,
+            batch_size: 4,
+            node_capacity: 1 << 14,
+            ..pure_mcts_opts()
+        };
+        let searcher = Searcher::new(&evaluator, opts);
+        let big = SearchLimits {
+            max_playouts: Some(5000),
+            ..SearchLimits::default()
+        };
+
+        // 1 手目後の局面を探索して木を保持する
+        let (r1, tree1) = searcher
+            .search_reusing(STARTPOS, &["7g7f".to_string()], &big, None)
+            .expect("正当な局面");
+        assert!(r1.pv.len() >= 2, "PV は 2 手以上 (継承できる筋がある)");
+        // PV 先頭 2 手で前進 = 探索済みの筋 → reroot が成功する経路
+        let moves = vec!["7g7f".to_string(), r1.pv[0].to_usi(), r1.pv[1].to_usi()];
+
+        let small = SearchLimits {
+            max_playouts: Some(400),
+            ..SearchLimits::default()
+        };
+        // warm: tree1 を再利用 / cold: 同一局面を fresh 探索
+        let (r_warm, _tree2) = searcher
+            .search_reusing(STARTPOS, &moves, &small, Some(tree1))
+            .expect("正当");
+        let (r_cold, _) = searcher
+            .search_reusing(STARTPOS, &moves, &small, None)
+            .expect("正当");
+
+        // soundness: どちらも新局面の合法手を返す
+        let (board, _) = build_board_and_history(STARTPOS, &moves).unwrap();
+        let legal = generate_legal_moves(&mut board.clone());
+        for r in [&r_warm, &r_cold] {
+            let best = r.best_move.expect("合法手がある");
+            assert!(legal.contains(&best), "best は合法手: {}", best.to_usi());
+        }
+        // warm start は継承した訪問を持つので，同じ予算でも root 直下の総訪問が多い
+        let warm: u64 = r_warm.root_children.iter().map(|c| c.visits).sum();
+        let cold: u64 = r_cold.root_children.iter().map(|c| c.visits).sum();
+        assert!(
+            warm > cold,
+            "warm start は継承分だけ訪問が多い (warm={warm}, cold={cold})"
+        );
+    }
+
+    #[test]
+    fn test_search_reusing_falls_back_when_position_diverges() {
+        // 経路が prefix 拡張でない (別局面) なら再利用せず fresh になる
+        let evaluator = MockEvaluator::new(0);
+        let searcher = Searcher::new(&evaluator, pure_mcts_opts());
+        let limits = SearchLimits {
+            max_playouts: Some(500),
+            ..SearchLimits::default()
+        };
+        let (_r1, tree1) = searcher
+            .search_reusing(STARTPOS, &["7g7f".to_string()], &limits, None)
+            .expect("正当");
+        // 全く別の初手経路 → prefix 不一致 → fresh (crash せず正当な結果)
+        let (r2, _t2) = searcher
+            .search_reusing(STARTPOS, &["2g2f".to_string()], &limits, Some(tree1))
+            .expect("正当");
+        assert!(r2.best_move.is_some(), "fresh 探索でも best が出る");
+        assert!(r2.stats.playouts >= 500);
     }
 }
