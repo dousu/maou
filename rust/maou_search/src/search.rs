@@ -75,6 +75,11 @@ const DEFAULT_MAX_PLAYOUTS: u64 = 1 << 20;
 /// PV 復元の最大長．
 const MAX_PV_LEN: usize = 64;
 
+/// 進捗スナップショット ([`SearchLimits::progress`]) を発行する playout 間隔．
+/// 1 回の発行は root 辺の走査 + PV 復元 (`MAX_PV_LEN` 上限) のみで安価だが，
+/// 過剰発行を避けるため間引く (エージェント側も `info` を時間 gate する)．
+const PROGRESS_PUBLISH_PLAYOUTS: u64 = 1024;
+
 /// leaf-mate ソルバ 1 回あたりのタイムアウト (秒)．探索は `leaf_mate_nodes`
 /// で node-bound されるので実際には到達しない安全弁 (50 ノード探索は μ 秒オーダ)．
 const LEAF_MATE_TIMEOUT_SECS: u64 = 1;
@@ -142,6 +147,14 @@ pub struct SearchOptions {
     /// 多く解放し，次の GC までの間隔が延びる (刈られたサブツリーの再展開
     /// コストとのトレードオフ)．
     pub gc_keep_ratio: f32,
+    /// 引き分け終端 (千日手・最大手数) の評価値 (**root 手番視点**，既定 0.5)．
+    /// エージェントが先後・持ち時間ルール (電竜戦の 0.4/0.6 勝など) から変換
+    /// して渡す (docs/design/usi-engine/index.md §6-4/§8.2)．葉ノードでは手番の
+    /// パリティに応じて `draw_value` / `1 − draw_value` を用い，backprop の視点
+    /// 反転で root からは常に `draw_value` に集約される．勝敗確定 (AND-OR) の
+    /// 論理値 0.5 (proven::DRAW) はゲーム理論値のまま変えない (探索の選好のみを
+    /// 変える)．0.5 のとき従来と bit-identical．
+    pub draw_value: f64,
     /// ルート局面の dfpn 詰み探索を MCTS と並行実行するか (既定 false)．
     /// 詰みが証明されたら root を勝ち確定にして探索を停止し，詰み手順を
     /// best_move / PV として返す ([`StopCause::RootProven`])．
@@ -176,6 +189,7 @@ impl Default for SearchOptions {
             max_ply: 512,
             gc_enabled: true,
             gc_keep_ratio: 0.5,
+            draw_value: 0.5,
             // 詰み探索はデフォルト有効: root-dfpn は NN 非依存で root/盲点の詰みを，
             // leaf-mate は MCTS が降りる narrow mate を，いずれも余剰 CPU (別スレッド)
             // で捕捉し，詰みのない局面では NPS を落とさない (実測: 静かな局面で dfpn は
@@ -211,6 +225,12 @@ pub struct SearchLimits {
     /// から立てると [`StopCause::External`] で停止する．応答性は worker の
     /// ループ粒度 (評価バッチ 1 回分) に律速される．
     pub stop: Option<Arc<AtomicBool>>,
+    /// 進捗スナップショットの発行先 (`None` = 発行しない)．設定すると worker が
+    /// 一定 playout 間隔で root 統計 ([`RootSnapshot`]) をここへ上書きする
+    /// (docs/design/usi-engine/index.md §6-3)．USI の `info` 随時出力と時間
+    /// 延長判断の入力に使う．発行は読み取り専用 (探索挙動に影響しない) の
+    /// ため，`None` のとき従来と bit-identical．
+    pub progress: Option<Arc<Mutex<Option<RootSnapshot>>>>,
 }
 
 /// 探索が停止した理由．
@@ -300,6 +320,84 @@ fn select_best_root_index(children: &[RootChildStat]) -> usize {
     best_i
 }
 
+/// root 直下の全子の統計を合法手生成順に集める (読み取り専用)．
+///
+/// [`Searcher::collect_result`] (探索終了後) と [`Shared::build_snapshot`]
+/// (探索中の近似) が共有する．
+fn root_children_of(pool: &NodePool) -> Vec<RootChildStat> {
+    pool.get(ROOT_IDX)
+        .edges()
+        .iter()
+        .map(|e| {
+            let (visits, q, proven) = match e.child.load(Ordering::Acquire) {
+                NULL_NODE => (0, 0.0, None),
+                c => {
+                    let child = pool.get(c);
+                    let v = child.visits();
+                    let q = if v == 0 { 0.0 } else { child.wins() / v as f64 };
+                    // 確定値は子ノード手番側視点なのでルート視点へ反転する
+                    (v, q, child.proven_value().map(|pv| 1.0 - pv))
+                }
+            };
+            RootChildStat {
+                mv: e.mv,
+                visits,
+                q,
+                prior: e.prior,
+                proven,
+            }
+        })
+        .collect()
+}
+
+/// robust child を選び，root が確定していれば確定値を達成する子を優先する．
+///
+/// 勝ち確定なら root 視点の確定値 (1) の子，引き分け確定なら 0.5 の子を選ぶ
+/// (訪問回数最大は確定前の探索の偏りを引きずり得る)．負け確定は全子が負け
+/// 確定なので robust child のまま (どれでも同値)．
+fn best_root_index(children: &[RootChildStat], root_proven: Option<f64>) -> usize {
+    let mut best_i = select_best_root_index(children);
+    if let Some(rv) = root_proven {
+        if rv > 0.0 {
+            if let Some(i) = children.iter().position(|c| c.proven == Some(rv)) {
+                best_i = i;
+            }
+        }
+    }
+    best_i
+}
+
+/// best 手を先頭に，以降は訪問回数最大の辺を辿って PV を復元する．
+fn extract_pv(pool: &NodePool, first_mv: Move, first_child: u32) -> Vec<Move> {
+    let mut pv = vec![first_mv];
+    let mut idx = first_child;
+    while idx != NULL_NODE && pv.len() < MAX_PV_LEN {
+        let node = pool.get(idx);
+        if node.state() != node_state::EXPANDED {
+            break;
+        }
+        let edges = node.edges();
+        let mut pv_best: Option<(&Edge, u64)> = None;
+        for e in edges {
+            let c = e.child.load(Ordering::Acquire);
+            if c == NULL_NODE {
+                continue;
+            }
+            let v = pool.get(c).visits();
+            if v == 0 {
+                continue;
+            }
+            if pv_best.is_none_or(|(_, bv)| v > bv) {
+                pv_best = Some((e, v));
+            }
+        }
+        let Some((e, _)) = pv_best else { break };
+        pv.push(e.mv);
+        idx = e.child.load(Ordering::Acquire);
+    }
+    pv
+}
+
 /// 探索の実行統計．
 #[derive(Clone, Debug)]
 pub struct SearchStats {
@@ -364,6 +462,33 @@ pub struct SearchResult {
     pub stats: SearchStats,
 }
 
+/// 探索中の root 進捗スナップショット ([`SearchLimits::progress`] 経由で発行)．
+///
+/// worker が一定間隔で上書きする近似値 (atomic 読みのため未定義動作はないが，
+/// 個々のフィールドは同一瞬間の一貫スナップショットとは限らない)．USI の
+/// `info` 随時出力・時間延長判断・resign 判断の入力に使う．
+#[derive(Clone, Debug, Default)]
+pub struct RootSnapshot {
+    /// これまでの完了 playout 数．
+    pub playouts: u64,
+    /// playout 毎秒 (探索開始からの経過に対する平均)．
+    pub nps: f64,
+    /// 到達最大深さ．
+    pub max_depth: u16,
+    /// 現時点の最有力手 (robust child．root に辺がなければ `None`)．
+    pub best_move: Option<Move>,
+    /// 最有力手の訪問回数．
+    pub best_visits: u64,
+    /// 2 番目に訪問された root 直下手の訪問回数 (延長判断の拮抗度に使う)．
+    pub second_visits: u64,
+    /// 最有力手の root 手番視点勝率 (root 確定時は確定値)．
+    pub winrate: f64,
+    /// 読み筋 (訪問回数最大の経路)．
+    pub pv: Vec<Move>,
+    /// root の確定値 (詰み等)．未確定は `None`．
+    pub proven: Option<f64>,
+}
+
 /// スレッド間共有の探索状態．
 struct Shared<'a, E: Evaluator> {
     pool: NodePool,
@@ -402,6 +527,12 @@ struct Shared<'a, E: Evaluator> {
     /// 世代と現世代が一致するときだけ proof を適用する (compact 後の無効 index
     /// への誤マーク=偽証明を防ぐ)．
     generation: AtomicU64,
+    /// 計測開始時刻 (warmup 完了後)．進捗スナップショットの nps/経過に使う．
+    start: Instant,
+    /// 進捗スナップショットの発行先 ([`SearchLimits::progress`])．
+    progress: Option<Arc<Mutex<Option<RootSnapshot>>>>,
+    /// 次にスナップショットを発行する playout 数の閾値 (CAS で 1 worker のみ発行)．
+    next_publish: AtomicU64,
 }
 
 impl<E: Evaluator> Shared<'_, E> {
@@ -495,6 +626,89 @@ impl<E: Evaluator> Shared<'_, E> {
         let d = depth.min(u16::MAX as usize) as u16;
         self.max_depth.fetch_max(d, Ordering::Relaxed);
     }
+
+    /// 引き分け終端 (千日手・最大手数) の葉手番視点評価値．
+    ///
+    /// `draw_value` は root 手番視点の引き分け価値．葉の手番が root と一致する
+    /// 偶数深さ (root = depth 0) では `draw_value`，相手番の奇数深さでは
+    /// `1 − draw_value` を返す．backprop の視点反転で root からは常に
+    /// `draw_value` に集約される (非対称引き分け 0.4/0.6 を一貫して表現する)．
+    fn draw_leaf_value(&self, path_len: usize) -> f64 {
+        draw_leaf_value_at(self.opts.draw_value, path_len)
+    }
+
+    /// 一定 playout 間隔で root 進捗スナップショットを発行する (worker から呼ぶ)．
+    ///
+    /// [`SearchLimits::progress`] 未設定なら何もしない (従来と bit-identical)．
+    /// 閾値を跨いだ worker のうち CAS で 1 つだけが実際に発行する
+    /// (root 走査 + PV 復元の重複を避ける)．発行内容は atomic 読みの近似値で
+    /// あり，探索の木・playout 会計には一切影響しない．
+    fn maybe_publish_progress(&self) {
+        let Some(cell) = &self.progress else {
+            return;
+        };
+        let done = self.playouts.load(Ordering::Relaxed);
+        let next = self.next_publish.load(Ordering::Relaxed);
+        if done < next {
+            return;
+        }
+        // 跨いだ worker が複数いても発行は 1 つだけ (次閾値へ CAS 前進)
+        if self
+            .next_publish
+            .compare_exchange(
+                next,
+                done + PROGRESS_PUBLISH_PLAYOUTS,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            )
+            .is_err()
+        {
+            return;
+        }
+        let snapshot = self.build_snapshot();
+        if let Ok(mut slot) = cell.lock() {
+            *slot = Some(snapshot);
+        }
+    }
+
+    /// 現在の木から root 進捗スナップショットを構築する (読み取り専用)．
+    ///
+    /// robust child 選択・root 確定手優先・PV 復元は [`Searcher::collect_result`]
+    /// と同じ関数を共有する (最終結果と同じ基準)．探索中の呼び出しでは
+    /// atomic 読みの近似となる．
+    fn build_snapshot(&self) -> RootSnapshot {
+        let pool = &self.pool;
+        let children = root_children_of(pool);
+        if children.is_empty() {
+            return RootSnapshot::default();
+        }
+        let root_node = pool.get(ROOT_IDX);
+        let root_proven = root_node.proven_value();
+        let best_i = best_root_index(&children, root_proven);
+        let best = &children[best_i];
+        let second_visits = children
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != best_i)
+            .map(|(_, c)| c.visits)
+            .max()
+            .unwrap_or(0);
+        let first_child = root_node.edges()[best_i].child.load(Ordering::Acquire);
+        let pv = extract_pv(pool, best.mv, first_child);
+        let playouts = self.playouts.load(Ordering::Relaxed);
+        let nps = playouts as f64 / self.start.elapsed().as_secs_f64().max(1e-9);
+        RootSnapshot {
+            playouts,
+            nps,
+            max_depth: self.max_depth.load(Ordering::Relaxed),
+            best_move: Some(best.mv),
+            best_visits: best.visits,
+            second_visits,
+            winrate: root_proven.unwrap_or(best.q),
+            pv,
+            proven: root_proven,
+        }
+    }
 }
 
 /// 葉選択の結果．
@@ -529,6 +743,18 @@ fn backprop<E: Evaluator>(shared: &Shared<'_, E>, path: &[u32], leaf_value: f64)
     }
 }
 
+/// 引き分け終端の葉手番視点評価値 (パリティ純関数．[`Shared::draw_leaf_value`]
+/// の実体)．`draw_value` は root 手番視点の引き分け価値．root (depth 0) と同じ
+/// 手番の偶数深さでは `draw_value`，相手番の奇数深さでは `1 − draw_value`．
+fn draw_leaf_value_at(draw_value: f64, path_len: usize) -> f64 {
+    let depth = path_len - 1; // path[0] = root = depth 0
+    if depth.is_multiple_of(2) {
+        draw_value
+    } else {
+        1.0 - draw_value
+    }
+}
+
 /// 終端状態の固定評価値 (そのノードの手番側から見た勝率)．
 fn terminal_value(state: u8) -> f64 {
     match state {
@@ -536,6 +762,15 @@ fn terminal_value(state: u8) -> f64 {
         node_state::TERMINAL_DRAW => 0.5,
         node_state::TERMINAL_WIN => 1.0,
         other => unreachable!("終端状態のみ: {other}"),
+    }
+}
+
+/// 終端状態の葉手番視点評価値 (引き分けのみ `draw_value` を手番視点で適用)．
+fn terminal_leaf_value<E: Evaluator>(shared: &Shared<'_, E>, state: u8, path_len: usize) -> f64 {
+    if state == node_state::TERMINAL_DRAW {
+        shared.draw_leaf_value(path_len)
+    } else {
+        terminal_value(state)
     }
 }
 
@@ -630,7 +865,14 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
         // 降下せず確定値をその場でバックプロパゲーションする
         if let Some(v) = node.proven_value() {
             shared.note_depth(path.len());
-            backprop(shared, &path, v);
+            // 確定引き分け (proven::DRAW = 0.5) は draw_value を手番視点で，
+            // 勝敗確定 (0.0/1.0) は確定値をそのまま backprop する
+            let leaf = if v == 0.5 {
+                shared.draw_leaf_value(path.len())
+            } else {
+                v
+            };
+            backprop(shared, &path, leaf);
             return Selection::Backpropped;
         }
         match node.state() {
@@ -693,7 +935,8 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
 
                 if path.len() > opts.max_ply as usize {
                     shared.note_depth(path.len());
-                    backprop(shared, &path, 0.5);
+                    // 最大深さ打ち切りは引き分け扱い (draw_value を手番視点で適用)
+                    backprop(shared, &path, shared.draw_leaf_value(path.len()));
                     return Selection::Backpropped;
                 }
             }
@@ -712,7 +955,11 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
                     node.mark_terminal(state);
                     shared.repetitions.fetch_add(1, Ordering::Relaxed);
                     shared.note_depth(path.len());
-                    backprop(shared, &path, terminal_value(state));
+                    backprop(
+                        shared,
+                        &path,
+                        terminal_leaf_value(shared, state, path.len()),
+                    );
                     propagate_proven_from(shared, &path);
                     return Selection::Backpropped;
                 }
@@ -753,7 +1000,11 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
             | node_state::TERMINAL_DRAW
             | node_state::TERMINAL_WIN) => {
                 shared.note_depth(path.len());
-                backprop(shared, &path, terminal_value(state));
+                backprop(
+                    shared,
+                    &path,
+                    terminal_leaf_value(shared, state, path.len()),
+                );
                 return Selection::Backpropped;
             }
             other => unreachable!("未知のノード状態: {other}"),
@@ -841,6 +1092,8 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
         }
         shared.complete_playouts(n);
         shared.check_deadline();
+        // 進捗スナップショットを一定 playout 間隔で発行 (progress 未設定なら no-op)
+        shared.maybe_publish_progress();
     }
 }
 
@@ -1037,6 +1290,9 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             mate_queue: Arc::new(Mutex::new(VecDeque::new())),
             mate_results: Arc::new(Mutex::new(VecDeque::new())),
             generation: AtomicU64::new(0),
+            start,
+            progress: limits.progress.clone(),
+            next_publish: AtomicU64::new(0),
         };
 
         let gc_keep_target =
@@ -1141,74 +1397,16 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
     ) -> SearchResult {
         let pool = &shared.pool;
         let root_node = pool.get(ROOT_IDX);
-        let root_children: Vec<RootChildStat> = root_node
-            .edges()
-            .iter()
-            .map(|e| {
-                let (visits, q, proven) = match e.child.load(Ordering::Acquire) {
-                    NULL_NODE => (0, 0.0, None),
-                    c => {
-                        let child = pool.get(c);
-                        let v = child.visits();
-                        let q = if v == 0 { 0.0 } else { child.wins() / v as f64 };
-                        // 確定値は子ノード手番側視点なのでルート視点へ反転する
-                        (v, q, child.proven_value().map(|pv| 1.0 - pv))
-                    }
-                };
-                RootChildStat {
-                    mv: e.mv,
-                    visits,
-                    q,
-                    prior: e.prior,
-                    proven,
-                }
-            })
-            .collect();
+        let root_children = root_children_of(pool);
 
-        // 負け確定の手を除外した robust child (select_best_root_index 参照)
-        let mut best_i = select_best_root_index(&root_children);
-
-        // root の勝敗が確定している場合は確定値を達成する子を優先する
-        // (訪問回数最大は確定前の探索の偏りを引きずり得る)．勝ち確定なら
-        // ルート視点の確定値 1 の子，引き分け確定なら 0.5 の子．負け確定は
-        // 全子が負け確定なのでどれでも同じ (robust child のまま)
+        // 負け確定除外の robust child + root 確定手の優先 (build_snapshot と共有)
         let root_proven = root_node.proven_value();
-        if let Some(rv) = root_proven {
-            if rv > 0.0 {
-                if let Some(i) = root_children.iter().position(|c| c.proven == Some(rv)) {
-                    best_i = i;
-                }
-            }
-        }
+        let best_i = best_root_index(&root_children, root_proven);
         let best = &root_children[best_i];
 
         // PV: 先頭は best_move に一致させ，以降は訪問回数最大の辺を辿る
-        let mut pv = vec![best.mv];
-        let mut idx = root_node.edges()[best_i].child.load(Ordering::Acquire);
-        while idx != NULL_NODE && pv.len() < MAX_PV_LEN {
-            let node = pool.get(idx);
-            if node.state() != node_state::EXPANDED {
-                break;
-            }
-            let edges = node.edges();
-            let mut pv_best: Option<(&Edge, u64)> = None;
-            for e in edges {
-                let c = e.child.load(Ordering::Acquire);
-                if c == NULL_NODE {
-                    continue;
-                }
-                let v = pool.get(c).visits();
-                if v == 0 {
-                    continue;
-                }
-                if pv_best.is_none_or(|(_, bv)| v > bv) {
-                    pv_best = Some((e, v));
-                }
-            }
-            let Some((e, _)) = pv_best else { break };
-            pv.push(e.mv);
-            idx = e.child.load(Ordering::Acquire);
-        }
+        let first_child = root_node.edges()[best_i].child.load(Ordering::Acquire);
+        let pv = extract_pv(pool, best.mv, first_child);
 
         let elapsed = start.elapsed();
         let playouts = shared.playouts.load(Ordering::Relaxed);
@@ -2105,5 +2303,70 @@ mod tests {
         );
         assert_eq!(result.stop, StopCause::External);
         assert!(result.best_move.is_some(), "停止時も指し手は返す");
+    }
+
+    #[test]
+    fn test_default_draw_value_is_half() {
+        // 既定 0.5 = 従来と bit-identical (canonical テストが保証)
+        assert_eq!(SearchOptions::default().draw_value, 0.5);
+    }
+
+    #[test]
+    fn test_draw_leaf_value_parity() {
+        // root(depth 0) 手番視点 draw_value=0.25: 偶数深さ=0.25, 奇数深さ=0.75
+        // (0.25/0.75 は f64 で厳密表現可能)
+        assert_eq!(draw_leaf_value_at(0.25, 1), 0.25); // depth 0 (root)
+        assert_eq!(draw_leaf_value_at(0.25, 2), 0.75); // depth 1 (相手番)
+        assert_eq!(draw_leaf_value_at(0.25, 3), 0.25); // depth 2
+        assert_eq!(draw_leaf_value_at(0.25, 4), 0.75); // depth 3
+                                                       // 0.5 は全深さで 0.5 (backprop 視点反転でも不変 = 従来挙動):
+        assert_eq!(draw_leaf_value_at(0.5, 1), 0.5);
+        assert_eq!(draw_leaf_value_at(0.5, 2), 0.5);
+    }
+
+    #[test]
+    fn test_progress_snapshot_published() {
+        // progress を設定すると worker が root スナップショットを発行する
+        let evaluator = MockEvaluator::new(7);
+        let searcher = Searcher::new(&evaluator, pure_mcts_opts());
+        let progress: Arc<Mutex<Option<RootSnapshot>>> = Arc::new(Mutex::new(None));
+        let limits = SearchLimits {
+            // PROGRESS_PUBLISH_PLAYOUTS (1024) を確実に跨ぐ予算
+            max_playouts: Some(4096),
+            progress: Some(Arc::clone(&progress)),
+            ..SearchLimits::default()
+        };
+        let mut board = Board::empty();
+        board.set_sfen(STARTPOS).unwrap();
+        let _ = searcher.search(&board, &limits);
+        let snap = progress
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("進捗スナップショットが少なくとも 1 回発行される");
+        assert!(snap.playouts > 0, "playouts が計上されている");
+        assert!(snap.best_move.is_some(), "best_move が入っている");
+        assert!(!snap.pv.is_empty(), "PV が非空");
+        assert!(
+            snap.best_visits >= snap.second_visits,
+            "best は second 以上の訪問"
+        );
+    }
+
+    #[test]
+    fn test_progress_none_leaves_cell_untouched() {
+        // progress 未設定なら発行しない (従来経路と同一 = bit-identical の担保)
+        let evaluator = MockEvaluator::new(7);
+        let searcher = Searcher::new(&evaluator, pure_mcts_opts());
+        let limits = SearchLimits {
+            max_playouts: Some(4096),
+            ..SearchLimits::default()
+        };
+        let mut board = Board::empty();
+        board.set_sfen(STARTPOS).unwrap();
+        let result = searcher.search(&board, &limits);
+        // progress None でも通常どおり探索は完了する
+        assert!(result.best_move.is_some());
+        assert!(result.stats.playouts >= 4096);
     }
 }

@@ -139,6 +139,7 @@ impl SearchBackend for MaouSearchBackend {
                 budget.time_ms
             },
             stop: Some(Arc::clone(stop)),
+            ..SearchLimits::default()
         };
         let result = match &self.evaluator {
             EngineEvaluator::Mock(e) => Searcher::new(e, self.options.clone())
