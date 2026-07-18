@@ -29,6 +29,11 @@ def usi(
     node_capacity: int | None = None,
     network_delay_ms: int = 1000,
     min_think_ms: int = 100,
+    draw_value_black: int = 500,
+    draw_value_white: int = 500,
+    resign_value: int = 0,
+    resign_consecutive: int = 3,
+    max_moves_to_draw: int = 0,
     root_dfpn: bool = True,
     root_dfpn_nodes: int = 2_000_000,
     root_dfpn_depth: int = 2047,
@@ -52,6 +57,11 @@ def usi(
         node_capacity: ノードプール容量 (None で既定)．
         network_delay_ms: 通信マージン (ミリ秒)．
         min_think_ms: 最低思考時間 (ミリ秒)．
+        draw_value_black: 先手番の引き分け価値 (千分率，既定 500)．
+        draw_value_white: 後手番の引き分け価値 (千分率，既定 500)．
+        resign_value: 投了する root 勝率 (千分率，既定 0 = 投了しない)．
+        resign_consecutive: 投了に必要な連続手数．
+        max_moves_to_draw: 引き分け最大手数 (既定 0 = 無効)．
         root_dfpn: ルート並行 dfpn 詰み探索を有効にするか．
         root_dfpn_nodes: ルート dfpn のノード予算．
         root_dfpn_depth: ルート dfpn の探索深さ上限 (最大 2047)．
@@ -70,6 +80,11 @@ def usi(
         node_capacity=node_capacity,
         network_delay_ms=network_delay_ms,
         min_think_ms=min_think_ms,
+        draw_value_black=draw_value_black,
+        draw_value_white=draw_value_white,
+        resign_value=resign_value,
+        resign_consecutive=resign_consecutive,
+        max_moves_to_draw=max_moves_to_draw,
         root_dfpn=root_dfpn,
         root_dfpn_nodes=root_dfpn_nodes,
         root_dfpn_depth=root_dfpn_depth,

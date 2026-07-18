@@ -24,6 +24,11 @@ use maou_usi::{EngineConfig, TimeStrategyConfig};
 /// - `trt_engine_cache_dir` (str, optional): TensorRT エンジンキャッシュ保存先．
 /// - `network_delay_ms` (int, optional): 通信マージン (デフォルト 1000)．
 /// - `min_think_ms` (int, optional): 最低思考時間 (デフォルト 100)．
+/// - `draw_value_black` / `draw_value_white` (int, optional): 先手/後手の引き分け
+///   価値 (千分率，デフォルト 500．電竜戦 0.4/0.6 勝 = 400/600)．
+/// - `resign_value` (int, optional): 投了する root 勝率 (千分率，デフォルト
+///   0 = 投了しない)．`resign_consecutive` (int, optional): 投了に必要な連続手数．
+/// - `max_moves_to_draw` (int, optional): 引き分け最大手数 (デフォルト 0 = 無効)．
 /// - `root_dfpn` / `root_dfpn_nodes` / `root_dfpn_depth`: ルート並行 dfpn．
 /// - `leaf_mate` / `leaf_mate_nodes` / `leaf_mate_threads`: leaf-mate．
 ///
@@ -31,7 +36,7 @@ use maou_usi::{EngineConfig, TimeStrategyConfig};
 ///
 /// モデルロード失敗・不正局面などの致命的エラーは `RuntimeError`．
 #[pyfunction]
-#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, network_delay_ms=None, min_think_ms=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, network_delay_ms=None, min_think_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, max_moves_to_draw=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_usi(
     py: Python<'_>,
@@ -46,6 +51,11 @@ fn run_usi(
     trt_engine_cache_dir: Option<String>,
     network_delay_ms: Option<u64>,
     min_think_ms: Option<u64>,
+    draw_value_black: Option<u32>,
+    draw_value_white: Option<u32>,
+    resign_value: Option<u32>,
+    resign_consecutive: Option<u32>,
+    max_moves_to_draw: Option<u32>,
     root_dfpn: Option<bool>,
     root_dfpn_nodes: Option<u64>,
     root_dfpn_depth: Option<u32>,
@@ -77,6 +87,21 @@ fn run_usi(
         min_think_ms: min_think_ms.unwrap_or(time_defaults.min_think_ms),
         horizon_moves: time_defaults.horizon_moves,
     };
+    if let Some(v) = draw_value_black {
+        config.draw_value_black = v;
+    }
+    if let Some(v) = draw_value_white {
+        config.draw_value_white = v;
+    }
+    if let Some(v) = resign_value {
+        config.resign_value = v;
+    }
+    if let Some(v) = resign_consecutive {
+        config.resign_consecutive = v.max(1);
+    }
+    if let Some(v) = max_moves_to_draw {
+        config.max_moves_to_draw = v;
+    }
     config.root_dfpn = root_dfpn;
     config.root_dfpn_nodes = root_dfpn_nodes;
     config.root_dfpn_depth = root_dfpn_depth;

@@ -4,17 +4,24 @@
 //! (USI `isready` のタイミング．TensorRT のエンジンビルドも warmup として
 //! ここで済ませ，初手の `go` を遅らせない)．
 
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use maou_search::{
-    build_board_and_history, EvalItem, Evaluator, MockEvaluator, SearchLimits, SearchOptions,
-    SearchResult, Searcher, StopCause,
+    build_board_and_history, EvalItem, Evaluator, MockEvaluator, RootSnapshot, SearchLimits,
+    SearchOptions, SearchResult, Searcher, StopCause,
 };
 use maou_shogi::board::Board;
 use maou_shogi::movegen::generate_legal_moves;
 
-use crate::agent::{EngineConfig, SearchBackend, SearchBudget, SearchOutcome, STARTPOS_SFEN};
+use crate::agent::{
+    EngineConfig, ProgressSnapshot, SearchBackend, SearchBudget, SearchObserver, SearchOutcome,
+    STARTPOS_SFEN,
+};
+
+/// 進捗スナップショットを observer へ渡すポーリング間隔．
+const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// 保持する評価器 (mock または ONNX)．
 enum EngineEvaluator {
@@ -122,9 +129,16 @@ impl SearchBackend for MaouSearchBackend {
         sfen: &str,
         moves: &[String],
         budget: &SearchBudget,
+        draw_value: f64,
         stop: &Arc<AtomicBool>,
+        observer: &mut dyn SearchObserver,
     ) -> Result<SearchOutcome, String> {
         let (board, history) = build_board_and_history(sfen, moves).map_err(|e| e.to_string())?;
+        // 千日手戦略: 手番視点の引き分け価値を探索へ渡す
+        let mut options = self.options.clone();
+        options.draw_value = draw_value;
+        // 進捗スナップショットの発行先 (monitor がポーリングして observer へ渡す)
+        let progress: Arc<Mutex<Option<RootSnapshot>>> = Arc::new(Mutex::new(None));
         let limits = SearchLimits {
             // 無期限 (go ponder / go infinite) は playout 上限 u64::MAX + stop
             // token で表現する (SearchLimits の規約)
@@ -133,26 +147,67 @@ impl SearchBackend for MaouSearchBackend {
             } else {
                 budget.max_playouts
             },
+            // hard_ms を探索の絶対上限 (backstop) に．soft 到達時の延長判断は
+            // monitor が observer 経由で行い stop フラグを立てる
             time_ms: if budget.unbounded {
                 None
             } else {
-                budget.time_ms
+                budget.time.map(|t| t.hard_ms)
             },
             stop: Some(Arc::clone(stop)),
-            ..SearchLimits::default()
+            progress: Some(Arc::clone(&progress)),
         };
-        let result = match &self.evaluator {
-            EngineEvaluator::Mock(e) => Searcher::new(e, self.options.clone())
-                .search_with_history(&board, &history, &limits),
-            #[cfg(feature = "onnx")]
-            EngineEvaluator::Onnx(e) => Searcher::new(e, self.options.clone())
-                .search_with_history(&board, &history, &limits),
-        };
+        // 探索を専用スレッドで走らせ，呼び出しスレッド (dispatcher) が monitor
+        // ループを回す (progress をポーリング → observer 駆動 → 早期停止)．
+        // GIL/GC を挟まない Rust 内で完結する (設計 §5)．
+        let evaluator = &self.evaluator;
+        let result = std::thread::scope(|s| {
+            let handle =
+                s.spawn(|| match evaluator {
+                    EngineEvaluator::Mock(e) => Searcher::new(e, options.clone())
+                        .search_with_history(&board, &history, &limits),
+                    #[cfg(feature = "onnx")]
+                    EngineEvaluator::Onnx(e) => Searcher::new(e, options.clone())
+                        .search_with_history(&board, &history, &limits),
+                });
+            let start = Instant::now();
+            while !handle.is_finished() {
+                std::thread::sleep(POLL_INTERVAL);
+                let latest = progress.lock().ok().and_then(|g| g.clone());
+                if let Some(snap) = latest {
+                    let elapsed = start.elapsed().as_millis() as u64;
+                    if observer.on_progress(&to_progress_snapshot(&snap), elapsed) {
+                        stop.store(true, Ordering::Release);
+                    }
+                }
+            }
+            handle.join().expect("探索スレッドは panic しない")
+        });
         Ok(to_outcome(&result))
+    }
+
+    fn nyugyoku_declarable(&self, sfen: &str, moves: &[String]) -> Result<bool, String> {
+        let (board, _) = build_board_and_history(sfen, moves).map_err(|e| e.to_string())?;
+        Ok(board.nyugyoku_declarable())
     }
 
     fn is_mock(&self) -> bool {
         matches!(self.evaluator, EngineEvaluator::Mock(_))
+    }
+}
+
+/// maou_search の [`RootSnapshot`] → transport 非依存の [`ProgressSnapshot`]．
+fn to_progress_snapshot(snap: &RootSnapshot) -> ProgressSnapshot {
+    ProgressSnapshot {
+        playouts: snap.playouts,
+        nps: snap.nps as u64,
+        max_depth: snap.max_depth,
+        best_usi: snap.best_move.map(|m| m.to_usi()),
+        best_visits: snap.best_visits,
+        second_visits: snap.second_visits,
+        winrate: snap.winrate,
+        pv: snap.pv.iter().map(|m| m.to_usi()).collect(),
+        proven: snap.proven,
     }
 }
 
@@ -190,6 +245,14 @@ mod tests {
         }
     }
 
+    /// 進捗を無視する観測者 (backend 単体テスト用)．
+    struct NoopObserver;
+    impl SearchObserver for NoopObserver {
+        fn on_progress(&mut self, _snapshot: &ProgressSnapshot, _elapsed_ms: u64) -> bool {
+            false
+        }
+    }
+
     #[test]
     fn test_build_and_search_with_mock() {
         let mut backend = MaouSearchBackend::build(&config()).expect("mock 構築は成功する");
@@ -200,11 +263,13 @@ mod tests {
                 STARTPOS_SFEN,
                 &["7g7f".to_string()],
                 &SearchBudget {
-                    time_ms: None,
+                    time: None,
                     max_playouts: Some(200),
                     unbounded: false,
                 },
+                0.5,
                 &stop,
+                &mut NoopObserver,
             )
             .expect("mock 探索は成功する");
         let best = outcome.best_usi.expect("平手 1 手目後に合法手はある");
@@ -233,11 +298,13 @@ mod tests {
                 STARTPOS_SFEN,
                 &[],
                 &SearchBudget {
-                    time_ms: None,
+                    time: None,
                     max_playouts: None,
                     unbounded: true,
                 },
+                0.5,
                 &stop,
+                &mut NoopObserver,
             )
             .expect("mock 探索は成功する");
         setter.join().expect("setter 正常終了");
@@ -253,11 +320,13 @@ mod tests {
                 STARTPOS_SFEN,
                 &["7g7e".to_string()],
                 &SearchBudget {
-                    time_ms: None,
+                    time: None,
                     max_playouts: Some(10),
                     unbounded: false,
                 },
+                0.5,
                 &stop,
+                &mut NoopObserver,
             )
             .err()
             .expect("非合法手はエラー");

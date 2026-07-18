@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use crate::agent::{Agent, EngineConfig, SearchBackend};
 use crate::backend::MaouSearchBackend;
-use crate::protocol::{parse_line, serialize, GuiCommand};
+use crate::protocol::{parse_line, serialize, EngineCommand, GuiCommand};
 
 /// reader: 入力を行単位でパースして送る．`go`/`stop`/`quit` は行順で
 /// 停止フラグへ反映する．EOF (GUI 死亡) では Quit を合成して終了する．
@@ -58,27 +58,43 @@ where
         if matches!(cmd, GuiCommand::Quit) {
             return Ok(());
         }
-        match agent.handle(cmd) {
-            Ok(responses) => {
-                for r in &responses {
-                    writeln!(out, "{}", serialize(r)).map_err(|e| e.to_string())?;
-                }
-                if !responses.is_empty() {
-                    out.flush().map_err(|e| e.to_string())?;
-                }
+        // Go は探索中に info を随時流すため handle_go_stream で直接ストリームする．
+        // それ以外は応答をまとめて書く．
+        if let GuiCommand::Go(params) = cmd {
+            let res = {
+                let mut emit = |c: EngineCommand| {
+                    let _ = writeln!(out, "{}", serialize(&c));
+                    let _ = out.flush();
+                };
+                agent.handle_go_stream(&params, &mut emit)
+            };
+            if let Err(e) = res {
+                return fatal(out, &e);
             }
-            Err(e) => {
-                // 致命的エラー (モデルロード失敗・不正局面)．詳細は stderr，
-                // GUI へは理由を ASCII 化した info string で通知して終了する
-                // (subprocess の stderr が見えない環境 — Colab 等 — でも
-                // 原因が stdout 側から分かるように)
-                eprintln!("maou usi fatal: {e}");
-                let _ = writeln!(out, "info string ERROR: {}", sanitize_ascii(&e));
-                let _ = out.flush();
-                return Err(e);
+        } else {
+            match agent.handle(cmd) {
+                Ok(responses) => {
+                    for r in &responses {
+                        writeln!(out, "{}", serialize(r)).map_err(|e| e.to_string())?;
+                    }
+                    if !responses.is_empty() {
+                        out.flush().map_err(|e| e.to_string())?;
+                    }
+                }
+                Err(e) => return fatal(out, &e),
             }
         }
     }
+}
+
+/// 致命的エラー (モデルロード失敗・不正局面)．詳細は stderr，GUI へは理由を
+/// ASCII 化した `info string` で通知して終了する (subprocess の stderr が
+/// 見えない環境 — Colab 等 — でも原因が stdout 側から分かるように)．
+fn fatal<W: Write>(out: &mut W, e: &str) -> Result<(), String> {
+    eprintln!("maou usi fatal: {e}");
+    let _ = writeln!(out, "info string ERROR: {}", sanitize_ascii(e));
+    let _ = out.flush();
+    Err(e.to_string())
 }
 
 /// `info string` 用にエラーメッセージを 1 行の ASCII へ丸める
