@@ -52,7 +52,7 @@ def test_learn_model_passes_stage_batch_sizes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """--stage1-batch-size and --stage2-batch-size are passed to learn_multi_stage."""
+    """--stage{1,2,3}-batch-size are passed to learn_multi_stage."""
     runner = CliRunner()
 
     captured_kwargs: dict[str, Any] = {}
@@ -98,6 +98,8 @@ def test_learn_model_passes_stage_batch_sizes(
             "32",
             "--stage2-batch-size",
             "64",
+            "--stage3-batch-size",
+            "128",
             "--batch-size",
             "256",
             "--no-streaming",
@@ -107,6 +109,7 @@ def test_learn_model_passes_stage_batch_sizes(
     assert result.exit_code == 0, result.output
     assert captured_kwargs["stage1_batch_size"] == 32
     assert captured_kwargs["stage2_batch_size"] == 64
+    assert captured_kwargs["stage3_batch_size"] == 128
     assert captured_kwargs["batch_size"] == 256
 
 

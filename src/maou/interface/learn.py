@@ -939,6 +939,7 @@ def learn_multi_stage(
     batch_size: int = 256,
     stage1_batch_size: int | None = None,
     stage2_batch_size: int | None = None,
+    stage3_batch_size: int | None = None,
     stage1_learning_rate: float | None = None,
     stage2_learning_rate: float | None = None,
     learning_rate: float = 0.001,
@@ -1008,6 +1009,8 @@ def learn_multi_stage(
         batch_size: Training batch size
         stage1_batch_size: Batch size for Stage 1 (default: inherits batch_size)
         stage2_batch_size: Batch size for Stage 2 (default: inherits batch_size)
+        stage3_batch_size: Batch size for Stage 3 (default: inherits batch_size).
+            Lower this to reduce Stage 3 DataLoader worker memory (OOM 対策)．
         stage1_learning_rate: Stage 1の学習率．未指定時はlearning_rateにフォールバック．
         stage2_learning_rate: Stage 2の学習率．未指定時はlearning_rateにフォールバック．
         learning_rate: Learning rate
@@ -1139,6 +1142,7 @@ def learn_multi_stage(
     # Resolve stage-specific batch sizes (fallback to global batch_size)
     effective_stage1_batch = stage1_batch_size or batch_size
     effective_stage2_batch = stage2_batch_size or batch_size
+    effective_stage3_batch = stage3_batch_size or batch_size
 
     # Warn about large Stage 2 batch sizes with ViT
     if (
@@ -1330,7 +1334,7 @@ def learn_multi_stage(
             detect_anomaly=detect_anomaly,
             test_ratio=test_ratio,
             epoch=epoch,
-            batch_size=batch_size,
+            batch_size=effective_stage3_batch,
             dataloader_workers=dataloader_workers,
             pin_memory=pin_memory,
             prefetch_factor=prefetch_factor,
