@@ -808,6 +808,7 @@ class TrainingBenchmarkUseCase:
                 n_train_files=n_train_files,
                 n_val_files=n_val_files,
                 file_paths=config.streaming_train_source.file_paths,
+                batch_size=config.batch_size,
             )
         )
 
@@ -1182,6 +1183,7 @@ class TrainingBenchmarkUseCase:
                         config.stage2_streaming_val_source.file_paths
                     ),
                     file_paths=config.stage2_streaming_train_source.file_paths,
+                    batch_size=val_batch_size,
                 )
             )
         else:

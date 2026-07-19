@@ -43,6 +43,13 @@ class TrainingContext:
     batch_size: int | None = None
     policy_target_distribution: torch.Tensor | None = None
     move_win_rate: torch.Tensor | None = None
+    optimizer_stepped: bool = True
+    """直前の optimizer step が実際に適用されたか．
+
+    mixed precision では ``GradScaler`` が inf/nan 勾配を検知すると
+    ``optimizer.step()`` をスキップする．その場合 ``False`` となり，
+    ``LRSchedulerStepCallback`` は ``scheduler.step()`` を呼ばない．
+    """
 
 
 class TrainingCallback(Protocol):
@@ -1321,7 +1328,16 @@ class LRSchedulerStepCallback(BaseCallback):
     def on_optimizer_step_end(
         self, context: TrainingContext
     ) -> None:
-        """Optimizer step完了後に学習率スケジューラをステップする．"""
+        """Optimizer step完了後に学習率スケジューラをステップする．
+
+        mixed precision で ``GradScaler`` が inf/nan 勾配を検知して
+        ``optimizer.step()`` をスキップした場合は，実際には optimizer が
+        更新されていないため scheduler もステップしない．これにより
+        PyTorch の「``lr_scheduler.step()`` が ``optimizer.step()`` より前に
+        呼ばれた」warning を回避する．
+        """
+        if not context.optimizer_stepped:
+            return
         self._scheduler.step()
 
 

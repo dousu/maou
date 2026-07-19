@@ -2,6 +2,7 @@ import pytest
 import torch
 
 from maou.app.learning.callbacks import (
+    LRSchedulerStepCallback,
     TrainingContext,
     ValidationCallback,
     ValidationMetrics,
@@ -746,3 +747,62 @@ class TestValidationCallbackWinRateMetrics:
         assert metrics.policy_top1_win_rate is None
         assert metrics.policy_move_label_ce is None
         assert metrics.policy_expected_win_rate is None
+
+
+def _create_minimal_context(
+    *, optimizer_stepped: bool
+) -> TrainingContext:
+    """LRSchedulerStepCallback 用の最小 TrainingContext を生成する．"""
+    return TrainingContext(
+        batch_idx=0,
+        epoch_idx=0,
+        inputs=torch.zeros((1, 1), dtype=torch.float32),
+        labels_policy=torch.zeros((1,), dtype=torch.long),
+        labels_value=torch.zeros((1,), dtype=torch.float32),
+        legal_move_mask=None,
+        optimizer_stepped=optimizer_stepped,
+    )
+
+
+class TestLRSchedulerStepCallback:
+    """optimizer step のスキップに追随して scheduler を制御する挙動の検証．"""
+
+    def _make_scheduler(
+        self,
+    ) -> torch.optim.lr_scheduler.StepLR:
+        param = torch.nn.Parameter(torch.zeros(1))
+        optimizer = torch.optim.SGD([param], lr=0.1)
+        return torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=1, gamma=0.5
+        )
+
+    def test_steps_scheduler_when_optimizer_stepped(
+        self,
+    ) -> None:
+        scheduler = self._make_scheduler()
+        callback = LRSchedulerStepCallback(scheduler)
+        start = scheduler.last_epoch
+        # 実際に optimizer.step() が走った状況を再現する．これを省くと
+        # PyTorch 自身が「optimizer.step() 前に scheduler.step()」warning を
+        # 出すため，本番と同じ順序で呼ぶ．
+        scheduler.optimizer.step()
+
+        callback.on_optimizer_step_end(
+            _create_minimal_context(optimizer_stepped=True)
+        )
+
+        assert scheduler.last_epoch == start + 1
+
+    def test_skips_scheduler_when_optimizer_not_stepped(
+        self,
+    ) -> None:
+        # GradScaler が optimizer.step() をスキップした場合を模擬する．
+        scheduler = self._make_scheduler()
+        callback = LRSchedulerStepCallback(scheduler)
+        start = scheduler.last_epoch
+
+        callback.on_optimizer_step_end(
+            _create_minimal_context(optimizer_stepped=False)
+        )
+
+        assert scheduler.last_epoch == start

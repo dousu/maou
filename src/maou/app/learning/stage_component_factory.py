@@ -303,6 +303,7 @@ class StageComponentFactory:
                 n_train_files=len(streaming_source.file_paths),
                 n_val_files=0,
                 file_paths=streaming_source.file_paths,
+                batch_size=batch_size,
             )
         )
 

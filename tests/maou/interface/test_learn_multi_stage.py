@@ -182,6 +182,100 @@ class TestLearnMultiStageStage3:
 
     @patch("maou.interface.learn.learn")
     @patch(
+        "maou.interface.learn.MultiStageTrainingOrchestrator"
+    )
+    @patch("maou.interface.learn.ModelFactory")
+    @patch("maou.interface.learn.DeviceSetup")
+    def test_stage3_batch_size_overrides_global(
+        self,
+        mock_device_setup: MagicMock,
+        mock_model_factory: MagicMock,
+        mock_orchestrator_cls: MagicMock,
+        mock_learn: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """stage3_batch_size がグローバル batch_size を上書きする(OOM 対策)．"""
+        from maou.interface.learn import learn_multi_stage
+
+        mock_device_config = MagicMock()
+        mock_device_config.device = MagicMock()
+        mock_device_setup.setup_device.return_value = (
+            mock_device_config
+        )
+        mock_backbone = MagicMock()
+        mock_model_factory.create_shogi_backbone.return_value = mock_backbone
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run_all_stages.return_value = {}
+        mock_orchestrator_cls.return_value = mock_orchestrator
+        mock_learn.return_value = '{"Result": "Finish"}'
+
+        mock_datasource = MagicMock()
+        stage3_config = StageDataConfig(
+            create_datasource=lambda: mock_datasource,
+            array_type="hcpe",
+        )
+
+        learn_multi_stage(
+            stage="3",
+            stage3_data_config=stage3_config,
+            batch_size=4096,
+            stage3_batch_size=512,
+            model_dir=tmp_path,
+        )
+
+        # Stage 3 の learn() には上書き後の 512 が渡る
+        assert (
+            mock_learn.call_args.kwargs.get("batch_size") == 512
+        )
+
+    @patch("maou.interface.learn.learn")
+    @patch(
+        "maou.interface.learn.MultiStageTrainingOrchestrator"
+    )
+    @patch("maou.interface.learn.ModelFactory")
+    @patch("maou.interface.learn.DeviceSetup")
+    def test_stage3_batch_size_defaults_to_global(
+        self,
+        mock_device_setup: MagicMock,
+        mock_model_factory: MagicMock,
+        mock_orchestrator_cls: MagicMock,
+        mock_learn: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """stage3_batch_size 未指定なら global batch_size を継承する．"""
+        from maou.interface.learn import learn_multi_stage
+
+        mock_device_config = MagicMock()
+        mock_device_config.device = MagicMock()
+        mock_device_setup.setup_device.return_value = (
+            mock_device_config
+        )
+        mock_model_factory.create_shogi_backbone.return_value = MagicMock()
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.run_all_stages.return_value = {}
+        mock_orchestrator_cls.return_value = mock_orchestrator
+        mock_learn.return_value = '{"Result": "Finish"}'
+
+        mock_datasource = MagicMock()
+        stage3_config = StageDataConfig(
+            create_datasource=lambda: mock_datasource,
+            array_type="hcpe",
+        )
+
+        learn_multi_stage(
+            stage="3",
+            stage3_data_config=stage3_config,
+            batch_size=4096,
+            model_dir=tmp_path,
+        )
+
+        assert (
+            mock_learn.call_args.kwargs.get("batch_size")
+            == 4096
+        )
+
+    @patch("maou.interface.learn.learn")
+    @patch(
         "maou.interface.learn._find_latest_backbone_checkpoint"
     )
     @patch("maou.interface.learn._run_stage2")

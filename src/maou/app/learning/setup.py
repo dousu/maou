@@ -181,8 +181,21 @@ class DatasetFactory:
 _DECOMPRESSION_FACTOR: float = 4.0
 """LZ4の一般的展開倍率(2-4倍)の上限値．"""
 
-_SAFETY_MARGIN: float = 1.5
-"""DataFrame + numpy配列共存の安全マージン．"""
+_SAFETY_MARGIN: float = 2.0
+"""ワーカーあたりメモリの安全マージン．
+
+各ワーカーは展開済み feather ファイルを Polars DataFrame と numpy
+(ColumnarBatch) の両方で一時保持し，さらに prefetch バッファ・アロケータ
+の断片化・GC 遅延が上乗せされる．旧値 1.5 は過小評価で worker を出し過ぎ，
+OOM killer による worker kill を招いていたため保守側に引き上げた．
+"""
+
+_WORKER_MEMORY_BUDGET_FRACTION: float = 0.4
+"""DataLoader ワーカー群に割り当てる利用可能メモリの割合．
+
+残りはメインプロセス(モデル・pinned buffer・CUDA context・Python)用に確保する．
+旧値 0.5 では headroom 不足で OOM しやすかったため 0.4 に引き下げた．
+"""
 
 _FALLBACK_PER_WORKER_MB: float = 200.0
 """ファイルサイズ情報が利用できない場合のデフォルト値．"""
@@ -258,7 +271,8 @@ def _estimate_max_workers_by_memory(
 
     ファイルパスが渡された場合，圧縮ファイルの実サイズから
     ワーカーあたりのメモリ消費量を動的に推定する．
-    展開倍率(LZ4: 4.0)と安全マージン(1.5)を考慮する．
+    展開倍率(LZ4: 4.0)と安全マージン(2.0)を考慮する．
+    割当は利用可能メモリの ``_WORKER_MEMORY_BUDGET_FRACTION`` に制限する．
 
     Args:
         pin_memory: pinned memory が有効か
@@ -289,8 +303,10 @@ def _estimate_max_workers_by_memory(
             )
             return 64  # 実質的に無制限
 
-    # ワーカーに割当可能なメモリ: 利用可能メモリの50%
-    worker_budget_mb = available_mb * 0.5
+    # ワーカーに割当可能なメモリ (残りはメインプロセス用に確保)
+    worker_budget_mb = (
+        available_mb * _WORKER_MEMORY_BUDGET_FRACTION
+    )
 
     # ファイルサイズベースの動的メモリ推定
     per_worker_mb = _estimate_per_worker_mb(file_paths, logger)
@@ -534,6 +550,7 @@ class DataLoaderFactory:
         n_train_files: int = 0,
         n_val_files: int = 0,
         file_paths: list[Path] | None = None,
+        batch_size: int | None = None,
     ) -> tuple[DataLoader, DataLoader]:
         """Streaming用DataLoader作成．
 
@@ -558,6 +575,9 @@ class DataLoaderFactory:
             n_train_files: 学習データのファイル数(ワーカー数制限用)
             n_val_files: 検証データのファイル数(ワーカー数制限用)
             file_paths: データファイルパスのリスト(動的メモリ推定用)
+            batch_size: StreamingDataset が yield するバッチのサイズ．
+                /dev/shm 見積り用のみに使用する(DataLoader 自体は
+                batch_size=None)．None の場合は概算フォールバック値を使う．
 
         Returns:
             (training_loader, validation_loader) のタプル
@@ -588,7 +608,7 @@ class DataLoaderFactory:
 
         _check_shm_size(
             num_workers=max(train_workers, val_workers),
-            batch_size=None,
+            batch_size=batch_size,
             prefetch_factor=prefetch_factor,
             logger=cls.logger,
         )
@@ -942,17 +962,24 @@ class WarmupCosineDecayScheduler(LRScheduler):
             param_group["lr"] = lr
         self._last_lr = initial_lrs
 
-    def get_lr(self) -> list[float]:
-        """Return the learning rate for the current step."""
+    def get_lr(self) -> list[float | torch.Tensor]:
+        """Return the learning rate for the current step.
+
+        PyTorch 2.11 で基底 ``LRScheduler.get_lr`` の返り値型が
+        ``list[float | Tensor]`` に変更されたため，override も同じ型に
+        揃える(``list`` は不変なので明示的に注釈する)．実際に返すのは
+        float のみ．
+        """
 
         step = self.last_epoch  # PyTorch convention
 
         if self.warmup_steps > 0 and step < self.warmup_steps:
             warmup_progress = (step + 1) / self.warmup_steps
-            return [
+            warmup_lrs: list[float | torch.Tensor] = [
                 base_lr * warmup_progress
                 for base_lr in self.base_lrs
             ]
+            return warmup_lrs
 
         decay_steps = max(
             self.total_steps - self.warmup_steps, 1
@@ -965,10 +992,11 @@ class WarmupCosineDecayScheduler(LRScheduler):
             1.0 + math.cos(math.pi * decay_progress)
         )
 
-        return [
+        decay_lrs: list[float | torch.Tensor] = [
             self.min_lr + (base_lr - self.min_lr) * cosine_scale
             for base_lr in self.base_lrs
         ]
+        return decay_lrs
 
 
 class SchedulerFactory:

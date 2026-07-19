@@ -84,6 +84,9 @@ def test_learn_model_options_available_in_benchmark_training() -> (
         "s3-bucket-name",  # S3（不要）
         "s3-base-path",  # S3（不要）
         "save-split-params",  # データ分割パラメータ保存（不要）
+        # benchmark-training の Stage 3 (policy+value) は主経路で --batch-size を
+        # 直接使うため個別上書きは不要 (stage1/2 は補助経路なので override あり)．
+        "stage3-batch-size",
     }
 
     # 除外リストを適用してチェック対象を絞る
@@ -193,6 +196,8 @@ def test_option_consistency_documentation() -> None:
         "output-s3",
         "s3-bucket-name",
         "s3-base-path",
+        # Stage 3 は benchmark-training の主経路で --batch-size を直接使う
+        "stage3-batch-size",
     }
 
     learn_only = sorted(learn_options - benchmark_options)

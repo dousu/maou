@@ -497,28 +497,29 @@ class _FakeVirtualMemory:
 @pytest.mark.parametrize(
     ("available_mb", "pin_memory", "expected"),
     [
+        # budget = available * 0.4, per_worker = 200 (+50 if pin)
         pytest.param(
             8000.0,
             False,
-            20,
+            16,  # 3200 / 200
             id="8GB_no_pin",
         ),
         pytest.param(
             8000.0,
             True,
-            16,
+            12,  # 3200 / 250
             id="8GB_pin",
         ),
         pytest.param(
             2000.0,
             False,
-            5,
+            4,  # 800 / 200
             id="2GB_no_pin",
         ),
         pytest.param(
             500.0,
             False,
-            1,
+            1,  # 200 / 200
             id="500MB_no_pin",
         ),
     ],
@@ -611,14 +612,14 @@ def _make_fake_path(
 
 
 def test_estimate_per_worker_mb_100mb_files() -> None:
-    """100MBファイル → per_worker_mb=600(pin_memory=True で650)．"""
+    """100MBファイル → per_worker_mb=800．"""
     from maou.app.learning.setup import _estimate_per_worker_mb
 
     logger = logging.getLogger("test_per_worker")
     paths = [_make_fake_path(100.0) for _ in range(5)]
     result = _estimate_per_worker_mb(paths, logger)
-    # 100 * 4.0 * 1.5 = 600.0
-    assert result == pytest.approx(600.0, rel=1e-3)
+    # 100 * 4.0 (LZ4) * 2.0 (safety) = 800.0
+    assert result == pytest.approx(800.0, rel=1e-3)
 
 
 def test_estimate_per_worker_mb_10mb_files() -> None:
@@ -628,7 +629,7 @@ def test_estimate_per_worker_mb_10mb_files() -> None:
     logger = logging.getLogger("test_per_worker")
     paths = [_make_fake_path(10.0) for _ in range(5)]
     result = _estimate_per_worker_mb(paths, logger)
-    # 10 * 4.0 * 1.5 = 60.0 → max(60, 200) = 200.0
+    # 10 * 4.0 * 2.0 = 80.0 → max(80, 200) = 200.0
     assert result == pytest.approx(200.0, rel=1e-3)
 
 
@@ -664,12 +665,12 @@ def test_estimate_per_worker_mb_mixed_existing() -> None:
         _make_fake_path(100.0, exists=True),
     ]
     result = _estimate_per_worker_mb(paths, logger)
-    # avg = 100MB, 100 * 4.0 * 1.5 = 600.0
-    assert result == pytest.approx(600.0, rel=1e-3)
+    # avg = 100MB, 100 * 4.0 * 2.0 = 800.0
+    assert result == pytest.approx(800.0, rel=1e-3)
 
 
 def test_estimate_max_workers_with_file_paths() -> None:
-    """ファイルサイズ100MB + pin_memory → per_worker_mb=650．"""
+    """ファイルサイズ100MB + pin_memory → per_worker_mb=850．"""
     logger = logging.getLogger("test_max_workers_file")
     fake_vm = _FakeVirtualMemory(50000.0)  # 50GB available
     paths = [_make_fake_path(100.0) for _ in range(10)]
@@ -680,9 +681,9 @@ def test_estimate_max_workers_with_file_paths() -> None:
             logger=logger,
             file_paths=paths,
         )
-    # budget = 50000 * 0.5 = 25000, per_worker = 600 + 50 = 650
-    # max_workers = 25000 / 650 = 38.46 → 38
-    assert result == 38
+    # budget = 50000 * 0.4 = 20000, per_worker = 800 + 50 = 850
+    # max_workers = 20000 / 850 = 23.5 → 23
+    assert result == 23
 
 
 def test_estimate_max_workers_fallback_no_file_paths() -> None:
@@ -696,9 +697,9 @@ def test_estimate_max_workers_fallback_no_file_paths() -> None:
             logger=logger,
             file_paths=None,
         )
-    # budget = 8000 * 0.5 = 4000, per_worker = 200 + 50 = 250
-    # max_workers = 4000 / 250 = 16
-    assert result == 16
+    # budget = 8000 * 0.4 = 3200, per_worker = 200 + 50 = 250
+    # max_workers = 3200 / 250 = 12.8 → 12
+    assert result == 12
 
 
 # --- Fix 3: /dev/shm サイズチェックテスト ---
@@ -798,6 +799,39 @@ def test_check_shm_size_skipped_with_zero_workers() -> None:
         )
 
     mock_warn.assert_not_called()
+
+
+def test_check_shm_size_uses_real_batch_size() -> None:
+    """実バッチサイズを渡すと 1024 フォールバックより高精度に警告する．
+
+    available=4000MB で num_workers=4, prefetch_factor=4 のとき，
+    batch_size=4096 なら threshold ~9856MB > 4000 で警告するが，
+    batch_size=None(1024 フォールバック) では ~2464MB < 4000 で警告しない．
+    ストリーミング経路が実バッチサイズを渡すようになった効果を検証する．
+    """
+    from maou.app.learning.setup import _check_shm_size
+
+    logger = logging.getLogger("test_shm_batch")
+    fake_statvfs = _FakeStatvfs(4000.0)
+
+    def _run(batch_size: int | None) -> bool:
+        with (
+            patch("sys.platform", "linux"),
+            patch("os.statvfs", return_value=fake_statvfs),
+            patch.object(Path, "exists", return_value=True),
+            patch.object(logger, "warning") as mock_warn,
+        ):
+            _check_shm_size(
+                num_workers=4,
+                batch_size=batch_size,
+                prefetch_factor=4,
+                logger=logger,
+            )
+        return mock_warn.called
+
+    # 実バッチサイズ 4096 では警告，フォールバック(None→1024)では警告しない
+    assert _run(4096) is True
+    assert _run(None) is False
 
 
 # --- Fix 4: ワーカーメモリ使用量ログテスト ---

@@ -687,8 +687,18 @@ class TrainingLoop:
             for callback in self.callbacks:
                 callback.on_optimizer_step_start(context)
 
+            # GradScaler は勾配に inf/nan があると optimizer.step() を
+            # スキップする(AMP のスケール調整期に頻発する)．スキップ時に
+            # scheduler.step() を呼ぶと optimizer 未更新のまま LR を進めて
+            # しまい，PyTorch の warning も発生する．update() が inf/nan 検知
+            # 時に scale を backoff_factor 倍(<1)する性質を使い，scale が
+            # 減っていなければ実際に step されたと判定して context に記録する．
+            scale_before = self.scaler.get_scale()
             self.scaler.step(self.optimizer)
             self.scaler.update()
+            context.optimizer_stepped = (
+                self.scaler.get_scale() >= scale_before
+            )
 
             self._maybe_synchronize(
                 "post_optimizer_step_mixed_precision"

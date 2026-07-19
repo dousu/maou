@@ -458,6 +458,16 @@ def _build_adaptive_batch_config(
     required=False,
 )
 @click.option(
+    "--stage3-batch-size",
+    type=int,
+    default=None,
+    help=(
+        "Batch size for Stage 3 (default: inherits --batch-size)."
+        " Lower this if Stage 3 DataLoader workers are OOM-killed."
+    ),
+    required=False,
+)
+@click.option(
     "--stage1-learning-rate",
     type=float,
     default=None,
@@ -703,6 +713,7 @@ def learn_model(
     stage2_max_epochs: int,
     stage1_batch_size: int | None,
     stage2_batch_size: int | None,
+    stage3_batch_size: int | None,
     stage1_learning_rate: float | None,
     stage2_learning_rate: float | None,
     stage12_lr_scheduler: str | None,
@@ -933,6 +944,7 @@ def learn_model(
             batch_size=batch_size or 4096,
             stage1_batch_size=stage1_batch_size,
             stage2_batch_size=stage2_batch_size,
+            stage3_batch_size=stage3_batch_size,
             stage1_learning_rate=stage1_learning_rate,
             stage2_learning_rate=stage2_learning_rate,
             stage12_lr_scheduler=stage12_lr_scheduler,

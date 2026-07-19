@@ -411,6 +411,7 @@ class Learning:
                 n_train_files=n_train_files,
                 n_val_files=n_val_files,
                 file_paths=config.streaming_train_source.file_paths,
+                batch_size=config.batch_size,
             )
         )
 
