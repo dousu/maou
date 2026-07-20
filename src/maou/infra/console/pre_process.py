@@ -266,6 +266,26 @@ from maou.infra.console.common import (
     required=False,
     default=5.0,
 )
+@click.option(
+    "--best-move-win-rate-fallback",
+    help="How to compute bestMoveWinRate for positions below "
+    "--position-count-threshold. 'uniform' records a neutral 0.5 "
+    "(default). 'raw-outcome' records the unsmoothed actual win/loss "
+    "outcome instead (can be an extreme 0.0/1.0 for low-count positions). "
+    "Ignored when --drop-below-threshold is set.",
+    type=click.Choice(["uniform", "raw-outcome"]),
+    required=False,
+    default="uniform",
+)
+@click.option(
+    "--drop-below-threshold",
+    help="Exclude positions with occurrence count below "
+    "--position-count-threshold from the output entirely, instead of "
+    "recording a fallback value for them. (default: False)",
+    is_flag=True,
+    default=False,
+    required=False,
+)
 @handle_exception
 def pre_process(
     input_path: Path | None,
@@ -304,6 +324,8 @@ def pre_process(
     input_split_rows: int,
     position_count_threshold: int,
     prior_strength: float,
+    best_move_win_rate_fallback: str,
+    drop_below_threshold: bool,
 ) -> None:
     import warnings
 
@@ -560,5 +582,7 @@ def pre_process(
             intermediate_batch_size=intermediate_batch_size,
             position_count_threshold=position_count_threshold,
             prior_strength=prior_strength,
+            best_move_win_rate_fallback=best_move_win_rate_fallback,
+            drop_below_threshold=drop_below_threshold,
         )
     )

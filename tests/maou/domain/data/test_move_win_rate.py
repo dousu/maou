@@ -641,3 +641,313 @@ class TestNumpyReturnTypes:
         )
         # count=0 row is skipped, all zeros
         assert result[0].sum() == 0.0
+
+
+class TestBestMoveWinRateFallbackStrategy:
+    """Test best_move_win_rate_fallback="raw-outcome" option."""
+
+    def _create_store(
+        self,
+        tmp_path: Path,
+        threshold: int = 3,
+        best_move_win_rate_fallback: str = "uniform",
+    ) -> IntermediateDataStore:
+        db_path = tmp_path / "test.duckdb"
+        return IntermediateDataStore(
+            db_path=db_path,
+            position_count_threshold=threshold,
+            prior_strength=0.0,
+            best_move_win_rate_fallback=best_move_win_rate_fallback,
+        )
+
+    def test_raw_outcome_uses_actual_win_loss(
+        self, tmp_path: Path
+    ) -> None:
+        """raw-outcome: single occurrence, actual win -> bestMoveWinRate=1.0."""
+        store = self._create_store(
+            tmp_path,
+            threshold=3,
+            best_move_win_rate_fallback="raw-outcome",
+        )
+        try:
+            indices_col = [[5]]
+            label_values_col = [[1]]
+            win_values_col = [
+                [1.0]
+            ]  # the single game was a win
+            counts = [1]  # < threshold=3 -> fallback range
+
+            (
+                move_win_rates,
+                best_move_win_rates,
+                fallback_count,
+            ) = store._compute_move_win_rates(
+                indices_col,
+                label_values_col,
+                win_values_col,
+                counts,
+            )
+
+            assert fallback_count == 1
+            # moveWinRate array stays uniform (1/N) regardless of strategy
+            assert move_win_rates[0][5] == pytest.approx(1.0)
+            # bestMoveWinRate reflects the actual outcome, not 0.5
+            assert best_move_win_rates[0] == pytest.approx(1.0)
+        finally:
+            store.close()
+
+    def test_raw_outcome_actual_loss(
+        self, tmp_path: Path
+    ) -> None:
+        """raw-outcome: single occurrence, actual loss -> bestMoveWinRate=0.0."""
+        store = self._create_store(
+            tmp_path,
+            threshold=3,
+            best_move_win_rate_fallback="raw-outcome",
+        )
+        try:
+            indices_col = [[5]]
+            label_values_col = [[1]]
+            win_values_col = [
+                [0.0]
+            ]  # the single game was a loss
+            counts = [1]
+
+            _, best_move_win_rates, _ = (
+                store._compute_move_win_rates(
+                    indices_col,
+                    label_values_col,
+                    win_values_col,
+                    counts,
+                )
+            )
+
+            assert best_move_win_rates[0] == pytest.approx(0.0)
+        finally:
+            store.close()
+
+    def test_raw_outcome_uses_best_of_observed_moves(
+        self, tmp_path: Path
+    ) -> None:
+        """raw-outcome: multiple moves observed, best (max) rate is used."""
+        store = self._create_store(
+            tmp_path,
+            threshold=3,
+            best_move_win_rate_fallback="raw-outcome",
+        )
+        try:
+            indices_col = [[5, 15]]
+            label_values_col = [[1, 1]]
+            win_values_col = [
+                [0.0, 1.0]
+            ]  # move 5 lost, move 15 won
+            counts = [2]  # < threshold=3
+
+            _, best_move_win_rates, _ = (
+                store._compute_move_win_rates(
+                    indices_col,
+                    label_values_col,
+                    win_values_col,
+                    counts,
+                )
+            )
+
+            assert best_move_win_rates[0] == pytest.approx(1.0)
+        finally:
+            store.close()
+
+    def test_uniform_strategy_unaffected(
+        self, tmp_path: Path
+    ) -> None:
+        """Default 'uniform' strategy is unchanged (regression guard)."""
+        store = self._create_store(
+            tmp_path,
+            threshold=3,
+            best_move_win_rate_fallback="uniform",
+        )
+        try:
+            indices_col = [[5]]
+            label_values_col = [[1]]
+            win_values_col = [[1.0]]
+            counts = [1]
+
+            _, best_move_win_rates, _ = (
+                store._compute_move_win_rates(
+                    indices_col,
+                    label_values_col,
+                    win_values_col,
+                    counts,
+                )
+            )
+
+            assert best_move_win_rates[0] == pytest.approx(0.5)
+        finally:
+            store.close()
+
+    def test_raw_outcome_does_not_affect_non_fallback_positions(
+        self, tmp_path: Path
+    ) -> None:
+        """count >= threshold positions are unaffected by the strategy."""
+        store = self._create_store(
+            tmp_path,
+            threshold=2,
+            best_move_win_rate_fallback="raw-outcome",
+        )
+        try:
+            indices_col = [[10, 20, 30]]
+            label_values_col = [[4, 2, 1]]
+            win_values_col = [[2.0, 1.0, 0.5]]
+            counts = [
+                5
+            ]  # >= threshold=2, normal (smoothed) path
+
+            _, best_move_win_rates, fallback_count = (
+                store._compute_move_win_rates(
+                    indices_col,
+                    label_values_col,
+                    win_values_col,
+                    counts,
+                )
+            )
+
+            assert fallback_count == 0
+            assert best_move_win_rates[0] == pytest.approx(
+                0.5, rel=1e-5
+            )
+        finally:
+            store.close()
+
+    def test_invalid_fallback_strategy_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        """Unknown best_move_win_rate_fallback value raises ValueError."""
+        db_path = tmp_path / "test.duckdb"
+        with pytest.raises(
+            ValueError,
+            match="best_move_win_rate_fallback must be",
+        ):
+            IntermediateDataStore(
+                db_path=db_path,
+                best_move_win_rate_fallback="bogus",
+            )
+
+
+class TestDropBelowThreshold:
+    """Test drop_below_threshold=True excludes low-count positions."""
+
+    def _make_position_df(
+        self,
+        hash_id: int,
+        count: int,
+        win_count: float,
+        move_index: int = 10,
+    ) -> pl.DataFrame:
+        move_label_count = [0] * 1496
+        move_label_count[move_index] = count
+        move_win_count = [0.0] * 1496
+        move_win_count[move_index] = win_count
+        return pl.DataFrame(
+            [
+                {
+                    "hash_id": hash_id,
+                    "count": count,
+                    "win_count": win_count,
+                    "move_label_count": move_label_count,
+                    "move_win_count": move_win_count,
+                    "board_id_positions": [
+                        [0] * 9 for _ in range(9)
+                    ],
+                    "pieces_in_hand": [0] * 14,
+                }
+            ]
+        )
+
+    def test_drop_excludes_low_count_positions(
+        self, tmp_path: Path
+    ) -> None:
+        """Positions below threshold are absent from finalize_to_dataframe output."""
+        db_path = tmp_path / "test.duckdb"
+        store = IntermediateDataStore(
+            db_path=db_path,
+            position_count_threshold=3,
+            prior_strength=0.0,
+            drop_below_threshold=True,
+        )
+        try:
+            # 2 positions >= threshold, 3 positions < threshold
+            for i in range(2):
+                store.add_dataframe_batch(
+                    self._make_position_df(
+                        hash_id=i, count=5, win_count=2.5
+                    )
+                )
+            for i in range(2, 5):
+                store.add_dataframe_batch(
+                    self._make_position_df(
+                        hash_id=i, count=1, win_count=1.0
+                    )
+                )
+
+            result_df, affected_count = (
+                store.finalize_to_dataframe()
+            )
+
+            assert len(result_df) == 2
+            assert set(result_df["id"].to_list()) == {0, 1}
+            assert affected_count == 3
+        finally:
+            store.close()
+
+    def test_drop_reports_zero_fallback_from_compute(
+        self, tmp_path: Path
+    ) -> None:
+        """With drop enabled, _compute_move_win_rates never sees sub-threshold rows,
+        so its own fallback_count stays 0; the drop count is added separately
+        in _finalize_chunk."""
+        db_path = tmp_path / "test.duckdb"
+        store = IntermediateDataStore(
+            db_path=db_path,
+            position_count_threshold=3,
+            prior_strength=0.0,
+            drop_below_threshold=True,
+        )
+        try:
+            store.add_dataframe_batch(
+                self._make_position_df(
+                    hash_id=0, count=1, win_count=1.0
+                )
+            )
+            result_df, affected_count = (
+                store.finalize_to_dataframe()
+            )
+            assert len(result_df) == 0
+            assert affected_count == 1
+        finally:
+            store.close()
+
+    def test_drop_disabled_keeps_fallback_behavior(
+        self, tmp_path: Path
+    ) -> None:
+        """drop_below_threshold=False (default) preserves existing fallback behavior."""
+        db_path = tmp_path / "test.duckdb"
+        store = IntermediateDataStore(
+            db_path=db_path,
+            position_count_threshold=3,
+            prior_strength=0.0,
+        )
+        try:
+            store.add_dataframe_batch(
+                self._make_position_df(
+                    hash_id=0, count=1, win_count=1.0
+                )
+            )
+            result_df, affected_count = (
+                store.finalize_to_dataframe()
+            )
+            assert len(result_df) == 1
+            assert affected_count == 1
+            assert result_df["bestMoveWinRate"].to_list()[
+                0
+            ] == pytest.approx(0.5)
+        finally:
+            store.close()

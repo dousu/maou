@@ -46,6 +46,8 @@ exclusion and warns when extras are missing.【F:src/maou/infra/console/pre_proc
 | `--intermediate-batch-size INT` | `50000` | DuckDBへのフラッシュ前に蓄積するレコード数．バッチ蓄積バッファにより，複数の小さなDataFrameを結合してからDuckDBにupsertすることでトランザクションオーバーヘッドを削減．A100 High Memory (83GB RAM) 向けに最適化．【F:src/maou/infra/console/pre_process.py†L575-L620】【F:src/maou/app/pre_process/hcpe_transform.py†L93-L147】 |
 | `--position-count-threshold INT` | `2` | 指し手別勝率計算の最小出現回数閾値．局面の出現回数(`count`)がこの値未満の場合，`moveWinRate` を合法手への均等配分(1/N)に置換する．推奨範囲: 2〜4．【F:src/maou/infra/console/pre_process.py†L251-L258】 |
 | `--prior-strength FLOAT` | `5.0` | Beta事前分布による勝率平滑化の強度．`(wins + prior) / (total + 2 * prior)` を適用し，出現回数が少ない手の勝率を50%方向へ収縮させる．0.0で平滑化なし．「その手の勝率を信じるために最低限ほしい対局数の半分」が目安(例: 10回は必要 → 5.0)．【F:src/maou/infra/console/pre_process.py†L259-L268】 |
+| `--best-move-win-rate-fallback {uniform,raw-outcome}` | `uniform` | 閾値未満局面での `bestMoveWinRate` 算出方法．`uniform`(デフォルト)は固定値0.5．`raw-outcome` は平滑化なしの実勝敗(`win_values/label_values` の最大)をそのまま使い，少数サンプルでは0.0/1.0等の極端値になり得る．`moveWinRate` 配列自体は本オプションに関わらず常に均等配分(1/N)のまま．`--drop-below-threshold` 指定時は無視される．【F:src/maou/infra/console/pre_process.py†L269-L279】 |
+| `--drop-below-threshold` | `False`(フラグ) | 出現回数(`count`)が `--position-count-threshold` 未満の局面を出力から完全に除外する．フォールバック値そのものを記録したくない場合に使う．`--best-move-win-rate-fallback` より優先される．【F:src/maou/infra/console/pre_process.py†L280-L288】 |
 | `--input-split-rows INT` | `500000` | 入力ファイルをこの行数にリサイズして並列処理を改善する．大きなファイルは分割し，小さなファイル（目標行数の半分未満）はチャンクにまとめる．Rustバックエンドを使用してLZ4圧縮を維持したまま高速に処理．0を指定すると無効化．A100 High Memory 向けに最適化．【F:src/maou/infra/console/pre_process.py†L230-L245】【F:src/maou/interface/preprocess.py†L50-L180】 |
 
 ## Execution flow

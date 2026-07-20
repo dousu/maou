@@ -151,6 +151,8 @@ class IntermediateDataStore:
         batch_size: int = 50_000,
         position_count_threshold: int = 2,
         prior_strength: float = 5.0,
+        best_move_win_rate_fallback: str = "uniform",
+        drop_below_threshold: bool = False,
         enable_vacuum: bool = False,  # Kept for API compatibility, unused in DuckDB
     ):
         """Initialize intermediate data store.
@@ -166,11 +168,29 @@ class IntermediateDataStore:
                 各手の勝率を ``(wins + prior_strength) / (total + 2 *
                 prior_strength)`` で平滑化し，出現回数が少ない手の勝率を
                 50%方向へ収縮させる．0.0の場合は平滑化なし(従来動作)．
+            best_move_win_rate_fallback: 閾値未満局面での ``bestMoveWinRate``
+                の算出方法．``"uniform"`` (デフォルト) は固定値0.5，
+                ``"raw-outcome"`` は平滑化なしの実勝敗(``win_values /
+                label_values``)をそのまま使う．少数サンプルでは0.0/1.0の
+                極端値になり得る．``moveWinRate`` 配列自体は本オプションに
+                関わらず常に均等分布(1/N)のまま(policy側は非対象)．
+            drop_below_threshold: True の場合，出現回数が
+                ``position_count_threshold`` 未満の局面を出力から完全に除外する．
+                フォールバック値そのものを記録したくない場合に使う．
+                ``best_move_win_rate_fallback`` より優先される．
             enable_vacuum: Unused (kept for API compatibility with SQLite version)
         """
         if prior_strength < 0.0:
             raise ValueError(
                 f"prior_strength must be >= 0.0, got {prior_strength}"
+            )
+        if best_move_win_rate_fallback not in (
+            "uniform",
+            "raw-outcome",
+        ):
+            raise ValueError(
+                "best_move_win_rate_fallback must be 'uniform' or "
+                f"'raw-outcome', got {best_move_win_rate_fallback!r}"
             )
         self.db_path = db_path
         self.batch_size = batch_size
@@ -181,6 +201,10 @@ class IntermediateDataStore:
             position_count_threshold
         )
         self._prior_strength = prior_strength
+        self._best_move_win_rate_fallback = (
+            best_move_win_rate_fallback
+        )
+        self._drop_below_threshold = drop_below_threshold
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._buffer: list[pl.DataFrame] = []
         self._buffer_rows: int = 0
@@ -736,9 +760,17 @@ class IntermediateDataStore:
     ) -> tuple[np.ndarray, list[float], int]:
         """指し手別勝率を計算する(フォールバック・Beta平滑化適用済み)．
 
-        局面の出現回数が ``position_count_threshold`` 未満の場合は合法手への均一分布に
-        フォールバックする．それ以外の場合は Beta事前分布による平滑化を適用し，
-        出現回数が少ない手の勝率ノイズを抑制する．
+        局面の出現回数が ``position_count_threshold`` 未満の場合は
+        ``moveWinRate`` 配列を合法手への均一分布にフォールバックする．
+        それ以外の場合は Beta事前分布による平滑化を適用し，出現回数が
+        少ない手の勝率ノイズを抑制する．
+
+        ``bestMoveWinRate`` のフォールバック値は ``self._best_move_win_rate_fallback``
+        で切り替わる:
+            - ``"uniform"``: 固定値0.5(情報なしを表す中立値)
+            - ``"raw-outcome"``: 平滑化なしの実勝敗(``win_values / label_values``)．
+              サンプル数が少ないほど0.0/1.0寄りの極端な値になり得るが，
+              フォールバックによる情報の消失(全て0.5化)を避けたい場合に使う．
 
         メモリ効率のためnumpy 2D配列(float32)を返す．
         Python list[list[float]]を使用した場合と比べて約7倍のメモリ削減．
@@ -782,6 +814,9 @@ class IntermediateDataStore:
             if count < self._position_count_threshold:
                 fallback_count += 1
                 # Fallback: 1/N uniform distribution over legal moves
+                # (moveWinRate array is always uniform here regardless of
+                # best_move_win_rate_fallback — only the bestMoveWinRate
+                # scalar changes below).
                 n_legal = len(indices)
                 if n_legal > 0:
                     uniform_rate = 1.0 / n_legal
@@ -789,7 +824,31 @@ class IntermediateDataStore:
                         indices, dtype=np.intp
                     )
                     move_win_rates[i, np_indices] = uniform_rate
-                    best_move_win_rates.append(0.5)
+                    if (
+                        self._best_move_win_rate_fallback
+                        == "raw-outcome"
+                    ):
+                        np_lv = np.array(
+                            label_values, dtype=np.float32
+                        )
+                        np_wv = np.array(
+                            win_values, dtype=np.float32
+                        )
+                        mask = np_lv > 0
+                        raw_rates = np.where(
+                            mask, np_wv / np_lv, 0.0
+                        )
+                        np.clip(
+                            raw_rates,
+                            0.0,
+                            1.0,
+                            out=raw_rates,
+                        )
+                        best_move_win_rates.append(
+                            float(raw_rates.max())
+                        )
+                    else:
+                        best_move_win_rates.append(0.5)
                 else:
                     best_move_win_rates.append(0.0)
             else:
@@ -878,14 +937,28 @@ class IntermediateDataStore:
         sparse展開・正規化・カラムリネームを行う．
         numpy 2D配列とArrow経由のゼロコピー変換でメモリ効率を最適化．
 
+        ``drop_below_threshold=True`` の場合，出現回数が
+        ``position_count_threshold`` 未満の局面はここで完全に除外され，
+        以降のフォールバック計算(``_compute_move_win_rates``)には渡らない．
+
         Args:
             raw_df: DuckDBから読み出した生のDataFrame
 
         Returns:
             (DataFrame, fallback_count):
-                最終形式のPreprocessing DataFrameと
-                position_count_thresholdによるフォールバック局面数
+                最終形式のPreprocessing DataFrameと，
+                position_count_thresholdの影響を受けた局面数
+                (フォールバック適用数，drop_below_threshold時は除外数)
         """
+        dropped_count = 0
+        if self._drop_below_threshold:
+            below_threshold = (
+                raw_df["count"] < self._position_count_threshold
+            )
+            dropped_count = int(below_threshold.sum())
+            if dropped_count > 0:
+                raw_df = raw_df.filter(~below_threshold)
+
         # 共通カラムを一度だけPythonリストに変換する
         indices_list = raw_df["move_label_indices"].to_list()
         label_values_list = raw_df[
@@ -937,7 +1010,7 @@ class IntermediateDataStore:
                 },
                 schema=get_preprocessing_polars_schema(),
             ),
-            fallback_count,
+            fallback_count + dropped_count,
         )
 
     def finalize_to_dataframe(
@@ -949,8 +1022,9 @@ class IntermediateDataStore:
 
         Returns:
             (DataFrame, fallback_count):
-                Preprocessing DataFrame with all aggregated data と
-                position_count_thresholdによるフォールバック局面数
+                Preprocessing DataFrame with all aggregated data と，
+                position_count_thresholdの影響を受けた局面数
+                (フォールバック適用数，drop_below_threshold時は除外数)
 
         Note:
             This method loads all data into memory at once.
@@ -1009,8 +1083,9 @@ class IntermediateDataStore:
                               after yielding to save disk space (default: True)
 
         Yields:
-            (DataFrame, fallback_count): チャンクのDataFrameと
-                position_count_thresholdによるフォールバック局面数
+            (DataFrame, fallback_count): チャンクのDataFrameと，
+                position_count_thresholdの影響を受けた局面数
+                (フォールバック適用数，drop_below_threshold時は除外数)
 
         Note:
             When delete_after_yield=True, processed records are deleted from
