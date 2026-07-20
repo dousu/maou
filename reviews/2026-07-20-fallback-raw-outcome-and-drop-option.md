@@ -1,7 +1,8 @@
 ---
 title: bestMoveWinRateフォールバック戦略の追加オプション化 (raw-outcome / drop-below-threshold)
 date: 2026-07-20
-status: pending
+status: applied
+applied_in: 248d17d
 target:
   - docs/commands/pre_process.md
   - docs/adr-005-move-win-rates.md
