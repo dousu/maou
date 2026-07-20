@@ -211,6 +211,8 @@ def transform(
     intermediate_batch_size: int = 50_000,
     position_count_threshold: int = 2,
     prior_strength: float = 5.0,
+    best_move_win_rate_fallback: str = "uniform",
+    drop_below_threshold: bool = False,
 ) -> str:
     """Transform HCPE data into neural network training features.
 
@@ -228,6 +230,15 @@ def transform(
         prior_strength: Beta prior strength for win rate smoothing.
             Applies ``(wins + prior) / (total + 2 * prior)`` to shrink
             low-count move win rates toward 50%. 0.0 disables smoothing.
+        best_move_win_rate_fallback: How to compute ``bestMoveWinRate`` for
+            positions below ``position_count_threshold``. ``"uniform"``
+            (default) records a neutral 0.5. ``"raw-outcome"`` records the
+            unsmoothed actual win/loss outcome instead, which can be an
+            extreme 0.0/1.0 for low-count positions. Ignored for positions
+            excluded via ``drop_below_threshold``.
+        drop_below_threshold: If True, positions with occurrence count below
+            ``position_count_threshold`` are excluded entirely from the
+            output instead of receiving a fallback value. (default: False)
 
     Returns:
         JSON string with processing results
@@ -254,6 +265,8 @@ def transform(
         intermediate_batch_size=intermediate_batch_size,
         position_count_threshold=position_count_threshold,
         prior_strength=prior_strength,
+        best_move_win_rate_fallback=best_move_win_rate_fallback,
+        drop_below_threshold=drop_below_threshold,
     ).transform(option)
 
     return json.dumps(pre_process_result)

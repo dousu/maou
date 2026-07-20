@@ -163,6 +163,8 @@ class PreProcess:
         intermediate_batch_size: int = 50_000,
         position_count_threshold: int = 2,
         prior_strength: float = 5.0,
+        best_move_win_rate_fallback: str = "uniform",
+        drop_below_threshold: bool = False,
     ):
         """Initialize pre-processor.
 
@@ -177,6 +179,11 @@ class PreProcess:
             prior_strength: Beta事前分布の強度パラメータ．
                 各手の勝率を ``(wins + prior_strength) / (total + 2 *
                 prior_strength)`` で平滑化する．0.0で平滑化なし．
+            best_move_win_rate_fallback: 閾値未満局面での ``bestMoveWinRate``
+                の算出方法．``"uniform"`` (デフォルト) は固定値0.5，
+                ``"raw-outcome"`` は平滑化なしの実勝敗をそのまま使う．
+            drop_below_threshold: True の場合，出現回数が
+                position_count_threshold 未満の局面を出力から完全に除外する．
         """
         self.__feature_store = feature_store
         self.__datasource = datasource
@@ -186,6 +193,10 @@ class PreProcess:
             position_count_threshold
         )
         self.__prior_strength = prior_strength
+        self.__best_move_win_rate_fallback = (
+            best_move_win_rate_fallback
+        )
+        self.__drop_below_threshold = drop_below_threshold
         self.intermediate_store = None
 
     @dataclass(kw_only=True, frozen=True)
@@ -593,6 +604,8 @@ class PreProcess:
             batch_size=self.__intermediate_batch_size,
             position_count_threshold=self.__position_count_threshold,
             prior_strength=self.__prior_strength,
+            best_move_win_rate_fallback=self.__best_move_win_rate_fallback,
+            drop_below_threshold=self.__drop_below_threshold,
         )
         self.logger.info(
             f"Initialized disk-based intermediate store at {db_path}"
