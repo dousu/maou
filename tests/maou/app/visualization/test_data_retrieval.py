@@ -390,6 +390,25 @@ class TestDataRetriever:
 class TestGetBySfen:
     """DataRetriever.get_by_sfenのテスト．"""
 
+    @pytest.fixture
+    def data_retriever(self, tmp_path: Path) -> DataRetriever:
+        """テスト用DataRetriever(hcpe/モックモード)を作成．"""
+        dummy_file = tmp_path / "test.feather"
+        dummy_file.touch()
+
+        search_index = SearchIndex.build(
+            file_paths=[dummy_file],
+            array_type="hcpe",
+            num_mock_records=100,
+            use_mock_data=True,
+        )
+        return DataRetriever(
+            search_index=search_index,
+            file_paths=[dummy_file],
+            array_type="hcpe",
+            load_df=lambda path: pl.read_ipc(path),
+        )
+
     def test_invalid_sfen_raises(
         self, data_retriever: DataRetriever
     ) -> None:
@@ -404,9 +423,7 @@ class TestGetBySfen:
         record = data_retriever.get_by_sfen(INITIAL_SFEN)
         assert record is None
 
-    def test_hcpe_real_data_hit(
-        self, tmp_path: Path
-    ) -> None:
+    def test_hcpe_real_data_hit(self, tmp_path: Path) -> None:
         """HCPE実データでSFENに一致するレコードを取得できる．"""
         target_board = Board()
         target_board.set_sfen(INITIAL_SFEN)
@@ -508,9 +525,7 @@ class TestGetBySfen:
                 "gameResult": pl.Series(
                     "gameResult", [1], dtype=pl.Int8
                 ),
-                "id": pl.Series(
-                    "id", ["pos_0"], dtype=pl.Utf8
-                ),
+                "id": pl.Series("id", ["pos_0"], dtype=pl.Utf8),
                 "partitioningKey": pl.Series(
                     "partitioningKey", [None], dtype=pl.Date
                 ),
@@ -696,9 +711,7 @@ class TestGetBySfen:
         record = retriever.get_by_sfen(INITIAL_SFEN)
         assert record is None
 
-    def test_stage2_real_data_hit(
-        self, tmp_path: Path
-    ) -> None:
+    def test_stage2_real_data_hit(self, tmp_path: Path) -> None:
         """Stage2データでSFENに一致するレコードをid経由で取得できる．"""
         board = Board()
         board.set_sfen(INITIAL_SFEN)
@@ -755,9 +768,7 @@ class TestGetBySfen:
         assert record is not None
         assert record["id"] == str(position_hash)
 
-    def test_stage1_real_data_hit(
-        self, tmp_path: Path
-    ) -> None:
+    def test_stage1_real_data_hit(self, tmp_path: Path) -> None:
         """Stage1データは合成idのため盤面配列の一致で検索する．"""
         board = Board()
         board.set_sfen(INITIAL_SFEN)
@@ -772,9 +783,7 @@ class TestGetBySfen:
         schema = get_stage1_polars_schema()
         df = pl.DataFrame(
             {
-                "id": pl.Series(
-                    "id", [12345], dtype=pl.UInt64
-                ),
+                "id": pl.Series("id", [12345], dtype=pl.UInt64),
                 "boardIdPositions": pl.Series(
                     "boardIdPositions",
                     [board_positions],
@@ -828,9 +837,7 @@ class TestGetBySfen:
         schema = get_stage1_polars_schema()
         df = pl.DataFrame(
             {
-                "id": pl.Series(
-                    "id", [99999], dtype=pl.UInt64
-                ),
+                "id": pl.Series("id", [99999], dtype=pl.UInt64),
                 "boardIdPositions": pl.Series(
                     "boardIdPositions",
                     [

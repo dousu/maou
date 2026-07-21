@@ -156,9 +156,7 @@ class DataRetriever:
             logger.exception(f"Failed to load record: {e}")
             return None
 
-    def get_by_sfen(
-        self, sfen: str
-    ) -> dict[str, Any] | None:
+    def get_by_sfen(self, sfen: str) -> dict[str, Any] | None:
         """SFEN文字列でレコードを検索．
 
         array_typeに応じて検索方法を切り替える:
