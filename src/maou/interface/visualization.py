@@ -131,6 +131,63 @@ class VisualizationInterface:
 
         return (board_svg, record_details)
 
+    def search_by_sfen(
+        self, sfen: str
+    ) -> tuple[str, dict[str, Any]]:
+        """SFENでレコードを検索し，ボードを描画．
+
+        Args:
+            sfen: 検索するSFEN文字列
+
+        Returns:
+            (board_svg, record_details)のタプル
+        """
+        if not sfen or not sfen.strip():
+            return (
+                self._render_empty_message(
+                    "SFENを入力してください"
+                ),
+                {},
+            )
+
+        try:
+            record = self.data_retriever.get_by_sfen(
+                sfen.strip()
+            )
+        except ValueError as e:
+            return (
+                self._render_empty_message(
+                    f"不正なSFEN文字列です: {e}"
+                ),
+                {
+                    "error": "Invalid SFEN",
+                    "searched_sfen": sfen,
+                },
+            )
+
+        if record is None:
+            return (
+                self._render_empty_message(
+                    f"SFEN '{sfen}' に一致するレコードが見つかりません"
+                ),
+                {
+                    "error": "Record not found",
+                    "searched_sfen": sfen,
+                },
+            )
+
+        # Rendererに委譲してボード描画と詳細抽出
+        board_svg = self.renderer.render_board(record)
+        record_details = self.renderer.extract_display_fields(
+            record
+        )
+
+        logger.info(
+            f"Successfully retrieved and rendered record by SFEN: {sfen}"
+        )
+
+        return (board_svg, record_details)
+
     def search_by_eval_range(
         self,
         min_eval: int | None,

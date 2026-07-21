@@ -1593,6 +1593,25 @@ class GradioVisualizationServer:
                             elem_id="id-search-btn",
                         )
 
+                    # SFEN検索
+                    with gr.Group():
+                        gr.Markdown("### SFEN検索")
+
+                        sfen_input = gr.Textbox(
+                            label="🔍 SFEN",
+                            placeholder=(
+                                "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/"
+                                "PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
+                            ),
+                            info="局面をSFEN文字列で指定して検索します",
+                            elem_id="sfen-search-input",
+                        )
+                        sfen_search_btn = gr.Button(
+                            "SFEN検索",
+                            variant="primary",
+                            elem_id="sfen-search-btn",
+                        )
+
                     # 評価値範囲検索（HCPEデータのみ）
                     if self.supports_eval_search:
                         with gr.Group():
@@ -1838,6 +1857,19 @@ class GradioVisualizationServer:
             id_search_btn.click(
                 fn=self._search_by_id,
                 inputs=[id_input],
+                outputs=[
+                    board_display,
+                    record_details,
+                    selected_record_id,
+                    record_indicator,
+                    prev_record_btn,
+                    next_record_btn,
+                ],
+            )
+
+            sfen_search_btn.click(
+                fn=self._search_by_sfen,
+                inputs=[sfen_input],
                 outputs=[
                     board_display,
                     record_details,
@@ -3052,6 +3084,84 @@ class GradioVisualizationServer:
                 gr.Button(interactive=False),
                 gr.Button(interactive=False),
             )
+
+    def _search_by_sfen(
+        self, sfen: str
+    ) -> tuple[
+        str, dict[str, Any], str, str, gr.Button, gr.Button
+    ]:
+        """SFEN検索のラッパー関数（viz_interfaceがNoneの場合をハンドリング）．
+
+        Args:
+            sfen: 検索するSFEN文字列
+
+        Returns:
+            (board_svg, record_details, selected_record_id,
+             record_indicator, prev_record_btn, next_record_btn)のタプル．
+            検索失敗時はboard_svg, record_details以外はgr.skip()を返す．
+        """
+        # Thread-safe access to viz_interface
+        with self._index_lock:
+            if not self.has_data or self.viz_interface is None:
+                board_svg, details = self._search_by_sfen_mock(
+                    sfen
+                )
+                return (
+                    board_svg,
+                    details,
+                    gr.skip(),
+                    gr.skip(),
+                    gr.skip(),
+                    gr.skip(),
+                )
+
+            board_svg, details = (
+                self.viz_interface.search_by_sfen(sfen)
+            )
+
+            # 検索失敗時（"error"キーの存在で判定）は状態を変更しない
+            if "error" in details:
+                return (
+                    board_svg,
+                    details,
+                    gr.skip(),
+                    gr.skip(),
+                    gr.skip(),
+                    gr.skip(),
+                )
+
+            # 検索成功: 該当レコードのIDを選択状態にし，ボタン無効化
+            record_id = str(details.get("id", sfen))
+            return (
+                board_svg,
+                details,
+                record_id,
+                "SFEN検索: 1/1",
+                gr.Button(interactive=False),
+                gr.Button(interactive=False),
+            )
+
+    def _search_by_sfen_mock(
+        self, sfen: str
+    ) -> tuple[str, dict[str, Any]]:
+        """SFEN検索のモック実装．
+
+        Args:
+            sfen: 検索するSFEN文字列
+
+        Returns:
+            (board_svg, record_details)のタプル
+        """
+        logger.info("Mock SFEN search: %s", sfen)
+
+        board_svg = self._get_default_board_svg()
+        record_details = {
+            "message": "SFEN検索機能は実装中です",
+            "searched_sfen": sfen,
+            "status": "mock",
+        }
+
+        return (board_svg, record_details)
 
     def _get_default_board_svg(self) -> str:
         """デフォルトの盤面SVGを生成（平手初期配置）．"""

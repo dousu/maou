@@ -11,7 +11,30 @@ from maou.domain.board.shogi import (
     Board,
     PieceId,
 )
+from maou.domain.data.rust_io import (
+    save_hcpe_df,
+    save_preprocessing_df,
+    save_stage1_df,
+    save_stage2_df,
+)
+from maou.domain.data.schema import (
+    get_hcpe_polars_schema,
+    get_preprocessing_polars_schema,
+    get_stage1_polars_schema,
+    get_stage2_polars_schema,
+)
 from maou.infra.visualization.search_index import SearchIndex
+from maou.interface.data_io import (
+    load_hcpe_df,
+    load_preprocessing_df,
+    load_stage1_df,
+    load_stage2_df,
+)
+
+INITIAL_SFEN = (
+    "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/"
+    "PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
+)
 
 
 class TestDataRetriever:
@@ -362,6 +385,499 @@ class TestDataRetriever:
                     f"White piece at (0, {col}) has ID {piece_id} "
                     f"< DOMAIN_WHITE_MIN ({DOMAIN_WHITE_MIN})"
                 )
+
+
+class TestGetBySfen:
+    """DataRetriever.get_by_sfenのテスト．"""
+
+    @pytest.fixture
+    def data_retriever(self, tmp_path: Path) -> DataRetriever:
+        """テスト用DataRetriever(hcpe/モックモード)を作成．"""
+        dummy_file = tmp_path / "test.feather"
+        dummy_file.touch()
+
+        search_index = SearchIndex.build(
+            file_paths=[dummy_file],
+            array_type="hcpe",
+            num_mock_records=100,
+            use_mock_data=True,
+        )
+        return DataRetriever(
+            search_index=search_index,
+            file_paths=[dummy_file],
+            array_type="hcpe",
+            load_df=lambda path: pl.read_ipc(path),
+        )
+
+    def test_invalid_sfen_raises(
+        self, data_retriever: DataRetriever
+    ) -> None:
+        """不正なSFEN文字列でValueErrorが発生する．"""
+        with pytest.raises(ValueError):
+            data_retriever.get_by_sfen("not a valid sfen")
+
+    def test_mock_mode_returns_none(
+        self, data_retriever: DataRetriever
+    ) -> None:
+        """モックモードのhcpeではSFEN検索は常にNoneを返す．"""
+        record = data_retriever.get_by_sfen(INITIAL_SFEN)
+        assert record is None
+
+    def test_hcpe_real_data_hit(self, tmp_path: Path) -> None:
+        """HCPE実データでSFENに一致するレコードを取得できる．"""
+        target_board = Board()
+        target_board.set_sfen(INITIAL_SFEN)
+        target_hcp = target_board.to_hcp()
+
+        # 別局面(初期局面から1手進めた局面)も混ぜて識別性を確認する
+        other_board = Board()
+        other_board.set_sfen(INITIAL_SFEN)
+        other_board.push_move(
+            next(iter(other_board.get_legal_moves()))
+        )
+        other_hcp = other_board.to_hcp()
+
+        schema = get_hcpe_polars_schema()
+        df = pl.DataFrame(
+            {
+                "hcp": pl.Series(
+                    "hcp",
+                    [other_hcp, target_hcp],
+                    dtype=pl.Binary,
+                ),
+                "eval": pl.Series(
+                    "eval", [0, 0], dtype=pl.Int16
+                ),
+                "bestMove16": pl.Series(
+                    "bestMove16", [0, 0], dtype=pl.Int16
+                ),
+                "gameResult": pl.Series(
+                    "gameResult", [1, 1], dtype=pl.Int8
+                ),
+                "id": pl.Series(
+                    "id",
+                    ["pos_other", "pos_target"],
+                    dtype=pl.Utf8,
+                ),
+                "partitioningKey": pl.Series(
+                    "partitioningKey",
+                    [None, None],
+                    dtype=pl.Date,
+                ),
+                "ratings": pl.Series(
+                    "ratings",
+                    [None, None],
+                    dtype=pl.List(pl.UInt16),
+                ),
+                "endgameStatus": pl.Series(
+                    "endgameStatus",
+                    [None, None],
+                    dtype=pl.Utf8,
+                ),
+                "moves": pl.Series(
+                    "moves", [0, 1], dtype=pl.Int16
+                ),
+            },
+            schema=schema,
+        )
+
+        file_path = tmp_path / "hcpe_real.feather"
+        save_hcpe_df(df, file_path)
+
+        search_index = SearchIndex.build(
+            file_paths=[file_path],
+            array_type="hcpe",
+            use_mock_data=False,
+        )
+        retriever = DataRetriever(
+            search_index=search_index,
+            file_paths=[file_path],
+            array_type="hcpe",
+            load_df=load_hcpe_df,
+        )
+
+        record = retriever.get_by_sfen(INITIAL_SFEN)
+
+        assert record is not None
+        assert record["id"] == "pos_target"
+
+    def test_hcpe_real_data_not_found(
+        self, tmp_path: Path
+    ) -> None:
+        """HCPE実データに一致局面がない場合はNoneを返す．"""
+        stored_board = Board()
+        stored_board.set_sfen(INITIAL_SFEN)
+        stored_board.push_move(
+            next(iter(stored_board.get_legal_moves()))
+        )
+        stored_hcp = stored_board.to_hcp()
+
+        schema = get_hcpe_polars_schema()
+        df = pl.DataFrame(
+            {
+                "hcp": pl.Series(
+                    "hcp", [stored_hcp], dtype=pl.Binary
+                ),
+                "eval": pl.Series("eval", [0], dtype=pl.Int16),
+                "bestMove16": pl.Series(
+                    "bestMove16", [0], dtype=pl.Int16
+                ),
+                "gameResult": pl.Series(
+                    "gameResult", [1], dtype=pl.Int8
+                ),
+                "id": pl.Series("id", ["pos_0"], dtype=pl.Utf8),
+                "partitioningKey": pl.Series(
+                    "partitioningKey", [None], dtype=pl.Date
+                ),
+                "ratings": pl.Series(
+                    "ratings",
+                    [None],
+                    dtype=pl.List(pl.UInt16),
+                ),
+                "endgameStatus": pl.Series(
+                    "endgameStatus", [None], dtype=pl.Utf8
+                ),
+                "moves": pl.Series(
+                    "moves", [0], dtype=pl.Int16
+                ),
+            },
+            schema=schema,
+        )
+
+        file_path = tmp_path / "hcpe_real.feather"
+        save_hcpe_df(df, file_path)
+
+        search_index = SearchIndex.build(
+            file_paths=[file_path],
+            array_type="hcpe",
+            use_mock_data=False,
+        )
+        retriever = DataRetriever(
+            search_index=search_index,
+            file_paths=[file_path],
+            array_type="hcpe",
+            load_df=load_hcpe_df,
+        )
+
+        # 初期局面は保存していないので見つからないはず
+        record = retriever.get_by_sfen(INITIAL_SFEN)
+        assert record is None
+
+    def test_preprocessing_real_data_hit(
+        self, tmp_path: Path
+    ) -> None:
+        """PreprocessingデータでSFENに一致するレコードをid経由で取得できる．"""
+        board = Board()
+        board.set_sfen(INITIAL_SFEN)
+        position_hash = board.hash()
+
+        board_positions = (
+            board.get_normalized_board_id_positions().tolist()
+        )
+        pieces_in_hand = (
+            board.get_normalized_pieces_in_hand().tolist()
+        )
+
+        from maou.domain.move.label import MOVE_LABELS_NUM
+
+        schema = get_preprocessing_polars_schema()
+        df = pl.DataFrame(
+            {
+                "id": pl.Series(
+                    "id", [position_hash], dtype=pl.UInt64
+                ),
+                "boardIdPositions": pl.Series(
+                    "boardIdPositions",
+                    [board_positions],
+                    dtype=pl.List(pl.List(pl.UInt8)),
+                ),
+                "piecesInHand": pl.Series(
+                    "piecesInHand",
+                    [pieces_in_hand],
+                    dtype=pl.List(pl.UInt8),
+                ),
+                "moveLabel": pl.Series(
+                    "moveLabel",
+                    [[0.0] * MOVE_LABELS_NUM],
+                    dtype=pl.List(pl.Float32),
+                ),
+                "moveWinRate": pl.Series(
+                    "moveWinRate",
+                    [[0.0] * MOVE_LABELS_NUM],
+                    dtype=pl.List(pl.Float32),
+                ),
+                "bestMoveWinRate": pl.Series(
+                    "bestMoveWinRate",
+                    [0.5],
+                    dtype=pl.Float32,
+                ),
+                "resultValue": pl.Series(
+                    "resultValue", [0.0], dtype=pl.Float32
+                ),
+            },
+            schema=schema,
+        )
+
+        file_path = tmp_path / "preprocessing_real.feather"
+        save_preprocessing_df(df, file_path)
+
+        search_index = SearchIndex.build(
+            file_paths=[file_path],
+            array_type="preprocessing",
+            use_mock_data=False,
+        )
+        retriever = DataRetriever(
+            search_index=search_index,
+            file_paths=[file_path],
+            array_type="preprocessing",
+            load_df=load_preprocessing_df,
+        )
+
+        record = retriever.get_by_sfen(INITIAL_SFEN)
+
+        assert record is not None
+        assert record["id"] == str(position_hash)
+
+    def test_preprocessing_real_data_not_found(
+        self, tmp_path: Path
+    ) -> None:
+        """Preprocessingデータに一致局面がない場合はNoneを返す．"""
+        stored_board = Board()
+        stored_board.set_sfen(INITIAL_SFEN)
+        stored_board.push_move(
+            next(iter(stored_board.get_legal_moves()))
+        )
+        stored_hash = stored_board.hash()
+
+        from maou.domain.move.label import MOVE_LABELS_NUM
+
+        schema = get_preprocessing_polars_schema()
+        df = pl.DataFrame(
+            {
+                "id": pl.Series(
+                    "id", [stored_hash], dtype=pl.UInt64
+                ),
+                "boardIdPositions": pl.Series(
+                    "boardIdPositions",
+                    [
+                        stored_board.get_normalized_board_id_positions().tolist()
+                    ],
+                    dtype=pl.List(pl.List(pl.UInt8)),
+                ),
+                "piecesInHand": pl.Series(
+                    "piecesInHand",
+                    [
+                        stored_board.get_normalized_pieces_in_hand().tolist()
+                    ],
+                    dtype=pl.List(pl.UInt8),
+                ),
+                "moveLabel": pl.Series(
+                    "moveLabel",
+                    [[0.0] * MOVE_LABELS_NUM],
+                    dtype=pl.List(pl.Float32),
+                ),
+                "moveWinRate": pl.Series(
+                    "moveWinRate",
+                    [[0.0] * MOVE_LABELS_NUM],
+                    dtype=pl.List(pl.Float32),
+                ),
+                "bestMoveWinRate": pl.Series(
+                    "bestMoveWinRate",
+                    [0.5],
+                    dtype=pl.Float32,
+                ),
+                "resultValue": pl.Series(
+                    "resultValue", [0.0], dtype=pl.Float32
+                ),
+            },
+            schema=schema,
+        )
+
+        file_path = tmp_path / "preprocessing_real.feather"
+        save_preprocessing_df(df, file_path)
+
+        search_index = SearchIndex.build(
+            file_paths=[file_path],
+            array_type="preprocessing",
+            use_mock_data=False,
+        )
+        retriever = DataRetriever(
+            search_index=search_index,
+            file_paths=[file_path],
+            array_type="preprocessing",
+            load_df=load_preprocessing_df,
+        )
+
+        record = retriever.get_by_sfen(INITIAL_SFEN)
+        assert record is None
+
+    def test_stage2_real_data_hit(self, tmp_path: Path) -> None:
+        """Stage2データでSFENに一致するレコードをid経由で取得できる．"""
+        board = Board()
+        board.set_sfen(INITIAL_SFEN)
+        position_hash = board.hash()
+
+        from maou.domain.move.label import MOVE_LABELS_NUM
+
+        schema = get_stage2_polars_schema()
+        df = pl.DataFrame(
+            {
+                "id": pl.Series(
+                    "id", [position_hash], dtype=pl.UInt64
+                ),
+                "boardIdPositions": pl.Series(
+                    "boardIdPositions",
+                    [
+                        board.get_normalized_board_id_positions().tolist()
+                    ],
+                    dtype=pl.List(pl.List(pl.UInt8)),
+                ),
+                "piecesInHand": pl.Series(
+                    "piecesInHand",
+                    [
+                        board.get_normalized_pieces_in_hand().tolist()
+                    ],
+                    dtype=pl.List(pl.UInt8),
+                ),
+                "legalMovesLabel": pl.Series(
+                    "legalMovesLabel",
+                    [[0] * MOVE_LABELS_NUM],
+                    dtype=pl.List(pl.UInt8),
+                ),
+            },
+            schema=schema,
+        )
+
+        file_path = tmp_path / "stage2_real.feather"
+        save_stage2_df(df, file_path)
+
+        search_index = SearchIndex.build(
+            file_paths=[file_path],
+            array_type="stage2",
+            use_mock_data=False,
+        )
+        retriever = DataRetriever(
+            search_index=search_index,
+            file_paths=[file_path],
+            array_type="stage2",
+            load_df=load_stage2_df,
+        )
+
+        record = retriever.get_by_sfen(INITIAL_SFEN)
+
+        assert record is not None
+        assert record["id"] == str(position_hash)
+
+    def test_stage1_real_data_hit(self, tmp_path: Path) -> None:
+        """Stage1データは合成idのため盤面配列の一致で検索する．"""
+        board = Board()
+        board.set_sfen(INITIAL_SFEN)
+        board_positions = (
+            board.get_normalized_board_id_positions().tolist()
+        )
+        pieces_in_hand = (
+            board.get_normalized_pieces_in_hand().tolist()
+        )
+        empty_reachable = [[0] * 9 for _ in range(9)]
+
+        schema = get_stage1_polars_schema()
+        df = pl.DataFrame(
+            {
+                "id": pl.Series("id", [12345], dtype=pl.UInt64),
+                "boardIdPositions": pl.Series(
+                    "boardIdPositions",
+                    [board_positions],
+                    dtype=pl.List(pl.List(pl.UInt8)),
+                ),
+                "piecesInHand": pl.Series(
+                    "piecesInHand",
+                    [pieces_in_hand],
+                    dtype=pl.List(pl.UInt8),
+                ),
+                "reachableSquares": pl.Series(
+                    "reachableSquares",
+                    [empty_reachable],
+                    dtype=pl.List(pl.List(pl.UInt8)),
+                ),
+            },
+            schema=schema,
+        )
+
+        file_path = tmp_path / "stage1_real.feather"
+        save_stage1_df(df, file_path)
+
+        search_index = SearchIndex.build(
+            file_paths=[file_path],
+            array_type="stage1",
+            use_mock_data=False,
+        )
+        retriever = DataRetriever(
+            search_index=search_index,
+            file_paths=[file_path],
+            array_type="stage1",
+            load_df=load_stage1_df,
+        )
+
+        record = retriever.get_by_sfen(INITIAL_SFEN)
+
+        assert record is not None
+        assert record["id"] == "12345"
+
+    def test_stage1_real_data_not_found(
+        self, tmp_path: Path
+    ) -> None:
+        """Stage1データに一致局面がない場合はNoneを返す．"""
+        stored_board = Board()
+        stored_board.set_sfen(INITIAL_SFEN)
+        stored_board.push_move(
+            next(iter(stored_board.get_legal_moves()))
+        )
+        empty_reachable = [[0] * 9 for _ in range(9)]
+
+        schema = get_stage1_polars_schema()
+        df = pl.DataFrame(
+            {
+                "id": pl.Series("id", [99999], dtype=pl.UInt64),
+                "boardIdPositions": pl.Series(
+                    "boardIdPositions",
+                    [
+                        stored_board.get_normalized_board_id_positions().tolist()
+                    ],
+                    dtype=pl.List(pl.List(pl.UInt8)),
+                ),
+                "piecesInHand": pl.Series(
+                    "piecesInHand",
+                    [
+                        stored_board.get_normalized_pieces_in_hand().tolist()
+                    ],
+                    dtype=pl.List(pl.UInt8),
+                ),
+                "reachableSquares": pl.Series(
+                    "reachableSquares",
+                    [empty_reachable],
+                    dtype=pl.List(pl.List(pl.UInt8)),
+                ),
+            },
+            schema=schema,
+        )
+
+        file_path = tmp_path / "stage1_real.feather"
+        save_stage1_df(df, file_path)
+
+        search_index = SearchIndex.build(
+            file_paths=[file_path],
+            array_type="stage1",
+            use_mock_data=False,
+        )
+        retriever = DataRetriever(
+            search_index=search_index,
+            file_paths=[file_path],
+            array_type="stage1",
+            load_df=load_stage1_df,
+        )
+
+        record = retriever.get_by_sfen(INITIAL_SFEN)
+        assert record is None
 
 
 class TestPreprocessingMockData:

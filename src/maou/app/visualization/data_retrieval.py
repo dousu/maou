@@ -156,6 +156,129 @@ class DataRetriever:
             logger.exception(f"Failed to load record: {e}")
             return None
 
+    def get_by_sfen(self, sfen: str) -> dict[str, Any] | None:
+        """SFEN文字列でレコードを検索．
+
+        array_typeに応じて検索方法を切り替える:
+        - preprocessing/stage2: idカラムがZobristハッシュのため，
+          Board.hash()を計算してget_by_id経由でO(1)検索する．
+        - hcpe: idが局面と無関係な文字列のため，各ファイルのhcp列を
+          Rustの一括ハッシュ計算(hcp_hashes)でスキャンする．
+        - stage1: idが合成値(局面ハッシュではない)のため，
+          正規化済み盤面配列を直接比較して線形探索する．
+
+        Args:
+            sfen: 検索するSFEN文字列
+
+        Returns:
+            レコードデータの辞書，見つからない場合はNone
+
+        Raises:
+            ValueError: 不正なSFEN文字列の場合
+        """
+        from maou.domain.board.shogi import Board
+
+        board = Board()
+        board.set_sfen(sfen)
+
+        if self.array_type in ("preprocessing", "stage2"):
+            return self.get_by_id(str(board.hash()))
+
+        if self.search_index.use_mock_data:
+            logger.debug(
+                f"⚠️  MOCK: SFEN search is not supported in mock mode: {sfen}"
+            )
+            return None
+
+        if self.array_type == "hcpe":
+            return self._search_hcpe_by_hash(board.hash())
+
+        if self.array_type == "stage1":
+            return self._search_by_normalized_board(
+                board.get_normalized_board_id_positions().tolist(),
+                board.get_normalized_pieces_in_hand().tolist(),
+            )
+
+        return None
+
+    def _search_hcpe_by_hash(
+        self, target_hash: int
+    ) -> dict[str, Any] | None:
+        """全HCPEファイルをZobristハッシュで一括検索する．
+
+        Rustの一括ハッシュ計算(hcp_hashes)でファイル単位にベクトル化して
+        一致行を探す(1行ずつPythonでHCPをデコードするより高速)．
+
+        Args:
+            target_hash: 検索対象局面のZobristハッシュ値
+
+        Returns:
+            一致したレコードの辞書，見つからない場合はNone
+        """
+        import numpy as np
+
+        from maou._rust.maou_search import hcp_hashes
+
+        for file_index in range(len(self.file_paths)):
+            df = self._load_df_cached(file_index)
+            if "hcp" not in df.columns or df.height == 0:
+                continue
+
+            hcp_bytes_list = df["hcp"].to_list()
+            hcps = np.frombuffer(
+                b"".join(hcp_bytes_list), dtype=np.uint8
+            ).reshape(-1, 32)
+            hashes = hcp_hashes(hcps)
+
+            matches = np.nonzero(hashes == target_hash)[0]
+            if len(matches) > 0:
+                row_number = int(matches[0])
+                return self._extract_record_from_df(
+                    df, row_number
+                )
+
+        return None
+
+    def _search_by_normalized_board(
+        self,
+        target_board: list[list[int]],
+        target_hand: list[int],
+    ) -> dict[str, Any] | None:
+        """手番正規化済みの盤面配列でレコードを線形探索する(Stage1用)．
+
+        Stage1のidは局面ハッシュではなく合成値のため，ハッシュベースの
+        高速パスが使えず，盤面配列を直接比較する．
+
+        Args:
+            target_board: 手番正規化済み9x9駒ID配列
+            target_hand: 手番正規化済み持ち駒配列(14要素)
+
+        Returns:
+            一致したレコードの辞書，見つからない場合はNone
+        """
+        for file_index in range(len(self.file_paths)):
+            df = self._load_df_cached(file_index)
+            if (
+                "boardIdPositions" not in df.columns
+                or "piecesInHand" not in df.columns
+            ):
+                continue
+
+            board_col = df["boardIdPositions"].to_list()
+            hand_col = df["piecesInHand"].to_list()
+            for row_number, (board_val, hand_val) in enumerate(
+                zip(board_col, hand_col)
+            ):
+                if (
+                    board_val == target_board
+                    and hand_val == target_hand
+                ):
+                    return self._extract_record_from_df(
+                        df, row_number
+                    )
+
+        return None
+
     def get_by_eval_range(
         self,
         min_eval: int | None,

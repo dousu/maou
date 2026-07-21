@@ -113,6 +113,10 @@ maou visualize --input-path data.feather --array-type stage1 --share
 ### 検索機能
 
 - **ID検索**: レコードIDで直接検索
+- **SFEN検索**: SFEN文字列で局面を指定して検索．データIDから該当局面を探すのが困難な場合に使用する
+  - `preprocessing`/`stage2`: idカラムが局面のZobristハッシュのため高速に検索する
+  - `hcpe`: 各ファイルのHCPデータを一括ハッシュ計算してスキャンする
+  - `stage1`: 手番正規化済みの盤面配列を直接比較して検索する（idは局面と無関係な合成値のため）
 - **評価値範囲検索**: HCPEデータのみ対応
 
 ### 検索結果タブ
