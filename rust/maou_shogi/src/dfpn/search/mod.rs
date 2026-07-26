@@ -794,14 +794,21 @@ impl DfPnSolver {
                     )
                 }
                 Some(d) => {
-                    eprintln!(
-                        "[dfpn] STRICT VERIFY Some({}) (root mate_len={}, budget_left={}, wall={:.2}s, tier={})",
-                        d,
-                        last.len().len(),
-                        budget,
-                        verify_wall.as_secs_f64(),
-                        tier
-                    );
+                    // 成功時の診断は DFPN_STATS gate 下 (他の統計と同じ扱い)．leaf-mate 統合
+                    // 探索では 1 手あたり数千回 solve が走り，proven のたびに出すと stderr が
+                    // 溢れて自己対局の進捗行や A/B サマリを流し去ってしまう (実測: 24 局で
+                    // 数万行)．偽証明・budget 枯渇の警告 (下の None 分岐) は soundness の
+                    // アラームなので gate しない．
+                    if dfpn_stats_enabled() {
+                        eprintln!(
+                            "[dfpn] STRICT VERIFY Some({}) (root mate_len={}, budget_left={}, wall={:.2}s, tier={})",
+                            d,
+                            last.len().len(),
+                            budget,
+                            verify_wall.as_secs_f64(),
+                            tier
+                        );
+                    }
                     // PV は pv_choice (verify が記録した無駄合い除外後の最適手) を辿って復元済．
                     // 最短確定手順は result 側の moves に入るため best_mate は空．
                     (
