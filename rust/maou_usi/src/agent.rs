@@ -800,12 +800,23 @@ where
     /// 外れた場合は prefix 照合が二度と一致しないため「以後無効化」を状態
     /// なしで満たす (gameover を送らない GUI の連続対局でも自己回復する)．
     /// script 手が非合法・局面が再現不能なら `None` (安全側)．
+    ///
+    /// さらに**基準局面が対局開始局面 (手数 1) であること**を要求する．
+    /// script は「対局の 1 手目から」の手順なので，指定局面方式 (電竜戦
+    /// HWT/TSEC) で手順消化後の局面を手数付きで渡された場合に script が
+    /// 再発火してはならない — 玉往復 script では屈伸を無限に繰り返して
+    /// しまう (基準局面 = 屈伸後の平手同型なので合法性検査は通ってしまう)．
     fn scripted_move(&self) -> Option<String> {
         let script = self.config.opening_script.as_deref()?;
         let tokens: Vec<&str> = script.split_whitespace().collect();
         let played = self.game.moves.len();
         if played >= tokens.len() {
             return None; // script 消化済み
+        }
+        // 基準局面の手数 (= 現在手数 − 経路長) が 1 = 対局開始局面から
+        // 完全な経路を渡されている場合のみ script を適用する
+        if self.game.move_number() != 1 + played as u64 {
+            return None;
         }
         if !self
             .game
@@ -1456,18 +1467,80 @@ mod tests {
         moves: &[&str],
         params: GoParams,
     ) -> (Vec<EngineCommand>, usize) {
+        go_with_script_from(script, None, moves, params)
+    }
+
+    /// 基準局面 SFEN も指定できる版 (指定局面方式の検証用)．
+    fn go_with_script_from(
+        script: &str,
+        sfen: Option<&str>,
+        moves: &[&str],
+        params: GoParams,
+    ) -> (Vec<EngineCommand>, usize) {
         let (mut agent, calls) = agent_with_fake(default_outcome());
         agent.handle(GuiCommand::IsReady).unwrap();
         set(&mut agent, "OpeningScript", script);
         agent
             .handle(GuiCommand::Position {
-                sfen: None,
+                sfen: sfen.map(str::to_string),
                 moves: moves.iter().map(|s| s.to_string()).collect(),
             })
             .unwrap();
         let out = agent.handle(GuiCommand::Go(params)).unwrap();
         let n = calls.borrow().len();
         (out, n)
+    }
+
+    /// 電竜戦 HWT の先手時間ハンデ手順 (玉の屈伸 4 手)．
+    const HWT_SHUFFLE: &str = "5i5h 5a5b 5h5i 5b5a";
+
+    #[test]
+    fn test_opening_script_hwt_shuffle_both_sides() {
+        // 先手番・後手番のどちらでも手順どおりの手を探索なしで即指しする
+        for (played, expected) in [
+            (&[][..], "5i5h"),
+            (&["5i5h"][..], "5a5b"),
+            (&["5i5h", "5a5b"][..], "5h5i"),
+            (&["5i5h", "5a5b", "5h5i"][..], "5b5a"),
+        ] {
+            let (out, n) = go_with_script(HWT_SHUFFLE, played, GoParams::default());
+            assert_eq!(n, 0, "{played:?} で探索が走った");
+            assert!(
+                matches!(
+                    out.last(),
+                    Some(EngineCommand::BestMove { mv: BestMoveKind::Move(m), .. }) if m == expected
+                ),
+                "{played:?} → {expected} を期待: {out:?}"
+            );
+        }
+        // 4 手消化後は通常探索に戻る
+        let (_, n) = go_with_script(
+            HWT_SHUFFLE,
+            &["5i5h", "5a5b", "5h5i", "5b5a"],
+            GoParams::default(),
+        );
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn test_opening_script_not_refired_from_designated_position() {
+        // 指定局面方式 (電竜戦 HWT/TSEC): 屈伸後の局面が「手数 5・経路なし」で
+        // 渡される．盤面は平手と同型なので script 手は合法だが，ここで再発火
+        // すると玉の屈伸を無限に繰り返してしまう → 通常探索でなければならない
+        let post_shuffle = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 5";
+        let (out, n) =
+            go_with_script_from(HWT_SHUFFLE, Some(post_shuffle), &[], GoParams::default());
+        assert_eq!(n, 1, "指定局面では script を再発火させない");
+        assert!(matches!(
+            out.last(),
+            Some(EngineCommand::BestMove { mv: BestMoveKind::Move(m), .. }) if m == "7g7f"
+        ));
+
+        // 同じ基準局面でも「手数 1」で渡されたら script は有効 (指定局面から
+        // 始まる対局に対して 1 手目から手順を課すケース)
+        let ply1 = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
+        let (_, n) = go_with_script_from(HWT_SHUFFLE, Some(ply1), &[], GoParams::default());
+        assert_eq!(n, 0);
     }
 
     #[test]

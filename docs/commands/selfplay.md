@@ -53,7 +53,7 @@
 | `--draw-value-white INT` | default `500` | Draw value for White in permille (Denryu-sen `600`). |
 | `--resign-value INT` | default `0` | Resign when the root win rate stays below this permille for `--resign-consecutive` moves (`0` = never). |
 | `--resign-consecutive INT` | default `3` | Consecutive below-threshold moves required to resign. |
-| `--opening-script "MOVES"` | | Forced opening move sequence in USI notation, applied to both agents. |
+| `--opening-script "MOVES"` | | Forced opening move sequence in USI notation, applied to both agents (only when `--sfen` is a move-1 position — see [`usi.md`](usi.md)). |
 | `--root-dfpn/--no-root-dfpn` | **default on** | Root-parallel dfpn mate search. |
 | `--root-dfpn-nodes INT` | default `2000000` | Node budget for the root dfpn mate search. |
 | `--root-dfpn-depth INT` | default `2047` | Depth limit for the root dfpn mate search. |

@@ -78,7 +78,7 @@
 | `--resign-consecutive INT` | default `3` | Consecutive below-threshold moves required to resign (with `--resign-value > 0`). |
 | `--max-moves-to-draw INT` | default `0` | Move count for a drawn game (`0` = disabled; Denryu-sen `512`). At/near the limit the engine always checks nyugyoku declaration and narrows its search budget; positions past the limit are treated as draws inside the search. |
 | `--usi-ponder/--no-usi-ponder` | **default on** | Enable pondering (thinking on the opponent's turn). When on, the engine declares `USI_Ponder` and appends the predicted reply to `bestmove` so the GUI sends `go ponder`. |
-| `--opening-script "MOVES"` | | Forced opening move sequence in USI notation, space-separated (e.g. `"5i5h 5a5b 5h5i 5b5a"` for the HWT king-shuffle handicap). While the game path matches this prefix the engine plays the next scripted move instantly without searching. |
+| `--opening-script "MOVES"` | | Forced opening move sequence in USI notation, space-separated (e.g. `"5i5h 5a5b 5h5i 5b5a"` for the HWT king-shuffle handicap). While the game path matches this prefix the engine plays the next scripted move instantly without searching (no clock time spent, no `ponder` attached). Requires the full game path from move 1: if the engine is handed a position whose move number is already past the script (e.g. a designated position set up *after* the shuffle), the script stays disabled instead of replaying the sequence. |
 | `--root-dfpn/--no-root-dfpn` | **default on** | Run dfpn mate search on the root position in parallel with MCTS. |
 | `--root-dfpn-nodes INT` | default `2000000` | Node budget for the root dfpn mate search. |
 | `--root-dfpn-depth INT` | default `2047` | Search depth limit for the root dfpn mate search (max 2047). |
