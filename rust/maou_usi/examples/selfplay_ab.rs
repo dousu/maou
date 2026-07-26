@@ -15,6 +15,9 @@
 //! - `--mode budget`: A = `--playouts` / B = `--playouts-b` (既定 A の 1/8)．
 //!   **ハーネスの健全性確認** — 予算の多い側が勝たなければ，この driver で
 //!   棋力差を測ること自体が成立していない (レバーの A/B より前に通すべき検証)
+//! - `--mode horizon`: 持ち時間モードで TimeStrategy の想定残り手数を A/B
+//!   (`--horizon` vs `--horizon-b`)．設計 §12 未決 1 の調整用．時計は
+//!   `--clock-ms` / `--byoyomi-ms` / `--inc-ms`．壁時計を測るので parallel=1
 
 use maou_usi::selfplay::{run_selfplay, GameOutcome, SelfplayConfig};
 use maou_usi::EngineConfig;
@@ -56,8 +59,15 @@ fn main() {
     let draw_white: u32 = arg_value(&args, "--draw-value-white").unwrap_or(500);
     let out: Option<String> = arg_value(&args, "--out");
 
+    // 持ち時間モード (--mode horizon) の時計設定
+    let clock_ms: u64 = arg_value(&args, "--clock-ms").unwrap_or(30_000);
+    let byoyomi_ms: u64 = arg_value(&args, "--byoyomi-ms").unwrap_or(0);
+    let inc_ms: u64 = arg_value(&args, "--inc-ms").unwrap_or(500);
+    let horizon_a: u64 = arg_value(&args, "--horizon").unwrap_or(40);
+    let horizon_b: u64 = arg_value(&args, "--horizon-b").unwrap_or(25);
+
     // 共通ベース: 詰み探索 off (両者同条件の純 MCTS で速く回す)
-    let base = EngineConfig {
+    let mut base = EngineConfig {
         model_path: model,
         node_capacity: Some(node_capacity),
         resign_value,
@@ -68,6 +78,8 @@ fn main() {
         leaf_mate: Some(false),
         ..EngineConfig::default()
     };
+    // 自己対局に伝送遅延はない (持ち時間モードで margin を引かない)
+    base.time.network_delay_ms = 0;
 
     // 予算差モードのみ B の playout を変える (既定は A の 1/8)
     let playouts_b_opt: Option<u64> = if mode == "budget" {
@@ -95,11 +107,24 @@ fn main() {
         }
         // A/B の設定は同一で探索予算だけを変える (ハーネスの健全性確認)
         "budget" => (base.clone(), base.clone(), true),
+        // 持ち時間モードで TimeStrategy の想定残り手数だけを変える (未決 1)
+        "horizon" => {
+            let mut a = base.clone();
+            a.time.horizon_moves = horizon_a;
+            let mut b = base.clone();
+            b.time.horizon_moves = horizon_b;
+            (a, b, true)
+        }
         other => {
-            eprintln!("unknown --mode {other} (subtree | maxmoves | budget)");
+            eprintln!("unknown --mode {other} (subtree | maxmoves | budget | horizon)");
             std::process::exit(2);
         }
     };
+    let clock = (mode == "horizon").then_some(maou_usi::selfplay::ClockSetting {
+        initial_ms: clock_ms,
+        byoyomi_ms,
+        inc_ms,
+    });
 
     let config = SelfplayConfig {
         engine: engine_a,
@@ -109,10 +134,12 @@ fn main() {
         sfen: None,
         games,
         parallel,
-        playouts: Some(playouts),
+        // 持ち時間モードでは playout 予算を渡さない (時計から算出させる)
+        playouts: clock.is_none().then_some(playouts),
         movetime_ms: None,
         playouts_b: playouts_b_opt,
         movetime_ms_b: None,
+        clock,
         max_moves,
         opening_random_plies: random_plies,
         seed,
@@ -206,10 +233,16 @@ fn main() {
     }
 
     println!("mode: {mode} (A = lever on, B = off)");
-    println!(
-        "games: {games}, playouts/move: A {playouts} / B {}, random plies: {random_plies}, max moves: {max_moves}, seed: {seed}",
-        playouts_b_opt.unwrap_or(playouts),
-    );
+    match clock {
+        Some(c) => println!(
+            "games: {games}, clock: {}ms + {}ms/move (byoyomi {}ms), horizon: A {horizon_a} / B {horizon_b}, random plies: {random_plies}, max moves: {max_moves}, seed: {seed}",
+            c.initial_ms, c.inc_ms, c.byoyomi_ms,
+        ),
+        None => println!(
+            "games: {games}, playouts/move: A {playouts} / B {}, random plies: {random_plies}, max moves: {max_moves}, seed: {seed}",
+            playouts_b_opt.unwrap_or(playouts),
+        ),
+    }
     println!("A result: {wins}W {draws}D {losses}L");
     println!(
         "A score: {:.1}/{} = {:.1}% (Wilson 95% CI [{:.1}%, {:.1}%])",

@@ -64,6 +64,10 @@ pub struct SelfplayConfig {
     pub playouts_b: Option<u64>,
     /// プレイヤー B の思考時間ミリ秒 (`None` = A と同じ)．
     pub movetime_ms_b: Option<u64>,
+    /// 持ち時間モード (`Some` = 実際の時計を回して TimeStrategy に予算を
+    /// 決めさせる)．playouts/movetime とは排他，`parallel > 1` とも排他
+    /// (壁時計を測るため)．TimeStrategy の定数調整に使う (設計 §12 未決 1)．
+    pub clock: Option<ClockSetting>,
     /// 最大手数 (到達で引き分け．到達局面で宣言可能なら手番の勝ち — 電竜戦
     /// ルール)．エージェントの `MaxMovesToDraw` にも同じ値が渡る．
     pub max_moves: u32,
@@ -88,11 +92,27 @@ impl Default for SelfplayConfig {
             movetime_ms: None,
             playouts_b: None,
             movetime_ms_b: None,
+            clock: None,
             max_moves: 512,
             opening_random_plies: 0,
             seed: 0,
         }
     }
+}
+
+/// 自己対局の持ち時間設定 (USI の `go` に渡す clock をシミュレートする)．
+///
+/// 実測の消費時間を残時間から引くため，**壁時計に依存する** — 同時対局
+/// (`parallel > 1`) では CPU 競合で消費時間が歪むので併用できない．
+/// TimeStrategy の定数調整 (設計 §12 未決 1) はこのモードで行う．
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClockSetting {
+    /// 各側の初期持ち時間 (ミリ秒)．
+    pub initial_ms: u64,
+    /// 秒読み (ミリ秒，0 = なし)．
+    pub byoyomi_ms: u64,
+    /// 1 手ごとのフィッシャー加算 (ミリ秒，0 = なし)．
+    pub inc_ms: u64,
 }
 
 /// 終局理由．
@@ -112,6 +132,8 @@ pub enum GameEndReason {
     MaxMoves,
     /// 非合法手または不成立の宣言 (指した側の負け．エージェントのバグ指標)．
     IllegalMove,
+    /// 時間切れ (持ち時間モードのみ．負けた側は時間管理が破綻している)．
+    Timeout,
 }
 
 impl GameEndReason {
@@ -125,6 +147,7 @@ impl GameEndReason {
             GameEndReason::PerpetualCheck => "perpetual_check",
             GameEndReason::MaxMoves => "max_moves",
             GameEndReason::IllegalMove => "illegal_move",
+            GameEndReason::Timeout => "timeout",
         }
     }
 }
@@ -186,9 +209,13 @@ pub fn run_selfplay(
     if config.max_moves == 0 {
         return Err("max_moves は 1 以上".to_string());
     }
-    match (config.playouts, config.movetime_ms) {
-        (Some(_), None) | (None, Some(_)) => {}
-        _ => return Err("playouts か movetime_ms のどちらか一方を指定".to_string()),
+    match (config.playouts, config.movetime_ms, config.clock) {
+        (Some(_), None, None) | (None, Some(_), None) | (None, None, Some(_)) => {}
+        _ => return Err("playouts / movetime_ms / clock のいずれか 1 つだけを指定".to_string()),
+    }
+    if config.clock.is_some() && config.parallel > 1 {
+        // 消費時間を壁時計で測るため，同時対局の CPU 競合で歪む
+        return Err("持ち時間モードは parallel=1 でのみ使える".to_string());
     }
     let sfen = config
         .sfen
@@ -256,6 +283,7 @@ pub fn run_selfplay(
                     &evaluator,
                     &sfen,
                     &go_params,
+                    config.clock,
                     config.max_moves,
                     config.opening_random_plies,
                     config.seed,
@@ -293,6 +321,7 @@ fn play_game(
     evaluator: &Arc<EngineEvaluator>,
     sfen: &str,
     go_params: &[GoParams; 2],
+    clock: Option<ClockSetting>,
     max_moves: u32,
     opening_random_plies: u32,
     seed: u64,
@@ -334,6 +363,8 @@ fn play_game(
     let mut playouts: u64 = 0;
     let mut reused_moves: u32 = 0;
     let mut carried_visits: u64 = 0;
+    // 持ち時間モードの残時間 (先手, 後手)．非該当モードでは使わない
+    let mut remaining = clock.map(|c| [c.initial_ms, c.initial_ms]);
     let (winner, reason) = loop {
         // 最大手数: 到達局面で宣言可能なら手番の勝ち，さもなくば引き分け
         // (電竜戦ルール．最大手数時の詰みも引き分け)
@@ -363,9 +394,38 @@ fn play_game(
                     moves: moves.clone(),
                 })
                 .map_err(|e| format!("game {game_index}: position 失敗: {e}"))?;
+            // 持ち時間モードでは現在の残時間を go に載せ，消費を実測する
+            let go = match (clock, remaining) {
+                (Some(c), Some(rem)) => GoParams {
+                    clock: crate::protocol::ClockParams {
+                        btime: Some(rem[0]),
+                        wtime: Some(rem[1]),
+                        byoyomi: (c.byoyomi_ms > 0).then_some(c.byoyomi_ms),
+                        binc: (c.inc_ms > 0).then_some(c.inc_ms),
+                        winc: (c.inc_ms > 0).then_some(c.inc_ms),
+                    },
+                    ..GoParams::default()
+                },
+                _ => go.clone(),
+            };
+            let move_started = Instant::now();
             let out = agent
-                .handle(GuiCommand::Go(go.clone()))
+                .handle(GuiCommand::Go(go))
                 .map_err(|e| format!("game {game_index}: go 失敗: {e}"))?;
+            // 時計の更新 (消費 → 秒読み/加算)．使い切ったら時間切れ負け
+            if let (Some(c), Some(rem)) = (clock, remaining.as_mut()) {
+                let idx = usize::from(side == Color::White);
+                let spent = move_started.elapsed().as_millis() as u64;
+                if spent <= rem[idx] {
+                    rem[idx] -= spent;
+                } else if spent <= rem[idx] + c.byoyomi_ms {
+                    // 秒読みで賄えた (持ち時間は使い切る)
+                    rem[idx] = 0;
+                } else {
+                    break (Some(side.opponent()), GameEndReason::Timeout);
+                }
+                rem[idx] += c.inc_ms;
+            }
             // 探索サマリ info (最後の nodes 付き info) から playout を集計する
             playouts += out
                 .iter()
@@ -665,6 +725,64 @@ mod tests {
             "A/B 予算差が playout 合計に出るはず: {}",
             o.playouts
         );
+    }
+
+    #[test]
+    fn test_selfplay_clock_mode_runs_and_consumes_time() {
+        // 持ち時間モード: 時計から予算が決まり，時間切れせずに終局する
+        let mut cfg = config(1, 16, 10);
+        cfg.playouts = None;
+        cfg.clock = Some(ClockSetting {
+            initial_ms: 2_000,
+            byoyomi_ms: 0,
+            inc_ms: 50,
+        });
+        let outcomes = run_selfplay(&cfg, None).expect("成功");
+        let o = &outcomes[0];
+        assert_eq!(o.reason, GameEndReason::MaxMoves, "{:?}", o.reason);
+        assert!(o.playouts > 0, "時計由来の予算で探索している");
+    }
+
+    #[test]
+    fn test_selfplay_clock_mode_rejects_parallel_and_budget_mix() {
+        let mut cfg = config(2, 16, 10);
+        cfg.playouts = None;
+        cfg.parallel = 2;
+        cfg.clock = Some(ClockSetting {
+            initial_ms: 1_000,
+            byoyomi_ms: 0,
+            inc_ms: 10,
+        });
+        assert!(
+            run_selfplay(&cfg, None).is_err(),
+            "壁時計計測なので並列は不可"
+        );
+        // playouts と clock の同時指定も不可 (予算の出所が二重になる)
+        let mut cfg = config(1, 16, 10);
+        cfg.clock = Some(ClockSetting {
+            initial_ms: 1_000,
+            byoyomi_ms: 0,
+            inc_ms: 10,
+        });
+        assert!(run_selfplay(&cfg, None).is_err());
+    }
+
+    #[test]
+    fn test_selfplay_clock_timeout_is_a_loss() {
+        // 実質ゼロ秒の持ち時間 + 秒読みなし → 最低思考時間を使った時点で
+        // 時間切れになり，相手の勝ちになる (時間管理破綻の検出経路)
+        let mut cfg = config(1, 16, 40);
+        cfg.playouts = None;
+        cfg.engine.time.min_think_ms = 50;
+        cfg.clock = Some(ClockSetting {
+            initial_ms: 1,
+            byoyomi_ms: 0,
+            inc_ms: 0,
+        });
+        let outcomes = run_selfplay(&cfg, None).expect("成功");
+        let o = &outcomes[0];
+        assert_eq!(o.reason, GameEndReason::Timeout);
+        assert_eq!(o.winner, Some(Color::White), "先手が時間切れ");
     }
 
     #[test]
