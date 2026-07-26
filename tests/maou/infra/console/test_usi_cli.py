@@ -283,32 +283,56 @@ def test_usi_stop_responds_quickly() -> None:
         stderr=subprocess.PIPE,
         text=True,
     )
-    assert proc.stdin is not None
+    assert proc.stdin is not None and proc.stdout is not None
+    lines: list[str] = []
     try:
+        # readyok を待ってから go infinite を送る．固定 sleep で「起動済み」を
+        # 仮定すると，起動が遅い構成 (onnx を静的リンクした release 拡張は
+        # import だけで数秒かかる) で stop が探索開始前に消費され，0-playout
+        # 経路の起動時間を測ってしまう
         proc.stdin.write(
             "usi\n"
             "setoption name RootDfpn value false\n"
             "setoption name LeafMate value false\n"
             "setoption name NodeCapacity value 16384\n"
             "isready\n"
-            "position startpos\n"
-            "go infinite\n"
         )
+        proc.stdin.flush()
+        for line in proc.stdout:
+            lines.append(line.rstrip("\n"))
+            if line.startswith("readyok"):
+                break
+        assert "readyok" in lines, "readyok が返らない"
+
+        proc.stdin.write("position startpos\ngo infinite\n")
         proc.stdin.flush()
         time.sleep(1.5)  # 無期限探索を回しておく
         stopped_at = time.monotonic()
-        proc.stdin.write("stop\nquit\n")
+        proc.stdin.write("stop\n")
+        proc.stdin.flush()
+        for line in proc.stdout:
+            lines.append(line.rstrip("\n"))
+            if line.startswith("bestmove "):
+                break
+        elapsed = time.monotonic() - stopped_at
+        proc.stdin.write("quit\n")
         proc.stdin.flush()
         proc.wait(timeout=15)
-        elapsed = time.monotonic() - stopped_at
     finally:
         if proc.poll() is None:
             proc.kill()
     assert proc.returncode == 0
-    # stop 即応 (mock 評価器なら実測ミリ秒オーダ．CI 余裕を見た緩い上限)
-    assert elapsed < 5.0, f"stop から終了まで {elapsed:.1f}s"
-    stdout = proc.stdout.read() if proc.stdout else ""
-    assert any(
-        line.startswith("bestmove ")
-        for line in stdout.splitlines()
+    # stop 即応 (バックエンドの監視間隔 100ms + 余裕．設計 doc §7 は 100ms 目標)
+    assert elapsed < 5.0, (
+        f"stop から bestmove まで {elapsed:.1f}s"
+    )
+    assert any(line.startswith("bestmove ") for line in lines)
+    # 実際に探索が回っていたこと (0-playout 経路で測っていない証拠)
+    nodes = [
+        int(line.split(" nodes ")[1].split()[0])
+        for line in lines
+        if line.startswith("info ") and " nodes " in line
+    ]
+    assert nodes and max(nodes) > 0, (
+        f"探索が回っていない: {lines[-5:]}"
     )
