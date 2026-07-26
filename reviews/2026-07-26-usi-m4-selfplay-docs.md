@@ -1,7 +1,8 @@
 ---
 title: USI M4 (selfplay / OpeningScript / MaxMovesToDraw in-search) のドキュメント反映
 date: 2026-07-26
-status: pending
+status: applied
+applied_in: d3cf1fb (commands docs) / 7c221d3 (design 節ステータス追記)
 target:
   - docs/commands/selfplay.md
   - docs/commands/usi.md
