@@ -264,6 +264,31 @@ impl Node {
     }
 }
 
+/// [`Node`] 本体のバイト数 (プールは容量分をまとめて事前確保する)．
+pub const NODE_BYTES: usize = std::mem::size_of::<Node>();
+
+/// 辺 1 本 ([`Edge`]) のバイト数．
+pub const EDGE_BYTES: usize = std::mem::size_of::<Edge>();
+
+/// 1 局面あたりの平均分岐数 (実測値)．
+///
+/// 自己対局 64 局・4,429 局面の合法手数から 61.8 (最大 335) — 端数を切り上げ．
+/// MCTS では 1 playout が 1 ノードを展開するので，飽和したプールのノードは
+/// ほぼ全てが辺配列を持つ．
+pub const AVG_BRANCHING: usize = 62;
+
+/// `Box<[Edge]>` 1 個あたりのアロケータ諸経費の見積り (ヘッダ + 丸め)．
+const EDGE_ALLOC_OVERHEAD: usize = 16;
+
+/// 展開済みノード 1 個の概算バイト数 (本体 + 辺配列 + 諸経費)．
+///
+/// USI の `USI_Hash` (MB) → `NodeCapacity` 換算に使う (設計 doc §12 未決 3)．
+/// 実測レイアウトから導くので，Node/Edge のフィールドが増減すれば自動追従
+/// する．**過小評価は GUI が指定したメモリ上限の超過に直結する**ため，
+/// 平均分岐は切り上げ・諸経費込みで見積もる．
+pub const APPROX_BYTES_PER_EXPANDED_NODE: usize =
+    NODE_BYTES + AVG_BRANCHING * EDGE_BYTES + EDGE_ALLOC_OVERHEAD;
+
 /// 固定容量ノードプール．
 ///
 /// 全ノードを一括で事前確保し，index の単調増加でロックフリーに割り当てる．
@@ -531,6 +556,24 @@ impl NodePool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_memory_estimate_tracks_layout() {
+        // レイアウトが変わったら換算係数も変わる (USI_Hash の意味が変わる)．
+        // 気付かず drift しないよう実測値を固定する
+        assert_eq!(NODE_BYTES, std::mem::size_of::<Node>());
+        assert_eq!(EDGE_BYTES, std::mem::size_of::<Edge>());
+        assert_eq!(
+            APPROX_BYTES_PER_EXPANDED_NODE,
+            NODE_BYTES + AVG_BRANCHING * EDGE_BYTES + EDGE_ALLOC_OVERHEAD
+        );
+        // 実測 (Node 48B / Edge 12B / 平均分岐 61.8) から ~800B 台．
+        // 桁が変わる改造をしたらこのテストで気付く
+        assert!(
+            (700..1000).contains(&APPROX_BYTES_PER_EXPANDED_NODE),
+            "想定外の 1 ノードサイズ: {APPROX_BYTES_PER_EXPANDED_NODE}"
+        );
+    }
 
     #[test]
     fn test_win_fixed_point_precision() {

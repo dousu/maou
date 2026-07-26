@@ -24,10 +24,13 @@ pub type Emit<'a> = dyn FnMut(EngineCommand) + 'a;
 /// 平手初期局面 (USI `position startpos`)．
 pub const STARTPOS_SFEN: &str = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
 
-/// `USI_Hash` (MB) → ノードプール容量の換算に使う 1 ノードあたりの概算バイト数
-/// (Node 本体 + Edge 配列の平均的な合計．将来 NodePool の実測で較正する —
-/// 設計 doc §12 未決事項 3)．
-const APPROX_BYTES_PER_NODE: u64 = 512;
+/// `USI_Hash` (MB) → ノードプール容量の換算に使う 1 ノードあたりの概算バイト数．
+///
+/// maou_search のノード実レイアウト (Node 本体 + 平均分岐分の Edge 配列 +
+/// アロケータ諸経費) から導く — 設計 doc §12 未決 3 の較正済み値．旧固定値
+/// 512B は実測 (~808B) の 1.6 倍過小評価で，`USI_Hash` 指定より多くメモリを
+/// 使っていた．
+const APPROX_BYTES_PER_NODE: u64 = maou_search::tree::APPROX_BYTES_PER_EXPANDED_NODE as u64;
 
 /// 探索中の `info` 随時出力の最小間隔 (ミリ秒)．過剰な流量を抑える (設計 §10)．
 const INFO_INTERVAL_MS: u64 = 1000;
@@ -1399,8 +1402,16 @@ mod tests {
             usi_hash_mb: Some(512),
             ..EngineConfig::default()
         };
-        // 512MB / 512B = 1M ノード
-        assert_eq!(config.effective_node_capacity(), Some(1 << 20));
+        // 512MB を実測ノードサイズで割った値 (較正済み — 未決 3)
+        let expected = 512 * 1024 * 1024 / APPROX_BYTES_PER_NODE;
+        assert_eq!(
+            config.effective_node_capacity(),
+            Some(u32::try_from(expected).expect("32bit に収まる"))
+        );
+        // 指定メモリを超えないこと (過小評価は GUI の上限超過に直結する)
+        let bytes = u64::from(config.effective_node_capacity().expect("換算される"))
+            * APPROX_BYTES_PER_NODE;
+        assert!(bytes <= 512 * 1024 * 1024, "512MB を超えている: {bytes}");
         // NodeCapacity 明示が優先
         config.node_capacity = Some(4096);
         assert_eq!(config.effective_node_capacity(), Some(4096));
