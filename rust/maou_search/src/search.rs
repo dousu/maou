@@ -141,6 +141,13 @@ pub struct SearchOptions {
     /// 最大探索深さ．到達した経路は引き分け (0.5) として打ち切る
     /// (千日手にならないまま伸び続ける経路で無限に降下しないためのガード)．
     pub max_ply: u16,
+    /// 引き分けになる最大手数 (0 = 無効，電竜戦は 512)．> 0 のとき，通算手数
+    /// (root 局面の SFEN 手数フィールド基準) がこの値に達した局面を探索内で
+    /// 引き分け終端として扱う — リミット以降の詰みも引き分け (ルールどおり)．
+    /// [`SearchOptions::max_ply`] と同じ非永続 backprop (`mark_terminal` しない)
+    /// なので subtree 再利用でも stale しない．USI の `MaxMovesToDraw` から
+    /// 渡される (docs/design/usi-engine/index.md §8.3, 未決 4)．
+    pub max_moves_to_draw: u32,
     /// ノードプール GC を有効にするか．有効ならプール枯渇時に
     /// [`NodePool::compact`] で低訪問サブツリーを刈り取って探索を継続する．
     pub gc_enabled: bool,
@@ -188,6 +195,7 @@ impl Default for SearchOptions {
             fpu: 0.5,
             node_capacity: 1 << 20,
             max_ply: 512,
+            max_moves_to_draw: 0,
             gc_enabled: true,
             gc_keep_ratio: 0.5,
             draw_value: 0.5,
@@ -546,6 +554,10 @@ struct Shared<'a, E: Evaluator> {
     game_history: &'a [HistoryEntry],
     evaluator: &'a E,
     opts: &'a SearchOptions,
+    /// 引き分け打ち切りになる path 長の実効上限 (これを超えた降下は引き分け
+    /// backprop)．`max_ply` と `max_moves_to_draw` (通算手数を root の SFEN
+    /// 手数から path 長へ換算) の小さい方．
+    max_path_len: usize,
     deadline: Option<Instant>,
     max_playouts: u64,
     /// 外部からの協調停止フラグ ([`SearchLimits::stop`])．
@@ -980,9 +992,13 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
                 rep_stack.push(HistoryEntry::from_board(&board));
                 idx = child_idx;
 
-                if path.len() > opts.max_ply as usize {
+                if path.len() > shared.max_path_len {
+                    // 最大深さ (max_ply) または最大手数 (max_moves_to_draw) の
+                    // 打ち切りは引き分け扱い (draw_value を手番視点で適用)．
+                    // 非永続 backprop (mark_terminal しない) — このノードの状態
+                    // 処理 (展開/詰み検出) には到達しないため，リミット以降の
+                    // 詰みも引き分けになる (電竜戦ルールどおり)
                     shared.note_depth(path.len());
-                    // 最大深さ打ち切りは引き分け扱い (draw_value を手番視点で適用)
                     backprop(shared, &path, shared.draw_leaf_value(path.len()));
                     return Selection::Backpropped;
                 }
@@ -1337,6 +1353,20 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         let warmup_ms = warmup_start.elapsed().as_millis() as u64;
         let start = Instant::now();
 
+        // 引き分け打ち切りの実効 path 長: max_ply と，MaxMovesToDraw を root の
+        // SFEN 手数 (= 次の手番号) から換算した上限の小さい方．path 長 P の
+        // ノードの通算手数は root_ply + (P-1) — moves_played がリミットに達する
+        // のは P > limit + 1 - root_ply のとき (max_moves_to_draw = 0 は無効)
+        let max_path_len = {
+            let ply_cap = opts.max_ply as usize;
+            if opts.max_moves_to_draw == 0 {
+                ply_cap
+            } else {
+                let root_ply = usize::from(root_board.ply().max(1));
+                let mm_cap = (opts.max_moves_to_draw as usize + 1).saturating_sub(root_ply);
+                ply_cap.min(mm_cap)
+            }
+        };
         let mut shared = Shared {
             pool,
             root_board: root_board.clone(),
@@ -1344,6 +1374,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             game_history,
             evaluator: self.evaluator,
             opts,
+            max_path_len,
             deadline: limits.time_ms.map(|ms| start + Duration::from_millis(ms)),
             max_playouts: limits.max_playouts.unwrap_or(if limits.time_ms.is_some() {
                 u64::MAX
@@ -1632,6 +1663,113 @@ mod tests {
             result.pv.first().map(|m| m.to_usi()).as_deref(),
             Some("G*5b")
         );
+    }
+
+    #[test]
+    fn test_max_moves_to_draw_masks_mate_beyond_limit() {
+        // root は手数 1 (moves_played = 0)．リミット 1 なら 1 手目以降は全て
+        // 引き分け終端 — 詰み (G*5b) も引き分けになる (最大手数時の詰みも
+        // 引き分け = 電竜戦ルール)
+        let result = run(
+            MATE_IN_1,
+            SearchOptions {
+                threads: 1,
+                batch_size: 4,
+                node_capacity: 1 << 14,
+                max_moves_to_draw: 1,
+                ..pure_mcts_opts()
+            },
+            SearchLimits {
+                max_playouts: Some(1000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        assert!(result.best_move.is_some(), "合法手は返す");
+        assert_ne!(result.stop, StopCause::RootProven, "詰みは証明されない");
+        assert!(
+            (0.4..=0.6).contains(&result.winrate),
+            "全 playout が引き分けなので勝率はほぼ draw_value (0.5): {}",
+            result.winrate
+        );
+    }
+
+    #[test]
+    fn test_max_moves_to_draw_counts_from_root_sfen_ply() {
+        // SFEN 手数フィールド 100 の root: リミット 100 では次の 1 手で
+        // moves_played = 100 に達し詰みが引き分けにマスクされる．リミット 101
+        // なら 1 手詰めが通常どおり証明される
+        let sfen_ply100 = "4k4/9/4P4/9/9/9/9/9/9 b G 100";
+        let masked = run(
+            sfen_ply100,
+            SearchOptions {
+                threads: 1,
+                batch_size: 4,
+                node_capacity: 1 << 14,
+                max_moves_to_draw: 100,
+                ..pure_mcts_opts()
+            },
+            SearchLimits {
+                max_playouts: Some(1000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        assert_ne!(masked.stop, StopCause::RootProven);
+        assert!((0.4..=0.6).contains(&masked.winrate), "{}", masked.winrate);
+
+        let proven = run(
+            sfen_ply100,
+            SearchOptions {
+                threads: 1,
+                batch_size: 4,
+                node_capacity: 1 << 14,
+                max_moves_to_draw: 101,
+                ..pure_mcts_opts()
+            },
+            SearchLimits {
+                max_playouts: Some(3000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        let best = proven.best_move.expect("合法手がある");
+        assert_eq!(
+            best.to_usi(),
+            "G*5b",
+            "リミット内の詰みは通常どおり見つかる"
+        );
+        assert!(proven.winrate > 0.9, "{}", proven.winrate);
+    }
+
+    #[test]
+    fn test_max_moves_to_draw_far_limit_is_behavior_identical() {
+        // リミットが max_ply より遠い (実効 wall = max_ply) なら無効 (0) と
+        // 完全に同一の探索になる (single-thread は決定的)
+        let opts = SearchOptions {
+            threads: 1,
+            batch_size: 4,
+            node_capacity: 1 << 14,
+            ..pure_mcts_opts()
+        };
+        let limits = SearchLimits {
+            max_playouts: Some(500),
+            ..SearchLimits::default()
+        };
+        let base = run(STARTPOS, opts.clone(), limits.clone(), 7);
+        let far = run(
+            STARTPOS,
+            SearchOptions {
+                max_moves_to_draw: 10_000,
+                ..opts
+            },
+            limits,
+            7,
+        );
+        assert_eq!(base.best_move, far.best_move);
+        assert_eq!(base.winrate, far.winrate);
+        assert_eq!(base.stats.playouts, far.stats.playouts);
+        assert_eq!(base.stats.max_depth, far.stats.max_depth);
     }
 
     /// [`select_best_root_index`] 用のダミー子統計 (mv は選択基準に関与しない)．

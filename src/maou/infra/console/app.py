@@ -303,6 +303,11 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
         "maou.infra.console.usi",
         "usi",
     ),
+    # in-process 自己対局 driver (評価器共有 + 並列; 追加依存なし)
+    "selfplay": LazyCommandSpec(
+        "maou.infra.console.selfplay",
+        "selfplay",
+    ),
     # 棋譜 1 局の自動解析 (1 手ずつ 1 局面探索; 追加依存なし)
     "analyze-game": LazyCommandSpec(
         "maou.infra.console.analyze_game",

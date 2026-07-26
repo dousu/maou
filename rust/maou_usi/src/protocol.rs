@@ -344,8 +344,21 @@ pub enum EngineCommand {
     },
     /// `info ...`．
     Info(Info),
-    /// `checkmate notimplemented` (`go mate` 未対応の応答)．
+    /// `checkmate notimplemented` (`go mate` を扱えない構成の応答)．
     CheckmateNotImplemented,
+    /// `go mate` の応答 ([`CheckmateResult`])．
+    Checkmate(CheckmateResult),
+}
+
+/// `go mate` の結果 (USI: `checkmate <手順>` / `nomate` / `timeout`)．
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CheckmateResult {
+    /// 詰みあり — 詰み手順 (USI 表記，攻方の初手から)．
+    Mate(Vec<String>),
+    /// 不詰が証明された．
+    NoMate,
+    /// 予算内に結論が出なかった (詰みとも不詰とも言えない)．
+    Timeout,
 }
 
 /// コマンドを USI の行 (改行なし) へシリアライズする．
@@ -372,6 +385,16 @@ pub fn serialize(cmd: &EngineCommand) -> String {
         }
         EngineCommand::Info(info) => serialize_info(info),
         EngineCommand::CheckmateNotImplemented => "checkmate notimplemented".to_string(),
+        EngineCommand::Checkmate(result) => match result {
+            // 手順は攻方の初手から並べる (USI 仕様)．空手順は詰みを示せない
+            // ので nomate ではなく timeout 扱い (呼び出し側で潰しているが，
+            // シリアライザ単体でも不正な `checkmate` 行を出さない)
+            CheckmateResult::Mate(moves) if !moves.is_empty() => {
+                format!("checkmate {}", moves.join(" "))
+            }
+            CheckmateResult::Mate(_) | CheckmateResult::Timeout => "checkmate timeout".to_string(),
+            CheckmateResult::NoMate => "checkmate nomate".to_string(),
+        },
     }
 }
 

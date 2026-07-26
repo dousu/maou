@@ -61,6 +61,18 @@ from maou.infra.console.common import (
     required=False,
 )
 @click.option(
+    "--keep-alive-ms",
+    help="While answering isready, send a blank line every N milliseconds "
+    "as a liveness signal (0 = disabled, the default). Useful when the "
+    "first TensorRT engine build takes longer than the GUI's readyok "
+    "timeout. GUI behaviour with blank lines is unverified, so this is "
+    "opt-in. Also `setoption name KeepAlive`.",
+    type=int,
+    default=0,
+    show_default=True,
+    required=False,
+)
+@click.option(
     "--draw-value-black",
     help="Draw value for Black in permille (default 500). The repetition / "
     "max-moves draw terminal is valued at this from the side-to-move view "
@@ -117,6 +129,18 @@ from maou.infra.console.common import (
     "to bestmove so the GUI sends `go ponder` (default on). Also "
     "`setoption name USI_Ponder`.",
     default=True,
+    required=False,
+)
+@click.option(
+    "--opening-script",
+    help="Forced opening move sequence in USI notation, space-separated "
+    '(e.g. "5i5h 5a5b 5h5i 5b5a" for the HWT king-shuffle handicap). '
+    "While the game path matches this prefix the engine plays the next "
+    "scripted move instantly without searching; once the path diverges "
+    "the script is disabled for the rest of the game. Also "
+    "`setoption name OpeningScript`.",
+    type=str,
+    default=None,
     required=False,
 )
 @click.option(
@@ -201,12 +225,14 @@ def usi(
     node_capacity: int | None,
     network_delay_ms: int,
     min_think_ms: int,
+    keep_alive_ms: int,
     draw_value_black: int,
     draw_value_white: int,
     resign_value: int,
     resign_consecutive: int,
     max_moves_to_draw: int,
     usi_ponder: bool,
+    opening_script: str | None,
     root_dfpn: bool,
     root_dfpn_nodes: int,
     root_dfpn_depth: int,
@@ -236,12 +262,15 @@ def usi(
         node_capacity: Node pool capacity.
         network_delay_ms: Communication overhead margin in milliseconds.
         min_think_ms: Minimum thinking time in milliseconds.
+        keep_alive_ms: Blank-line keep-alive interval while answering
+            isready (0 = disabled).
         draw_value_black: Draw value for Black in permille (default 500).
         draw_value_white: Draw value for White in permille (default 500).
         resign_value: Resign win-rate threshold in permille (0 = never).
         resign_consecutive: Consecutive below-threshold moves to resign.
         max_moves_to_draw: Move count for a drawn game (0 = disabled).
         usi_ponder: Enable pondering on the opponent's turn (default on).
+        opening_script: Forced opening moves in USI notation (None = off).
         root_dfpn: Run dfpn mate search on the root position in parallel.
         root_dfpn_nodes: Node budget for the root dfpn mate search.
         root_dfpn_depth: Search depth limit for the root dfpn mate search.
@@ -259,12 +288,14 @@ def usi(
         node_capacity=node_capacity,
         network_delay_ms=network_delay_ms,
         min_think_ms=min_think_ms,
+        keep_alive_ms=keep_alive_ms,
         draw_value_black=draw_value_black,
         draw_value_white=draw_value_white,
         resign_value=resign_value,
         resign_consecutive=resign_consecutive,
         max_moves_to_draw=max_moves_to_draw,
         usi_ponder=usi_ponder,
+        opening_script=opening_script,
         root_dfpn=root_dfpn,
         root_dfpn_nodes=root_dfpn_nodes,
         root_dfpn_depth=root_dfpn_depth,

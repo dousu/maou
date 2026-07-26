@@ -15,10 +15,12 @@
 pub mod agent;
 pub mod backend;
 pub mod protocol;
+pub mod selfplay;
 pub mod stdio;
 pub mod time;
 
 pub use agent::{Agent, EngineConfig, SearchBackend, SearchBudget, SearchOutcome};
 pub use backend::MaouSearchBackend;
+pub use selfplay::{run_selfplay, GameEndReason, GameOutcome, SelfplayConfig};
 pub use stdio::run_stdio;
 pub use time::{TimeBudget, TimeStrategyConfig};

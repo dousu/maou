@@ -17,7 +17,7 @@
 - When no model is configured, a deterministic **mock evaluator** is used and
   announced with `info string mock evaluator (development only) ...` on
   `isready` (development/verification only — move quality is meaningless).
-- Supported through milestone M3: full game loop (`usi` / `isready` /
+- Supported through milestone M4: full game loop (`usi` / `isready` /
   `setoption` / `usinewgame` / `position` / `go` with
   `btime wtime byoyomi binc winc`, `go infinite`, `go nodes`, `go movetime` /
   `stop` / `gameover` / `quit`); time strategy with soft/hard budgets and
@@ -25,19 +25,31 @@
   delay margin); streaming `info` during search; draw-value strategy
   (`DrawValueBlack` / `DrawValueWhite`); nyugyoku declaration win
   (`bestmove win`, 27-point rule); resign threshold (`ResignValue` /
-  `ResignConsecutive`, off by default); `MaxMovesToDraw` (declaration check +
-  budget narrowing near the limit); root-dfpn + leaf-mate search; **pondering**
+  `ResignConsecutive`, off by default); `MaxMovesToDraw` (declaration check,
+  budget narrowing near the limit, and an **in-search draw terminal**:
+  positions past the limit are treated as draws inside the search, so a mate
+  beyond the move limit correctly counts as a draw); root-dfpn + leaf-mate
+  search; **pondering**
   (`USI_Ponder`, `go ponder` / `ponderhit`, and `bestmove <move> ponder
   <reply>` with the predicted reply = PV's 2nd move) — a ponder hit *continues*
   the same unbounded search under a fresh time budget, so the tree built while
-  pondering carries over (the main ponder benefit); and **subtree reuse across
+  pondering carries over (the main ponder benefit); **subtree reuse across
   moves** — when the game advances along an explored line, the retained search
   tree is rerooted to the new position so its subtree warm-starts the next
   search instead of rebuilding from scratch (a ponder *miss*, or any advance
-  the tree did not explore, falls back to a fresh search).
-  Not yet implemented (later milestones): tournament opening scripts and the
-  self-play driver (M4), the in-search `MaxMovesToDraw` draw terminal (M4),
-  `go mate` (answers `checkmate notimplemented`).
+  the tree did not explore, falls back to a fresh search); and
+  **`OpeningScript`** — a forced opening move sequence (e.g. the HWT
+  king-shuffle time handicap): while the game path matches the script prefix
+  the engine plays the next scripted move instantly without searching, and
+  once the path diverges the script is disabled for the rest of the game
+  (an illegal scripted move falls back to normal search); and **`go mate`**
+  — dfpn mate search for the GUI's mate-search/analysis button, answering
+  `checkmate <move sequence>` (shortest mate), `checkmate nomate` (only
+  when no-mate is actually *proven*), or `checkmate timeout` (budget or
+  `stop` reached without a conclusion). It runs on dfpn alone, so it works
+  even without a model, and no `bestmove` is emitted (per the USI spec).
+- For in-process self-play with the same agent, see
+  [`maou selfplay`](selfplay.md).
 
 ## Engine registration in a GUI
 
@@ -64,12 +76,14 @@
 | `--node-capacity INT` | | Node pool capacity (default 2^20 nodes). |
 | `--network-delay-ms INT` | default `1000` | Communication overhead margin in milliseconds. The GUI/server measures elapsed time including transport, so the per-move budget is reduced by this amount. |
 | `--min-think-ms INT` | default `100` | Minimum thinking time in milliseconds. |
+| `--keep-alive-ms INT` | default `0` (off) | While answering `isready`, send a blank line every N milliseconds as a liveness signal. Intended for setups where the first TensorRT engine build exceeds the GUI's `readyok` timeout. Opt-in because GUI handling of blank lines is not yet verified on real hardware. |
 | `--draw-value-black INT` | default `500` | Draw value for Black in permille. Repetition / max-moves draw terminals are valued at this (root side-to-move view). Denryu-sen Black 0.4 win = `400`. |
 | `--draw-value-white INT` | default `500` | Draw value for White in permille (Denryu-sen White 0.6 win = `600`). |
 | `--resign-value INT` | default `0` | Resign when the root win rate stays below this permille for `--resign-consecutive` moves. `0` = never resign. |
 | `--resign-consecutive INT` | default `3` | Consecutive below-threshold moves required to resign (with `--resign-value > 0`). |
-| `--max-moves-to-draw INT` | default `0` | Move count for a drawn game (`0` = disabled; Denryu-sen `512`). At/near the limit the engine always checks nyugyoku declaration and narrows its search budget. |
+| `--max-moves-to-draw INT` | default `0` | Move count for a drawn game (`0` = disabled; Denryu-sen `512`). At/near the limit the engine always checks nyugyoku declaration and narrows its search budget; positions past the limit are treated as draws inside the search. |
 | `--usi-ponder/--no-usi-ponder` | **default on** | Enable pondering (thinking on the opponent's turn). When on, the engine declares `USI_Ponder` and appends the predicted reply to `bestmove` so the GUI sends `go ponder`. |
+| `--opening-script "MOVES"` | | Forced opening move sequence in USI notation, space-separated (e.g. `"5i5h 5a5b 5h5i 5b5a"` for the HWT king-shuffle handicap). While the game path matches this prefix the engine plays the next scripted move instantly without searching (no clock time spent, no `ponder` attached). Requires the full game path from move 1: if the engine is handed a position whose move number is already past the script (e.g. a designated position set up *after* the shuffle), the script stays disabled instead of replaying the sequence. |
 | `--root-dfpn/--no-root-dfpn` | **default on** | Run dfpn mate search on the root position in parallel with MCTS. |
 | `--root-dfpn-nodes INT` | default `2000000` | Node budget for the root dfpn mate search. |
 | `--root-dfpn-depth INT` | default `2047` | Search depth limit for the root dfpn mate search (max 2047). |
@@ -88,15 +102,17 @@ Declared in the `usi` response; defaults reflect the CLI flags above.
 | --- | --- | --- |
 | `ModelPath` | filename | ONNX model path (empty = mock evaluator). |
 | `Threads` / `BatchSize` / `NodeCapacity` | spin | Search resources. |
-| `USI_Hash` | spin (MB) | Used to derive `NodeCapacity` when the latter is not set (approx. 512 bytes/node). `0` = ignore. |
+| `USI_Hash` | spin (MB) | Used to derive `NodeCapacity` when the latter is not set. The conversion uses the measured node footprint (node struct + edge array for the measured average branching factor ≈ 808 bytes/node), so the resulting pool stays within the megabytes you asked for. `0` = ignore. |
 | `UseCuda` / `UseTensorRT` | check | Execution providers (feature-gated wheel required). |
 | `TrtCacheDir` | string | TensorRT engine cache directory. |
 | `NetworkDelay` | spin (ms) | Communication margin subtracted from each move budget. |
 | `MinimumThinkingTime` | spin (ms) | Minimum thinking time. |
+| `KeepAlive` | spin (ms) | Blank-line keep-alive interval while answering `isready` (0 = disabled). |
 | `DrawValueBlack` / `DrawValueWhite` | spin (permille) | Draw value per side (default 500; Denryu-sen 400 / 600). Converted to the search's side-to-move `draw_value`. |
 | `ResignValue` | spin (permille) | Resign win-rate threshold (0 = never). |
 | `ResignConsecutive` | spin | Consecutive below-threshold moves required to resign. |
-| `MaxMovesToDraw` | spin | Move count for a drawn game (0 = disabled; Denryu-sen 512). |
+| `MaxMovesToDraw` | spin | Move count for a drawn game (0 = disabled; Denryu-sen 512). Also enables the in-search draw terminal past the limit. |
+| `OpeningScript` | string | Forced opening move sequence in USI notation (empty = disabled). |
 | `USI_Ponder` | check | Enable pondering (default on). Declared so the GUI sends `go ponder`; `bestmove` carries the predicted reply (PV's 2nd move). |
 | `RootDfpn` / `LeafMate` | check | Mate search toggles. |
 

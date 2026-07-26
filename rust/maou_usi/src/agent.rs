@@ -7,11 +7,13 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use maou_search::build_board_and_history;
+use maou_shogi::movegen::generate_legal_moves;
 use maou_shogi::types::Color;
 
 use crate::protocol::{
-    BestMoveKind, EngineCommand, GameResult, GoParams, GuiCommand, Info, OptionDecl, OptionKind,
-    Score,
+    BestMoveKind, CheckmateResult, EngineCommand, GameResult, GoParams, GuiCommand, Info,
+    OptionDecl, OptionKind, Score,
 };
 use crate::time::{allocate, should_stop, TimeBudget, TimeStrategyConfig};
 
@@ -22,10 +24,13 @@ pub type Emit<'a> = dyn FnMut(EngineCommand) + 'a;
 /// 平手初期局面 (USI `position startpos`)．
 pub const STARTPOS_SFEN: &str = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
 
-/// `USI_Hash` (MB) → ノードプール容量の換算に使う 1 ノードあたりの概算バイト数
-/// (Node 本体 + Edge 配列の平均的な合計．将来 NodePool の実測で較正する —
-/// 設計 doc §12 未決事項 3)．
-const APPROX_BYTES_PER_NODE: u64 = 512;
+/// `USI_Hash` (MB) → ノードプール容量の換算に使う 1 ノードあたりの概算バイト数．
+///
+/// maou_search のノード実レイアウト (Node 本体 + 平均分岐分の Edge 配列 +
+/// アロケータ諸経費) から導く — 設計 doc §12 未決 3 の較正済み値．旧固定値
+/// 512B は実測 (~808B) の 1.6 倍過小評価で，`USI_Hash` 指定より多くメモリを
+/// 使っていた．
+const APPROX_BYTES_PER_NODE: u64 = maou_search::tree::APPROX_BYTES_PER_EXPANDED_NODE as u64;
 
 /// 探索中の `info` 随時出力の最小間隔 (ミリ秒)．過剰な流量を抑える (設計 §10)．
 const INFO_INTERVAL_MS: u64 = 1000;
@@ -66,8 +71,27 @@ pub struct EngineConfig {
     /// 投了に必要な連続手数 (`resign_value` > 0 のとき有効)．
     pub resign_consecutive: u32,
     /// 引き分けになる最大手数 (既定 0 = 無効．電竜戦は 512)．到達局面では入玉
-    /// 宣言を必ず確認し，可能なら宣言勝ちする．
+    /// 宣言を必ず確認し，可能なら宣言勝ちする．> 0 のとき探索にも渡され，
+    /// リミット以降の局面を探索内で引き分け終端として扱う (設計 §8.3 未決 4)．
     pub max_moves_to_draw: u32,
+    /// 強制序盤手順 (USI 指し手の空白区切り，例 "5i5h 5a5b 5h5i 5b5a"．
+    /// `None` = 無効)．対局経路が script の prefix と一致する間は次の script 手
+    /// を探索なしで即指しする．外れたら以後無効 (prefix 照合が自然に満たす)．
+    /// script 手が現局面で非合法なら無効化して通常探索 (安全側．設計 §8.3)．
+    /// HWT の先手時間ハンデ (玉往復 4 手) 対応 (設計 §3)．
+    pub opening_script: Option<String>,
+    /// subtree 再利用 (対局手番間の探索木引き継ぎ，M3) を有効にするか
+    /// (既定 true = on-by-default)．**計測用トグル** — 自己対局 A/B (設計 §12
+    /// 未決 6) で off 側を作るためのもので，USI option には宣言しない
+    /// (§10 に無い — M3 での user 決定)．
+    pub subtree_reuse: bool,
+    /// `isready` の応答待ち中に空行を送る間隔 (ミリ秒．0 = 送らない = 既定)．
+    ///
+    /// モデルロード + warmup (TensorRT の初回エンジンビルドは数十秒) が
+    /// GUI 側のタイムアウトを超えると対局に入れないため，生存通知として
+    /// 空行を流す逃げ道 (設計 §7)．GUI が空行をどう扱うかは実機確認が必要
+    /// なので既定は off (設計 §12 未決 2 — 既定値の判断のみ実機待ち)．
+    pub keep_alive_ms: u64,
     /// ponder (先読み) を有効にするか (既定 true)．true のとき `USI_Ponder`
     /// option を宣言し，`bestmove` に予想相手手 (自探索 PV の 2 手目) を付ける．
     /// GUI はこれを見て相手番中に `go ponder` を送る (設計 doc §8.4)．
@@ -105,6 +129,9 @@ impl Default for EngineConfig {
             resign_value: 0,
             resign_consecutive: 3,
             max_moves_to_draw: 0,
+            opening_script: None,
+            subtree_reuse: true,
+            keep_alive_ms: 0,
             usi_ponder: true,
             root_dfpn: None,
             root_dfpn_nodes: None,
@@ -139,6 +166,19 @@ pub struct SearchBudget {
     pub max_playouts: Option<u64>,
     /// 無期限 (stop でのみ停止．`go ponder`/`go infinite`)．
     pub unbounded: bool,
+}
+
+/// 1 回の探索に適用する対局ルール由来のパラメータ (エージェント → バックエンド)．
+///
+/// `setoption` で対局中に変わり得る値をバックエンド再構築なしで go ごとに
+/// 渡す (`draw_value` は手番依存でもある)．
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GoRules {
+    /// root 手番視点の引き分け価値 (千日手戦略，設計 §8.2)．
+    pub draw_value: f64,
+    /// 引き分けになる最大手数 (0 = 無効)．探索内でリミット以降の局面を
+    /// 引き分け終端として扱う (設計 §8.3 未決 4)．
+    pub max_moves_to_draw: u32,
 }
 
 /// 探索中の進捗スナップショット (バックエンド → [`SearchObserver`])．
@@ -196,27 +236,48 @@ pub struct SearchOutcome {
     /// root の確定値 (1.0 = 勝ち確定/詰み発見，0.0 = 負け確定，0.5 = 引き分け
     /// 確定)．未確定は `None`．
     pub proven: Option<f64>,
+    /// 前回の探索木から引き継いだ訪問数 (subtree 再利用の実効量)．
+    ///
+    /// root 直下の訪問数合計から今回の playout 数を引いた残り = warm start で
+    /// 継承した分．reroot が失敗して fresh になった手では 0 になるので，
+    /// 「機構が実対局で何回発火し，どれだけ得したか」の計測に使う (設計 §12
+    /// 未決 6)．統計目的のみで対局判断には使わない．
+    pub carried_visits: u64,
 }
 
 /// 探索バックエンド (実装: [`MaouSearchBackend`]，テスト: fake)．
 pub trait SearchBackend {
     /// 局面 (基準 SFEN + USI 経路 = 千日手履歴規約) を予算内で探索する．
     ///
-    /// `draw_value` は root 手番視点の引き分け価値 (千日手戦略)．`observer` は
-    /// 探索中の進捗を受け取り早期停止を要求できる (`info` 随時出力・時間延長)．
-    /// `stop` が立てられたら途中で打ち切ってその時点の最有力手を返すこと．
+    /// `rules` は対局ルール由来の per-go パラメータ ([`GoRules`])．`observer`
+    /// は探索中の進捗を受け取り早期停止を要求できる (`info` 随時出力・時間
+    /// 延長)．`stop` が立てられたら途中で打ち切ってその時点の最有力手を
+    /// 返すこと．
     fn search(
         &mut self,
         sfen: &str,
         moves: &[String],
         budget: &SearchBudget,
-        draw_value: f64,
+        rules: &GoRules,
         stop: &Arc<AtomicBool>,
         observer: &mut dyn SearchObserver,
     ) -> Result<SearchOutcome, String>;
 
     /// 現局面 (基準 SFEN + USI 経路) で手番側の入玉宣言 (27 点法) が成立するか．
     fn nyugyoku_declarable(&self, sfen: &str, moves: &[String]) -> Result<bool, String>;
+
+    /// 現局面の詰み探索 (`go mate`)．手番側が詰ませられるかを dfpn で判定する．
+    ///
+    /// `time_ms` は時間予算 (`None` = 無制限．外部 `stop` で打ち切られる)．
+    /// 探索そのものは NN 評価器に依存しない (dfpn 単体) ので mock 構成でも
+    /// 実行できる．詰み手順は攻方の初手から並べた USI 表記で返す．
+    fn solve_mate(
+        &self,
+        sfen: &str,
+        moves: &[String],
+        time_ms: Option<u64>,
+        stop: &Arc<AtomicBool>,
+    ) -> Result<CheckmateResult, String>;
 
     /// mock 評価器か (isready 時の明示に使う)．
     fn is_mock(&self) -> bool;
@@ -300,6 +361,9 @@ where
     /// root 勝率が投了閾値未満だった連続手数 (`resign_value` 用)．usinewgame /
     /// gameover でリセットする．
     resign_streak: u32,
+    /// 直近の `go` で前回木から引き継いだ訪問数 (subtree 再利用の実効量)．
+    /// 計測用 ([`Agent::last_carried_visits`])．対局判断には使わない．
+    last_carried_visits: u64,
     /// ponder 的中シグナル．transport (stdio reader) が行の到着順で更新する:
     /// `go` 行で false，`ponderhit` 行で true (stop フラグと同じ race-free 規約)．
     /// 探索中の [`GoObserver`] がポーリングし，的中したら無期限の ponder 探索を
@@ -321,8 +385,24 @@ where
             game: GameState::default(),
             stop: Arc::new(AtomicBool::new(false)),
             resign_streak: 0,
+            last_carried_visits: 0,
             ponderhit: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// `isready` 応答待ちの keep-alive 間隔 (ミリ秒．0 = 送らない)．
+    /// transport が生存通知の送出間隔として使う ([`EngineConfig::keep_alive_ms`])．
+    pub fn keep_alive_ms(&self) -> u64 {
+        self.config.keep_alive_ms
+    }
+
+    /// 直近の `go` で subtree 再利用が引き継いだ訪問数 (0 = fresh 探索)．
+    ///
+    /// 自己対局 driver が「機構が実対局で何回発火し，実質どれだけ予算が
+    /// 増えたか」を集計するための計測フック (設計 §12 未決 6)．探索なしで
+    /// 応じた手 (OpeningScript・宣言勝ち) では更新されない．
+    pub fn last_carried_visits(&self) -> u64 {
+        self.last_carried_visits
     }
 
     /// 探索停止フラグのハンドル．
@@ -549,6 +629,20 @@ where
                     max: 100_000,
                 },
             },
+            OptionDecl {
+                name: "KeepAlive",
+                kind: OptionKind::Spin {
+                    default: c.keep_alive_ms as i64,
+                    min: 0,
+                    max: 60_000,
+                },
+            },
+            OptionDecl {
+                name: "OpeningScript",
+                kind: OptionKind::String {
+                    default: c.opening_script.clone().unwrap_or_default(),
+                },
+            },
         ]
     }
 
@@ -657,6 +751,21 @@ where
                 if let Ok(n) = v.parse() {
                     self.config.max_moves_to_draw = n;
                 }
+                // 探索へは go ごとに GoRules として渡すため再構築不要
+                invalidate = false;
+            }
+            "KeepAlive" => {
+                if let Ok(n) = v.parse() {
+                    self.config.keep_alive_ms = n;
+                }
+                invalidate = false;
+            }
+            "OpeningScript" => {
+                self.config.opening_script = if v.is_empty() {
+                    None
+                } else {
+                    Some(v.to_string())
+                };
                 invalidate = false;
             }
             "USI_Ponder" => {
@@ -675,20 +784,32 @@ where
     ///
     /// - `go mate` は未対応 (`checkmate notimplemented`)．
     /// - SpecialRules 前処理: 入玉宣言 (27 点法 + 持ち時間) が成立すれば探索
-    ///   せず `bestmove win`．
+    ///   せず `bestmove win`．次いで強制序盤手順 (OpeningScript) が適用可能
+    ///   なら script 手を探索なしで即指し．
     /// - 千日手戦略: 手番の引き分け価値を探索の `draw_value` へ変換して渡す．
     /// - 投了: root 勝率が閾値未満の手が `resign_consecutive` 手続いたら
     ///   `bestmove resign` (`resign_value` = 0 なら投了しない)．
     pub fn handle_go_stream(&mut self, params: &GoParams, emit: &mut Emit) -> Result<(), String> {
-        if params.mate.is_some() {
-            // 詰み探索モードは未対応 (dfpn 接続は将来対応)
-            emit(EngineCommand::CheckmateNotImplemented);
-            return Ok(());
-        }
-
         // isready を送らない GUI への防御 (通常は isready で構築済み)
         if self.backend.is_none() {
             self.backend = Some((self.factory)(&self.config)?);
+        }
+
+        // 詰み探索モード (`go mate <ms>` / `go mate infinite`)．dfpn 単体で
+        // 解くので通常探索とは別経路 (bestmove は返さない — USI 仕様)
+        if let Some(limit) = params.mate {
+            let time_ms = match limit {
+                crate::protocol::MateLimit::TimeMs(ms) => Some(ms),
+                crate::protocol::MateLimit::Infinite => None,
+            };
+            let sfen = self.game.sfen.clone();
+            let moves = self.game.moves.clone();
+            let stop = Arc::clone(&self.stop);
+            let backend = self.backend.as_ref().expect("直前で構築済み");
+            emit(EngineCommand::Checkmate(
+                backend.solve_mate(&sfen, &moves, time_ms, &stop)?,
+            ));
+            return Ok(());
         }
 
         // SpecialRules: 入玉宣言 (27 点法 + 持ち時間が残っている)
@@ -698,6 +819,20 @@ where
                 ponder: None,
             });
             return Ok(());
+        }
+
+        // SpecialRules: 強制序盤手順 (OpeningScript)．ponder/infinite は即
+        // bestmove を返せないモード (stop/ponderhit 待ち規約) なので通常探索へ
+        // (script 中は bestmove に ponder を付けないため GUI は go ponder を
+        // 送ってこない — この分岐は防御)
+        if !params.ponder && !params.infinite {
+            if let Some(usi) = self.scripted_move() {
+                emit(EngineCommand::BestMove {
+                    mv: BestMoveKind::Move(usi),
+                    ponder: None,
+                });
+                return Ok(());
+            }
         }
 
         let draw_value = self.draw_value_for(self.game.side_to_move());
@@ -711,21 +846,71 @@ where
                 self.timed_budget(&params.clock),
             )
         });
+        let rules = GoRules {
+            draw_value,
+            max_moves_to_draw: self.config.max_moves_to_draw,
+        };
         let sfen = self.game.sfen.clone();
         let moves = self.game.moves.clone();
         let stop = Arc::clone(&self.stop);
         let outcome = {
             let backend = self.backend.as_mut().expect("直前で構築済み");
             let mut observer = GoObserver::new(emit, budget.time, ponder_switch);
-            backend.search(&sfen, &moves, &budget, draw_value, &stop, &mut observer)?
+            backend.search(&sfen, &moves, &budget, &rules, &stop, &mut observer)?
         };
 
+        self.last_carried_visits = outcome.carried_visits;
         // 探索サマリ info (最終) → bestmove (予想相手手 = 自探索 PV の 2 手目)
         emit(EngineCommand::Info(build_info(&outcome)));
         let mv = self.decide_bestmove(&outcome);
         let ponder = self.ponder_move(&mv, &outcome);
         emit(EngineCommand::BestMove { mv, ponder });
         Ok(())
+    }
+
+    /// 強制序盤手順 (OpeningScript) の次の一手 (USI)．適用できなければ `None`
+    /// (= 通常探索へ)．
+    ///
+    /// 適用条件 (設計 §8.3): 対局経路 (基準局面からの指し手列) が script の
+    /// prefix と一致し，かつ次の script 手が現局面で合法であること．経路が
+    /// 外れた場合は prefix 照合が二度と一致しないため「以後無効化」を状態
+    /// なしで満たす (gameover を送らない GUI の連続対局でも自己回復する)．
+    /// script 手が非合法・局面が再現不能なら `None` (安全側)．
+    ///
+    /// さらに**基準局面が対局開始局面 (手数 1) であること**を要求する．
+    /// script は「対局の 1 手目から」の手順なので，指定局面方式 (電竜戦
+    /// HWT/TSEC) で手順消化後の局面を手数付きで渡された場合に script が
+    /// 再発火してはならない — 玉往復 script では屈伸を無限に繰り返して
+    /// しまう (基準局面 = 屈伸後の平手同型なので合法性検査は通ってしまう)．
+    fn scripted_move(&self) -> Option<String> {
+        let script = self.config.opening_script.as_deref()?;
+        let tokens: Vec<&str> = script.split_whitespace().collect();
+        let played = self.game.moves.len();
+        if played >= tokens.len() {
+            return None; // script 消化済み
+        }
+        // 基準局面の手数 (= 現在手数 − 経路長) が 1 = 対局開始局面から
+        // 完全な経路を渡されている場合のみ script を適用する
+        if self.game.move_number() != 1 + played as u64 {
+            return None;
+        }
+        if !self
+            .game
+            .moves
+            .iter()
+            .zip(tokens.iter())
+            .all(|(m, t)| m == t)
+        {
+            return None; // 経路が script から外れた — 以後常に不一致
+        }
+        let candidate = tokens[played];
+        // 合法性検証: 現局面を再現して合法手列挙と USI 表記で照合する
+        // (build_board_and_history と同じ検証規約)．失敗は安全側 (通常探索)
+        let (mut board, _) = build_board_and_history(&self.game.sfen, &self.game.moves).ok()?;
+        generate_legal_moves(&mut board)
+            .into_iter()
+            .find(|m| m.to_usi() == candidate)
+            .map(|_| candidate.to_string())
     }
 
     /// 入玉宣言 (27 点法) が成立し，かつ持ち時間が残っているか．
@@ -979,10 +1164,12 @@ mod tests {
     /// 1 回駆動して info 随時出力の経路も通す．
     struct FakeBackend {
         calls: Calls,
-        draw_values: DrawValues,
+        rules_log: RulesLog,
         outcome: SearchOutcome,
         /// `nyugyoku_declarable` の返り値 (入玉宣言テスト用)．
         nyugyoku: bool,
+        /// `solve_mate` の返り値 (`go mate` テスト用)．
+        mate: CheckmateResult,
     }
 
     impl SearchBackend for FakeBackend {
@@ -991,14 +1178,14 @@ mod tests {
             sfen: &str,
             moves: &[String],
             budget: &SearchBudget,
-            draw_value: f64,
+            rules: &GoRules,
             _stop: &Arc<AtomicBool>,
             observer: &mut dyn SearchObserver,
         ) -> Result<SearchOutcome, String> {
             self.calls
                 .borrow_mut()
                 .push((sfen.to_string(), moves.to_vec(), *budget));
-            self.draw_values.borrow_mut().push(draw_value);
+            self.rules_log.borrow_mut().push(*rules);
             // observer を 1 回駆動 (info 随時出力の経路を検証可能にする)
             let snap = ProgressSnapshot {
                 playouts: self.outcome.playouts,
@@ -1019,46 +1206,59 @@ mod tests {
             Ok(self.nyugyoku)
         }
 
+        fn solve_mate(
+            &self,
+            _sfen: &str,
+            _moves: &[String],
+            _time_ms: Option<u64>,
+            _stop: &Arc<AtomicBool>,
+        ) -> Result<CheckmateResult, String> {
+            Ok(self.mate.clone())
+        }
+
         fn is_mock(&self) -> bool {
             true
         }
     }
 
     type Calls = Rc<RefCell<Vec<(String, Vec<String>, SearchBudget)>>>;
-    type DrawValues = Rc<RefCell<Vec<f64>>>;
+    type RulesLog = Rc<RefCell<Vec<GoRules>>>;
 
+    #[allow(clippy::type_complexity)] // impl Fn を含むタプル返却は alias 化不能 (TAIT 未安定)
     fn agent_with_fake(
         outcome: SearchOutcome,
     ) -> (
         Agent<FakeBackend, impl Fn(&EngineConfig) -> Result<FakeBackend, String>>,
         Calls,
     ) {
-        let (agent, calls, _draws) = agent_with_fake_full(outcome, false);
+        let (agent, calls, _rules) = agent_with_fake_full(outcome, false);
         (agent, calls)
     }
 
-    /// nyugyoku フラグと draw_value 記録も取れる版．
+    /// nyugyoku フラグと GoRules 記録も取れる版．
+    #[allow(clippy::type_complexity)] // 同上
     fn agent_with_fake_full(
         outcome: SearchOutcome,
         nyugyoku: bool,
     ) -> (
         Agent<FakeBackend, impl Fn(&EngineConfig) -> Result<FakeBackend, String>>,
         Calls,
-        DrawValues,
+        RulesLog,
     ) {
         let calls: Calls = Rc::new(RefCell::new(Vec::new()));
-        let draws: DrawValues = Rc::new(RefCell::new(Vec::new()));
+        let rules: RulesLog = Rc::new(RefCell::new(Vec::new()));
         let calls_for_factory = Rc::clone(&calls);
-        let draws_for_factory = Rc::clone(&draws);
+        let rules_for_factory = Rc::clone(&rules);
         let agent = Agent::new(EngineConfig::default(), move |_config| {
             Ok(FakeBackend {
                 calls: Rc::clone(&calls_for_factory),
-                draw_values: Rc::clone(&draws_for_factory),
+                rules_log: Rc::clone(&rules_for_factory),
                 outcome: outcome.clone(),
                 nyugyoku,
+                mate: CheckmateResult::NoMate,
             })
         });
-        (agent, calls, draws)
+        (agent, calls, rules)
     }
 
     fn default_outcome() -> SearchOutcome {
@@ -1071,6 +1271,7 @@ mod tests {
             nps: 1100,
             max_depth: 8,
             proven: None,
+            carried_visits: 0,
         }
     }
 
@@ -1181,15 +1382,16 @@ mod tests {
     }
 
     #[test]
-    fn test_go_mate_not_implemented() {
+    fn test_go_mate_builds_backend_when_isready_skipped() {
+        // isready を送らない GUI でも go mate は動く (通常 go と同じ防御)
         let (mut agent, _) = agent_with_fake(default_outcome());
         let out = agent
             .handle(GuiCommand::Go(GoParams {
-                mate: Some(crate::protocol::MateLimit::TimeMs(1000)),
+                mate: Some(crate::protocol::MateLimit::Infinite),
                 ..GoParams::default()
             }))
             .unwrap();
-        assert_eq!(out, vec![EngineCommand::CheckmateNotImplemented]);
+        assert_eq!(out, vec![EngineCommand::Checkmate(CheckmateResult::NoMate)]);
     }
 
     #[test]
@@ -1262,10 +1464,20 @@ mod tests {
 
     #[test]
     fn test_usi_hash_conversion() {
-        let mut config = EngineConfig::default();
-        config.usi_hash_mb = Some(512);
-        // 512MB / 512B = 1M ノード
-        assert_eq!(config.effective_node_capacity(), Some(1 << 20));
+        let mut config = EngineConfig {
+            usi_hash_mb: Some(512),
+            ..EngineConfig::default()
+        };
+        // 512MB を実測ノードサイズで割った値 (較正済み — 未決 3)
+        let expected = 512 * 1024 * 1024 / APPROX_BYTES_PER_NODE;
+        assert_eq!(
+            config.effective_node_capacity(),
+            Some(u32::try_from(expected).expect("32bit に収まる"))
+        );
+        // 指定メモリを超えないこと (過小評価は GUI の上限超過に直結する)
+        let bytes = u64::from(config.effective_node_capacity().expect("換算される"))
+            * APPROX_BYTES_PER_NODE;
+        assert!(bytes <= 512 * 1024 * 1024, "512MB を超えている: {bytes}");
         // NodeCapacity 明示が優先
         config.node_capacity = Some(4096);
         assert_eq!(config.effective_node_capacity(), Some(4096));
@@ -1326,8 +1538,209 @@ mod tests {
             .unwrap();
         agent.handle(GuiCommand::Go(GoParams::default())).unwrap();
         let d = draws.borrow();
-        assert!((d[0] - 0.4).abs() < 1e-9, "先手番は 0.4 (got {})", d[0]);
-        assert!((d[1] - 0.6).abs() < 1e-9, "後手番は 0.6 (got {})", d[1]);
+        assert!(
+            (d[0].draw_value - 0.4).abs() < 1e-9,
+            "先手番は 0.4 (got {})",
+            d[0].draw_value
+        );
+        assert!(
+            (d[1].draw_value - 0.6).abs() < 1e-9,
+            "後手番は 0.6 (got {})",
+            d[1].draw_value
+        );
+    }
+
+    /// `go mate` は詰み探索経路へ行き，bestmove を返さない (USI 仕様)．
+    #[test]
+    fn test_go_mate_reports_checkmate_result() {
+        let (mut agent, calls, _) = agent_with_fake_full(default_outcome(), false);
+        agent.handle(GuiCommand::IsReady).unwrap();
+        let out = agent
+            .handle(GuiCommand::Go(GoParams {
+                mate: Some(crate::protocol::MateLimit::TimeMs(1000)),
+                ..GoParams::default()
+            }))
+            .unwrap();
+        assert_eq!(out, vec![EngineCommand::Checkmate(CheckmateResult::NoMate)]);
+        assert!(calls.borrow().is_empty(), "通常探索は走らない");
+    }
+
+    #[test]
+    fn test_max_moves_to_draw_passed_to_search_rules() {
+        let (mut agent, _calls, rules) = agent_with_fake_full(default_outcome(), false);
+        agent.handle(GuiCommand::IsReady).unwrap();
+        set(&mut agent, "MaxMovesToDraw", "512");
+        agent.handle(GuiCommand::Go(GoParams::default())).unwrap();
+        assert_eq!(rules.borrow()[0].max_moves_to_draw, 512);
+    }
+
+    /// OpeningScript テストの共通ドライバ: script を設定し経路 `moves` で go
+    /// して (応答列, backend.search 呼び出し回数) を返す．
+    fn go_with_script(
+        script: &str,
+        moves: &[&str],
+        params: GoParams,
+    ) -> (Vec<EngineCommand>, usize) {
+        go_with_script_from(script, None, moves, params)
+    }
+
+    /// 基準局面 SFEN も指定できる版 (指定局面方式の検証用)．
+    fn go_with_script_from(
+        script: &str,
+        sfen: Option<&str>,
+        moves: &[&str],
+        params: GoParams,
+    ) -> (Vec<EngineCommand>, usize) {
+        let (mut agent, calls) = agent_with_fake(default_outcome());
+        agent.handle(GuiCommand::IsReady).unwrap();
+        set(&mut agent, "OpeningScript", script);
+        agent
+            .handle(GuiCommand::Position {
+                sfen: sfen.map(str::to_string),
+                moves: moves.iter().map(|s| s.to_string()).collect(),
+            })
+            .unwrap();
+        let out = agent.handle(GuiCommand::Go(params)).unwrap();
+        let n = calls.borrow().len();
+        (out, n)
+    }
+
+    /// 電竜戦 HWT の先手時間ハンデ手順 (玉の屈伸 4 手)．
+    const HWT_SHUFFLE: &str = "5i5h 5a5b 5h5i 5b5a";
+
+    #[test]
+    fn test_opening_script_hwt_shuffle_both_sides() {
+        // 先手番・後手番のどちらでも手順どおりの手を探索なしで即指しする
+        for (played, expected) in [
+            (&[][..], "5i5h"),
+            (&["5i5h"][..], "5a5b"),
+            (&["5i5h", "5a5b"][..], "5h5i"),
+            (&["5i5h", "5a5b", "5h5i"][..], "5b5a"),
+        ] {
+            let (out, n) = go_with_script(HWT_SHUFFLE, played, GoParams::default());
+            assert_eq!(n, 0, "{played:?} で探索が走った");
+            assert!(
+                matches!(
+                    out.last(),
+                    Some(EngineCommand::BestMove { mv: BestMoveKind::Move(m), .. }) if m == expected
+                ),
+                "{played:?} → {expected} を期待: {out:?}"
+            );
+        }
+        // 4 手消化後は通常探索に戻る
+        let (_, n) = go_with_script(
+            HWT_SHUFFLE,
+            &["5i5h", "5a5b", "5h5i", "5b5a"],
+            GoParams::default(),
+        );
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn test_opening_script_not_refired_from_designated_position() {
+        // 指定局面方式 (電竜戦 HWT/TSEC): 屈伸後の局面が「手数 5・経路なし」で
+        // 渡される．盤面は平手と同型なので script 手は合法だが，ここで再発火
+        // すると玉の屈伸を無限に繰り返してしまう → 通常探索でなければならない
+        let post_shuffle = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 5";
+        let (out, n) =
+            go_with_script_from(HWT_SHUFFLE, Some(post_shuffle), &[], GoParams::default());
+        assert_eq!(n, 1, "指定局面では script を再発火させない");
+        assert!(matches!(
+            out.last(),
+            Some(EngineCommand::BestMove { mv: BestMoveKind::Move(m), .. }) if m == "7g7f"
+        ));
+
+        // 同じ基準局面でも「手数 1」で渡されたら script は有効 (指定局面から
+        // 始まる対局に対して 1 手目から手順を課すケース)
+        let ply1 = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
+        let (_, n) = go_with_script_from(HWT_SHUFFLE, Some(ply1), &[], GoParams::default());
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn test_opening_script_plays_next_move_without_search() {
+        // 経路が script prefix と一致 → 次の script 手を探索なしで即指し
+        let (out, n) = go_with_script("7g7f 3c3d 2g2f", &[], GoParams::default());
+        assert_eq!(n, 0, "探索は走らない");
+        assert!(matches!(
+            out.last(),
+            Some(EngineCommand::BestMove {
+                mv: BestMoveKind::Move(m),
+                ponder: None,
+            }) if m == "7g7f"
+        ));
+
+        // script 途中の局面でも同様 (ponder は付かない)
+        let (out, n) = go_with_script("7g7f 3c3d 2g2f", &["7g7f", "3c3d"], GoParams::default());
+        assert_eq!(n, 0);
+        assert!(matches!(
+            out.last(),
+            Some(EngineCommand::BestMove {
+                mv: BestMoveKind::Move(m),
+                ponder: None,
+            }) if m == "2g2f"
+        ));
+    }
+
+    #[test]
+    fn test_opening_script_diverged_falls_back_to_search() {
+        // 経路が script から外れた → 以後は通常探索 (prefix 照合が満たす)
+        let (out, n) = go_with_script("7g7f 3c3d", &["2g2f"], GoParams::default());
+        assert_eq!(n, 1, "通常探索が走る");
+        assert!(matches!(
+            out.last(),
+            Some(EngineCommand::BestMove { mv: BestMoveKind::Move(m), .. }) if m == "7g7f"
+        ));
+    }
+
+    #[test]
+    fn test_opening_script_exhausted_falls_back_to_search() {
+        let (_, n) = go_with_script("7g7f 3c3d", &["7g7f", "3c3d"], GoParams::default());
+        assert_eq!(n, 1, "script 消化後は通常探索");
+    }
+
+    #[test]
+    fn test_opening_script_illegal_move_falls_back_to_search() {
+        // 7g7e は非合法 (歩は 1 マスしか進めない) → 無効化して通常探索 (安全側)
+        let (_, n) = go_with_script("7g7e", &[], GoParams::default());
+        assert_eq!(n, 1, "非合法 script 手は通常探索");
+    }
+
+    #[test]
+    fn test_opening_script_skipped_for_infinite_and_ponder() {
+        // go infinite / go ponder は即 bestmove を返せない (stop/ponderhit 待ち
+        // 規約) ため script を適用しない
+        let (_, n) = go_with_script(
+            "7g7f",
+            &[],
+            GoParams {
+                infinite: true,
+                ..GoParams::default()
+            },
+        );
+        assert_eq!(n, 1, "go infinite は script を短絡しない");
+        let (_, n) = go_with_script(
+            "7g7f",
+            &[],
+            GoParams {
+                ponder: true,
+                ..GoParams::default()
+            },
+        );
+        assert_eq!(n, 1, "go ponder は script を短絡しない");
+    }
+
+    #[test]
+    fn test_opening_script_option_declared() {
+        let (mut agent, _) = agent_with_fake(default_outcome());
+        let out = agent.handle(GuiCommand::Usi).unwrap();
+        assert!(out.iter().any(|c| matches!(
+            c,
+            EngineCommand::OptionDecl(OptionDecl {
+                name: "OpeningScript",
+                kind: OptionKind::String { default },
+            }) if default.is_empty()
+        )));
     }
 
     #[test]

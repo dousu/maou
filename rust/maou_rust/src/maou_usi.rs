@@ -1,8 +1,66 @@
 //! maou_usi (USI 対局エージェント) の PyO3 バインディング．
 
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
 
+use maou_usi::selfplay::{GameOutcome, SelfplayConfig};
 use maou_usi::{EngineConfig, TimeStrategyConfig};
+
+/// 評価器・探索・戦略の共通引数を [`EngineConfig`] へ反映する
+/// (`run_usi` / `run_selfplay` で共有する単一実装)．
+#[allow(clippy::too_many_arguments)]
+fn apply_common_engine_args(
+    config: &mut EngineConfig,
+    model_path: Option<String>,
+    threads: Option<usize>,
+    batch_size: Option<usize>,
+    node_capacity: Option<u32>,
+    use_cuda: Option<bool>,
+    use_tensorrt: Option<bool>,
+    trt_engine_cache_dir: Option<String>,
+    draw_value_black: Option<u32>,
+    draw_value_white: Option<u32>,
+    resign_value: Option<u32>,
+    resign_consecutive: Option<u32>,
+    opening_script: Option<String>,
+    root_dfpn: Option<bool>,
+    root_dfpn_nodes: Option<u64>,
+    root_dfpn_depth: Option<u32>,
+    leaf_mate: Option<bool>,
+    leaf_mate_nodes: Option<u64>,
+    leaf_mate_threads: Option<usize>,
+) {
+    config.model_path = model_path.filter(|p| !p.is_empty());
+    if let Some(v) = threads {
+        config.threads = v;
+    }
+    if let Some(v) = batch_size {
+        config.batch_size = v;
+    }
+    config.node_capacity = node_capacity;
+    config.use_cuda = use_cuda.unwrap_or(false);
+    config.use_tensorrt = use_tensorrt.unwrap_or(false);
+    config.trt_cache_dir = trt_engine_cache_dir;
+    if let Some(v) = draw_value_black {
+        config.draw_value_black = v;
+    }
+    if let Some(v) = draw_value_white {
+        config.draw_value_white = v;
+    }
+    if let Some(v) = resign_value {
+        config.resign_value = v;
+    }
+    if let Some(v) = resign_consecutive {
+        config.resign_consecutive = v.max(1);
+    }
+    config.opening_script = opening_script.filter(|s| !s.trim().is_empty());
+    config.root_dfpn = root_dfpn;
+    config.root_dfpn_nodes = root_dfpn_nodes;
+    config.root_dfpn_depth = root_dfpn_depth;
+    config.leaf_mate = leaf_mate;
+    config.leaf_mate_nodes = leaf_mate_nodes;
+    config.leaf_mate_threads = leaf_mate_threads;
+}
 
 /// USI エンジンを標準入出力で実行する (`quit`/EOF まで戻らない)．
 ///
@@ -28,10 +86,16 @@ use maou_usi::{EngineConfig, TimeStrategyConfig};
 ///   価値 (千分率，デフォルト 500．電竜戦 0.4/0.6 勝 = 400/600)．
 /// - `resign_value` (int, optional): 投了する root 勝率 (千分率，デフォルト
 ///   0 = 投了しない)．`resign_consecutive` (int, optional): 投了に必要な連続手数．
+/// - `keep_alive_ms` (int, optional): `isready` 応答待ち中に空行を送る間隔
+///   (デフォルト 0 = 送らない)．TensorRT の初回ビルドが GUI のタイムアウトを
+///   超える場合の生存通知．
 /// - `max_moves_to_draw` (int, optional): 引き分け最大手数 (デフォルト 0 = 無効)．
+///   > 0 なら探索内でもリミット以降を引き分け終端として扱う．
 /// - `usi_ponder` (bool, optional): ponder (先読み) を有効にするか (デフォルト
 ///   true)．true のとき `USI_Ponder` option を宣言し `bestmove` に予想相手手を
 ///   付ける (`setoption name USI_Ponder` で上書き可)．
+/// - `opening_script` (str, optional): 強制序盤手順 (USI 指し手の空白区切り，
+///   例 "5i5h 5a5b 5h5i 5b5a")．経路が prefix 一致する間は探索なしで即指し．
 /// - `root_dfpn` / `root_dfpn_nodes` / `root_dfpn_depth`: ルート並行 dfpn．
 /// - `leaf_mate` / `leaf_mate_nodes` / `leaf_mate_threads`: leaf-mate．
 ///
@@ -39,7 +103,7 @@ use maou_usi::{EngineConfig, TimeStrategyConfig};
 ///
 /// モデルロード失敗・不正局面などの致命的エラーは `RuntimeError`．
 #[pyfunction]
-#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, network_delay_ms=None, min_think_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, max_moves_to_draw=None, usi_ponder=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, network_delay_ms=None, min_think_ms=None, keep_alive_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, max_moves_to_draw=None, usi_ponder=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_usi(
     py: Python<'_>,
@@ -54,12 +118,14 @@ fn run_usi(
     trt_engine_cache_dir: Option<String>,
     network_delay_ms: Option<u64>,
     min_think_ms: Option<u64>,
+    keep_alive_ms: Option<u64>,
     draw_value_black: Option<u32>,
     draw_value_white: Option<u32>,
     resign_value: Option<u32>,
     resign_consecutive: Option<u32>,
     max_moves_to_draw: Option<u32>,
     usi_ponder: Option<bool>,
+    opening_script: Option<String>,
     root_dfpn: Option<bool>,
     root_dfpn_nodes: Option<u64>,
     root_dfpn_depth: Option<u32>,
@@ -74,34 +140,14 @@ fn run_usi(
     if let Some(v) = engine_author {
         config.engine_author = v;
     }
-    config.model_path = model_path.filter(|p| !p.is_empty());
-    if let Some(v) = threads {
-        config.threads = v;
-    }
-    if let Some(v) = batch_size {
-        config.batch_size = v;
-    }
-    config.node_capacity = node_capacity;
-    config.use_cuda = use_cuda.unwrap_or(false);
-    config.use_tensorrt = use_tensorrt.unwrap_or(false);
-    config.trt_cache_dir = trt_engine_cache_dir;
     let time_defaults = TimeStrategyConfig::default();
     config.time = TimeStrategyConfig {
         network_delay_ms: network_delay_ms.unwrap_or(time_defaults.network_delay_ms),
         min_think_ms: min_think_ms.unwrap_or(time_defaults.min_think_ms),
         horizon_moves: time_defaults.horizon_moves,
     };
-    if let Some(v) = draw_value_black {
-        config.draw_value_black = v;
-    }
-    if let Some(v) = draw_value_white {
-        config.draw_value_white = v;
-    }
-    if let Some(v) = resign_value {
-        config.resign_value = v;
-    }
-    if let Some(v) = resign_consecutive {
-        config.resign_consecutive = v.max(1);
+    if let Some(v) = keep_alive_ms {
+        config.keep_alive_ms = v;
     }
     if let Some(v) = max_moves_to_draw {
         config.max_moves_to_draw = v;
@@ -109,20 +155,209 @@ fn run_usi(
     if let Some(v) = usi_ponder {
         config.usi_ponder = v;
     }
-    config.root_dfpn = root_dfpn;
-    config.root_dfpn_nodes = root_dfpn_nodes;
-    config.root_dfpn_depth = root_dfpn_depth;
-    config.leaf_mate = leaf_mate;
-    config.leaf_mate_nodes = leaf_mate_nodes;
-    config.leaf_mate_threads = leaf_mate_threads;
+    apply_common_engine_args(
+        &mut config,
+        model_path,
+        threads,
+        batch_size,
+        node_capacity,
+        use_cuda,
+        use_tensorrt,
+        trt_engine_cache_dir,
+        draw_value_black,
+        draw_value_white,
+        resign_value,
+        resign_consecutive,
+        opening_script,
+        root_dfpn,
+        root_dfpn_nodes,
+        root_dfpn_depth,
+        leaf_mate,
+        leaf_mate_nodes,
+        leaf_mate_threads,
+    );
 
     py.detach(move || maou_usi::run_stdio(config))
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)
+}
+
+/// [`GameOutcome`] → Python dict．
+fn outcome_to_dict<'py>(py: Python<'py>, o: &GameOutcome) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("game_index", o.game_index)?;
+    d.set_item("sfen", &o.sfen)?;
+    d.set_item("moves", PyList::new(py, &o.moves)?)?;
+    d.set_item(
+        "winner",
+        o.winner.map(|c| match c {
+            maou_shogi::types::Color::Black => "black",
+            maou_shogi::types::Color::White => "white",
+        }),
+    )?;
+    d.set_item("reason", o.reason.as_str())?;
+    d.set_item("black_player", if o.black_is_a { "a" } else { "b" })?;
+    d.set_item("plies", o.moves.len())?;
+    d.set_item("playouts", o.playouts)?;
+    d.set_item("reused_moves", o.reused_moves)?;
+    d.set_item("carried_visits", o.carried_visits)?;
+    d.set_item("elapsed_ms", o.elapsed_ms)?;
+    Ok(d)
+}
+
+/// in-process 自己対局を実行し，対局結果 (dict) のリストを返す．
+///
+/// 1 対局 = エージェント 2 個 (先後独立の探索木) を stdio なしで直接駆動する．
+/// 評価器はプロセス内 1 個を全対局で共有する (モデルロード/warmup 1 回)．
+/// 終局判定 (宣言/千日手/最大手数/投了) は USI 対局と同一実装．
+///
+/// # 引数 (全て keyword-only)
+///
+/// - `model_path` (str, optional): ONNX モデルパス (未指定 = mock 評価器)．
+/// - `games` (int, optional): 対局数 (デフォルト 1)．
+/// - `parallel` (int, optional): 同時対局数 (デフォルト 1)．
+/// - `playouts` (int, optional): 1 手の playout 予算 (`movetime_ms` 未指定なら
+///   デフォルト 800)．
+/// - `movetime_ms` (int, optional): 1 手の思考時間ミリ秒 (`playouts` と排他)．
+/// - `max_moves` (int, optional): 最大手数 (デフォルト 512 = 電竜戦)．到達で
+///   引き分け (宣言成立は勝ち)．
+/// - `sfen` (str, optional): 基準局面 (デフォルト平手)．
+/// - `opening_random_plies` (int, optional): 序盤ランダム手数 (対局多様化，
+///   デフォルト 0)．`seed` (int, optional): 乱数シード (デフォルト 0)．
+/// - `verbose` (bool, optional): 対局ごとの進捗を stderr へ出す (デフォルト
+///   true)．
+/// - 残りは `run_usi` と同名の評価器・探索・戦略引数
+///   (`opening_script` は両側エージェントに適用される)．
+///
+/// # 返り値
+///
+/// 対局 index 順の dict リスト: `{game_index, sfen, moves, winner
+/// ("black"/"white"/None), reason, plies, playouts, elapsed_ms}`．
+///
+/// # エラー
+///
+/// 設定不正・モデルロード失敗・対局中の内部エラーは `RuntimeError`．
+#[pyfunction]
+#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+#[allow(clippy::too_many_arguments)]
+fn run_selfplay(
+    py: Python<'_>,
+    model_path: Option<String>,
+    games: Option<u32>,
+    parallel: Option<usize>,
+    playouts: Option<u64>,
+    movetime_ms: Option<u64>,
+    max_moves: Option<u32>,
+    sfen: Option<String>,
+    opening_random_plies: Option<u32>,
+    seed: Option<u64>,
+    verbose: Option<bool>,
+    threads: Option<usize>,
+    batch_size: Option<usize>,
+    node_capacity: Option<u32>,
+    use_cuda: Option<bool>,
+    use_tensorrt: Option<bool>,
+    trt_engine_cache_dir: Option<String>,
+    draw_value_black: Option<u32>,
+    draw_value_white: Option<u32>,
+    resign_value: Option<u32>,
+    resign_consecutive: Option<u32>,
+    opening_script: Option<String>,
+    root_dfpn: Option<bool>,
+    root_dfpn_nodes: Option<u64>,
+    root_dfpn_depth: Option<u32>,
+    leaf_mate: Option<bool>,
+    leaf_mate_nodes: Option<u64>,
+    leaf_mate_threads: Option<usize>,
+) -> PyResult<Py<PyList>> {
+    let mut engine = EngineConfig::default();
+    apply_common_engine_args(
+        &mut engine,
+        model_path,
+        threads,
+        batch_size,
+        node_capacity,
+        use_cuda,
+        use_tensorrt,
+        trt_engine_cache_dir,
+        draw_value_black,
+        draw_value_white,
+        resign_value,
+        resign_consecutive,
+        opening_script,
+        root_dfpn,
+        root_dfpn_nodes,
+        root_dfpn_depth,
+        leaf_mate,
+        leaf_mate_nodes,
+        leaf_mate_threads,
+    );
+    // 自己対局に伝送遅延はない (movetime をそのまま思考時間にする)
+    engine.time.network_delay_ms = 0;
+
+    let config = SelfplayConfig {
+        engine,
+        // A/B 対戦 (engine_b / 色交代 / 同期解除) は Rust example
+        // (selfplay_ab) 経由 — CLI には露出しない
+        engine_b: None,
+        alternate_colors: false,
+        sync_max_moves_to_draw: true,
+        sfen,
+        games: games.unwrap_or(1),
+        parallel: parallel.unwrap_or(1),
+        // playouts/movetime_ms 両方未指定なら playout 予算のデフォルトを使う
+        // 予算の per-side 指定 (A/B 検証用) と持ち時間モード (TimeStrategy
+        // 調整用) は Rust example 経由 — CLI は共通予算のみ
+        playouts_b: None,
+        movetime_ms_b: None,
+        clock: None,
+        playouts: match (playouts, movetime_ms) {
+            (None, None) => SelfplayConfig::default().playouts,
+            _ => playouts,
+        },
+        movetime_ms,
+        max_moves: max_moves.unwrap_or(512),
+        opening_random_plies: opening_random_plies.unwrap_or(0),
+        seed: seed.unwrap_or(0),
+    };
+    let verbose = verbose.unwrap_or(true);
+    let total = config.games;
+
+    let progress = move |o: &GameOutcome| {
+        if verbose {
+            let winner = match o.winner {
+                Some(maou_shogi::types::Color::Black) => "black wins",
+                Some(maou_shogi::types::Color::White) => "white wins",
+                None => "draw",
+            };
+            // stderr へ (stdout を汚さない — logging 規約と同じ)
+            eprintln!(
+                "[selfplay] game {}/{}: {} by {} ({} plies, {:.1}s, {} playouts)",
+                o.game_index + 1,
+                total,
+                winner,
+                o.reason.as_str(),
+                o.moves.len(),
+                o.elapsed_ms as f64 / 1000.0,
+                o.playouts,
+            );
+        }
+    };
+
+    let outcomes = py
+        .detach(move || maou_usi::selfplay::run_selfplay(&config, Some(&progress)))
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+
+    let list = PyList::empty(py);
+    for o in &outcomes {
+        list.append(outcome_to_dict(py, o)?)?;
+    }
+    Ok(list.unbind())
 }
 
 /// Create maou_usi submodule
 pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let m = PyModule::new(py, "maou_usi")?;
     m.add_function(wrap_pyfunction!(run_usi, &m)?)?;
+    m.add_function(wrap_pyfunction!(run_selfplay, &m)?)?;
     Ok(m)
 }

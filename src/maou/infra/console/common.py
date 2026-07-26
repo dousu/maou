@@ -9,45 +9,27 @@ from maou.infra.app_logging import (
 )
 
 if TYPE_CHECKING:
-    from maou.infra.bigquery.bq_data_source import (
-        BigQueryDataSource as _BigQueryDataSource,
-    )
-    from maou.infra.bigquery.bq_feature_store import (
-        BigQueryFeatureStore as _BigQueryFeatureStore,
-    )
     from maou.infra.file_system.file_data_source import (
         FileDataSource as FileDataSource,
     )
     from maou.infra.file_system.file_system import (
         FileSystem as FileSystem,
     )
-    from maou.infra.gcs.gcs import GCS as _GCS
-    from maou.infra.gcs.gcs_data_source import (
-        GCSDataSource as _GCSDataSource,
-    )
-    from maou.infra.gcs.gcs_feature_store import (
-        GCSFeatureStore as _GCSFeatureStore,
-    )
-    from maou.infra.s3.s3 import S3 as _S3
-    from maou.infra.s3.s3_data_source import (
-        S3DataSource as _S3DataSource,
-    )
-    from maou.infra.s3.s3_feature_store import (
-        S3FeatureStore as _S3FeatureStore,
-    )
-else:
-    _BigQueryDataSource = _BigQueryFeatureStore = None
-    _GCS = _GCSDataSource = _GCSFeatureStore = None
-    _S3 = _S3DataSource = _S3FeatureStore = None
 
-BigQueryDataSource: type[Any] | None = None
-BigQueryFeatureStore: type[Any] | None = None
-GCS: type[Any] | None = None
-GCSDataSource: type[Any] | None = None
-GCSFeatureStore: type[Any] | None = None
-S3: type[Any] | None = None
-S3DataSource: type[Any] | None = None
-S3FeatureStore: type[Any] | None = None
+    # 以下は実行時には `__getattr__` (PEP 562) が初回アクセスで解決する．
+    # **代入を書いてはいけない** — module global が存在すると `__getattr__`
+    # が呼ばれず，probe 前の値 (None) がそのまま渡ってしまう
+    HAS_BIGQUERY: bool
+    HAS_GCS: bool
+    HAS_AWS: bool
+    BigQueryDataSource: type[Any] | None
+    BigQueryFeatureStore: type[Any] | None
+    GCS: type[Any] | None
+    GCSDataSource: type[Any] | None
+    GCSFeatureStore: type[Any] | None
+    S3: type[Any] | None
+    S3DataSource: type[Any] | None
+    S3FeatureStore: type[Any] | None
 
 __all__ = [
     "app_logger",
@@ -85,83 +67,95 @@ def is_google_colab() -> bool:
         return False
 
 
-# 必要なライブラリが利用可能かどうかをチェックする変数
-HAS_BIGQUERY = False
-HAS_GCS = False
-HAS_AWS = False
-
-# BigQuery関連のライブラリのインポートを試みる
-try:
-    from maou.infra.bigquery import (
-        bq_data_source as _bq_data_source,
-    )
-    from maou.infra.bigquery import (
-        bq_feature_store as _bq_feature_store,
-    )
-
-    BigQueryDataSource = cast(
-        "type[Any]",
-        getattr(_bq_data_source, "BigQueryDataSource", None),
-    )
-    BigQueryFeatureStore = cast(
-        "type[Any]",
-        getattr(
-            _bq_feature_store, "BigQueryFeatureStore", None
+# クラウド連携 (BigQuery / GCS / S3) の在否と実体は初回アクセス時に解決する
+# (PEP 562 lazy import — 下の __getattr__)．BigQuery 経路は
+# maou.interface.learn 経由で torch を，GCS/S3 は各 SDK を引き込むため，
+# ここで eager に probe すると **クラウドを使わないコマンドまで** 数秒の
+# import を払う (USI エンジンは GUI 登録で毎回起動するため実害が大きい)．
+# 公開名 (HAS_BIGQUERY / BigQueryDataSource / …) と「依存が無ければ
+# HAS_* = False・クラス名 = None」の意味論は従来どおり．
+_CLOUD_PROBES: dict[
+    str, tuple[str, tuple[tuple[str, str], ...]]
+] = {
+    "BIGQUERY": (
+        "HAS_BIGQUERY",
+        (
+            (
+                "maou.infra.bigquery.bq_data_source",
+                "BigQueryDataSource",
+            ),
+            (
+                "maou.infra.bigquery.bq_feature_store",
+                "BigQueryFeatureStore",
+            ),
         ),
-    )
-    HAS_BIGQUERY = True
-except ImportError:
-    app_logger.debug(
-        "BigQuery dependencies not available. Some features will be disabled."
-    )
+    ),
+    "GCS": (
+        "HAS_GCS",
+        (
+            ("maou.infra.gcs.gcs", "GCS"),
+            ("maou.infra.gcs.gcs_data_source", "GCSDataSource"),
+            (
+                "maou.infra.gcs.gcs_feature_store",
+                "GCSFeatureStore",
+            ),
+        ),
+    ),
+    "AWS": (
+        "HAS_AWS",
+        (
+            ("maou.infra.s3.s3", "S3"),
+            ("maou.infra.s3.s3_data_source", "S3DataSource"),
+            (
+                "maou.infra.s3.s3_feature_store",
+                "S3FeatureStore",
+            ),
+        ),
+    ),
+}
 
-# GCS関連のライブラリのインポートを試みる
-try:
-    from maou.infra.gcs import gcs as _gcs
-    from maou.infra.gcs import (
-        gcs_data_source as _gcs_data_source,
-    )
-    from maou.infra.gcs import (
-        gcs_feature_store as _gcs_feature_store,
-    )
+# 公開名 → どの probe に属するか (逆引き)
+_CLOUD_OWNER: dict[str, str] = {
+    flag: group for group, (flag, _) in _CLOUD_PROBES.items()
+} | {
+    attr: group
+    for group, (_, members) in _CLOUD_PROBES.items()
+    for _, attr in members
+}
 
-    GCS = cast("type[Any]", getattr(_gcs, "GCS", None))
-    GCSDataSource = cast(
-        "type[Any]",
-        getattr(_gcs_data_source, "GCSDataSource", None),
-    )
-    GCSFeatureStore = cast(
-        "type[Any]",
-        getattr(_gcs_feature_store, "GCSFeatureStore", None),
-    )
-    HAS_GCS = True
-except ImportError:
-    app_logger.debug(
-        "GCS dependencies not available. Some features will be disabled."
-    )
 
-# AWS S3関連のライブラリのインポートを試みる
-try:
-    from maou.infra.s3 import s3 as _s3
-    from maou.infra.s3 import s3_data_source as _s3_data_source
-    from maou.infra.s3 import (
-        s3_feature_store as _s3_feature_store,
-    )
+def _resolve_cloud_probe(group: str) -> None:
+    """クラウド依存を 1 グループ分 import して結果を globals へ焼き付ける．
 
-    S3 = cast("type[Any]", getattr(_s3, "S3", None))
-    S3DataSource = cast(
-        "type[Any]",
-        getattr(_s3_data_source, "S3DataSource", None),
-    )
-    S3FeatureStore = cast(
-        "type[Any]",
-        getattr(_s3_feature_store, "S3FeatureStore", None),
-    )
-    HAS_AWS = True
-except ImportError:
-    app_logger.debug(
-        "AWS S3 dependencies not available. Some features will be disabled."
-    )
+    依存が無ければ `HAS_* = False`・各クラス名 = None にする (従来の
+    try/except ImportError と同じ意味論)．一度解決したら以後
+    `__getattr__` を経由しない．
+
+    Args:
+        group: `_CLOUD_PROBES` のキー ("BIGQUERY" / "GCS" / "AWS")．
+    """
+    from importlib import import_module
+
+    flag, members = _CLOUD_PROBES[group]
+    try:
+        resolved = {
+            attr: cast(
+                "type[Any]",
+                getattr(import_module(module_path), attr, None),
+            )
+            for module_path, attr in members
+        }
+    except ImportError:
+        app_logger.debug(
+            "%s dependencies not available. Some features will be disabled.",
+            group,
+        )
+        globals()[flag] = False
+        for _, attr in members:
+            globals()[attr] = None
+        return
+    globals().update(resolved)
+    globals()[flag] = True
 
 
 def validate_cloud_provider_exclusivity(
@@ -221,6 +215,10 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
 
 
 def __getattr__(name: str) -> Any:
+    group = _CLOUD_OWNER.get(name)
+    if group is not None:
+        _resolve_cloud_probe(group)
+        return globals()[name]
     spec = _LAZY_IMPORTS.get(name)
     if spec is not None:
         module_path, attr_name = spec

@@ -123,6 +123,99 @@ def test_usi_option_declarations() -> None:
     } <= names
     # M3: USI_Ponder を宣言する (GUI が go ponder を送る trigger．設計 doc §8.4)
     assert "USI_Ponder" in names
+    # M4: OpeningScript (強制序盤手順．設計 doc §8.3)
+    assert "OpeningScript" in names
+
+
+def test_usi_opening_script_plays_instantly() -> None:
+    """OpeningScript 中は探索なしで script 手を即指しする (M4)．
+
+    script 手の bestmove は探索を経ず同期的に出るため，一括 pipe でも
+    stop フラグ競合 (0-playout 経路) の影響を受けない．
+    """
+    lines = _run_engine(
+        "usi\n"
+        "setoption name OpeningScript value 7g7f 3c3d\n"
+        "isready\n"
+        "usinewgame\n"
+        "position startpos\n"
+        "go btime 60000 wtime 60000 byoyomi 1000\n"
+        "quit\n",
+    )
+    bestmove = next(
+        line for line in lines if line.startswith("bestmove ")
+    )
+    assert bestmove == "bestmove 7g7f", bestmove
+    # script 手には ponder が付かない (GUI に go ponder を送らせない)
+    assert " ponder " not in bestmove
+
+
+def _run_engine_until(
+    script: str, prefix: str, timeout: float = 60.0
+) -> list[str]:
+    """台本を流し `prefix` で始まる行が出るまで読んでから quit する．
+
+    一括 pipe だと `quit` が先に stop フラグを立てて探索が 0 で打ち切られる
+    (`go` も `go mate` も同じ規約) ため，応答を待ってから quit を送る．
+    """
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _ENTRY],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stdin is not None and proc.stdout is not None
+    lines: list[str] = []
+    try:
+        proc.stdin.write(script)
+        proc.stdin.flush()
+        for line in proc.stdout:
+            lines.append(line.rstrip("\n"))
+            if line.startswith(prefix):
+                break
+        proc.stdin.write("quit\n")
+        proc.stdin.flush()
+        proc.wait(timeout=timeout)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 0
+    return lines
+
+
+def test_usi_go_mate_e2e() -> None:
+    """`go mate` が dfpn で詰みを解き `checkmate <手順>` を返す (M4)．
+
+    詰み探索は評価器に依存しないので mock 構成でも実解する．
+    """
+    lines = _run_engine_until(
+        "usi\n"
+        "isready\n"
+        "usinewgame\n"
+        # 先手 5三歩 + 持駒金，後手 5一玉: G*5b の 1 手詰め
+        "position sfen 4k4/9/4P4/9/9/9/9/9/9 b G 1\n"
+        "go mate 5000\n",
+        "checkmate ",
+    )
+    checkmate = next(
+        line for line in lines if line.startswith("checkmate ")
+    )
+    assert checkmate.split()[1] == "G*5b", checkmate
+    # go mate は bestmove を返さない (USI 仕様)
+    assert not any(
+        line.startswith("bestmove ") for line in lines
+    )
+
+
+def test_usi_go_mate_reports_nomate() -> None:
+    """詰みが無い局面では `checkmate nomate` を返す．"""
+    lines = _run_engine_until(
+        "usi\nisready\nposition startpos\ngo mate 5000\n",
+        "checkmate ",
+    )
+    assert "checkmate nomate" in lines
 
 
 def test_usi_ponder_session_e2e() -> None:
@@ -258,32 +351,56 @@ def test_usi_stop_responds_quickly() -> None:
         stderr=subprocess.PIPE,
         text=True,
     )
-    assert proc.stdin is not None
+    assert proc.stdin is not None and proc.stdout is not None
+    lines: list[str] = []
     try:
+        # readyok を待ってから go infinite を送る．固定 sleep で「起動済み」を
+        # 仮定すると，起動が遅い構成 (onnx を静的リンクした release 拡張は
+        # import だけで数秒かかる) で stop が探索開始前に消費され，0-playout
+        # 経路の起動時間を測ってしまう
         proc.stdin.write(
             "usi\n"
             "setoption name RootDfpn value false\n"
             "setoption name LeafMate value false\n"
             "setoption name NodeCapacity value 16384\n"
             "isready\n"
-            "position startpos\n"
-            "go infinite\n"
         )
+        proc.stdin.flush()
+        for line in proc.stdout:
+            lines.append(line.rstrip("\n"))
+            if line.startswith("readyok"):
+                break
+        assert "readyok" in lines, "readyok が返らない"
+
+        proc.stdin.write("position startpos\ngo infinite\n")
         proc.stdin.flush()
         time.sleep(1.5)  # 無期限探索を回しておく
         stopped_at = time.monotonic()
-        proc.stdin.write("stop\nquit\n")
+        proc.stdin.write("stop\n")
+        proc.stdin.flush()
+        for line in proc.stdout:
+            lines.append(line.rstrip("\n"))
+            if line.startswith("bestmove "):
+                break
+        elapsed = time.monotonic() - stopped_at
+        proc.stdin.write("quit\n")
         proc.stdin.flush()
         proc.wait(timeout=15)
-        elapsed = time.monotonic() - stopped_at
     finally:
         if proc.poll() is None:
             proc.kill()
     assert proc.returncode == 0
-    # stop 即応 (mock 評価器なら実測ミリ秒オーダ．CI 余裕を見た緩い上限)
-    assert elapsed < 5.0, f"stop から終了まで {elapsed:.1f}s"
-    stdout = proc.stdout.read() if proc.stdout else ""
-    assert any(
-        line.startswith("bestmove ")
-        for line in stdout.splitlines()
+    # stop 即応 (バックエンドの監視間隔 100ms + 余裕．設計 doc §7 は 100ms 目標)
+    assert elapsed < 5.0, (
+        f"stop から bestmove まで {elapsed:.1f}s"
+    )
+    assert any(line.startswith("bestmove ") for line in lines)
+    # 実際に探索が回っていたこと (0-playout 経路で測っていない証拠)
+    nodes = [
+        int(line.split(" nodes ")[1].split()[0])
+        for line in lines
+        if line.startswith("info ") and " nodes " in line
+    ]
+    assert nodes and max(nodes) > 0, (
+        f"探索が回っていない: {lines[-5:]}"
     )
