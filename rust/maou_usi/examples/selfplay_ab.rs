@@ -12,6 +12,9 @@
 //! - `--mode subtree`: A = subtree 再利用 on / B = off
 //! - `--mode maxmoves`: A = MaxMovesToDraw の in-search 終端化 on / B = off
 //!   (両者とも driver の最大手数で引き分けになる点は同一．知識の有無だけが違う)
+//! - `--mode budget`: A = `--playouts` / B = `--playouts-b` (既定 A の 1/8)．
+//!   **ハーネスの健全性確認** — 予算の多い側が勝たなければ，この driver で
+//!   棋力差を測ること自体が成立していない (レバーの A/B より前に通すべき検証)
 
 use maou_usi::selfplay::{run_selfplay, GameOutcome, SelfplayConfig};
 use maou_usi::EngineConfig;
@@ -66,6 +69,13 @@ fn main() {
         ..EngineConfig::default()
     };
 
+    // 予算差モードのみ B の playout を変える (既定は A の 1/8)
+    let playouts_b_opt: Option<u64> = if mode == "budget" {
+        Some(arg_value(&args, "--playouts-b").unwrap_or((playouts / 8).max(1)))
+    } else {
+        None
+    };
+
     let (engine_a, engine_b, sync) = match mode.as_str() {
         // A = subtree 再利用 on (現行 default) / B = off
         "subtree" => {
@@ -83,8 +93,10 @@ fn main() {
             b.max_moves_to_draw = 0;
             (a, b, false)
         }
+        // A/B の設定は同一で探索予算だけを変える (ハーネスの健全性確認)
+        "budget" => (base.clone(), base.clone(), true),
         other => {
-            eprintln!("unknown --mode {other} (subtree | maxmoves)");
+            eprintln!("unknown --mode {other} (subtree | maxmoves | budget)");
             std::process::exit(2);
         }
     };
@@ -99,6 +111,8 @@ fn main() {
         parallel,
         playouts: Some(playouts),
         movetime_ms: None,
+        playouts_b: playouts_b_opt,
+        movetime_ms_b: None,
         max_moves,
         opening_random_plies: random_plies,
         seed,
@@ -192,7 +206,10 @@ fn main() {
     }
 
     println!("mode: {mode} (A = lever on, B = off)");
-    println!("games: {games}, playouts/move: {playouts}, random plies: {random_plies}, max moves: {max_moves}, seed: {seed}");
+    println!(
+        "games: {games}, playouts/move: A {playouts} / B {}, random plies: {random_plies}, max moves: {max_moves}, seed: {seed}",
+        playouts_b_opt.unwrap_or(playouts),
+    );
     println!("A result: {wins}W {draws}D {losses}L");
     println!(
         "A score: {:.1}/{} = {:.1}% (Wilson 95% CI [{:.1}%, {:.1}%])",

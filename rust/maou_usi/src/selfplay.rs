@@ -57,6 +57,13 @@ pub struct SelfplayConfig {
     pub playouts: Option<u64>,
     /// 1 手あたりの思考時間ミリ秒 (`go movetime` 相当)．
     pub movetime_ms: Option<u64>,
+    /// プレイヤー B の playout 予算 (`None` = A と同じ)．A/B 対戦で
+    /// **予算差**を作るためのもの — 「強い予算が勝つ」ことの確認は driver が
+    /// 棋力差を測れているかの検証になる (設計 §9 の自己対局を計測基盤として
+    /// 使う前提の健全性確認)．
+    pub playouts_b: Option<u64>,
+    /// プレイヤー B の思考時間ミリ秒 (`None` = A と同じ)．
+    pub movetime_ms_b: Option<u64>,
     /// 最大手数 (到達で引き分け．到達局面で宣言可能なら手番の勝ち — 電竜戦
     /// ルール)．エージェントの `MaxMovesToDraw` にも同じ値が渡る．
     pub max_moves: u32,
@@ -79,6 +86,8 @@ impl Default for SelfplayConfig {
             parallel: 1,
             playouts: Some(800),
             movetime_ms: None,
+            playouts_b: None,
+            movetime_ms_b: None,
             max_moves: 512,
             opening_random_plies: 0,
             seed: 0,
@@ -213,11 +222,19 @@ pub fn run_selfplay(
     warmup_evaluator(&evaluator)?;
     let evaluator = Arc::new(evaluator);
 
-    let go_params = GoParams {
-        nodes: config.playouts,
-        movetime: config.movetime_ms,
-        ..GoParams::default()
-    };
+    // 探索予算 (A/B で別々にできる — 予算差で棋力差を作る検証用)
+    let go_params: [GoParams; 2] = [
+        GoParams {
+            nodes: config.playouts,
+            movetime: config.movetime_ms,
+            ..GoParams::default()
+        },
+        GoParams {
+            nodes: config.playouts_b.or(config.playouts),
+            movetime: config.movetime_ms_b.or(config.movetime_ms),
+            ..GoParams::default()
+        },
+    ];
 
     let next = AtomicU32::new(0);
     let results: Mutex<Vec<(u32, Result<GameOutcome, String>)>> =
@@ -275,7 +292,7 @@ fn play_game(
     black_is_a: bool,
     evaluator: &Arc<EngineEvaluator>,
     sfen: &str,
-    go_params: &GoParams,
+    go_params: &[GoParams; 2],
     max_moves: u32,
     opening_random_plies: u32,
     seed: u64,
@@ -300,13 +317,11 @@ fn play_game(
             .map_err(|e| format!("game {game_index}: isready 失敗: {e}"))?;
         Ok::<_, String>(agent)
     };
-    let (cfg_black, cfg_white) = if black_is_a {
-        (&engines[0], &engines[1])
-    } else {
-        (&engines[1], &engines[0])
-    };
-    let mut black = mk_agent(cfg_black)?;
-    let mut white = mk_agent(cfg_white)?;
+    // 先後への A/B 割り当て (設定と探索予算は同じ側から取る)
+    let (ia, ib) = if black_is_a { (0, 1) } else { (1, 0) };
+    let mut black = mk_agent(&engines[ia])?;
+    let mut white = mk_agent(&engines[ib])?;
+    let (go_black, go_white) = (&go_params[ia], &go_params[ib]);
 
     let (mut board, _) = build_board_and_history(sfen, &[]).map_err(|e| e.to_string())?;
     let mut entries = vec![HistoryEntry::from_board(&board)];
@@ -338,9 +353,9 @@ fn play_game(
             let pick = (rng.next() % legal.len() as u64) as usize;
             legal[pick].to_usi()
         } else {
-            let agent = match side {
-                Color::Black => &mut black,
-                Color::White => &mut white,
+            let (agent, go) = match side {
+                Color::Black => (&mut black, go_black),
+                Color::White => (&mut white, go_white),
             };
             agent
                 .handle(GuiCommand::Position {
@@ -349,7 +364,7 @@ fn play_game(
                 })
                 .map_err(|e| format!("game {game_index}: position 失敗: {e}"))?;
             let out = agent
-                .handle(GuiCommand::Go(go_params.clone()))
+                .handle(GuiCommand::Go(go.clone()))
                 .map_err(|e| format!("game {game_index}: go 失敗: {e}"))?;
             // 探索サマリ info (最後の nodes 付き info) から playout を集計する
             playouts += out
@@ -632,6 +647,24 @@ mod tests {
         assert_eq!(off[0].reason, GameEndReason::MaxMoves);
         assert_eq!(off[0].reused_moves, 0);
         assert_eq!(off[0].carried_visits, 0);
+    }
+
+    #[test]
+    fn test_selfplay_ab_per_side_budget() {
+        // A に 4 倍の予算を与えると，その分だけ playout が積まれる
+        // (予算差で棋力差を作れる = ハーネス健全性確認の前提)
+        let mut cfg = config(1, 64, 6);
+        cfg.engine_b = Some(cfg.engine.clone());
+        cfg.playouts_b = Some(16);
+        let outcomes = run_selfplay(&cfg, None).expect("成功");
+        let o = &outcomes[0];
+        assert_eq!(o.moves.len(), 6);
+        // 先手 3 手 × 64 + 後手 3 手 × 16 = 240 前後 (バッチ粒度で超過し得る)
+        assert!(
+            (200..400).contains(&o.playouts),
+            "A/B 予算差が playout 合計に出るはず: {}",
+            o.playouts
+        );
     }
 
     #[test]

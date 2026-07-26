@@ -298,6 +298,9 @@ fn run_selfplay(
         games: games.unwrap_or(1),
         parallel: parallel.unwrap_or(1),
         // playouts/movetime_ms 両方未指定なら playout 予算のデフォルトを使う
+        // 予算の per-side 指定 (A/B 検証用) は Rust example 経由 — CLI は共通
+        playouts_b: None,
+        movetime_ms_b: None,
         playouts: match (playouts, movetime_ms) {
             (None, None) => SelfplayConfig::default().playouts,
             _ => playouts,
