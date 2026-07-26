@@ -177,6 +177,11 @@ pub struct GameOutcome {
     pub carried_visits: u64,
     /// 対局の壁時計時間 (ミリ秒)．
     pub elapsed_ms: u64,
+    /// 終局時の残り持ち時間 [先手, 後手] (持ち時間モードのみ)．
+    ///
+    /// 時間配分の診断に使う: 使い残しが多ければ配分が保守的すぎ，
+    /// 0 付近に張り付いていれば攻めすぎ (設計 §12 未決 1)．
+    pub remaining_ms: Option<[u64; 2]>,
 }
 
 /// SplitMix64 (シード決定的な軽量乱数．依存を増やさない)．
@@ -513,6 +518,7 @@ fn play_game(
         reused_moves,
         carried_visits,
         elapsed_ms: start.elapsed().as_millis() as u64,
+        remaining_ms: remaining,
     })
 }
 
@@ -741,6 +747,12 @@ mod tests {
         let o = &outcomes[0];
         assert_eq!(o.reason, GameEndReason::MaxMoves, "{:?}", o.reason);
         assert!(o.playouts > 0, "時計由来の予算で探索している");
+        // 終局時の残り時間が記録される (時間配分の診断に使う)
+        let rem = o.remaining_ms.expect("持ち時間モードでは記録される");
+        assert!(
+            rem.iter().all(|&v| v <= 2_000 + 10 * 50),
+            "残り時間が初期値 + 加算を超えている: {rem:?}"
+        );
     }
 
     #[test]

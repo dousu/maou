@@ -265,6 +265,35 @@ fn main() {
         total_plies,
         total_ms as f64 / 1000.0,
     );
+    // 時間配分の診断 (持ち時間モード): 終局時の残り時間 = 使い残し．
+    // 勝率より少ないサンプルで「配分が保守的すぎないか」が分かる
+    if let Some(c) = clock {
+        let mut left = [0u64; 2]; // [A, B]
+        let mut n = 0u32;
+        for o in &outcomes {
+            if let Some(rem) = o.remaining_ms {
+                // rem は [先手, 後手]．A/B 視点へ写す
+                let (a, b) = if o.black_is_a {
+                    (rem[0], rem[1])
+                } else {
+                    (rem[1], rem[0])
+                };
+                left[0] += a;
+                left[1] += b;
+                n += 1;
+            }
+        }
+        if n > 0 {
+            let avg = |v: u64| v as f64 / f64::from(n);
+            println!(
+                "time left at end (avg): A {:.1}s / B {:.1}s (initial {:.1}s + {}ms/move)",
+                avg(left[0]) / 1000.0,
+                avg(left[1]) / 1000.0,
+                c.initial_ms as f64 / 1000.0,
+                c.inc_ms,
+            );
+        }
+    }
     // 機構レベルの計測: 勝率が有意でなくても「レバーが実対局で発火したか」
     // は決着する (subtree 再利用は A 側のみ on なので carry は全て A の分)
     println!(
