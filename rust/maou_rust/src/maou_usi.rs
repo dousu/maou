@@ -86,6 +86,9 @@ fn apply_common_engine_args(
 ///   価値 (千分率，デフォルト 500．電竜戦 0.4/0.6 勝 = 400/600)．
 /// - `resign_value` (int, optional): 投了する root 勝率 (千分率，デフォルト
 ///   0 = 投了しない)．`resign_consecutive` (int, optional): 投了に必要な連続手数．
+/// - `keep_alive_ms` (int, optional): `isready` 応答待ち中に空行を送る間隔
+///   (デフォルト 0 = 送らない)．TensorRT の初回ビルドが GUI のタイムアウトを
+///   超える場合の生存通知．
 /// - `max_moves_to_draw` (int, optional): 引き分け最大手数 (デフォルト 0 = 無効)．
 ///   > 0 なら探索内でもリミット以降を引き分け終端として扱う．
 /// - `usi_ponder` (bool, optional): ponder (先読み) を有効にするか (デフォルト
@@ -100,7 +103,7 @@ fn apply_common_engine_args(
 ///
 /// モデルロード失敗・不正局面などの致命的エラーは `RuntimeError`．
 #[pyfunction]
-#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, network_delay_ms=None, min_think_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, max_moves_to_draw=None, usi_ponder=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, network_delay_ms=None, min_think_ms=None, keep_alive_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, max_moves_to_draw=None, usi_ponder=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_usi(
     py: Python<'_>,
@@ -115,6 +118,7 @@ fn run_usi(
     trt_engine_cache_dir: Option<String>,
     network_delay_ms: Option<u64>,
     min_think_ms: Option<u64>,
+    keep_alive_ms: Option<u64>,
     draw_value_black: Option<u32>,
     draw_value_white: Option<u32>,
     resign_value: Option<u32>,
@@ -142,6 +146,9 @@ fn run_usi(
         min_think_ms: min_think_ms.unwrap_or(time_defaults.min_think_ms),
         horizon_moves: time_defaults.horizon_moves,
     };
+    if let Some(v) = keep_alive_ms {
+        config.keep_alive_ms = v;
+    }
     if let Some(v) = max_moves_to_draw {
         config.max_moves_to_draw = v;
     }
@@ -298,9 +305,11 @@ fn run_selfplay(
         games: games.unwrap_or(1),
         parallel: parallel.unwrap_or(1),
         // playouts/movetime_ms 両方未指定なら playout 予算のデフォルトを使う
-        // 予算の per-side 指定 (A/B 検証用) は Rust example 経由 — CLI は共通
+        // 予算の per-side 指定 (A/B 検証用) と持ち時間モード (TimeStrategy
+        // 調整用) は Rust example 経由 — CLI は共通予算のみ
         playouts_b: None,
         movetime_ms_b: None,
+        clock: None,
         playouts: match (playouts, movetime_ms) {
             (None, None) => SelfplayConfig::default().playouts,
             _ => playouts,

@@ -54,6 +54,27 @@ fn read_commands<R: BufRead>(
     let _ = tx.send(GuiCommand::Quit);
 }
 
+/// `isready` の応答待ち中に空行を出し続ける (生存通知)．
+///
+/// モデルロード + warmup (TensorRT の初回ビルドは数十秒) が GUI のタイムアウト
+/// を超えると対局に入れないため，`interval_ms` ごとに空行を書く (設計 §7)．
+/// `done` が立つまで細かい刻みで眠りながら待つので，構築が速く終われば
+/// 1 行も出さずに畳まれる．既定は無効 (`interval_ms == 0` では呼ばない)．
+fn keep_alive_loop<W: Write>(mut out: W, interval_ms: u64, done: &AtomicBool) {
+    const TICK: std::time::Duration = std::time::Duration::from_millis(50);
+    let interval = std::time::Duration::from_millis(interval_ms.max(1));
+    let mut next = interval;
+    let start = std::time::Instant::now();
+    while !done.load(Ordering::Acquire) {
+        std::thread::sleep(TICK);
+        if start.elapsed() >= next {
+            let _ = writeln!(out);
+            let _ = out.flush();
+            next += interval;
+        }
+    }
+}
+
 /// dispatcher: コマンドを順に処理して応答を書く．`Quit` で終了する．
 fn run_loop<B, F, W>(
     rx: &Receiver<GuiCommand>,
@@ -63,7 +84,7 @@ fn run_loop<B, F, W>(
 where
     B: SearchBackend,
     F: Fn(&EngineConfig) -> Result<B, String>,
-    W: Write,
+    W: Write + Clone + Send,
 {
     loop {
         let Ok(cmd) = rx.recv() else {
@@ -86,7 +107,25 @@ where
                 return fatal(out, &e);
             }
         } else {
-            match agent.handle(cmd) {
+            // isready は重い初期化 (モデルロード/warmup) でブロックし得るので，
+            // 設定されていれば別スレッドから生存通知の空行を流す
+            let keep_alive = matches!(cmd, GuiCommand::IsReady)
+                .then(|| agent.keep_alive_ms())
+                .filter(|ms| *ms > 0);
+            let result = match keep_alive {
+                None => agent.handle(cmd),
+                Some(interval) => {
+                    let done = AtomicBool::new(false);
+                    std::thread::scope(|s| {
+                        let ka_out = out.clone();
+                        s.spawn(|| keep_alive_loop(ka_out, interval, &done));
+                        let r = agent.handle(cmd);
+                        done.store(true, Ordering::Release);
+                        r
+                    })
+                }
+            };
+            match result {
                 Ok(responses) => {
                     for r in &responses {
                         writeln!(out, "{}", serialize(r)).map_err(|e| e.to_string())?;
@@ -127,6 +166,23 @@ fn sanitize_ascii(s: &str) -> String {
         .collect()
 }
 
+/// stdout への行書き込み．**呼び出しごとにロックを取る**ので複数スレッドから
+/// 安全に書ける (dispatcher と keep-alive スレッドが同じ stdout を共有する)．
+/// セッション中ロックを保持し続けると keep-alive が書けなくなるため，
+/// `StdoutLock` は持たない．
+#[derive(Clone, Copy)]
+struct StdoutWriter;
+
+impl Write for StdoutWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        std::io::stdout().write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stdout().flush()
+    }
+}
+
 /// 標準入出力で USI エンジンを実行する (quit / EOF まで戻らない)．
 ///
 /// 呼び出しスレッドが dispatcher になる．stdin を専有するため，プロセスに
@@ -140,9 +196,7 @@ pub fn run_stdio(config: EngineConfig) -> Result<(), String> {
         let stdin = std::io::stdin();
         read_commands(stdin.lock(), &stop, &ponderhit, &tx);
     });
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
-    run_loop(&rx, &mut out, &mut agent)
+    run_loop(&rx, &mut StdoutWriter, &mut agent)
 }
 
 #[cfg(test)]
@@ -152,6 +206,72 @@ mod tests {
     use maou_search::build_board_and_history;
     use maou_shogi::movegen::generate_legal_moves;
     use std::io::Cursor;
+
+    /// 複数スレッドから書けるテスト用 writer (keep-alive スレッドと共有する)．
+    #[derive(Clone)]
+    struct SharedOut(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for SharedOut {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("test writer lock")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// keep-alive: isready が重いと空行が流れ，readyok より前に出る．
+    #[test]
+    fn test_keep_alive_emits_blank_lines_during_slow_isready() {
+        let config = EngineConfig {
+            root_dfpn: Some(false),
+            leaf_mate: Some(false),
+            node_capacity: Some(1 << 12),
+            keep_alive_ms: 50,
+            ..EngineConfig::default()
+        };
+        // 構築に時間のかかる評価器を模す (TRT エンジンビルド相当)
+        let mut agent = Agent::new(config, |cfg: &EngineConfig| {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            MaouSearchBackend::build(cfg)
+        });
+        let stop = agent.stop_handle();
+        let ponderhit = agent.ponderhit_handle();
+        let (tx, rx) = std::sync::mpsc::channel::<GuiCommand>();
+        let input = Cursor::new("isready\nquit\n".to_string());
+        let reader = std::thread::spawn(move || {
+            read_commands(input, &stop, &ponderhit, &tx);
+        });
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        run_loop(&rx, &mut SharedOut(std::sync::Arc::clone(&buf)), &mut agent)
+            .expect("セッションは正常終了する");
+        reader.join().expect("reader 正常終了");
+        let text = String::from_utf8(buf.lock().expect("lock").clone()).expect("UTF-8");
+        let lines: Vec<&str> = text.lines().collect();
+        let readyok = lines
+            .iter()
+            .position(|l| *l == "readyok")
+            .expect("readyok が返る");
+        // 300ms / 50ms なので数本は出る．readyok より前であること
+        let blanks = lines[..readyok].iter().filter(|l| l.is_empty()).count();
+        assert!(blanks >= 2, "keep-alive の空行が出ていない: {lines:?}");
+    }
+
+    /// 既定 (0) では空行を出さない — GUI の挙動が未検証なので opt-in．
+    #[test]
+    fn test_keep_alive_off_by_default() {
+        let lines = run_session("isready\nquit\n");
+        assert!(lines.iter().any(|l| l == "readyok"));
+        assert!(
+            lines.iter().all(|l| !l.is_empty()),
+            "既定で空行を出してはいけない: {lines:?}"
+        );
+    }
 
     /// USI セッション台本を実バックエンド (mock 評価器) で流す E2E．
     fn run_session(script: &str) -> Vec<String> {

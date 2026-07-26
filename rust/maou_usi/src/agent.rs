@@ -85,6 +85,13 @@ pub struct EngineConfig {
     /// 未決 6) で off 側を作るためのもので，USI option には宣言しない
     /// (§10 に無い — M3 での user 決定)．
     pub subtree_reuse: bool,
+    /// `isready` の応答待ち中に空行を送る間隔 (ミリ秒．0 = 送らない = 既定)．
+    ///
+    /// モデルロード + warmup (TensorRT の初回エンジンビルドは数十秒) が
+    /// GUI 側のタイムアウトを超えると対局に入れないため，生存通知として
+    /// 空行を流す逃げ道 (設計 §7)．GUI が空行をどう扱うかは実機確認が必要
+    /// なので既定は off (設計 §12 未決 2 — 既定値の判断のみ実機待ち)．
+    pub keep_alive_ms: u64,
     /// ponder (先読み) を有効にするか (既定 true)．true のとき `USI_Ponder`
     /// option を宣言し，`bestmove` に予想相手手 (自探索 PV の 2 手目) を付ける．
     /// GUI はこれを見て相手番中に `go ponder` を送る (設計 doc §8.4)．
@@ -124,6 +131,7 @@ impl Default for EngineConfig {
             max_moves_to_draw: 0,
             opening_script: None,
             subtree_reuse: true,
+            keep_alive_ms: 0,
             usi_ponder: true,
             root_dfpn: None,
             root_dfpn_nodes: None,
@@ -382,6 +390,12 @@ where
         }
     }
 
+    /// `isready` 応答待ちの keep-alive 間隔 (ミリ秒．0 = 送らない)．
+    /// transport が生存通知の送出間隔として使う ([`EngineConfig::keep_alive_ms`])．
+    pub fn keep_alive_ms(&self) -> u64 {
+        self.config.keep_alive_ms
+    }
+
     /// 直近の `go` で subtree 再利用が引き継いだ訪問数 (0 = fresh 探索)．
     ///
     /// 自己対局 driver が「機構が実対局で何回発火し，実質どれだけ予算が
@@ -616,6 +630,14 @@ where
                 },
             },
             OptionDecl {
+                name: "KeepAlive",
+                kind: OptionKind::Spin {
+                    default: c.keep_alive_ms as i64,
+                    min: 0,
+                    max: 60_000,
+                },
+            },
+            OptionDecl {
                 name: "OpeningScript",
                 kind: OptionKind::String {
                     default: c.opening_script.clone().unwrap_or_default(),
@@ -730,6 +752,12 @@ where
                     self.config.max_moves_to_draw = n;
                 }
                 // 探索へは go ごとに GoRules として渡すため再構築不要
+                invalidate = false;
+            }
+            "KeepAlive" => {
+                if let Ok(n) = v.parse() {
+                    self.config.keep_alive_ms = n;
+                }
                 invalidate = false;
             }
             "OpeningScript" => {

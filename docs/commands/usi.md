@@ -76,6 +76,7 @@
 | `--node-capacity INT` | | Node pool capacity (default 2^20 nodes). |
 | `--network-delay-ms INT` | default `1000` | Communication overhead margin in milliseconds. The GUI/server measures elapsed time including transport, so the per-move budget is reduced by this amount. |
 | `--min-think-ms INT` | default `100` | Minimum thinking time in milliseconds. |
+| `--keep-alive-ms INT` | default `0` (off) | While answering `isready`, send a blank line every N milliseconds as a liveness signal. Intended for setups where the first TensorRT engine build exceeds the GUI's `readyok` timeout. Opt-in because GUI handling of blank lines is not yet verified on real hardware. |
 | `--draw-value-black INT` | default `500` | Draw value for Black in permille. Repetition / max-moves draw terminals are valued at this (root side-to-move view). Denryu-sen Black 0.4 win = `400`. |
 | `--draw-value-white INT` | default `500` | Draw value for White in permille (Denryu-sen White 0.6 win = `600`). |
 | `--resign-value INT` | default `0` | Resign when the root win rate stays below this permille for `--resign-consecutive` moves. `0` = never resign. |
@@ -106,6 +107,7 @@ Declared in the `usi` response; defaults reflect the CLI flags above.
 | `TrtCacheDir` | string | TensorRT engine cache directory. |
 | `NetworkDelay` | spin (ms) | Communication margin subtracted from each move budget. |
 | `MinimumThinkingTime` | spin (ms) | Minimum thinking time. |
+| `KeepAlive` | spin (ms) | Blank-line keep-alive interval while answering `isready` (0 = disabled). |
 | `DrawValueBlack` / `DrawValueWhite` | spin (permille) | Draw value per side (default 500; Denryu-sen 400 / 600). Converted to the search's side-to-move `draw_value`. |
 | `ResignValue` | spin (permille) | Resign win-rate threshold (0 = never). |
 | `ResignConsecutive` | spin | Consecutive below-threshold moves required to resign. |

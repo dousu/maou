@@ -64,6 +64,11 @@ A/B 対戦支援 (per-side 設定 + 色交代，Rust example `selfplay_ab`) の�
 伴い，selfplay.md の Output 節に `black_player` キーの説明を 1 行追加した
 (レコード形式の正確性維持のための追随で，新しい設計判断を含まない)．
 
+keep-alive (設計 §7 で「オプションで用意・default off」と決めてあったが
+未実装だった) を実装したため，usi.md の CLI/USI オプション表に
+`--keep-alive-ms` / `KeepAlive` を追加した．既定 off は設計どおりで，
+既定値の判断 (未決 2) は実機確認後のまま．
+
 残件消化 (未決 3 の較正・`go mate` 実装) に伴い usi.md を 2 箇所更新した:
 `USI_Hash` の換算根拠を実測値 (~808 B/node) に差し替え，「未実装: go mate」
 の記述を実装済み (checkmate 手順 / nomate は証明時のみ / timeout) に更新．

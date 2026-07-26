@@ -61,6 +61,18 @@ from maou.infra.console.common import (
     required=False,
 )
 @click.option(
+    "--keep-alive-ms",
+    help="While answering isready, send a blank line every N milliseconds "
+    "as a liveness signal (0 = disabled, the default). Useful when the "
+    "first TensorRT engine build takes longer than the GUI's readyok "
+    "timeout. GUI behaviour with blank lines is unverified, so this is "
+    "opt-in. Also `setoption name KeepAlive`.",
+    type=int,
+    default=0,
+    show_default=True,
+    required=False,
+)
+@click.option(
     "--draw-value-black",
     help="Draw value for Black in permille (default 500). The repetition / "
     "max-moves draw terminal is valued at this from the side-to-move view "
@@ -213,6 +225,7 @@ def usi(
     node_capacity: int | None,
     network_delay_ms: int,
     min_think_ms: int,
+    keep_alive_ms: int,
     draw_value_black: int,
     draw_value_white: int,
     resign_value: int,
@@ -249,6 +262,8 @@ def usi(
         node_capacity: Node pool capacity.
         network_delay_ms: Communication overhead margin in milliseconds.
         min_think_ms: Minimum thinking time in milliseconds.
+        keep_alive_ms: Blank-line keep-alive interval while answering
+            isready (0 = disabled).
         draw_value_black: Draw value for Black in permille (default 500).
         draw_value_white: Draw value for White in permille (default 500).
         resign_value: Resign win-rate threshold in permille (0 = never).
@@ -273,6 +288,7 @@ def usi(
         node_capacity=node_capacity,
         network_delay_ms=network_delay_ms,
         min_think_ms=min_think_ms,
+        keep_alive_ms=keep_alive_ms,
         draw_value_black=draw_value_black,
         draw_value_white=draw_value_white,
         resign_value=resign_value,
