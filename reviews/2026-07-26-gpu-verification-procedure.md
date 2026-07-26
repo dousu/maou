@@ -1,7 +1,8 @@
 ---
 title: GPU (Colab L4) 検証手順の文書化と A/B ハーネスの CLI 露出に伴う docs 更新
 date: 2026-07-26
-status: pending
+status: applied
+applied_in: 27dacbc
 target:
   - docs/design/usi-engine/verification.md (新設)
   - docs/design/usi-engine/index.md
