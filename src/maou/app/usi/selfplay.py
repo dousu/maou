@@ -96,7 +96,9 @@ class SelfplayRunner:
 
         Returns:
             対局ごとの dict: ``{game_index, sfen, moves, winner
-            ("black"/"white"/None), reason, plies, playouts, elapsed_ms}``．
+            ("black"/"white"/None), reason, black_player ("a"/"b" — A/B
+            対戦時の色交代記録．CLI の純粋自己対局では常に "a"), plies,
+            playouts, elapsed_ms}``．
 
         Raises:
             RuntimeError: 設定不正・モデルロード失敗・対局中の内部エラー

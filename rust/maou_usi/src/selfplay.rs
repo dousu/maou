@@ -29,11 +29,24 @@ use crate::protocol::{BestMoveKind, EngineCommand, GoParams, GuiCommand};
 /// 自己対局の設定．
 #[derive(Clone, Debug)]
 pub struct SelfplayConfig {
-    /// 両側エージェント共通のエンジン設定 (モデル・探索オプション・戦略)．
-    /// `usi_ponder` は無視され (ponder は GUI 対局の概念)，`max_moves_to_draw`
-    /// は [`SelfplayConfig::max_moves`] で上書きされる (driver の終局判定と
-    /// エージェントの in-search 終端化を一致させる)．
+    /// プレイヤー A のエンジン設定 (モデル・探索オプション・戦略)．
+    /// `usi_ponder` は無視される (ponder は GUI 対局の概念)．
+    /// [`SelfplayConfig::sync_max_moves_to_draw`] が true (既定) なら
+    /// `max_moves_to_draw` は [`SelfplayConfig::max_moves`] で上書きされる．
     pub engine: EngineConfig,
+    /// プレイヤー B のエンジン設定 (`None` = A と同一 = 純粋自己対局)．
+    /// Some なら A/B 対戦モード．**モデルは A と同一であること** (評価器を
+    /// プロセス内 1 個で共有するため．設定レバーの A/B 比較用)．
+    pub engine_b: Option<EngineConfig>,
+    /// 対局ごとに A/B の先後を入れ替える (既定 false)．true なら偶数対局で
+    /// A が先手，奇数対局で B が先手になり，ペア (2n, 2n+1) は同じ序盤
+    /// ランダム系列を共有する (paired 比較で開局サンプリング分散を相殺)．
+    pub alternate_colors: bool,
+    /// エージェントの `max_moves_to_draw` を [`SelfplayConfig::max_moves`] に
+    /// 同期する (既定 true — driver の終局判定と in-search 終端化を一致させる)．
+    /// in-search 終端化そのものを A/B するときだけ false にして
+    /// engine/engine_b の値を呼び出し側が管理する．
+    pub sync_max_moves_to_draw: bool,
     /// 基準局面 SFEN (`None` = 平手初期局面)．
     pub sfen: Option<String>,
     /// 対局数．
@@ -58,6 +71,9 @@ impl Default for SelfplayConfig {
     fn default() -> SelfplayConfig {
         SelfplayConfig {
             engine: EngineConfig::default(),
+            engine_b: None,
+            alternate_colors: false,
+            sync_max_moves_to_draw: true,
             sfen: None,
             games: 1,
             parallel: 1,
@@ -113,6 +129,9 @@ pub struct GameOutcome {
     pub sfen: String,
     /// USI 指し手列 (基準局面から)．
     pub moves: Vec<String>,
+    /// 先手 (基準局面の手番側) をプレイヤー A が持ったか (A/B 対戦の色交代
+    /// 記録．純粋自己対局では常に true)．
+    pub black_is_a: bool,
     /// 勝者 (`None` = 引き分け)．
     pub winner: Option<Color>,
     /// 終局理由．
@@ -164,14 +183,28 @@ pub fn run_selfplay(
     // 基準局面の検証 (不正 SFEN は対局前に弾く)
     build_board_and_history(&sfen, &[]).map_err(|e| e.to_string())?;
 
-    // エージェント設定の正規化: driver の終局判定と in-search 終端化を一致させ，
-    // GUI 対局の概念 (ponder) を無効化する
-    let mut engine = config.engine.clone();
-    engine.max_moves_to_draw = config.max_moves;
-    engine.usi_ponder = false;
+    // エージェント設定の正規化: GUI 対局の概念 (ponder) を無効化し，既定では
+    // driver の終局判定と in-search 終端化を一致させる (sync_max_moves_to_draw)
+    let normalize = |src: &EngineConfig| {
+        let mut e = src.clone();
+        e.usi_ponder = false;
+        if config.sync_max_moves_to_draw {
+            e.max_moves_to_draw = config.max_moves;
+        }
+        e
+    };
+    let engines: [EngineConfig; 2] = [
+        normalize(&config.engine),
+        normalize(config.engine_b.as_ref().unwrap_or(&config.engine)),
+    ];
+    if engines[0].model_path != engines[1].model_path {
+        return Err("A/B 対戦は同一モデル前提 (評価器をプロセス内 1 個で共有するため)".to_string());
+    }
+    // ペア開局 (2n, 2n+1 が同じ序盤ランダム系列): A/B + 色交代のときのみ
+    let paired = config.engine_b.is_some() && config.alternate_colors;
 
     // 評価器はプロセス内 1 個 (モデルロード/warmup 1 回) を全対局で共有する
-    let evaluator = build_evaluator(&engine)?;
+    let evaluator = build_evaluator(&engines[0])?;
     warmup_evaluator(&evaluator)?;
     let evaluator = Arc::new(evaluator);
 
@@ -191,14 +224,20 @@ pub fn run_selfplay(
                 if index >= config.games {
                     break;
                 }
+                // 色交代: 偶数対局は A が先手，奇数対局は B が先手．ペア時は
+                // 開局乱数系列をペア (index/2) で共有する
+                let black_is_a = !(config.alternate_colors && index % 2 == 1);
+                let rng_index = if paired { index / 2 } else { index };
                 let result = play_game(
-                    &engine,
+                    &engines,
+                    black_is_a,
                     &evaluator,
                     &sfen,
                     &go_params,
                     config.max_moves,
                     config.opening_random_plies,
                     config.seed,
+                    rng_index,
                     index,
                 );
                 if let (Ok(outcome), Some(cb)) = (&result, progress) {
@@ -221,26 +260,33 @@ pub fn run_selfplay(
 }
 
 /// 1 対局を最後まで駆動する．
+///
+/// `engines` は [A, B] (純粋自己対局では同一設定 2 つ)，`black_is_a` で
+/// どちらが先手 (基準局面の手番側) を持つかを決める．`rng_index` は開局
+/// ランダム系列の番号 (ペア比較では 2 対局が共有する)．
 #[allow(clippy::too_many_arguments)]
 fn play_game(
-    engine: &EngineConfig,
+    engines: &[EngineConfig; 2],
+    black_is_a: bool,
     evaluator: &Arc<EngineEvaluator>,
     sfen: &str,
     go_params: &GoParams,
     max_moves: u32,
     opening_random_plies: u32,
     seed: u64,
+    rng_index: u32,
     game_index: u32,
 ) -> Result<GameOutcome, String> {
     let start = Instant::now();
     // 対局ごとにエージェント 2 個 (先後で独立の探索木 = 実対局と同じ構図)．
     // backend は共有評価器から安価に作られる (モデル再ロードなし)
-    let mk_agent = || {
+    let mk_agent = |engine: &EngineConfig| {
         let ev = Arc::clone(evaluator);
         let mut agent = Agent::new(engine.clone(), move |cfg: &EngineConfig| {
             Ok(MaouSearchBackend::from_shared(
                 Arc::clone(&ev),
                 search_options(cfg),
+                cfg.subtree_reuse,
             ))
         });
         agent
@@ -249,15 +295,20 @@ fn play_game(
             .map_err(|e| format!("game {game_index}: isready 失敗: {e}"))?;
         Ok::<_, String>(agent)
     };
-    let mut black = mk_agent()?;
-    let mut white = mk_agent()?;
+    let (cfg_black, cfg_white) = if black_is_a {
+        (&engines[0], &engines[1])
+    } else {
+        (&engines[1], &engines[0])
+    };
+    let mut black = mk_agent(cfg_black)?;
+    let mut white = mk_agent(cfg_white)?;
 
     let (mut board, _) = build_board_and_history(sfen, &[]).map_err(|e| e.to_string())?;
     let mut entries = vec![HistoryEntry::from_board(&board)];
     let mut counts: HashMap<u64, u32> = HashMap::new();
     counts.insert(board.hash(), 1);
-    // 対局ごとに異なる決定的シード (SplitMix64 で index を撹拌)
-    let mut rng = SplitMix64(seed ^ SplitMix64(game_index as u64 + 1).next());
+    // 開局系列ごとに異なる決定的シード (SplitMix64 で系列番号を撹拌)
+    let mut rng = SplitMix64(seed ^ SplitMix64(rng_index as u64 + 1).next());
 
     let mut moves: Vec<String> = Vec::new();
     let mut playouts: u64 = 0;
@@ -367,6 +418,7 @@ fn play_game(
         game_index,
         sfen: sfen.to_string(),
         moves,
+        black_is_a,
         winner,
         reason,
         playouts,
@@ -512,6 +564,56 @@ mod tests {
             "裸玉は引き分けで終わる: {:?}",
             o.reason
         );
+    }
+
+    #[test]
+    fn test_selfplay_ab_alternates_colors_and_maps_winner() {
+        // B は即投了する設定 → 色がどちらでも勝者はプレイヤー A になる
+        let mut cfg = config(2, 16, 64);
+        let mut b = cfg.engine.clone();
+        b.resign_value = 900;
+        b.resign_consecutive = 1;
+        cfg.engine_b = Some(b);
+        cfg.alternate_colors = true;
+        let outcomes = run_selfplay(&cfg, None).expect("成功");
+        assert_eq!(outcomes.len(), 2);
+        // 偶数対局: A が先手，B (後手) が自分の初手で投了 → 先手勝ち
+        assert!(outcomes[0].black_is_a);
+        assert_eq!(outcomes[0].winner, Some(Color::Black));
+        assert_eq!(outcomes[0].reason, GameEndReason::Resign);
+        // 奇数対局: B が先手で即投了 → 後手 (A) 勝ち
+        assert!(!outcomes[1].black_is_a);
+        assert_eq!(outcomes[1].winner, Some(Color::White));
+        assert_eq!(outcomes[1].reason, GameEndReason::Resign);
+    }
+
+    #[test]
+    fn test_selfplay_ab_paired_openings_share_random_series() {
+        // ペア (2n, 2n+1) は同じ開局ランダム系列を共有する
+        let mut cfg = config(2, 8, 12);
+        cfg.engine_b = Some(cfg.engine.clone());
+        cfg.alternate_colors = true;
+        cfg.opening_random_plies = 4;
+        cfg.seed = 99;
+        let outcomes = run_selfplay(&cfg, None).expect("成功");
+        assert_eq!(outcomes[0].moves[..4], outcomes[1].moves[..4]);
+    }
+
+    #[test]
+    fn test_selfplay_subtree_reuse_off_completes() {
+        let mut cfg = config(1, 16, 8);
+        cfg.engine.subtree_reuse = false;
+        let outcomes = run_selfplay(&cfg, None).expect("成功");
+        assert_eq!(outcomes[0].reason, GameEndReason::MaxMoves);
+    }
+
+    #[test]
+    fn test_selfplay_ab_rejects_different_models() {
+        let mut cfg = config(1, 16, 8);
+        let mut b = cfg.engine.clone();
+        b.model_path = Some("other.onnx".to_string());
+        cfg.engine_b = Some(b);
+        assert!(run_selfplay(&cfg, None).is_err(), "異モデルはエラー");
     }
 
     #[test]

@@ -188,6 +188,7 @@ fn outcome_to_dict<'py>(py: Python<'py>, o: &GameOutcome) -> PyResult<Bound<'py,
         }),
     )?;
     d.set_item("reason", o.reason.as_str())?;
+    d.set_item("black_player", if o.black_is_a { "a" } else { "b" })?;
     d.set_item("plies", o.moves.len())?;
     d.set_item("playouts", o.playouts)?;
     d.set_item("elapsed_ms", o.elapsed_ms)?;
@@ -286,6 +287,11 @@ fn run_selfplay(
 
     let config = SelfplayConfig {
         engine,
+        // A/B 対戦 (engine_b / 色交代 / 同期解除) は Rust example
+        // (selfplay_ab) 経由 — CLI には露出しない
+        engine_b: None,
+        alternate_colors: false,
+        sync_max_moves_to_draw: true,
         sfen,
         games: games.unwrap_or(1),
         parallel: parallel.unwrap_or(1),

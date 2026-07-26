@@ -77,6 +77,11 @@ pub struct EngineConfig {
     /// script 手が現局面で非合法なら無効化して通常探索 (安全側．設計 §8.3)．
     /// HWT の先手時間ハンデ (玉往復 4 手) 対応 (設計 §3)．
     pub opening_script: Option<String>,
+    /// subtree 再利用 (対局手番間の探索木引き継ぎ，M3) を有効にするか
+    /// (既定 true = on-by-default)．**計測用トグル** — 自己対局 A/B (設計 §12
+    /// 未決 6) で off 側を作るためのもので，USI option には宣言しない
+    /// (§10 に無い — M3 での user 決定)．
+    pub subtree_reuse: bool,
     /// ponder (先読み) を有効にするか (既定 true)．true のとき `USI_Ponder`
     /// option を宣言し，`bestmove` に予想相手手 (自探索 PV の 2 手目) を付ける．
     /// GUI はこれを見て相手番中に `go ponder` を送る (設計 doc §8.4)．
@@ -115,6 +120,7 @@ impl Default for EngineConfig {
             resign_consecutive: 3,
             max_moves_to_draw: 0,
             opening_script: None,
+            subtree_reuse: true,
             usi_ponder: true,
             root_dfpn: None,
             root_dfpn_nodes: None,

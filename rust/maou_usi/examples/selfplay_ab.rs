@@ -1,0 +1,212 @@
+//! 自己対局 A/B ハーネス — 設定レバーの棋力効果を対戦で測る (設計 §12 未決 4/6)．
+//!
+//! プレイヤー A (レバー on) vs B (レバー off) を色交代 + ペア開局で対戦させ，
+//! A の勝率と Wilson 95% 信頼区間を報告する．
+//!
+//! ```bash
+//! cargo run --release -p maou_usi --example selfplay_ab --features onnx -- \
+//!   --mode subtree --model model.onnx --games 30 --playouts 64 \
+//!   --random-plies 8 --seed 1 --out /tmp/ab.jsonl
+//! ```
+//!
+//! - `--mode subtree`: A = subtree 再利用 on / B = off
+//! - `--mode maxmoves`: A = MaxMovesToDraw の in-search 終端化 on / B = off
+//!   (両者とも driver の最大手数で引き分けになる点は同一．知識の有無だけが違う)
+
+use maou_usi::selfplay::{run_selfplay, GameOutcome, SelfplayConfig};
+use maou_usi::EngineConfig;
+
+fn arg_value<T: std::str::FromStr>(args: &[String], key: &str) -> Option<T> {
+    args.iter()
+        .position(|a| a == key)
+        .and_then(|i| args.get(i + 1))
+        .and_then(|v| v.parse().ok())
+}
+
+/// Wilson score interval (95%) — 少数対局でも壊れない勝率の区間推定．
+fn wilson_95(score: f64, n: f64) -> (f64, f64) {
+    if n <= 0.0 {
+        return (0.0, 1.0);
+    }
+    let z = 1.96_f64;
+    let p = score / n;
+    let denom = 1.0 + z * z / n;
+    let center = (p + z * z / (2.0 * n)) / denom;
+    let half = (z / denom) * (p * (1.0 - p) / n + z * z / (4.0 * n * n)).sqrt();
+    ((center - half).max(0.0), (center + half).min(1.0))
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let mode: String = arg_value(&args, "--mode").unwrap_or_else(|| "subtree".to_string());
+    let model: Option<String> = arg_value(&args, "--model");
+    let games: u32 = arg_value(&args, "--games").unwrap_or(20);
+    let parallel: usize = arg_value(&args, "--parallel").unwrap_or(1);
+    let playouts: u64 = arg_value(&args, "--playouts").unwrap_or(64);
+    let max_moves: u32 = arg_value(&args, "--max-moves").unwrap_or(256);
+    let random_plies: u32 = arg_value(&args, "--random-plies").unwrap_or(8);
+    let seed: u64 = arg_value(&args, "--seed").unwrap_or(1);
+    let node_capacity: u32 = arg_value(&args, "--node-capacity").unwrap_or(1 << 16);
+    let resign_value: u32 = arg_value(&args, "--resign-value").unwrap_or(0);
+    let resign_consecutive: u32 = arg_value(&args, "--resign-consecutive").unwrap_or(4);
+    let draw_black: u32 = arg_value(&args, "--draw-value-black").unwrap_or(500);
+    let draw_white: u32 = arg_value(&args, "--draw-value-white").unwrap_or(500);
+    let out: Option<String> = arg_value(&args, "--out");
+
+    // 共通ベース: 詰み探索 off (両者同条件の純 MCTS で速く回す)
+    let base = EngineConfig {
+        model_path: model,
+        node_capacity: Some(node_capacity),
+        resign_value,
+        resign_consecutive,
+        draw_value_black: draw_black,
+        draw_value_white: draw_white,
+        root_dfpn: Some(false),
+        leaf_mate: Some(false),
+        ..EngineConfig::default()
+    };
+
+    let (engine_a, engine_b, sync) = match mode.as_str() {
+        // A = subtree 再利用 on (現行 default) / B = off
+        "subtree" => {
+            let a = base.clone();
+            let mut b = base.clone();
+            b.subtree_reuse = false;
+            (a, b, true)
+        }
+        // A = in-search 終端化 on / B = off (max_moves_to_draw を per-side 管理
+        // するため sync は切る．driver の終局判定は両者共通で max_moves)
+        "maxmoves" => {
+            let mut a = base.clone();
+            a.max_moves_to_draw = max_moves;
+            let mut b = base.clone();
+            b.max_moves_to_draw = 0;
+            (a, b, false)
+        }
+        other => {
+            eprintln!("unknown --mode {other} (subtree | maxmoves)");
+            std::process::exit(2);
+        }
+    };
+
+    let config = SelfplayConfig {
+        engine: engine_a,
+        engine_b: Some(engine_b),
+        alternate_colors: true,
+        sync_max_moves_to_draw: sync,
+        sfen: None,
+        games,
+        parallel,
+        playouts: Some(playouts),
+        movetime_ms: None,
+        max_moves,
+        opening_random_plies: random_plies,
+        seed,
+    };
+
+    let total = games;
+    let progress = |o: &GameOutcome| {
+        let a_color = if o.black_is_a { "A=black" } else { "A=white" };
+        let winner = match o.winner {
+            Some(c) => format!("{c:?} wins"),
+            None => "draw".to_string(),
+        };
+        eprintln!(
+            "[ab] game {}/{}: {} ({}) by {} — {} plies, {:.1}s",
+            o.game_index + 1,
+            total,
+            winner,
+            a_color,
+            o.reason.as_str(),
+            o.moves.len(),
+            o.elapsed_ms as f64 / 1000.0,
+        );
+    };
+
+    let outcomes = match run_selfplay(&config, Some(&progress)) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("selfplay failed: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // 集計: A 視点の W/D/L (勝ち 1 点，引き分け 0.5 点)
+    let mut wins = 0u32;
+    let mut draws = 0u32;
+    let mut losses = 0u32;
+    let mut reasons: std::collections::BTreeMap<&'static str, u32> = Default::default();
+    let mut total_plies = 0usize;
+    let mut total_ms = 0u64;
+    for o in &outcomes {
+        use maou_shogi::types::Color;
+        let a_is_winner = match (o.winner, o.black_is_a) {
+            (None, _) => None,
+            (Some(Color::Black), black_a) => Some(black_a),
+            (Some(Color::White), black_a) => Some(!black_a),
+        };
+        match a_is_winner {
+            Some(true) => wins += 1,
+            Some(false) => losses += 1,
+            None => draws += 1,
+        }
+        *reasons.entry(o.reason.as_str()).or_default() += 1;
+        total_plies += o.moves.len();
+        total_ms += o.elapsed_ms;
+    }
+    let n = outcomes.len() as f64;
+    let score = f64::from(wins) + 0.5 * f64::from(draws);
+    let (lo, hi) = wilson_95(score, n);
+
+    if let Some(path) = out {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&path).expect("JSONL 出力先を作成できる");
+        for o in &outcomes {
+            let winner = match o.winner {
+                Some(maou_shogi::types::Color::Black) => "\"black\"",
+                Some(maou_shogi::types::Color::White) => "\"white\"",
+                None => "null",
+            };
+            let moves: Vec<String> = o.moves.iter().map(|m| format!("\"{m}\"")).collect();
+            writeln!(
+                f,
+                "{{\"game_index\":{},\"black_player\":\"{}\",\"winner\":{},\"reason\":\"{}\",\"plies\":{},\"playouts\":{},\"elapsed_ms\":{},\"moves\":[{}]}}",
+                o.game_index,
+                if o.black_is_a { "a" } else { "b" },
+                winner,
+                o.reason.as_str(),
+                o.moves.len(),
+                o.playouts,
+                o.elapsed_ms,
+                moves.join(","),
+            )
+            .expect("JSONL 書き込み成功");
+        }
+        eprintln!("[ab] wrote {} records to {path}", outcomes.len());
+    }
+
+    println!("mode: {mode} (A = lever on, B = off)");
+    println!("games: {games}, playouts/move: {playouts}, random plies: {random_plies}, max moves: {max_moves}, seed: {seed}");
+    println!("A result: {wins}W {draws}D {losses}L");
+    println!(
+        "A score: {:.1}/{} = {:.1}% (Wilson 95% CI [{:.1}%, {:.1}%])",
+        score,
+        n,
+        100.0 * score / n,
+        100.0 * lo,
+        100.0 * hi,
+    );
+    println!(
+        "reasons: {}",
+        reasons
+            .iter()
+            .map(|(k, v)| format!("{k} {v}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "plies: {} total, wall: {:.1}s summed",
+        total_plies,
+        total_ms as f64 / 1000.0,
+    );
+}

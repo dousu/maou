@@ -123,6 +123,9 @@ pub struct MaouSearchBackend {
     /// 対局手番間で保持する探索木 (subtree 再利用)．手番進行で局面が前進した
     /// ときに reroot して warm start する．`reset` (usinewgame/gameover) で破棄．
     retained: Option<ReusableTree>,
+    /// subtree 再利用を行うか ([`EngineConfig::subtree_reuse`]，計測用
+    /// トグル)．false なら毎手 fresh 探索 (保持もしない)．
+    reuse_tree: bool,
 }
 
 impl MaouSearchBackend {
@@ -134,6 +137,7 @@ impl MaouSearchBackend {
         Ok(MaouSearchBackend::from_shared(
             Arc::new(evaluator),
             search_options(config),
+            config.subtree_reuse,
         ))
     }
 
@@ -142,11 +146,13 @@ impl MaouSearchBackend {
     pub(crate) fn from_shared(
         evaluator: Arc<EngineEvaluator>,
         options: SearchOptions,
+        reuse_tree: bool,
     ) -> MaouSearchBackend {
         MaouSearchBackend {
             evaluator,
             options,
             retained: None,
+            reuse_tree,
         }
     }
 }
@@ -188,7 +194,12 @@ impl SearchBackend for MaouSearchBackend {
         };
         // 前回の探索木を取り出す — 手番進行で局面が前進していれば search_reusing
         // が reroot して warm start する (前進していなければ fresh)．
-        let retained = self.retained.take();
+        // reuse_tree が false (計測用トグル off) なら常に fresh
+        let retained = if self.reuse_tree {
+            self.retained.take()
+        } else {
+            None
+        };
         // 探索を専用スレッドで走らせ，呼び出しスレッド (dispatcher) が monitor
         // ループを回す (progress をポーリング → observer 駆動 → 早期停止)．
         // GIL/GC を挟まない Rust 内で完結する (設計 §5)．
@@ -215,9 +226,12 @@ impl SearchBackend for MaouSearchBackend {
             }
             handle.join().expect("探索スレッドは panic しない")
         });
-        // 更新後の木を保持して次回の subtree 再利用に備える (fresh でも保持する)
+        // 更新後の木を保持して次回の subtree 再利用に備える (fresh でも保持する．
+        // 再利用 off なら保持もしない — メモリを残さない)
         let (result, tree) = outcome.map_err(|e| e.to_string())?;
-        self.retained = Some(tree);
+        if self.reuse_tree {
+            self.retained = Some(tree);
+        }
         Ok(to_outcome(&result))
     }
 
