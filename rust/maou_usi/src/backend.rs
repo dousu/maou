@@ -16,23 +16,109 @@ use maou_shogi::board::Board;
 use maou_shogi::movegen::generate_legal_moves;
 
 use crate::agent::{
-    EngineConfig, ProgressSnapshot, SearchBackend, SearchBudget, SearchObserver, SearchOutcome,
-    STARTPOS_SFEN,
+    EngineConfig, GoRules, ProgressSnapshot, SearchBackend, SearchBudget, SearchObserver,
+    SearchOutcome, STARTPOS_SFEN,
 };
 
 /// 進捗スナップショットを observer へ渡すポーリング間隔．
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// 保持する評価器 (mock または ONNX)．
-enum EngineEvaluator {
+/// 保持する評価器 (mock または ONNX)．自己対局 driver はこれを `Arc` で全対局
+/// に共有する (モデルロード/warmup をプロセス内 1 回に — 設計 §9)．
+pub(crate) enum EngineEvaluator {
     Mock(MockEvaluator),
     #[cfg(feature = "onnx")]
     Onnx(maou_search::OnnxEvaluator),
 }
 
+/// 設定から評価器 (mock または ONNX) を構築する (warmup は別途
+/// [`warmup_evaluator`])．
+pub(crate) fn build_evaluator(config: &EngineConfig) -> Result<EngineEvaluator, String> {
+    match &config.model_path {
+        None => Ok(EngineEvaluator::Mock(MockEvaluator::new(0))),
+        #[cfg(feature = "onnx")]
+        Some(path) => {
+            let onnx_options = maou_search::onnx::OnnxOptions {
+                intra_threads: 1,
+                use_cuda: config.use_cuda,
+                use_tensorrt: config.use_tensorrt,
+                trt_engine_cache_dir: config.trt_cache_dir.clone(),
+                // TensorRT は shape ごとにエンジンをビルドするため batch_size に固定する
+                pad_to: if config.use_tensorrt {
+                    Some(config.batch_size)
+                } else {
+                    None
+                },
+            };
+            Ok(EngineEvaluator::Onnx(
+                maou_search::OnnxEvaluator::from_file(path, &onnx_options)
+                    .map_err(|e| format!("ONNX model load failed: {e}"))?,
+            ))
+        }
+        #[cfg(not(feature = "onnx"))]
+        Some(_) => Err("this build has no onnx feature; ModelPath is unavailable \
+             (build with `maturin develop --features onnx`)"
+            .to_string()),
+    }
+}
+
+/// 平手初期局面を 1 回評価して初回推論の固定費 (TensorRT エンジンビルド/
+/// CUDA 初期化) を前払いする (USI では `isready` 中，自己対局では起動時)．
+pub(crate) fn warmup_evaluator(evaluator: &EngineEvaluator) -> Result<(), String> {
+    let mut board = Board::empty();
+    board
+        .set_sfen(STARTPOS_SFEN)
+        .map_err(|e| format!("startpos SFEN must parse: {e:?}"))?;
+    let moves = generate_legal_moves(&mut board.clone());
+    let item = [EvalItem { board, moves }];
+    match evaluator {
+        EngineEvaluator::Mock(e) => {
+            let _ = e.evaluate_batch(&item);
+        }
+        #[cfg(feature = "onnx")]
+        EngineEvaluator::Onnx(e) => {
+            let _ = e.evaluate_batch(&item);
+        }
+    }
+    Ok(())
+}
+
+/// [`EngineConfig`] → 探索オプション ([`SearchOptions`]) の写像
+/// (build / 自己対局 driver で共有する単一実装)．
+pub(crate) fn search_options(config: &EngineConfig) -> SearchOptions {
+    let mut options = SearchOptions {
+        threads: config.threads,
+        batch_size: config.batch_size,
+        ..SearchOptions::default()
+    };
+    if let Some(v) = config.effective_node_capacity() {
+        options.node_capacity = v;
+    }
+    if let Some(v) = config.root_dfpn {
+        options.root_dfpn = v;
+    }
+    if let Some(v) = config.root_dfpn_nodes {
+        options.root_dfpn_nodes = v;
+    }
+    if let Some(v) = config.root_dfpn_depth {
+        options.root_dfpn_depth = v;
+    }
+    if let Some(v) = config.leaf_mate {
+        options.leaf_mate = v;
+    }
+    if let Some(v) = config.leaf_mate_nodes {
+        options.leaf_mate_nodes = v;
+    }
+    if let Some(v) = config.leaf_mate_threads {
+        options.leaf_mate_threads = v;
+    }
+    options
+}
+
 /// maou_search を使う実バックエンド．
 pub struct MaouSearchBackend {
-    evaluator: EngineEvaluator,
+    /// 評価器 (`Arc` 共有: USI では単独所有と等価，自己対局では全対局共有)．
+    evaluator: Arc<EngineEvaluator>,
     options: SearchOptions,
     /// 対局手番間で保持する探索木 (subtree 再利用)．手番進行で局面が前進した
     /// ときに reroot して warm start する．`reset` (usinewgame/gameover) で破棄．
@@ -43,90 +129,25 @@ impl MaouSearchBackend {
     /// 設定から評価器を構築し，warmup (初回推論 = TensorRT エンジンビルド等)
     /// まで済ませる．
     pub fn build(config: &EngineConfig) -> Result<MaouSearchBackend, String> {
-        let mut options = SearchOptions {
-            threads: config.threads,
-            batch_size: config.batch_size,
-            ..SearchOptions::default()
-        };
-        if let Some(v) = config.effective_node_capacity() {
-            options.node_capacity = v;
-        }
-        if let Some(v) = config.root_dfpn {
-            options.root_dfpn = v;
-        }
-        if let Some(v) = config.root_dfpn_nodes {
-            options.root_dfpn_nodes = v;
-        }
-        if let Some(v) = config.root_dfpn_depth {
-            options.root_dfpn_depth = v;
-        }
-        if let Some(v) = config.leaf_mate {
-            options.leaf_mate = v;
-        }
-        if let Some(v) = config.leaf_mate_nodes {
-            options.leaf_mate_nodes = v;
-        }
-        if let Some(v) = config.leaf_mate_threads {
-            options.leaf_mate_threads = v;
-        }
+        let evaluator = build_evaluator(config)?;
+        warmup_evaluator(&evaluator)?;
+        Ok(MaouSearchBackend::from_shared(
+            Arc::new(evaluator),
+            search_options(config),
+        ))
+    }
 
-        let evaluator = match &config.model_path {
-            None => EngineEvaluator::Mock(MockEvaluator::new(0)),
-            #[cfg(feature = "onnx")]
-            Some(path) => {
-                let onnx_options = maou_search::onnx::OnnxOptions {
-                    intra_threads: 1,
-                    use_cuda: config.use_cuda,
-                    use_tensorrt: config.use_tensorrt,
-                    trt_engine_cache_dir: config.trt_cache_dir.clone(),
-                    // TensorRT は shape ごとにエンジンをビルドするため batch_size に固定する
-                    pad_to: if config.use_tensorrt {
-                        Some(config.batch_size)
-                    } else {
-                        None
-                    },
-                };
-                EngineEvaluator::Onnx(
-                    maou_search::OnnxEvaluator::from_file(path, &onnx_options)
-                        .map_err(|e| format!("ONNX model load failed: {e}"))?,
-                )
-            }
-            #[cfg(not(feature = "onnx"))]
-            Some(_) => {
-                return Err("this build has no onnx feature; ModelPath is unavailable \
-                     (build with `maturin develop --features onnx`)"
-                    .to_string())
-            }
-        };
-
-        let backend = MaouSearchBackend {
+    /// 構築・warmup 済みの共有評価器からバックエンドを作る (自己対局 driver
+    /// 用 — 評価器の再ロード/warmup なしで対局ごとに安価に構築できる)．
+    pub(crate) fn from_shared(
+        evaluator: Arc<EngineEvaluator>,
+        options: SearchOptions,
+    ) -> MaouSearchBackend {
+        MaouSearchBackend {
             evaluator,
             options,
             retained: None,
-        };
-        backend.warmup()?;
-        Ok(backend)
-    }
-
-    /// 平手初期局面を 1 回評価して初回推論の固定費 (TensorRT エンジンビルド/
-    /// CUDA 初期化) を isready 中に支払う．
-    fn warmup(&self) -> Result<(), String> {
-        let mut board = Board::empty();
-        board
-            .set_sfen(STARTPOS_SFEN)
-            .map_err(|e| format!("startpos SFEN must parse: {e:?}"))?;
-        let moves = generate_legal_moves(&mut board.clone());
-        let item = [EvalItem { board, moves }];
-        match &self.evaluator {
-            EngineEvaluator::Mock(e) => {
-                let _ = e.evaluate_batch(&item);
-            }
-            #[cfg(feature = "onnx")]
-            EngineEvaluator::Onnx(e) => {
-                let _ = e.evaluate_batch(&item);
-            }
         }
-        Ok(())
     }
 }
 
@@ -136,13 +157,15 @@ impl SearchBackend for MaouSearchBackend {
         sfen: &str,
         moves: &[String],
         budget: &SearchBudget,
-        draw_value: f64,
+        rules: &GoRules,
         stop: &Arc<AtomicBool>,
         observer: &mut dyn SearchObserver,
     ) -> Result<SearchOutcome, String> {
-        // 千日手戦略: 手番視点の引き分け価値を探索へ渡す
+        // 対局ルール由来の per-go パラメータ: 手番視点の引き分け価値 (千日手
+        // 戦略) と最大手数 (in-search 引き分け終端化) を探索へ渡す
         let mut options = self.options.clone();
-        options.draw_value = draw_value;
+        options.draw_value = rules.draw_value;
+        options.max_moves_to_draw = rules.max_moves_to_draw;
         // 進捗スナップショットの発行先 (monitor がポーリングして observer へ渡す)
         let progress: Arc<Mutex<Option<RootSnapshot>>> = Arc::new(Mutex::new(None));
         let limits = SearchLimits {
@@ -169,7 +192,7 @@ impl SearchBackend for MaouSearchBackend {
         // 探索を専用スレッドで走らせ，呼び出しスレッド (dispatcher) が monitor
         // ループを回す (progress をポーリング → observer 駆動 → 早期停止)．
         // GIL/GC を挟まない Rust 内で完結する (設計 §5)．
-        let evaluator = &self.evaluator;
+        let evaluator: &EngineEvaluator = &self.evaluator;
         let outcome = std::thread::scope(|s| {
             let handle =
                 s.spawn(move || match evaluator {
@@ -204,7 +227,7 @@ impl SearchBackend for MaouSearchBackend {
     }
 
     fn is_mock(&self) -> bool {
-        matches!(self.evaluator, EngineEvaluator::Mock(_))
+        matches!(*self.evaluator, EngineEvaluator::Mock(_))
     }
 
     fn reset(&mut self) {
@@ -284,7 +307,10 @@ mod tests {
                     max_playouts: Some(200),
                     unbounded: false,
                 },
-                0.5,
+                &GoRules {
+                    draw_value: 0.5,
+                    max_moves_to_draw: 0,
+                },
                 &stop,
                 &mut NoopObserver,
             )
@@ -319,7 +345,10 @@ mod tests {
                     max_playouts: None,
                     unbounded: true,
                 },
-                0.5,
+                &GoRules {
+                    draw_value: 0.5,
+                    max_moves_to_draw: 0,
+                },
                 &stop,
                 &mut NoopObserver,
             )
@@ -341,7 +370,10 @@ mod tests {
                     max_playouts: Some(10),
                     unbounded: false,
                 },
-                0.5,
+                &GoRules {
+                    draw_value: 0.5,
+                    max_moves_to_draw: 0,
+                },
                 &stop,
                 &mut NoopObserver,
             )
@@ -365,7 +397,10 @@ mod tests {
                 STARTPOS_SFEN,
                 &["7g7f".to_string()],
                 &budget,
-                0.5,
+                &GoRules {
+                    draw_value: 0.5,
+                    max_moves_to_draw: 0,
+                },
                 &stop,
                 &mut NoopObserver,
             )
@@ -381,7 +416,10 @@ mod tests {
                 STARTPOS_SFEN,
                 &moves,
                 &budget,
-                0.5,
+                &GoRules {
+                    draw_value: 0.5,
+                    max_moves_to_draw: 0,
+                },
                 &stop,
                 &mut NoopObserver,
             )
@@ -402,7 +440,10 @@ mod tests {
                 STARTPOS_SFEN,
                 &["2g2f".to_string()],
                 &budget,
-                0.5,
+                &GoRules {
+                    draw_value: 0.5,
+                    max_moves_to_draw: 0,
+                },
                 &stop,
                 &mut NoopObserver,
             )
