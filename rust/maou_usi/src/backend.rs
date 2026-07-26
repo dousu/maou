@@ -13,12 +13,14 @@ use maou_search::{
     SearchLimits, SearchOptions, SearchResult, Searcher, StopCause,
 };
 use maou_shogi::board::Board;
+use maou_shogi::dfpn::{DfPnSolver, TsumeResult};
 use maou_shogi::movegen::generate_legal_moves;
 
 use crate::agent::{
     EngineConfig, GoRules, ProgressSnapshot, SearchBackend, SearchBudget, SearchObserver,
     SearchOutcome, STARTPOS_SFEN,
 };
+use crate::protocol::CheckmateResult;
 
 /// 進捗スナップショットを observer へ渡すポーリング間隔．
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -240,6 +242,50 @@ impl SearchBackend for MaouSearchBackend {
         Ok(board.nyugyoku_declarable())
     }
 
+    fn solve_mate(
+        &self,
+        sfen: &str,
+        moves: &[String],
+        time_ms: Option<u64>,
+        stop: &Arc<AtomicBool>,
+    ) -> Result<CheckmateResult, String> {
+        let (mut board, _) = build_board_and_history(sfen, moves).map_err(|e| e.to_string())?;
+        // 予算: 時間指定は秒へ切り上げ (dfpn の timeout 粒度)．無制限は
+        // 十分大きな値を置き，停止は stop トークンに委ねる (`go mate
+        // infinite` は GUI の stop まで走る規約)
+        let timeout_secs = time_ms.map_or(u64::MAX, |ms| ms.div_ceil(1000).max(1));
+        let mut solver = DfPnSolver::with_timeout(
+            self.options.root_dfpn_depth,
+            // ノード予算は無制限側に倒し，実際の打ち切りは時間と stop で行う
+            // (GUI は「この時間だけ考えて」と言っているため)
+            u64::MAX,
+            timeout_secs,
+        );
+        // 詰将棋としての最短手順を返す (検討機能の用途に合う)
+        solver.set_find_shortest(true);
+        solver.set_stop_flag(Arc::clone(stop));
+        // 停止理由まで見る: `nomate` は**不詰を証明できたときだけ**返す．
+        // 打ち切り (stop/時間切れ) の未解決を nomate と報告すると GUI に
+        // 「詰みは無い」と嘘をつくことになる
+        let report = solver.solve_report(&mut board);
+        Ok(match report.result {
+            TsumeResult::Checkmate { ref moves, .. } if !moves.is_empty() => {
+                CheckmateResult::Mate(moves.iter().map(|m| m.to_usi()).collect())
+            }
+            // 詰みだが手順を復元できない場合は手順を示せないので timeout 扱い
+            // (誤った `checkmate` 行を出さない)
+            TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. } => {
+                CheckmateResult::Timeout
+            }
+            TsumeResult::NoCheckmate { .. }
+                if report.stop_reason == maou_shogi::dfpn::StopReason::Disproven =>
+            {
+                CheckmateResult::NoMate
+            }
+            _ => CheckmateResult::Timeout,
+        })
+    }
+
     fn is_mock(&self) -> bool {
         matches!(*self.evaluator, EngineEvaluator::Mock(_))
     }
@@ -374,6 +420,68 @@ mod tests {
             .expect("mock 探索は成功する");
         setter.join().expect("setter 正常終了");
         assert!(outcome.best_usi.is_some());
+    }
+
+    #[test]
+    fn test_solve_mate_finds_mate_in_1() {
+        // 先手 5三歩 + 持駒金，後手 5一玉のみ: G*5b の 1 手詰め
+        let backend = MaouSearchBackend::build(&config()).expect("mock 構築は成功する");
+        let stop = Arc::new(AtomicBool::new(false));
+        let result = backend
+            .solve_mate("4k4/9/4P4/9/9/9/9/9/9 b G 1", &[], Some(5_000), &stop)
+            .expect("詰み探索は成功する");
+        match result {
+            CheckmateResult::Mate(moves) => {
+                assert_eq!(moves.first().map(String::as_str), Some("G*5b"), "{moves:?}");
+            }
+            other => panic!("詰みを期待: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_solve_mate_reports_nomate() {
+        // 平手初期局面は当然不詰 (dfpn が即 NoCheckmate を返す)
+        let backend = MaouSearchBackend::build(&config()).expect("mock 構築は成功する");
+        let stop = Arc::new(AtomicBool::new(false));
+        let result = backend
+            .solve_mate(STARTPOS_SFEN, &[], Some(5_000), &stop)
+            .expect("詰み探索は成功する");
+        assert_eq!(result, CheckmateResult::NoMate);
+    }
+
+    #[test]
+    fn test_solve_mate_honors_stop_token() {
+        // 29 手詰め (canonical: 396,516 ノード) を stop 済みで走らせる．
+        // 打ち切りは「不詰」ではなく timeout として報告しなければならない
+        // (nomate は Disproven のときだけ — GUI に嘘をつかないため)
+        const TSUME_29: &str =
+            "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let backend = MaouSearchBackend::build(&config()).expect("mock 構築は成功する");
+        let stop = Arc::new(AtomicBool::new(true));
+        let started = Instant::now();
+        let result = backend
+            .solve_mate(TSUME_29, &[], None, &stop)
+            .expect("詰み探索は成功する");
+        assert_eq!(result, CheckmateResult::Timeout);
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "stop 済みなら即座に戻る: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn test_solve_mate_nomate_only_when_disproven() {
+        // 平手初期局面は「王手できる手が無い」ので 1 ノードで不詰が証明される
+        // (打ち切りではなく Disproven ゆえ nomate が正しい)
+        let backend = MaouSearchBackend::build(&config()).expect("mock 構築は成功する");
+        let stop = Arc::new(AtomicBool::new(false));
+        assert_eq!(
+            backend
+                .solve_mate(STARTPOS_SFEN, &[], Some(5_000), &stop)
+                .expect("詰み探索は成功する"),
+            CheckmateResult::NoMate
+        );
     }
 
     #[test]

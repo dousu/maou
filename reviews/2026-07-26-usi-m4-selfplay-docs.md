@@ -64,6 +64,11 @@ A/B 対戦支援 (per-side 設定 + 色交代，Rust example `selfplay_ab`) の�
 伴い，selfplay.md の Output 節に `black_player` キーの説明を 1 行追加した
 (レコード形式の正確性維持のための追随で，新しい設計判断を含まない)．
 
+残件消化 (未決 3 の較正・`go mate` 実装) に伴い usi.md を 2 箇所更新した:
+`USI_Hash` の換算根拠を実測値 (~808 B/node) に差し替え，「未実装: go mate」
+の記述を実装済み (checkmate 手順 / nomate は証明時のみ / timeout) に更新．
+いずれも実装の説明の正確性維持であり，新しい設計判断ではない．
+
 OpeningScript に「基準局面が手数 1 のときのみ適用」ガードを入れた
 (電竜戦 HWT の指定局面方式で屈伸後の局面を手数付きで渡されたとき script が
 再発火して玉往復を繰り返すのを防ぐ)．実装挙動が変わるため usi.md /

@@ -12,8 +12,8 @@ use maou_shogi::movegen::generate_legal_moves;
 use maou_shogi::types::Color;
 
 use crate::protocol::{
-    BestMoveKind, EngineCommand, GameResult, GoParams, GuiCommand, Info, OptionDecl, OptionKind,
-    Score,
+    BestMoveKind, CheckmateResult, EngineCommand, GameResult, GoParams, GuiCommand, Info,
+    OptionDecl, OptionKind, Score,
 };
 use crate::time::{allocate, should_stop, TimeBudget, TimeStrategyConfig};
 
@@ -257,6 +257,19 @@ pub trait SearchBackend {
 
     /// 現局面 (基準 SFEN + USI 経路) で手番側の入玉宣言 (27 点法) が成立するか．
     fn nyugyoku_declarable(&self, sfen: &str, moves: &[String]) -> Result<bool, String>;
+
+    /// 現局面の詰み探索 (`go mate`)．手番側が詰ませられるかを dfpn で判定する．
+    ///
+    /// `time_ms` は時間予算 (`None` = 無制限．外部 `stop` で打ち切られる)．
+    /// 探索そのものは NN 評価器に依存しない (dfpn 単体) ので mock 構成でも
+    /// 実行できる．詰み手順は攻方の初手から並べた USI 表記で返す．
+    fn solve_mate(
+        &self,
+        sfen: &str,
+        moves: &[String],
+        time_ms: Option<u64>,
+        stop: &Arc<AtomicBool>,
+    ) -> Result<CheckmateResult, String>;
 
     /// mock 評価器か (isready 時の明示に使う)．
     fn is_mock(&self) -> bool;
@@ -749,15 +762,26 @@ where
     /// - 投了: root 勝率が閾値未満の手が `resign_consecutive` 手続いたら
     ///   `bestmove resign` (`resign_value` = 0 なら投了しない)．
     pub fn handle_go_stream(&mut self, params: &GoParams, emit: &mut Emit) -> Result<(), String> {
-        if params.mate.is_some() {
-            // 詰み探索モードは未対応 (dfpn 接続は将来対応)
-            emit(EngineCommand::CheckmateNotImplemented);
-            return Ok(());
-        }
-
         // isready を送らない GUI への防御 (通常は isready で構築済み)
         if self.backend.is_none() {
             self.backend = Some((self.factory)(&self.config)?);
+        }
+
+        // 詰み探索モード (`go mate <ms>` / `go mate infinite`)．dfpn 単体で
+        // 解くので通常探索とは別経路 (bestmove は返さない — USI 仕様)
+        if let Some(limit) = params.mate {
+            let time_ms = match limit {
+                crate::protocol::MateLimit::TimeMs(ms) => Some(ms),
+                crate::protocol::MateLimit::Infinite => None,
+            };
+            let sfen = self.game.sfen.clone();
+            let moves = self.game.moves.clone();
+            let stop = Arc::clone(&self.stop);
+            let backend = self.backend.as_ref().expect("直前で構築済み");
+            emit(EngineCommand::Checkmate(
+                backend.solve_mate(&sfen, &moves, time_ms, &stop)?,
+            ));
+            return Ok(());
         }
 
         // SpecialRules: 入玉宣言 (27 点法 + 持ち時間が残っている)
@@ -1116,6 +1140,8 @@ mod tests {
         outcome: SearchOutcome,
         /// `nyugyoku_declarable` の返り値 (入玉宣言テスト用)．
         nyugyoku: bool,
+        /// `solve_mate` の返り値 (`go mate` テスト用)．
+        mate: CheckmateResult,
     }
 
     impl SearchBackend for FakeBackend {
@@ -1150,6 +1176,16 @@ mod tests {
 
         fn nyugyoku_declarable(&self, _sfen: &str, _moves: &[String]) -> Result<bool, String> {
             Ok(self.nyugyoku)
+        }
+
+        fn solve_mate(
+            &self,
+            _sfen: &str,
+            _moves: &[String],
+            _time_ms: Option<u64>,
+            _stop: &Arc<AtomicBool>,
+        ) -> Result<CheckmateResult, String> {
+            Ok(self.mate.clone())
         }
 
         fn is_mock(&self) -> bool {
@@ -1191,6 +1227,7 @@ mod tests {
                 rules_log: Rc::clone(&rules_for_factory),
                 outcome: outcome.clone(),
                 nyugyoku,
+                mate: CheckmateResult::NoMate,
             })
         });
         (agent, calls, rules)
@@ -1317,15 +1354,16 @@ mod tests {
     }
 
     #[test]
-    fn test_go_mate_not_implemented() {
+    fn test_go_mate_builds_backend_when_isready_skipped() {
+        // isready を送らない GUI でも go mate は動く (通常 go と同じ防御)
         let (mut agent, _) = agent_with_fake(default_outcome());
         let out = agent
             .handle(GuiCommand::Go(GoParams {
-                mate: Some(crate::protocol::MateLimit::TimeMs(1000)),
+                mate: Some(crate::protocol::MateLimit::Infinite),
                 ..GoParams::default()
             }))
             .unwrap();
-        assert_eq!(out, vec![EngineCommand::CheckmateNotImplemented]);
+        assert_eq!(out, vec![EngineCommand::Checkmate(CheckmateResult::NoMate)]);
     }
 
     #[test]
@@ -1482,6 +1520,21 @@ mod tests {
             "後手番は 0.6 (got {})",
             d[1].draw_value
         );
+    }
+
+    /// `go mate` は詰み探索経路へ行き，bestmove を返さない (USI 仕様)．
+    #[test]
+    fn test_go_mate_reports_checkmate_result() {
+        let (mut agent, calls, _) = agent_with_fake_full(default_outcome(), false);
+        agent.handle(GuiCommand::IsReady).unwrap();
+        let out = agent
+            .handle(GuiCommand::Go(GoParams {
+                mate: Some(crate::protocol::MateLimit::TimeMs(1000)),
+                ..GoParams::default()
+            }))
+            .unwrap();
+        assert_eq!(out, vec![EngineCommand::Checkmate(CheckmateResult::NoMate)]);
+        assert!(calls.borrow().is_empty(), "通常探索は走らない");
     }
 
     #[test]

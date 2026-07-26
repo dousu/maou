@@ -42,8 +42,12 @@
   king-shuffle time handicap): while the game path matches the script prefix
   the engine plays the next scripted move instantly without searching, and
   once the path diverges the script is disabled for the rest of the game
-  (an illegal scripted move falls back to normal search).
-  Not yet implemented: `go mate` (answers `checkmate notimplemented`).
+  (an illegal scripted move falls back to normal search); and **`go mate`**
+  — dfpn mate search for the GUI's mate-search/analysis button, answering
+  `checkmate <move sequence>` (shortest mate), `checkmate nomate` (only
+  when no-mate is actually *proven*), or `checkmate timeout` (budget or
+  `stop` reached without a conclusion). It runs on dfpn alone, so it works
+  even without a model, and no `bestmove` is emitted (per the USI spec).
 - For in-process self-play with the same agent, see
   [`maou selfplay`](selfplay.md).
 
@@ -97,7 +101,7 @@ Declared in the `usi` response; defaults reflect the CLI flags above.
 | --- | --- | --- |
 | `ModelPath` | filename | ONNX model path (empty = mock evaluator). |
 | `Threads` / `BatchSize` / `NodeCapacity` | spin | Search resources. |
-| `USI_Hash` | spin (MB) | Used to derive `NodeCapacity` when the latter is not set (approx. 512 bytes/node). `0` = ignore. |
+| `USI_Hash` | spin (MB) | Used to derive `NodeCapacity` when the latter is not set. The conversion uses the measured node footprint (node struct + edge array for the measured average branching factor ≈ 808 bytes/node), so the resulting pool stays within the megabytes you asked for. `0` = ignore. |
 | `UseCuda` / `UseTensorRT` | check | Execution providers (feature-gated wheel required). |
 | `TrtCacheDir` | string | TensorRT engine cache directory. |
 | `NetworkDelay` | spin (ms) | Communication margin subtracted from each move budget. |

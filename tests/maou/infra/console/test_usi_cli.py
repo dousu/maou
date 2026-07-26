@@ -150,6 +150,74 @@ def test_usi_opening_script_plays_instantly() -> None:
     assert " ponder " not in bestmove
 
 
+def _run_engine_until(
+    script: str, prefix: str, timeout: float = 60.0
+) -> list[str]:
+    """台本を流し `prefix` で始まる行が出るまで読んでから quit する．
+
+    一括 pipe だと `quit` が先に stop フラグを立てて探索が 0 で打ち切られる
+    (`go` も `go mate` も同じ規約) ため，応答を待ってから quit を送る．
+    """
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _ENTRY],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    assert proc.stdin is not None and proc.stdout is not None
+    lines: list[str] = []
+    try:
+        proc.stdin.write(script)
+        proc.stdin.flush()
+        for line in proc.stdout:
+            lines.append(line.rstrip("\n"))
+            if line.startswith(prefix):
+                break
+        proc.stdin.write("quit\n")
+        proc.stdin.flush()
+        proc.wait(timeout=timeout)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    assert proc.returncode == 0
+    return lines
+
+
+def test_usi_go_mate_e2e() -> None:
+    """`go mate` が dfpn で詰みを解き `checkmate <手順>` を返す (M4)．
+
+    詰み探索は評価器に依存しないので mock 構成でも実解する．
+    """
+    lines = _run_engine_until(
+        "usi\n"
+        "isready\n"
+        "usinewgame\n"
+        # 先手 5三歩 + 持駒金，後手 5一玉: G*5b の 1 手詰め
+        "position sfen 4k4/9/4P4/9/9/9/9/9/9 b G 1\n"
+        "go mate 5000\n",
+        "checkmate ",
+    )
+    checkmate = next(
+        line for line in lines if line.startswith("checkmate ")
+    )
+    assert checkmate.split()[1] == "G*5b", checkmate
+    # go mate は bestmove を返さない (USI 仕様)
+    assert not any(
+        line.startswith("bestmove ") for line in lines
+    )
+
+
+def test_usi_go_mate_reports_nomate() -> None:
+    """詰みが無い局面では `checkmate nomate` を返す．"""
+    lines = _run_engine_until(
+        "usi\nisready\nposition startpos\ngo mate 5000\n",
+        "checkmate ",
+    )
+    assert "checkmate nomate" in lines
+
+
 def test_usi_ponder_session_e2e() -> None:
     """go ponder → ponderhit で先読み木を引き継いで bestmove を返す．
 
