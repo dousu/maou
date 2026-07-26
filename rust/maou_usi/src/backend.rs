@@ -377,8 +377,7 @@ mod tests {
                 &stop,
                 &mut NoopObserver,
             )
-            .err()
-            .expect("非合法手はエラー");
+            .expect_err("非合法手はエラー");
         assert!(err.contains("7g7e"));
     }
 

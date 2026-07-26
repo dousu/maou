@@ -1119,6 +1119,7 @@ mod tests {
     type Calls = Rc<RefCell<Vec<(String, Vec<String>, SearchBudget)>>>;
     type RulesLog = Rc<RefCell<Vec<GoRules>>>;
 
+    #[allow(clippy::type_complexity)] // impl Fn を含むタプル返却は alias 化不能 (TAIT 未安定)
     fn agent_with_fake(
         outcome: SearchOutcome,
     ) -> (
@@ -1130,6 +1131,7 @@ mod tests {
     }
 
     /// nyugyoku フラグと GoRules 記録も取れる版．
+    #[allow(clippy::type_complexity)] // 同上
     fn agent_with_fake_full(
         outcome: SearchOutcome,
         nyugyoku: bool,
@@ -1354,8 +1356,10 @@ mod tests {
 
     #[test]
     fn test_usi_hash_conversion() {
-        let mut config = EngineConfig::default();
-        config.usi_hash_mb = Some(512);
+        let mut config = EngineConfig {
+            usi_hash_mb: Some(512),
+            ..EngineConfig::default()
+        };
         // 512MB / 512B = 1M ノード
         assert_eq!(config.effective_node_capacity(), Some(1 << 20));
         // NodeCapacity 明示が優先
