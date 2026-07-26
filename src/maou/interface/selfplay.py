@@ -2,9 +2,8 @@
 
 import logging
 from pathlib import Path
-from typing import Any
 
-from maou.app.usi.selfplay import SelfplayRunner
+from maou.app.usi.selfplay import AB_MODES, SelfplayRunner
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -38,7 +37,16 @@ def selfplay(
     cuda: bool = False,
     tensorrt: bool = False,
     trt_engine_cache_dir: Path | None = None,
-) -> list[dict[str, Any]]:
+    min_think_ms: int | None = None,
+    ab_mode: str | None = None,
+    playouts_b: int | None = None,
+    horizon_moves: int | None = None,
+    horizon_moves_b: int | None = None,
+    alternate_colors: bool | None = None,
+    clock_ms: int | None = None,
+    byoyomi_ms: int | None = None,
+    inc_ms: int | None = None,
+) -> SelfplayRunner.SelfplayResult:
     """in-process 自己対局を実行して対局結果のリストを返す．
 
     Args:
@@ -69,16 +77,51 @@ def selfplay(
         cuda: CUDA Execution Provider を使うか．
         tensorrt: TensorRT Execution Provider を使うか．
         trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
+        min_think_ms: 最低思考時間ミリ秒 (None = エンジン既定)．
+        ab_mode: A/B 対戦のレバー (subtree/maxmoves/budget/horizon．
+            None = 純粋自己対局)．
+        playouts_b: ab_mode="budget" の B 側予算 (None = A の 1/8)．
+        horizon_moves: ab_mode="horizon" の A 側想定残り手数．
+        horizon_moves_b: 同 B 側想定残り手数．
+        alternate_colors: 先後交代 + ペア開局 (None = ab_mode 指定時 True)．
+        clock_ms: 持ち時間モードの初期持ち時間ミリ秒 (0/None = 無効)．
+        byoyomi_ms: 秒読みミリ秒．
+        inc_ms: 1 手加算ミリ秒．
 
     Returns:
-        対局 index 順の対局結果 dict のリスト．
+        対局結果 (records) + 集計 (summary) + 壁時計時間 (wall_ms)．
 
     Raises:
-        ValueError: playouts と movetime_ms を同時指定した場合．
+        ValueError: 探索予算の指定が排他条件を満たさない場合，未知の
+            ab_mode，持ち時間モードと parallel > 1 の併用．
     """
-    if playouts is not None and movetime_ms is not None:
+    budgets = [
+        name
+        for name, value in (
+            ("playouts", playouts),
+            ("movetime_ms", movetime_ms),
+            ("clock_ms", clock_ms or None),
+        )
+        if value is not None
+    ]
+    if len(budgets) > 1:
         raise ValueError(
-            "playouts と movetime_ms は同時に指定できない"
+            "探索予算は playouts / movetime_ms / clock_ms の"
+            f"いずれか 1 つだけ指定できる (指定: {', '.join(budgets)})"
+        )
+    if ab_mode is not None and ab_mode not in AB_MODES:
+        raise ValueError(
+            f"未知の ab_mode: {ab_mode} "
+            f"({' | '.join(AB_MODES)})"
+        )
+    if ab_mode == "horizon" and not clock_ms:
+        raise ValueError(
+            "ab_mode=horizon は持ち時間モード (clock_ms > 0) が必要"
+        )
+    if clock_ms and parallel > 1:
+        # 消費時間を壁時計で測るため，同時対局の CPU 競合で歪む
+        raise ValueError(
+            "持ち時間モード (clock_ms) は parallel=1 でのみ使える"
         )
     option = SelfplayRunner.SelfplayOption(
         model_path=model_path,
@@ -108,5 +151,14 @@ def selfplay(
         cuda=cuda,
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_engine_cache_dir,
+        min_think_ms=min_think_ms,
+        ab_mode=ab_mode,
+        playouts_b=playouts_b,
+        horizon_moves=horizon_moves,
+        horizon_moves_b=horizon_moves_b,
+        alternate_colors=alternate_colors,
+        clock_ms=clock_ms,
+        byoyomi_ms=byoyomi_ms,
+        inc_ms=inc_ms,
     )
     return SelfplayRunner().run(option)

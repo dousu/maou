@@ -29,6 +29,16 @@
   the first N plies uniformly at random among legal moves (deterministic
   per `--seed`, mixed with the game index). `--opening-script` applies a
   forced opening to both agents instead.
+- **A/B matches** (`--ab-mode`): player A plays the lever on, player B off,
+  everything else identical. Colors swap every game and the pair
+  (2n, 2n+1) shares one opening sequence, so the paired comparison cancels
+  opening variance. Used to settle the design's open questions
+  ([design §12](../design/usi-engine/index.md); GPU procedure:
+  [verification.md](../design/usi-engine/verification.md)).
+- **Real-clock mode** (`--clock-ms`): instead of a fixed per-move budget,
+  a real clock runs and the time strategy decides each move's budget. Time
+  spent is measured on the wall clock, so it requires `--parallel 1` and is
+  mutually exclusive with `--playouts` / `--movetime-ms`.
 - HCPE (training data) generation from self-play records is a later
   campaign; this command produces the driver + records + smoke layer only.
 
@@ -54,6 +64,15 @@
 | `--resign-value INT` | default `0` | Resign when the root win rate stays below this permille for `--resign-consecutive` moves (`0` = never). |
 | `--resign-consecutive INT` | default `3` | Consecutive below-threshold moves required to resign. |
 | `--opening-script "MOVES"` | | Forced opening move sequence in USI notation, applied to both agents (only when `--sfen` is a move-1 position — see [`usi.md`](usi.md)). |
+| `--clock-ms INT` | default `0` | Real-clock mode: initial time per side in milliseconds (`0` = off). Mutually exclusive with `--playouts` / `--movetime-ms`, and requires `--parallel 1`. |
+| `--byoyomi-ms INT` | default `0` | Byoyomi in milliseconds (real-clock mode only). |
+| `--inc-ms INT` | default `0` | Fischer increment per move in milliseconds (real-clock mode only). |
+| `--min-think-ms INT` | | Minimum thinking time per move (engine default `100`); only meaningful in real-clock mode. |
+| `--ab-mode MODE` | | A/B match instead of plain self-play: `subtree` (subtree reuse), `maxmoves` (in-search draw terminal), `budget` (same config, smaller budget for B — harness sanity check), `horizon` (time-strategy horizon; requires `--clock-ms`). |
+| `--playouts-b INT` | | Player B playout budget (`--ab-mode budget`; defaults to one eighth of `--playouts`). |
+| `--horizon INT` | | Assumed remaining moves for player A (`--ab-mode horizon`; defaults to the engine value). |
+| `--horizon-b INT` | | Assumed remaining moves for player B (`--ab-mode horizon`; default `25`). |
+| `--alternate-colors/--no-alternate-colors` | default: on with `--ab-mode` | Swap colors every game and pair the openings (2n, 2n+1). |
 | `--root-dfpn/--no-root-dfpn` | **default on** | Root-parallel dfpn mate search. |
 | `--root-dfpn-nodes INT` | default `2000000` | Node budget for the root dfpn mate search. |
 | `--root-dfpn-depth INT` | default `2047` | Depth limit for the root dfpn mate search. |
@@ -72,16 +91,26 @@
   "black"|"white"|null, "reason": "checkmate"|"resign"|"declaration"|
   "repetition"|"perpetual_check"|"max_moves"|"illegal_move",
   "black_player": "a"|"b", "plies": N, "playouts": N, "reused_moves": N,
-  "carried_visits": N, "elapsed_ms": N}`.
+  "carried_visits": N, "elapsed_ms": N, "remaining_ms": [N, N]|null}`.
   (`reused_moves` / `carried_visits` measure how often subtree reuse
   warm-started a search and how many visits it carried over — the
   effective budget the retained tree added.)
-  (`black_player` records color alternation in A/B matches driven via the
-  Rust harness `cargo run -p maou_usi --example selfplay_ab`; plain CLI
-  self-play always reports `"a"`.)
+  (`black_player` records color alternation in A/B matches; plain
+  self-play always reports `"a"`. `remaining_ms` is `[black, white]` time
+  left at the end and is only filled in real-clock mode.)
 - stdout prints a summary: game count, black/white/draw results, a reason
-  histogram, totals for plies / playouts / summed game time, and how much
-  subtree reuse contributed.
+  histogram, totals for plies / playouts / summed game time, wall-clock
+  `throughput:` in playouts per second (the denominator is the whole run,
+  so `--parallel` sweeps are comparable), and how much subtree reuse
+  contributed.
+- With `--ab-mode` the summary additionally reports, from player A's point
+  of view: `W/D/L`, the score with a Wilson 95% interval, the Elo
+  conversion with its interval, the paired statistics (pairs, mean, SE,
+  t value, pairs where A came out ahead) and — in real-clock mode — the
+  average time left at the end for each side. Read the engagement numbers
+  (carried visits, time left) before concluding "no effect": at n = 40 the
+  interval only resolves differences of roughly 150 Elo, so a win rate
+  alone cannot separate "no effect" from "the lever never fired".
 
 ## Example
 
@@ -94,4 +123,19 @@ maou selfplay --games 2 --playouts 16 --max-moves 64 \
 maou selfplay --model-path model.onnx --games 20 --parallel 4 \
   --playouts 800 --opening-random-plies 6 --seed 1 \
   --output selfplay.jsonl
+
+# A/B: subtree reuse on (A) vs off (B), paired openings with color swap
+maou selfplay --model-path model.onnx --games 40 --ab-mode subtree \
+  --playouts 800 --opening-random-plies 8 --seed 1 --max-moves 256
+
+# A/B on the time strategy: real clock, horizon 40 (A) vs 20 (B)
+maou selfplay --model-path model.onnx --games 40 --ab-mode horizon \
+  --clock-ms 32000 --inc-ms 500 --horizon 40 --horizon-b 20 \
+  --resign-value 0 --opening-random-plies 8 --seed 1 --max-moves 256
 ```
+
+The same harness is available without building the Python extension as
+`cargo run --release -p maou_usi --example selfplay_ab` (a thin wrapper
+around the same `maou_usi::ab` implementation, so the numbers agree).
+GPU procedure for the open questions:
+[verification.md](../design/usi-engine/verification.md).

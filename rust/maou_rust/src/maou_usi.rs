@@ -3,7 +3,8 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use maou_usi::selfplay::{GameOutcome, SelfplayConfig};
+use maou_usi::ab::{build_ab, summarize, AbMode, AbOptions, RunSummary, SummaryOptions};
+use maou_usi::selfplay::{ClockSetting, GameOutcome, SelfplayConfig};
 use maou_usi::{EngineConfig, TimeStrategyConfig};
 
 /// 評価器・探索・戦略の共通引数を [`EngineConfig`] へ反映する
@@ -201,6 +202,54 @@ fn outcome_to_dict<'py>(py: Python<'py>, o: &GameOutcome) -> PyResult<Bound<'py,
     d.set_item("reused_moves", o.reused_moves)?;
     d.set_item("carried_visits", o.carried_visits)?;
     d.set_item("elapsed_ms", o.elapsed_ms)?;
+    // 終局時の残り持ち時間 [先手, 後手]．持ち時間モード以外は None
+    d.set_item("remaining_ms", o.remaining_ms.map(|r| r.to_vec()))?;
+    Ok(d)
+}
+
+/// [`RunSummary`] → Python dict (`ab` は A/B 対戦時のみ dict，他は None)．
+fn summary_to_dict<'py>(py: Python<'py>, s: &RunSummary) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("games", s.games)?;
+    d.set_item("black_wins", s.black_wins)?;
+    d.set_item("white_wins", s.white_wins)?;
+    d.set_item("draws", s.draws)?;
+    let reasons = PyDict::new(py);
+    for (name, count) in &s.reasons {
+        reasons.set_item(name, count)?;
+    }
+    d.set_item("reasons", reasons)?;
+    d.set_item("total_plies", s.total_plies)?;
+    d.set_item("total_playouts", s.total_playouts)?;
+    d.set_item("total_game_ms", s.total_game_ms)?;
+    d.set_item("reused_moves", s.reused_moves)?;
+    d.set_item("carried_visits", s.carried_visits)?;
+    match &s.ab {
+        None => d.set_item("ab", py.None())?,
+        Some(ab) => {
+            let a = PyDict::new(py);
+            a.set_item("wins", ab.wins)?;
+            a.set_item("draws", ab.draws)?;
+            a.set_item("losses", ab.losses)?;
+            a.set_item("score", ab.score)?;
+            a.set_item("score_rate", ab.score_rate)?;
+            a.set_item("ci_lo", ab.ci_lo)?;
+            a.set_item("ci_hi", ab.ci_hi)?;
+            a.set_item("elo", ab.elo)?;
+            a.set_item("elo_lo", ab.elo_lo)?;
+            a.set_item("elo_hi", ab.elo_hi)?;
+            a.set_item("pairs", ab.pairs)?;
+            a.set_item("pairs_a_ahead", ab.pairs_a_ahead)?;
+            a.set_item("pairs_tied", ab.pairs_tied)?;
+            a.set_item("pairs_b_ahead", ab.pairs_b_ahead)?;
+            a.set_item("paired_mean", ab.paired_mean)?;
+            a.set_item("paired_se", ab.paired_se)?;
+            a.set_item("paired_t", ab.paired_t)?;
+            a.set_item("time_left_a_ms", ab.time_left_a_ms)?;
+            a.set_item("time_left_b_ms", ab.time_left_b_ms)?;
+            d.set_item("ab", a)?
+        }
+    }
     Ok(d)
 }
 
@@ -225,19 +274,37 @@ fn outcome_to_dict<'py>(py: Python<'py>, o: &GameOutcome) -> PyResult<Bound<'py,
 ///   デフォルト 0)．`seed` (int, optional): 乱数シード (デフォルト 0)．
 /// - `verbose` (bool, optional): 対局ごとの進捗を stderr へ出す (デフォルト
 ///   true)．
+/// - `min_think_ms` (int, optional): 最低思考時間 (持ち時間モードの下限)．
 /// - 残りは `run_usi` と同名の評価器・探索・戦略引数
 ///   (`opening_script` は両側エージェントに適用される)．
 ///
+/// # A/B 対戦 (レバーの効果計測．設計 §12)
+///
+/// - `ab_mode` (str, optional): `"subtree"` / `"maxmoves"` / `"budget"` /
+///   `"horizon"`．指定するとプレイヤー B (レバー off 側) が作られ，A 視点の
+///   勝率統計が summary に載る．レバー以外の設定は A と同一になる．
+/// - `playouts_b` (int, optional): `"budget"` の B 側予算 (未指定 = A の 1/8)．
+/// - `horizon_moves` / `horizon_moves_b` (int, optional): `"horizon"` の
+///   A/B 想定残り手数 (未指定 = 40 / 25)．
+/// - `alternate_colors` (bool, optional): 対局ごとに先後を入れ替え，ペア
+///   (2n, 2n+1) で同じ開局系列を共有する (`ab_mode` 指定時のデフォルト true)．
+/// - `clock_ms` / `byoyomi_ms` / `inc_ms` (int, optional): 持ち時間モード
+///   (`clock_ms` > 0 で有効)．`playouts`/`movetime_ms` と排他，`parallel=1`
+///   限定 (壁時計で消費を測るため)．`"horizon"` では必須．
+///
 /// # 返り値
 ///
-/// 対局 index 順の dict リスト: `{game_index, sfen, moves, winner
-/// ("black"/"white"/None), reason, plies, playouts, elapsed_ms}`．
+/// `{"records": [...], "summary": {...}}`．`records` は対局 index 順の dict
+/// `{game_index, sfen, moves, winner ("black"/"white"/None), reason,
+/// black_player, plies, playouts, reused_moves, carried_visits, elapsed_ms,
+/// remaining_ms}`，`summary` は集計 (`ab` キーは A/B 対戦時のみ dict)．
 ///
 /// # エラー
 ///
-/// 設定不正・モデルロード失敗・対局中の内部エラーは `RuntimeError`．
+/// 設定不正・モデルロード失敗・対局中の内部エラーは `RuntimeError`，
+/// 未知の `ab_mode` は `ValueError`．
 #[pyfunction]
-#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, min_think_ms=None, ab_mode=None, playouts_b=None, horizon_moves=None, horizon_moves_b=None, alternate_colors=None, clock_ms=None, byoyomi_ms=None, inc_ms=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_selfplay(
     py: Python<'_>,
@@ -268,7 +335,16 @@ fn run_selfplay(
     leaf_mate: Option<bool>,
     leaf_mate_nodes: Option<u64>,
     leaf_mate_threads: Option<usize>,
-) -> PyResult<Py<PyList>> {
+    min_think_ms: Option<u64>,
+    ab_mode: Option<String>,
+    playouts_b: Option<u64>,
+    horizon_moves: Option<u64>,
+    horizon_moves_b: Option<u64>,
+    alternate_colors: Option<bool>,
+    clock_ms: Option<u64>,
+    byoyomi_ms: Option<u64>,
+    inc_ms: Option<u64>,
+) -> PyResult<Py<PyDict>> {
     let mut engine = EngineConfig::default();
     apply_common_engine_args(
         &mut engine,
@@ -293,29 +369,72 @@ fn run_selfplay(
     );
     // 自己対局に伝送遅延はない (movetime をそのまま思考時間にする)
     engine.time.network_delay_ms = 0;
+    if let Some(v) = min_think_ms {
+        engine.time.min_think_ms = v;
+    }
+
+    // 持ち時間モード (clock_ms > 0)．playouts/movetime との排他は
+    // maou_usi::selfplay::run_selfplay が検証する
+    let clock = match clock_ms {
+        Some(v) if v > 0 => Some(ClockSetting {
+            initial_ms: v,
+            byoyomi_ms: byoyomi_ms.unwrap_or(0),
+            inc_ms: inc_ms.unwrap_or(0),
+        }),
+        _ => None,
+    };
+    let max_moves = max_moves.unwrap_or(512);
+
+    // A/B 対戦: レバーの on/off を A/B へ割る (maou_usi::ab が単一実装)
+    let mode = match &ab_mode {
+        None => None,
+        Some(name) => Some(AbMode::parse(name).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "未知の ab_mode: {name} (subtree | maxmoves | budget | horizon)"
+            ))
+        })?),
+    };
+    if let Some(m) = mode {
+        if m.needs_clock() && clock.is_none() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "ab_mode=horizon は持ち時間モード (clock_ms > 0) が必要",
+            ));
+        }
+    }
+    let alternate_colors = alternate_colors.unwrap_or(mode.is_some());
+    let setup = mode.map(|mode| {
+        build_ab(
+            &engine,
+            &AbOptions {
+                mode,
+                playouts_b,
+                max_moves,
+                horizon_a: horizon_moves.unwrap_or(engine.time.horizon_moves),
+                horizon_b: horizon_moves_b.unwrap_or(25),
+            },
+            playouts,
+        )
+    });
 
     let config = SelfplayConfig {
-        engine,
-        // A/B 対戦 (engine_b / 色交代 / 同期解除) は Rust example
-        // (selfplay_ab) 経由 — CLI には露出しない
-        engine_b: None,
-        alternate_colors: false,
-        sync_max_moves_to_draw: true,
+        engine: setup.as_ref().map_or(engine, |s| s.engine_a.clone()),
+        engine_b: setup.as_ref().map(|s| s.engine_b.clone()),
+        alternate_colors,
+        sync_max_moves_to_draw: setup.as_ref().is_none_or(|s| s.sync_max_moves_to_draw),
         sfen,
         games: games.unwrap_or(1),
         parallel: parallel.unwrap_or(1),
-        // playouts/movetime_ms 両方未指定なら playout 予算のデフォルトを使う
-        // 予算の per-side 指定 (A/B 検証用) と持ち時間モード (TimeStrategy
-        // 調整用) は Rust example 経由 — CLI は共通予算のみ
-        playouts_b: None,
+        playouts_b: setup.as_ref().and_then(|s| s.playouts_b),
         movetime_ms_b: None,
-        clock: None,
-        playouts: match (playouts, movetime_ms) {
-            (None, None) => SelfplayConfig::default().playouts,
+        clock,
+        // playouts/movetime_ms/clock がどれも未指定なら playout 予算の
+        // デフォルトを使う (持ち時間モードでは時計から算出させる)
+        playouts: match (playouts, movetime_ms, clock) {
+            (None, None, None) => SelfplayConfig::default().playouts,
             _ => playouts,
         },
         movetime_ms,
-        max_moves: max_moves.unwrap_or(512),
+        max_moves,
         opening_random_plies: opening_random_plies.unwrap_or(0),
         seed: seed.unwrap_or(0),
     };
@@ -343,6 +462,7 @@ fn run_selfplay(
         }
     };
 
+    let ab = mode.is_some();
     let outcomes = py
         .detach(move || maou_usi::selfplay::run_selfplay(&config, Some(&progress)))
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
@@ -351,7 +471,17 @@ fn run_selfplay(
     for o in &outcomes {
         list.append(outcome_to_dict(py, o)?)?;
     }
-    Ok(list.unbind())
+    let summary = summarize(
+        &outcomes,
+        SummaryOptions {
+            ab,
+            paired: ab && alternate_colors,
+        },
+    );
+    let result = PyDict::new(py);
+    result.set_item("records", list)?;
+    result.set_item("summary", summary_to_dict(py, &summary)?)?;
+    Ok(result.unbind())
 }
 
 /// Create maou_usi submodule
