@@ -120,6 +120,18 @@ from maou.infra.console.common import (
     required=False,
 )
 @click.option(
+    "--opening-script",
+    help="Forced opening move sequence in USI notation, space-separated "
+    '(e.g. "5i5h 5a5b 5h5i 5b5a" for the HWT king-shuffle handicap). '
+    "While the game path matches this prefix the engine plays the next "
+    "scripted move instantly without searching; once the path diverges "
+    "the script is disabled for the rest of the game. Also "
+    "`setoption name OpeningScript`.",
+    type=str,
+    default=None,
+    required=False,
+)
+@click.option(
     "--root-dfpn/--no-root-dfpn",
     type=bool,
     is_flag=True,
@@ -207,6 +219,7 @@ def usi(
     resign_consecutive: int,
     max_moves_to_draw: int,
     usi_ponder: bool,
+    opening_script: str | None,
     root_dfpn: bool,
     root_dfpn_nodes: int,
     root_dfpn_depth: int,
@@ -242,6 +255,7 @@ def usi(
         resign_consecutive: Consecutive below-threshold moves to resign.
         max_moves_to_draw: Move count for a drawn game (0 = disabled).
         usi_ponder: Enable pondering on the opponent's turn (default on).
+        opening_script: Forced opening moves in USI notation (None = off).
         root_dfpn: Run dfpn mate search on the root position in parallel.
         root_dfpn_nodes: Node budget for the root dfpn mate search.
         root_dfpn_depth: Search depth limit for the root dfpn mate search.
@@ -265,6 +279,7 @@ def usi(
         resign_consecutive=resign_consecutive,
         max_moves_to_draw=max_moves_to_draw,
         usi_ponder=usi_ponder,
+        opening_script=opening_script,
         root_dfpn=root_dfpn,
         root_dfpn_nodes=root_dfpn_nodes,
         root_dfpn_depth=root_dfpn_depth,

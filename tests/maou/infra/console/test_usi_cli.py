@@ -123,6 +123,31 @@ def test_usi_option_declarations() -> None:
     } <= names
     # M3: USI_Ponder を宣言する (GUI が go ponder を送る trigger．設計 doc §8.4)
     assert "USI_Ponder" in names
+    # M4: OpeningScript (強制序盤手順．設計 doc §8.3)
+    assert "OpeningScript" in names
+
+
+def test_usi_opening_script_plays_instantly() -> None:
+    """OpeningScript 中は探索なしで script 手を即指しする (M4)．
+
+    script 手の bestmove は探索を経ず同期的に出るため，一括 pipe でも
+    stop フラグ競合 (0-playout 経路) の影響を受けない．
+    """
+    lines = _run_engine(
+        "usi\n"
+        "setoption name OpeningScript value 7g7f 3c3d\n"
+        "isready\n"
+        "usinewgame\n"
+        "position startpos\n"
+        "go btime 60000 wtime 60000 byoyomi 1000\n"
+        "quit\n",
+    )
+    bestmove = next(
+        line for line in lines if line.startswith("bestmove ")
+    )
+    assert bestmove == "bestmove 7g7f", bestmove
+    # script 手には ponder が付かない (GUI に go ponder を送らせない)
+    assert " ponder " not in bestmove
 
 
 def test_usi_ponder_session_e2e() -> None:
