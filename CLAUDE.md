@@ -23,6 +23,11 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 ### Architecture
 - MUST maintain dependency flow: `infra → interface → app → domain`
 - MUST NOT introduce circular dependencies between layers
+- MUST NOT import heavy optional dependencies (torch, cloud SDKs) at module
+  level in `src/maou/infra/console/` or any path a light command reaches —
+  use PEP 562 `__getattr__` lazy resolution
+- MUST NOT leave a module-level assignment for a name resolved lazily by
+  `__getattr__` (the global shadows the hook and leaks the pre-probe value)
 
 ### Code Quality
 - MUST add type hints to all code
