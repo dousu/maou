@@ -138,6 +138,11 @@ pub struct GameOutcome {
     pub reason: GameEndReason,
     /// 両側合計の playout 数 (探索した手のみ．script/ランダム手は 0)．
     pub playouts: u64,
+    /// subtree 再利用が発火した手数 (前回木から訪問を引き継いだ手)．
+    pub reused_moves: u32,
+    /// 前回木から引き継いだ訪問数の合計 (再利用の実効量．`playouts` に対する
+    /// 比が「実質何 % 予算が増えたか」— 設計 §12 未決 6 の計測)．
+    pub carried_visits: u64,
     /// 対局の壁時計時間 (ミリ秒)．
     pub elapsed_ms: u64,
 }
@@ -312,6 +317,8 @@ fn play_game(
 
     let mut moves: Vec<String> = Vec::new();
     let mut playouts: u64 = 0;
+    let mut reused_moves: u32 = 0;
+    let mut carried_visits: u64 = 0;
     let (winner, reason) = loop {
         // 最大手数: 到達局面で宣言可能なら手番の勝ち，さもなくば引き分け
         // (電竜戦ルール．最大手数時の詰みも引き分け)
@@ -353,6 +360,12 @@ fn play_game(
                     _ => None,
                 })
                 .unwrap_or(0);
+            // subtree 再利用の実効量 (前回木から引き継いだ訪問数．0 = fresh)
+            let carried = agent.last_carried_visits();
+            if carried > 0 {
+                reused_moves += 1;
+                carried_visits += carried;
+            }
             let best = out
                 .iter()
                 .rev()
@@ -422,6 +435,8 @@ fn play_game(
         winner,
         reason,
         playouts,
+        reused_moves,
+        carried_visits,
         elapsed_ms: start.elapsed().as_millis() as u64,
     })
 }
@@ -600,11 +615,23 @@ mod tests {
     }
 
     #[test]
-    fn test_selfplay_subtree_reuse_off_completes() {
-        let mut cfg = config(1, 16, 8);
+    fn test_selfplay_subtree_reuse_toggle_changes_carry() {
+        // on: 手が進むと reroot が成功して訪問を引き継ぐ手が現れる
+        let on = run_selfplay(&config(1, 64, 12), None).expect("成功");
+        assert_eq!(on[0].reason, GameEndReason::MaxMoves);
+        assert!(
+            on[0].reused_moves > 0 && on[0].carried_visits > 0,
+            "再利用 on では引き継ぎが発生するはず: {} moves / {} visits",
+            on[0].reused_moves,
+            on[0].carried_visits
+        );
+        // off: 常に fresh なので引き継ぎは 0 (計測トグルの効きの検証)
+        let mut cfg = config(1, 64, 12);
         cfg.engine.subtree_reuse = false;
-        let outcomes = run_selfplay(&cfg, None).expect("成功");
-        assert_eq!(outcomes[0].reason, GameEndReason::MaxMoves);
+        let off = run_selfplay(&cfg, None).expect("成功");
+        assert_eq!(off[0].reason, GameEndReason::MaxMoves);
+        assert_eq!(off[0].reused_moves, 0);
+        assert_eq!(off[0].carried_visits, 0);
     }
 
     #[test]

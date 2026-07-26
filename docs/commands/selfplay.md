@@ -71,12 +71,17 @@
   `{"game_index": 0, "sfen": "...", "moves": ["7g7f", ...], "winner":
   "black"|"white"|null, "reason": "checkmate"|"resign"|"declaration"|
   "repetition"|"perpetual_check"|"max_moves"|"illegal_move",
-  "black_player": "a"|"b", "plies": N, "playouts": N, "elapsed_ms": N}`.
+  "black_player": "a"|"b", "plies": N, "playouts": N, "reused_moves": N,
+  "carried_visits": N, "elapsed_ms": N}`.
+  (`reused_moves` / `carried_visits` measure how often subtree reuse
+  warm-started a search and how many visits it carried over — the
+  effective budget the retained tree added.)
   (`black_player` records color alternation in A/B matches driven via the
   Rust harness `cargo run -p maou_usi --example selfplay_ab`; plain CLI
   self-play always reports `"a"`.)
 - stdout prints a summary: game count, black/white/draw results, a reason
-  histogram, and totals for plies / playouts / summed game time.
+  histogram, totals for plies / playouts / summed game time, and how much
+  subtree reuse contributed.
 
 ## Example
 

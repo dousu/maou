@@ -138,6 +138,9 @@ fn main() {
     let mut reasons: std::collections::BTreeMap<&'static str, u32> = Default::default();
     let mut total_plies = 0usize;
     let mut total_ms = 0u64;
+    let mut total_playouts = 0u64;
+    let mut reused_moves = 0u32;
+    let mut carried_visits = 0u64;
     for o in &outcomes {
         use maou_shogi::types::Color;
         let a_is_winner = match (o.winner, o.black_is_a) {
@@ -153,6 +156,9 @@ fn main() {
         *reasons.entry(o.reason.as_str()).or_default() += 1;
         total_plies += o.moves.len();
         total_ms += o.elapsed_ms;
+        total_playouts += o.playouts;
+        reused_moves += o.reused_moves;
+        carried_visits += o.carried_visits;
     }
     let n = outcomes.len() as f64;
     let score = f64::from(wins) + 0.5 * f64::from(draws);
@@ -208,5 +214,14 @@ fn main() {
         "plies: {} total, wall: {:.1}s summed",
         total_plies,
         total_ms as f64 / 1000.0,
+    );
+    // 機構レベルの計測: 勝率が有意でなくても「レバーが実対局で発火したか」
+    // は決着する (subtree 再利用は A 側のみ on なので carry は全て A の分)
+    println!(
+        "subtree reuse engagement: {} moves carried {} visits ({:.1}% of {} total playouts)",
+        reused_moves,
+        carried_visits,
+        100.0 * carried_visits as f64 / total_playouts.max(1) as f64,
+        total_playouts,
     );
 }

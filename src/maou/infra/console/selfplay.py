@@ -382,3 +382,10 @@ def selfplay(
         f"plies: {total_plies} total, playouts: {total_playouts} total, "
         f"game time: {total_ms / 1000.0:.1f}s summed"
     )
+    reused = sum(int(r["reused_moves"]) for r in records)
+    carried = sum(int(r["carried_visits"]) for r in records)
+    pct = 100.0 * carried / total_playouts if total_playouts else 0.0
+    click.echo(
+        f"subtree reuse: {reused} move(s) warm-started, "
+        f"{carried} visits carried over ({pct:.1f}% of playouts)"
+    )

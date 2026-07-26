@@ -225,6 +225,13 @@ pub struct SearchOutcome {
     /// root の確定値 (1.0 = 勝ち確定/詰み発見，0.0 = 負け確定，0.5 = 引き分け
     /// 確定)．未確定は `None`．
     pub proven: Option<f64>,
+    /// 前回の探索木から引き継いだ訪問数 (subtree 再利用の実効量)．
+    ///
+    /// root 直下の訪問数合計から今回の playout 数を引いた残り = warm start で
+    /// 継承した分．reroot が失敗して fresh になった手では 0 になるので，
+    /// 「機構が実対局で何回発火し，どれだけ得したか」の計測に使う (設計 §12
+    /// 未決 6)．統計目的のみで対局判断には使わない．
+    pub carried_visits: u64,
 }
 
 /// 探索バックエンド (実装: [`MaouSearchBackend`]，テスト: fake)．
@@ -330,6 +337,9 @@ where
     /// root 勝率が投了閾値未満だった連続手数 (`resign_value` 用)．usinewgame /
     /// gameover でリセットする．
     resign_streak: u32,
+    /// 直近の `go` で前回木から引き継いだ訪問数 (subtree 再利用の実効量)．
+    /// 計測用 ([`Agent::last_carried_visits`])．対局判断には使わない．
+    last_carried_visits: u64,
     /// ponder 的中シグナル．transport (stdio reader) が行の到着順で更新する:
     /// `go` 行で false，`ponderhit` 行で true (stop フラグと同じ race-free 規約)．
     /// 探索中の [`GoObserver`] がポーリングし，的中したら無期限の ponder 探索を
@@ -351,8 +361,18 @@ where
             game: GameState::default(),
             stop: Arc::new(AtomicBool::new(false)),
             resign_streak: 0,
+            last_carried_visits: 0,
             ponderhit: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// 直近の `go` で subtree 再利用が引き継いだ訪問数 (0 = fresh 探索)．
+    ///
+    /// 自己対局 driver が「機構が実対局で何回発火し，実質どれだけ予算が
+    /// 増えたか」を集計するための計測フック (設計 §12 未決 6)．探索なしで
+    /// 応じた手 (OpeningScript・宣言勝ち) では更新されない．
+    pub fn last_carried_visits(&self) -> u64 {
+        self.last_carried_visits
     }
 
     /// 探索停止フラグのハンドル．
@@ -784,6 +804,7 @@ where
             backend.search(&sfen, &moves, &budget, &rules, &stop, &mut observer)?
         };
 
+        self.last_carried_visits = outcome.carried_visits;
         // 探索サマリ info (最終) → bestmove (予想相手手 = 自探索 PV の 2 手目)
         emit(EngineCommand::Info(build_info(&outcome)));
         let mv = self.decide_bestmove(&outcome);
@@ -1182,6 +1203,7 @@ mod tests {
             nps: 1100,
             max_depth: 8,
             proven: None,
+            carried_visits: 0,
         }
     }
 
