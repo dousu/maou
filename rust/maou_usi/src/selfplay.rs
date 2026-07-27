@@ -184,6 +184,15 @@ pub struct GameOutcome {
     pub remaining_ms: Option<[u64; 2]>,
 }
 
+/// 持ち時間モードで確保する最低マージン (ミリ秒)．
+///
+/// 呼び出し側の設定値と driver のポーリング粒度 ([`crate::backend::POLL_INTERVAL`])
+/// の大きい方を採る — 探索の停止要求はポーリングでしか届かないため，最悪
+/// 1 周期分は予算を超えて走る．
+fn clock_margin_ms(configured_ms: u64) -> u64 {
+    configured_ms.max(crate::backend::POLL_INTERVAL.as_millis() as u64)
+}
+
 /// SplitMix64 (シード決定的な軽量乱数．依存を増やさない)．
 struct SplitMix64(u64);
 
@@ -236,6 +245,14 @@ pub fn run_selfplay(
         e.usi_ponder = false;
         if config.sync_max_moves_to_draw {
             e.max_moves_to_draw = config.max_moves;
+        }
+        if config.clock.is_some() {
+            // 持ち時間モードは実測消費で時計を引くため，**driver 自身の遅れ**を
+            // マージンとして引かないと残り僅少で踏み越えて時間切れ負けになる
+            // (実測: 30s+0.5s の 4 局で 3 局が timeout)．遅れの主因は monitor の
+            // ポーリング粒度で，探索はその分だけ hard を超えて走り得る．
+            // GUI 対局の NetworkDelay と同じ役割をここで最低限確保する．
+            e.time.network_delay_ms = clock_margin_ms(e.time.network_delay_ms);
         }
         e
     };
@@ -614,6 +631,21 @@ mod tests {
         assert!(
             long > short * 3,
             "手数を 5 倍にしたら playout も増えるはず (short={short}, long={long})"
+        );
+    }
+
+    /// 持ち時間モードのマージンは driver のポーリング粒度を下回らない．
+    ///
+    /// 0 のままだと残り僅少の手で予算を踏み越えて時間切れ負けになる
+    /// (GPU 実測: 30s+0.5s の 4 局中 3 局が timeout)．
+    #[test]
+    fn test_clock_margin_covers_poll_interval() {
+        let poll = crate::backend::POLL_INTERVAL.as_millis() as u64;
+        assert_eq!(clock_margin_ms(0), poll, "既定 0 でも最低 1 周期は確保する");
+        assert_eq!(
+            clock_margin_ms(poll + 500),
+            poll + 500,
+            "呼び出し側がより大きなマージンを指定したら尊重する"
         );
     }
 

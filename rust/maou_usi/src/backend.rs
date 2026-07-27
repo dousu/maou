@@ -23,7 +23,7 @@ use crate::agent::{
 use crate::protocol::CheckmateResult;
 
 /// 進捗スナップショットを observer へ渡すポーリング間隔．
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
+pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// 保持する評価器 (mock または ONNX)．自己対局 driver はこれを `Arc` で全対局
 /// に共有する (モデルロード/warmup をプロセス内 1 回に — 設計 §9)．
