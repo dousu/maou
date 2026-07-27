@@ -193,6 +193,18 @@ cargo test --release -p maou_shogi -- <test_name> --nocapture --ignored
 | `test_counter_check_example` | - | 逆王手詰将棋 mate-7 健全性 |
 | `test_counter_check_diagnostic` | - | 診断用ログ出力 |
 | `test_no_checkmate_counter_check_probe` | 10M nodes | ノード予算プローブ |
+| `test_false_proof_hunt` | 50 nodes/局面 (leaf-mate 相当) | 偽証明 (`STRICT VERIFY None`) ハンター．ランダム対局から局面生成．env `SEED`/`GAMES`/`PLIES`/`NODES`/`MAXHITS` |
+
+dfpn の **偽 1 手詰 (soundness 違反)** を疑うときは `MATE1PLY_VERIFY=1` を付ける．
+1 手詰と申告した手を実 replay で検証し，偽なら
+`[mate1ply] FALSE MATE site=... m=... sfen=...` を出す
+(production が通る fused / near2 / cached full scan の全経路をカバー)．
+`test_false_proof_hunt` と併用すると広域スイープになる:
+
+```bash
+SEED=1 GAMES=200 MATE1PLY_VERIFY=1 cargo test --release -p maou_shogi -- \
+  --test-threads=1 --ignored --nocapture dfpn::tests::test_false_proof_hunt
+```
 
 dfpn テストは各々が大きな置換表 (TT) を alloc するため，**MUST `--test-threads=1`** で実行すること．
 default の並列実行は memory 制約 DevContainer (8GB) で OOM → `signal: 15 SIGTERM` となり，
