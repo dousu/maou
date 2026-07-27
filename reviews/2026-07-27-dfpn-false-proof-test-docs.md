@@ -1,8 +1,8 @@
 ---
 title: CLAUDE.md の [SLOW] テスト表に偽証明ハンターを追加し，soundness スイープの回し方を明記
 date: 2026-07-27
-status: pending
-applied_in:
+status: applied
+applied_in: f221561
 target:
   - CLAUDE.md
 risk: low
