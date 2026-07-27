@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 103cc4b
 date: 2026-07-27
 target:
   - docs/commands/selfplay.md
