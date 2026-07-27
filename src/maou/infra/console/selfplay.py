@@ -202,14 +202,46 @@ logger: logging.Logger = logging.getLogger(__name__)
     required=False,
 )
 @click.option(
+    "--spin-relief/--no-spin-relief",
+    type=bool,
+    is_flag=True,
+    help="Exclude terminal spin (backprops that never reach a leaf) from "
+    "the playout budget, so --playouts counts real search volume only "
+    "(default off). Bounded by a consecutive-spin limit so a frontier "
+    "made entirely of terminals still stops. Fixed-budget runs only.",
+    default=False,
+    required=False,
+)
+@click.option(
+    "--skip-proven/--no-skip-proven",
+    type=bool,
+    is_flag=True,
+    help="Exclude proven children (mate / repetition / resolved subtrees) "
+    "from PUCT selection, so descents open new leaves instead of "
+    "backpropagating a known value (MCTS-Solver; default off). Works "
+    "under both fixed budgets and the real clock.",
+    default=False,
+    required=False,
+)
+@click.option(
     "--ab-mode",
     help="Play an A/B match instead of plain self-play: player A runs "
     "the lever on, player B off, everything else identical. "
     "'subtree' = subtree reuse, 'maxmoves' = in-search draw terminal, "
     "'budget' = same config with a smaller budget for B (harness sanity "
-    "check), 'horizon' = time-strategy horizon (needs --clock-ms).",
+    "check), 'horizon' = time-strategy horizon (needs --clock-ms), "
+    "'spin' = exclude terminal spin from the playout budget (fixed "
+    "--playouts only; the clock mode is bounded by time, not playouts), "
+    "'proven' = exclude proven children from PUCT selection.",
     type=click.Choice(
-        ["subtree", "maxmoves", "budget", "horizon"]
+        [
+            "subtree",
+            "maxmoves",
+            "budget",
+            "horizon",
+            "spin",
+            "proven",
+        ]
     ),
     default=None,
     required=False,
@@ -353,6 +385,8 @@ def selfplay(
     byoyomi_ms: int,
     inc_ms: int,
     min_think_ms: int | None,
+    spin_relief: bool,
+    skip_proven: bool,
     ab_mode: str | None,
     playouts_b: int | None,
     horizon: int | None,
@@ -409,6 +443,8 @@ def selfplay(
         byoyomi_ms: Byoyomi in milliseconds (real-clock mode).
         inc_ms: Fischer increment per move (real-clock mode).
         min_think_ms: Minimum thinking time per move.
+        spin_relief: Exclude terminal spin from the playout budget.
+        skip_proven: Exclude proven children from PUCT selection.
         ab_mode: Lever compared in an A/B match (None = plain self-play).
         playouts_b: Player B playout budget (``--ab-mode budget``).
         horizon: Player A assumed remaining moves (``--ab-mode horizon``).
@@ -454,6 +490,8 @@ def selfplay(
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_cache_dir,
         min_think_ms=min_think_ms,
+        spin_budget_relief=spin_relief,
+        skip_proven_children=skip_proven,
         ab_mode=ab_mode,
         playouts_b=playouts_b,
         horizon_moves=horizon,
@@ -525,8 +563,22 @@ def _echo_summary(
         f"playouts: {total_playouts} total, "
         f"game time: {int(summary['total_game_ms']) / 1000.0:.1f}s summed"
     )
+    # 空回り: 終端 (証明済み・千日手・最大手数・深さ上限) に当たって葉評価に
+    # 至らなかった backprop．予算は playout との合計で消費されるため，比が
+    # 大きいほど公称予算に対する実探索量が小さい
+    spin = int(summary.get("total_terminal_backprops", 0))
+    budget_used = total_playouts + spin
+    spin_pct = (
+        100.0 * spin / budget_used if budget_used else 0.0
+    )
+    click.echo(
+        f"terminal spin: {spin} backprop(s) without leaf eval "
+        f"({spin_pct:.1f}% of the consumed budget)"
+    )
     # 並列スループット: 分母は wall clock (対局ごとの合計ではない)．
-    # --parallel を振ってこの値が伸びるかがバッチ aggregator 採否の材料
+    # --parallel を振ってこの値が伸びるかがバッチ aggregator 採否の材料．
+    # 分子は**実 playout のみ** (空回りを含めると NN 評価の物理上限を超えた
+    # 水増し値になる)
     wall_s = wall_ms / 1000.0
     click.echo(
         f"throughput: {total_playouts / wall_s if wall_s else 0.0:.1f} "

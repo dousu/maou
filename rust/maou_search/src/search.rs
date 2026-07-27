@@ -65,7 +65,7 @@ use maou_shogi::moves::Move;
 use crate::evaluator::{EvalItem, Evaluator};
 use crate::position::{build_board_and_history, PositionSetupError};
 use crate::repetition::{find_repetition, HistoryEntry, RepetitionOutcome};
-use crate::tree::{node_state, proven, Edge, NodePool, NULL_NODE};
+use crate::tree::{node_state, proven, Edge, Node, NodePool, NULL_NODE};
 
 /// ルートノードの pool index (最初の alloc で必ず 0 になる)．
 const ROOT_IDX: u32 = 0;
@@ -148,6 +148,30 @@ pub struct SearchOptions {
     /// なので subtree 再利用でも stale しない．USI の `MaxMovesToDraw` から
     /// 渡される (docs/design/usi-engine/index.md §8.3, 未決 4)．
     pub max_moves_to_draw: u32,
+    /// **空回りを playout 予算から外す** (既定 false = 従来どおり合算)．
+    ///
+    /// true にすると [`SearchLimits::max_playouts`] は葉評価を伴う playout
+    /// だけを数える — 終端に当たって折り返しただけの降下は予算を消費しない．
+    /// 終盤では消費予算の 9 割超が空回りになるため，公称予算に対する実探索量
+    /// が桁で増える (実測: 引き分け地平が 2 手先で 98.1% が空回り)．
+    ///
+    /// 停止性は [`SPIN_STREAK_LIMIT`] 連続空回りで担保する — 深さ上限超過は
+    /// `mark_terminal` しない (証明で畳めない) ため，この上限が無いと葉収集
+    /// ループが永久に回る．**棋力への影響が大きいので A/B で確認するまで
+    /// 既定は false**．
+    pub spin_budget_relief: bool,
+    /// **確定済み (proven) の子を PUCT の選択候補から外す** (既定 false)．
+    ///
+    /// 詰み・千日手・最大手数で確定した子は値が既知なので，降りても
+    /// no-op backprop (空回り) になるだけで新しい葉は開かない．候補から
+    /// 外すと同じ予算・同じ wall clock で実 playout が増える (MCTS-Solver
+    /// 相当)．全子が確定した親はその場で確定化して畳む．
+    ///
+    /// 着手選択への影響: 確定済みの子は訪問が伸びなくなるため robust child
+    /// では選ばれなくなる．有効時は [`best_root_index`] が確定値で上書き
+    /// 判定する (確実な引き分けと不確実な劣勢を取り違えないため)．
+    /// **棋力への影響が大きいので A/B で確認するまで既定は false**．
+    pub skip_proven_children: bool,
     /// ノードプール GC を有効にするか．有効ならプール枯渇時に
     /// [`NodePool::compact`] で低訪問サブツリーを刈り取って探索を継続する．
     pub gc_enabled: bool,
@@ -196,6 +220,8 @@ impl Default for SearchOptions {
             node_capacity: 1 << 20,
             max_ply: 512,
             max_moves_to_draw: 0,
+            spin_budget_relief: false,
+            skip_proven_children: false,
             gc_enabled: true,
             gc_keep_ratio: 0.5,
             draw_value: 0.5,
@@ -258,6 +284,13 @@ pub enum StopCause {
     RootProven,
     /// 外部の停止フラグ ([`SearchLimits::stop`]) が立てられた．
     External,
+    /// 空回りが続いて新しい葉に到達できなくなった
+    /// ([`SearchOptions::spin_budget_relief`] 有効時のみ)．
+    ///
+    /// 予算から空回りを外すと，終端しか無い領域では playout 上限に永久に
+    /// 到達しない．[`SPIN_STREAK_LIMIT`] 回連続で葉評価に届かなかったら
+    /// 「これ以上開ける葉が無い」と判断して停止する (停止性の担保)．
+    SpinExhausted,
 }
 
 impl StopCause {
@@ -269,6 +302,7 @@ impl StopCause {
             StopCause::RootTerminal => 4,
             StopCause::RootProven => 5,
             StopCause::External => 6,
+            StopCause::SpinExhausted => 7,
         }
     }
 
@@ -280,6 +314,7 @@ impl StopCause {
             4 => Some(StopCause::RootTerminal),
             5 => Some(StopCause::RootProven),
             6 => Some(StopCause::External),
+            7 => Some(StopCause::SpinExhausted),
             _ => None,
         }
     }
@@ -364,8 +399,28 @@ fn root_children_of(pool: &NodePool) -> Vec<RootChildStat> {
 /// 勝ち確定なら root 視点の確定値 (1) の子，引き分け確定なら 0.5 の子を選ぶ
 /// (訪問回数最大は確定前の探索の偏りを引きずり得る)．負け確定は全子が負け
 /// 確定なので robust child のまま (どれでも同値)．
-fn best_root_index(children: &[RootChildStat], root_proven: Option<f64>) -> usize {
+fn best_root_index(
+    children: &[RootChildStat],
+    root_proven: Option<f64>,
+    skip_proven_children: bool,
+) -> usize {
     let mut best_i = select_best_root_index(children);
+    // 確定済みの子を選択候補から外していると，その子は訪問が伸びないので
+    // robust child では選ばれない．確定値 (厳密) が robust child の推定値
+    // (q) を上回るなら確定側で上書きする — 「確実な引き分け」を「不確実な
+    // 劣勢」と取り違えないため
+    if skip_proven_children {
+        let base_value = children[best_i].proven.unwrap_or(children[best_i].q);
+        let better_proven = children
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| c.proven.map(|v| (i, v)))
+            .filter(|&(_, v)| v > base_value)
+            .max_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((i, _)) = better_proven {
+            best_i = i;
+        }
+    }
     if let Some(rv) = root_proven {
         if rv > 0.0 {
             if let Some(i) = children.iter().position(|c| c.proven == Some(rv)) {
@@ -410,8 +465,17 @@ fn extract_pv(pool: &NodePool, first_mv: Move, first_child: u32) -> Vec<Move> {
 /// 探索の実行統計．
 #[derive(Clone, Debug)]
 pub struct SearchStats {
-    /// 完了した playout 数 (評価 + 終端到達)．
+    /// 葉評価を伴って完了した playout 数．**終端到達だけで折り返した空回り
+    /// ([`Self::terminal_backprops`]) は含まない** — 探索量の指標として読める
+    /// 値はこちら．予算 ([`SearchLimits::max_playouts`]) は両者の合計で消費する．
     pub playouts: u64,
+    /// 終端に当たって葉評価に到達しなかった backprop 数 (空回り)．
+    ///
+    /// 引き分け終端・千日手・終端マーク済みノードの再訪・深さ上限超過は，新しい
+    /// 葉を開かずカウントだけ回す．証明済み局面が近いと `playouts` の数十倍に
+    /// 達するため，**別掲して throughput の水増しを防ぐ** (旧実装は両者を
+    /// `playouts` に合算しており，実測で物理上限の約 61 倍を報告していた)．
+    pub terminal_backprops: u64,
     /// ルート評価 (初回推論 = TensorRT エンジンビルド/ロード等) の所要時間
     /// (ミリ秒)．1 回限りの固定コストであり，計測区間 (`elapsed_ms`/`nps`) から
     /// 除外して別掲する (onnx_bench の warmup と同義)．
@@ -564,7 +628,13 @@ struct Shared<'a, E: Evaluator> {
     ext_stop: Option<Arc<AtomicBool>>,
     stop: AtomicBool,
     stop_cause: AtomicU8,
+    /// 葉評価を伴って完了した playout 数 ([`SearchStats::playouts`])．
     playouts: AtomicU64,
+    /// 終端到達で折り返した空回り数 ([`SearchStats::terminal_backprops`])．
+    /// 予算判定では `playouts` との合計を使う (relief 有効時は使わない)．
+    terminal_backprops: AtomicU64,
+    /// 直近の葉評価からの連続空回り数 ([`SPIN_STREAK_LIMIT`] の判定用)．
+    spin_streak: AtomicU64,
     collisions: AtomicU64,
     eval_batches: AtomicU64,
     eval_items: AtomicU64,
@@ -664,10 +734,48 @@ impl<E: Evaluator> Shared<'_, E> {
         false
     }
 
-    /// playout 完了を n 件計上し，上限到達なら停止フラグを立てる．
+    /// 葉評価を伴う playout 完了を n 件計上し，予算到達なら停止フラグを立てる．
+    /// 葉に到達したので連続空回り ([`SPIN_STREAK_LIMIT`]) はリセットする．
     fn complete_playouts(&self, n: u64) {
         let prev = self.playouts.fetch_add(n, Ordering::Relaxed);
-        if prev + n >= self.max_playouts {
+        self.spin_streak.store(0, Ordering::Relaxed);
+        let used = if self.opts.spin_budget_relief {
+            prev + n
+        } else {
+            prev + n + self.terminal_backprops.load(Ordering::Relaxed)
+        };
+        self.check_budget(used);
+    }
+
+    /// 終端到達だけで折り返した空回りを n 件計上する．
+    ///
+    /// 既定 ([`SearchOptions::spin_budget_relief`] = false) では **予算を
+    /// `playouts` との合計で見る**．空回りを予算から外すと，終端しか無い領域
+    /// (深さ上限超過は `mark_terminal` しないため証明で畳めない) で葉収集
+    /// ループが永久に回り，playout 制の探索が停止しなくなるためで，既定の
+    /// 停止性はこの計上に依存している．
+    ///
+    /// relief 有効時は予算を消費させない代わりに，連続空回りが
+    /// [`SPIN_STREAK_LIMIT`] に達した時点で [`StopCause::SpinExhausted`] で
+    /// 止める (葉が開けなくなったことの検出)．
+    fn complete_terminal_backprops(&self, n: u64) {
+        let prev = self.terminal_backprops.fetch_add(n, Ordering::Relaxed);
+        if self.opts.spin_budget_relief {
+            let streak = self.spin_streak.fetch_add(n, Ordering::Relaxed) + n;
+            if streak >= SPIN_STREAK_LIMIT {
+                self.set_stop(StopCause::SpinExhausted);
+            }
+            return;
+        }
+        self.check_budget(prev + n + self.playouts.load(Ordering::Relaxed));
+    }
+
+    /// 消費合計が予算に達していれば停止フラグを立てる．
+    ///
+    /// 2 つの counter を Relaxed で読むため境界では 1-2 件の前後がありうるが，
+    /// 元から複数 worker が同時に計上する近似値であり，停止点の意味は変わらない．
+    fn check_budget(&self, used: u64) {
+        if used >= self.max_playouts {
             self.set_stop(StopCause::PlayoutLimit);
         }
     }
@@ -743,7 +851,7 @@ impl<E: Evaluator> Shared<'_, E> {
         }
         let root_node = pool.get(ROOT_IDX);
         let root_proven = root_node.proven_value();
-        let best_i = best_root_index(&children, root_proven);
+        let best_i = best_root_index(&children, root_proven, self.opts.skip_proven_children);
         let best = &children[best_i];
         let second_visits = children
             .iter()
@@ -833,6 +941,34 @@ fn terminal_leaf_value<E: Evaluator>(shared: &Shared<'_, E>, state: u8, path_len
     }
 }
 
+/// 全子の確定値から親の確定値を AND 集約する (未確定の子が 1 つでもあれば
+/// `None`)．親視点の値は `1 - min(子の確定値)` — 相手は親視点で最悪の子，
+/// すなわち子視点で最小値の子を選べる．
+///
+/// 兄弟スキャンは SeqCst 版 ([`Node::proven_value_sync`]) を使う: 最後の
+/// 2 兄弟を同時に確定した 2 スレッドが互いを未確定と読むと，親の確定が
+/// 回復不能に失われるため．
+fn aggregate_proven(pool: &NodePool, parent: &Node) -> Option<u8> {
+    let mut min_cv = f64::INFINITY;
+    for e in parent.edges() {
+        let c = e.child.load(Ordering::Acquire);
+        if c == NULL_NODE {
+            return None;
+        }
+        min_cv = min_cv.min(pool.get(c).proven_value_sync()?);
+    }
+    if !min_cv.is_finite() {
+        return None; // 子が無い (展開済みノードでは起きない)
+    }
+    Some(if min_cv == 0.0 {
+        proven::WIN
+    } else if min_cv == 0.5 {
+        proven::DRAW
+    } else {
+        proven::LOSS
+    })
+}
+
 /// path 末尾の確定値を AND-OR 論理で祖先へ伝播する ([`crate::tree::proven`])．
 ///
 /// - いずれかの子が手番側負け確定 (値 0) → 親は勝ち確定 (OR)
@@ -855,32 +991,11 @@ fn propagate_proven(pool: &NodePool, path: &[u32]) -> u64 {
         let p = if cv == 0.0 {
             proven::WIN
         } else {
-            let mut min_cv = cv;
-            let mut all_proven = true;
-            for e in parent.edges() {
-                let c = e.child.load(Ordering::Acquire);
-                if c == NULL_NODE {
-                    all_proven = false;
-                    break;
-                }
-                match pool.get(c).proven_value_sync() {
-                    None => {
-                        all_proven = false;
-                        break;
-                    }
-                    Some(v) => min_cv = min_cv.min(v),
-                }
-            }
-            if !all_proven {
+            // 全子が確定していなければ親は確定できない (AND 集約)
+            let Some(p) = aggregate_proven(pool, parent) else {
                 break;
-            }
-            if min_cv == 0.0 {
-                proven::WIN
-            } else if min_cv == 0.5 {
-                proven::DRAW
-            } else {
-                proven::LOSS
-            }
+            };
+            p
         };
         if parent.try_mark_proven(p) {
             newly += 1;
@@ -938,13 +1053,18 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
             node_state::EXPANDED => {
                 let edges = node.edges();
                 let sqrt_pn = (node.visits() as f32).sqrt();
-                let mut best_i = 0usize;
+                let mut best_i = usize::MAX;
                 let mut best_score = f32::NEG_INFINITY;
                 for (i, e) in edges.iter().enumerate() {
                     let (q, n) = match e.child.load(Ordering::Acquire) {
                         NULL_NODE => (opts.fpu, 0u64),
                         c => {
                             let child = pool.get(c);
+                            // 確定済みの子は値が既知 — 降りても no-op backprop
+                            // にしかならないので候補から外す (MCTS-Solver)
+                            if opts.skip_proven_children && child.proven_value().is_some() {
+                                continue;
+                            }
                             let v = child.visits();
                             if v == 0 {
                                 (opts.fpu, 0)
@@ -959,6 +1079,24 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
                         best_score = score;
                         best_i = i;
                     }
+                }
+                if best_i == usize::MAX {
+                    // 全子が確定済み — この親も確定する (伝播の取りこぼしを
+                    // ここで回収し，以後この部分木へは降りなくなる)．
+                    // skip_proven_children が false なら best_i は必ず埋まる
+                    if let Some(p) = aggregate_proven(pool, node) {
+                        node.try_mark_proven(p);
+                    }
+                    shared.note_depth(path.len());
+                    let v = node.proven_value().unwrap_or(0.5);
+                    let leaf = if v == 0.5 {
+                        shared.draw_leaf_value(path.len())
+                    } else {
+                        v
+                    };
+                    backprop(shared, &path, leaf);
+                    propagate_proven_from(shared, &path);
+                    return Selection::Backpropped;
                 }
                 let edge = &edges[best_i];
                 board.do_move(edge.mv);
@@ -1075,6 +1213,14 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
     }
 }
 
+/// 連続空回りの上限 ([`SearchOptions::spin_budget_relief`] 有効時)．これだけ
+/// 続けて葉評価に到達しなければ「開ける葉が無い」と判断して探索を止める．
+///
+/// 健全な局面では空回りと葉評価が交互に起きるため streak は伸びない (終盤の
+/// 実測でも空回り/葉評価は約 50:1 で，連続 4096 回はその 80 倍に相当する)．
+/// 予算に比例させないのは，予算が大きいほど無駄な走査が伸びるのを避けるため．
+const SPIN_STREAK_LIMIT: u64 = 4096;
+
 /// 終端連続時に期限を確認する間隔 (backprop 回数)．`Instant::now()` の頻度を
 /// 抑えつつ，時間制の停止が終端の連続で無限に遅れるのを防ぐ．
 const DEADLINE_CHECK_INTERVAL: u32 = 64;
@@ -1112,7 +1258,7 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
                     items.push(*item);
                 }
                 Selection::Backpropped => {
-                    shared.complete_playouts(1);
+                    shared.complete_terminal_backprops(1);
                     terminal_hits += 1;
                     if terminal_hits.is_multiple_of(DEADLINE_CHECK_INTERVAL) {
                         shared.check_deadline();
@@ -1304,6 +1450,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                 stop: StopCause::RootTerminal,
                 stats: SearchStats {
                     playouts: 0,
+                    terminal_backprops: 0,
                     warmup_ms: warmup_start.elapsed().as_millis() as u64,
                     elapsed_ms: 0,
                     nps: 0.0,
@@ -1399,6 +1546,8 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             stop: AtomicBool::new(false),
             stop_cause: AtomicU8::new(CAUSE_NONE),
             playouts: AtomicU64::new(0),
+            terminal_backprops: AtomicU64::new(0),
+            spin_streak: AtomicU64::new(0),
             collisions: AtomicU64::new(0),
             eval_batches: AtomicU64::new(0),
             eval_items: AtomicU64::new(0),
@@ -1555,7 +1704,11 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
 
         // 負け確定除外の robust child + root 確定手の優先 (build_snapshot と共有)
         let root_proven = root_node.proven_value();
-        let best_i = best_root_index(&root_children, root_proven);
+        let best_i = best_root_index(
+            &root_children,
+            root_proven,
+            shared.opts.skip_proven_children,
+        );
         let best = &root_children[best_i];
 
         // PV: 先頭は best_move に一致させ，以降は訪問回数最大の辺を辿る
@@ -1568,6 +1721,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         let eval_items = shared.eval_items.load(Ordering::Relaxed);
         let stats = SearchStats {
             playouts,
+            terminal_backprops: shared.terminal_backprops.load(Ordering::Relaxed),
             warmup_ms,
             elapsed_ms: elapsed.as_millis() as u64,
             nps: playouts as f64 / elapsed.as_secs_f64().max(1e-9),
@@ -1706,6 +1860,180 @@ mod tests {
             "全 playout が引き分けなので勝率はほぼ draw_value (0.5): {}",
             result.winrate
         );
+    }
+
+    #[test]
+    fn test_terminal_spin_is_separated_from_playouts() {
+        // 深さ上限を超えた降下は葉評価に到達せず，`mark_terminal` もしないので
+        // 証明でも畳めない = 予算を使い切るまで空回りが続く．この空回りを
+        // `playouts` に合算していた頃は throughput が NN 評価の物理上限を
+        // 超えて報告されていた (実測 668,449 playouts/秒 = 上限の約 61 倍)．
+        let result = run(
+            MATE_IN_1,
+            SearchOptions {
+                threads: 1,
+                batch_size: 4,
+                node_capacity: 1 << 14,
+                max_moves_to_draw: 1,
+                ..pure_mcts_opts()
+            },
+            SearchLimits {
+                max_playouts: Some(1000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        // 停止性は空回りの計上に依存する: 予算から外すとこの探索は永久に回る
+        assert_eq!(result.stop, StopCause::PlayoutLimit);
+        assert!(
+            result.stats.terminal_backprops >= 900,
+            "ほぼ全ての予算が空回りに消えるはず: {}",
+            result.stats.terminal_backprops
+        );
+        assert!(
+            result.stats.playouts <= 100,
+            "葉評価は root 直下のみ (空回りは playouts に入らない): {}",
+            result.stats.playouts
+        );
+        // 予算は両者の合計で消費する (旧実装と同じ停止点)
+        assert!(result.stats.playouts + result.stats.terminal_backprops >= 1000);
+        // `playouts` = 評価した葉の数 (throughput の分子として意味を持つ値)
+        assert_eq!(
+            result.stats.playouts, result.stats.eval_items,
+            "playouts は葉評価数と一致する"
+        );
+    }
+
+    #[test]
+    fn test_skip_proven_children_prefers_sure_draw_over_worse_guess() {
+        // 確定済みの子は訪問が伸びないので robust child では選ばれない．
+        // 確定値 (0.5 = 引き分け) が robust child の推定 q (0.2) を上回るなら
+        // 確定側を選ぶ — 「確実な引き分け」を「不確実な劣勢」と取り違えない
+        let mv = |usi: &str| Move::from_usi(usi).expect("正当な USI");
+        let children = vec![
+            RootChildStat {
+                mv: mv("7g7f"),
+                visits: 1000,
+                q: 0.2,
+                prior: 0.5,
+                proven: None,
+            },
+            RootChildStat {
+                mv: mv("2g2f"),
+                visits: 3,
+                q: 0.5,
+                prior: 0.5,
+                proven: Some(0.5),
+            },
+        ];
+        assert_eq!(
+            best_root_index(&children, None, true),
+            1,
+            "確実な引き分けを選ぶ"
+        );
+        assert_eq!(
+            best_root_index(&children, None, false),
+            0,
+            "レバー off では従来どおり robust child"
+        );
+    }
+
+    #[test]
+    fn test_skip_proven_children_keeps_better_unproven_move() {
+        // 逆に robust child の推定が引き分けより良いなら，確定値では
+        // 上書きしない (確定 = 常に優先ではない)
+        let mv = |usi: &str| Move::from_usi(usi).expect("正当な USI");
+        let children = vec![
+            RootChildStat {
+                mv: mv("7g7f"),
+                visits: 1000,
+                q: 0.8,
+                prior: 0.5,
+                proven: None,
+            },
+            RootChildStat {
+                mv: mv("2g2f"),
+                visits: 3,
+                q: 0.5,
+                prior: 0.5,
+                proven: Some(0.5),
+            },
+        ];
+        assert_eq!(best_root_index(&children, None, true), 0);
+    }
+
+    #[test]
+    fn test_skip_proven_children_cuts_spin_on_mate_adjacent_tree() {
+        // 詰み・千日手が近い局面では，確定済みの部分木へ降りる空回りが
+        // 予算を食う．確定済みの子を候補から外すと空回りが減り，同じ予算で
+        // 実 playout が増える (レバーの発火確認)．
+        // 玉だけの局面は千日手終端 (mark_terminal + 確定伝播) がすぐ溜まる
+        let bare_kings = "4k4/9/9/9/9/9/9/9/4K4 b - 1";
+        let opts = |skip: bool| SearchOptions {
+            threads: 1,
+            batch_size: 4,
+            node_capacity: 1 << 14,
+            skip_proven_children: skip,
+            ..pure_mcts_opts()
+        };
+        let limits = SearchLimits {
+            max_playouts: Some(2000),
+            ..SearchLimits::default()
+        };
+        let off = run(bare_kings, opts(false), limits.clone(), 42);
+        let on = run(bare_kings, opts(true), limits, 42);
+        assert!(
+            on.stats.terminal_backprops < off.stats.terminal_backprops,
+            "空回りが減るはず: off={} on={}",
+            off.stats.terminal_backprops,
+            on.stats.terminal_backprops
+        );
+        assert!(
+            on.stats.playouts >= off.stats.playouts,
+            "実 playout は減らない: off={} on={}",
+            off.stats.playouts,
+            on.stats.playouts
+        );
+        assert!(on.best_move.is_some());
+    }
+
+    #[test]
+    fn test_spin_budget_relief_stops_instead_of_spinning_forever() {
+        // relief 有効時は空回りが予算を消費しないので，終端しか無い領域では
+        // playout 上限に永久に到達しない．SPIN_STREAK_LIMIT 連続で葉に届か
+        // なければ SpinExhausted で止まる (これが無いと無限ループ)．
+        let result = run(
+            MATE_IN_1,
+            SearchOptions {
+                threads: 1,
+                batch_size: 4,
+                node_capacity: 1 << 14,
+                max_moves_to_draw: 1,
+                spin_budget_relief: true,
+                ..pure_mcts_opts()
+            },
+            SearchLimits {
+                max_playouts: Some(1000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        assert_eq!(
+            result.stop,
+            StopCause::SpinExhausted,
+            "葉が開けなくなったら停止する (予算到達では止まれない)"
+        );
+        assert!(
+            result.stats.playouts < 1000,
+            "playout 予算には到達していない: {}",
+            result.stats.playouts
+        );
+        assert!(
+            result.stats.terminal_backprops >= SPIN_STREAK_LIMIT,
+            "連続空回りの上限まで回ってから止まる: {}",
+            result.stats.terminal_backprops
+        );
+        assert!(result.best_move.is_some(), "合法手は返す");
     }
 
     #[test]

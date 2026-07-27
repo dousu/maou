@@ -62,8 +62,10 @@ impl SearchRootChild {
 /// - `pv`: 読み筋 (USI 形式のリスト)．
 /// - `root_children`: ルート直下の全候補手の統計 (合法手生成順)．
 /// - `stop`: 停止理由 (`"playout_limit"` / `"time_limit"` / `"pool_exhausted"` /
-///   `"root_terminal"` / `"root_proven"`)．
-/// - 統計: `playouts` / `warmup_ms` (ルート評価/エンジンビルドの所要; 計測
+///   `"root_terminal"` / `"root_proven"` / `"spin_exhausted"`)．
+/// - 統計: `playouts` (葉評価を伴う実 playout のみ) / `terminal_backprops`
+///   (終端到達だけで折り返した空回り; 予算は両者の合計で消費) /
+///   `warmup_ms` (ルート評価/エンジンビルドの所要; 計測
 ///   区間外) / `elapsed_ms` / `nps` / `max_depth` / `repetitions`
 ///   (千日手検出数) / `proven_nodes` (AND-OR 確定ノード数) / `leaf_mates`
 ///   (leaf-mate が葉で詰みを証明した回数) / `nodes_used` / `collisions` /
@@ -82,6 +84,8 @@ struct PySearchResult {
     stop: String,
     #[pyo3(get)]
     playouts: u64,
+    #[pyo3(get)]
+    terminal_backprops: u64,
     #[pyo3(get)]
     warmup_ms: u64,
     #[pyo3(get)]
@@ -127,6 +131,7 @@ fn stop_cause_str(stop: StopCause) -> &'static str {
         StopCause::RootTerminal => "root_terminal",
         StopCause::RootProven => "root_proven",
         StopCause::External => "external",
+        StopCause::SpinExhausted => "spin_exhausted",
     }
 }
 
@@ -148,6 +153,7 @@ fn to_py_result(r: SearchResult) -> PySearchResult {
             .collect(),
         stop: stop_cause_str(r.stop).to_string(),
         playouts: r.stats.playouts,
+        terminal_backprops: r.stats.terminal_backprops,
         warmup_ms: r.stats.warmup_ms,
         elapsed_ms: r.stats.elapsed_ms,
         nps: r.stats.nps,

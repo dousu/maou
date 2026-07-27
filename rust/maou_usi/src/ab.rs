@@ -34,6 +34,15 @@ pub enum AbMode {
     Budget,
     /// 持ち時間モードで `TimeStrategy` の想定残り手数を A/B (未決 1)．
     Horizon,
+    /// A = 確定済みの子を選択候補から外す (MCTS-Solver) / B = 従来どおり．
+    ///
+    /// 空回りの降下自体が消えるので，固定予算でも持ち時間モードでも効く．
+    Proven,
+    /// A = 空回りを playout 予算から外す / B = 従来どおり合算．
+    ///
+    /// **固定 playout 予算でのみ意味を持つ** (`--playouts`)．持ち時間モードは
+    /// 時計が拘束条件なので，会計を変えても消費 wall clock は変わらない．
+    Spin,
 }
 
 impl AbMode {
@@ -44,6 +53,8 @@ impl AbMode {
             "maxmoves" => Some(AbMode::MaxMoves),
             "budget" => Some(AbMode::Budget),
             "horizon" => Some(AbMode::Horizon),
+            "spin" => Some(AbMode::Spin),
+            "proven" => Some(AbMode::Proven),
             _ => None,
         }
     }
@@ -55,6 +66,8 @@ impl AbMode {
             AbMode::MaxMoves => "maxmoves",
             AbMode::Budget => "budget",
             AbMode::Horizon => "horizon",
+            AbMode::Spin => "spin",
+            AbMode::Proven => "proven",
         }
     }
 
@@ -124,6 +137,14 @@ pub fn build_ab(base: &EngineConfig, opts: &AbOptions, playouts: Option<u64>) ->
         AbMode::Horizon => {
             engine_a.time.horizon_moves = opts.horizon_a;
             engine_b.time.horizon_moves = opts.horizon_b;
+        }
+        AbMode::Spin => {
+            engine_a.spin_budget_relief = true;
+            engine_b.spin_budget_relief = false;
+        }
+        AbMode::Proven => {
+            engine_a.skip_proven_children = true;
+            engine_b.skip_proven_children = false;
         }
     }
     AbSetup {
@@ -203,6 +224,9 @@ pub struct RunSummary {
     pub total_plies: u64,
     /// 総 playout 数 (両側合計)．
     pub total_playouts: u64,
+    /// 全局合計の空回り数 (終端到達だけで折り返した backprop)．
+    /// `total_playouts` との比で「予算のどれだけが空回りに消えたか」を見る．
+    pub total_terminal_backprops: u64,
     /// 対局の壁時計時間の総和 (ミリ秒．並列時は wall clock と一致しない)．
     pub total_game_ms: u64,
     /// subtree 再利用が発火した手数．
@@ -227,6 +251,7 @@ pub fn summarize(outcomes: &[GameOutcome], opts: SummaryOptions) -> RunSummary {
     let mut reasons: BTreeMap<&'static str, u32> = BTreeMap::new();
     let mut total_plies = 0u64;
     let mut total_playouts = 0u64;
+    let mut total_terminal_backprops = 0u64;
     let mut total_game_ms = 0u64;
     let mut reused_moves = 0u32;
     let mut carried_visits = 0u64;
@@ -239,6 +264,7 @@ pub fn summarize(outcomes: &[GameOutcome], opts: SummaryOptions) -> RunSummary {
         *reasons.entry(o.reason.as_str()).or_default() += 1;
         total_plies += o.moves.len() as u64;
         total_playouts += o.playouts;
+        total_terminal_backprops += o.terminal_backprops;
         total_game_ms += o.elapsed_ms;
         reused_moves += o.reused_moves;
         carried_visits += o.carried_visits;
@@ -252,6 +278,7 @@ pub fn summarize(outcomes: &[GameOutcome], opts: SummaryOptions) -> RunSummary {
         reasons: reasons.into_iter().collect(),
         total_plies,
         total_playouts,
+        total_terminal_backprops,
         total_game_ms,
         reused_moves,
         carried_visits,
@@ -480,6 +507,7 @@ mod tests {
             winner,
             reason: GameEndReason::MaxMoves,
             playouts: 100,
+            terminal_backprops: 0,
             reused_moves: 1,
             carried_visits: 20,
             elapsed_ms: 1000,

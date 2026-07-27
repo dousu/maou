@@ -114,6 +114,8 @@ pub(crate) fn search_options(config: &EngineConfig) -> SearchOptions {
     if let Some(v) = config.leaf_mate_threads {
         options.leaf_mate_threads = v;
     }
+    options.spin_budget_relief = config.spin_budget_relief;
+    options.skip_proven_children = config.skip_proven_children;
     options
 }
 
@@ -313,16 +315,19 @@ fn to_progress_snapshot(snap: &RootSnapshot) -> ProgressSnapshot {
 
 /// [`SearchResult`] → transport 非依存の [`SearchOutcome`]．
 fn to_outcome(r: &SearchResult) -> SearchOutcome {
-    // subtree 再利用の実効量: root 直下の訪問数合計のうち今回の playout を
-    // 超える分が前回木から引き継いだ訪問 (fresh 探索では 0 になる)
+    // subtree 再利用の実効量: root 直下の訪問数合計のうち今回の backprop を
+    // 超える分が前回木から引き継いだ訪問 (fresh 探索では 0 になる)．
+    // root 訪問は葉評価・空回りの**どちらでも**増えるので，両方を引く
+    // (playouts だけを引くと空回りの分が引き継ぎとして二重計上される)
     let root_visits: u64 = r.root_children.iter().map(|c| c.visits).sum();
-    let carried_visits = root_visits.saturating_sub(r.stats.playouts);
+    let carried_visits = root_visits.saturating_sub(r.stats.playouts + r.stats.terminal_backprops);
     SearchOutcome {
         carried_visits,
         best_usi: r.best_move.map(|m| m.to_usi()),
         winrate: r.winrate,
         pv: r.pv.iter().map(|m| m.to_usi()).collect(),
         playouts: r.stats.playouts,
+        terminal_backprops: r.stats.terminal_backprops,
         // GUI へ報告する消費時間は warmup (root 評価) 込みの壁時計
         elapsed_ms: r.stats.warmup_ms + r.stats.elapsed_ms,
         nps: r.stats.nps as u64,

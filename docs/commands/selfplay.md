@@ -68,7 +68,9 @@
 | `--byoyomi-ms INT` | default `0` | Byoyomi in milliseconds (real-clock mode only). |
 | `--inc-ms INT` | default `0` | Fischer increment per move in milliseconds (real-clock mode only). |
 | `--min-think-ms INT` | | Minimum thinking time per move (engine default `100`); only meaningful in real-clock mode. |
-| `--ab-mode MODE` | | A/B match instead of plain self-play: `subtree` (subtree reuse), `maxmoves` (in-search draw terminal), `budget` (same config, smaller budget for B — harness sanity check), `horizon` (time-strategy horizon; requires `--clock-ms`). |
+| `--ab-mode MODE` | | A/B match instead of plain self-play: `subtree` (subtree reuse), `maxmoves` (in-search draw terminal), `budget` (same config, smaller budget for B — harness sanity check), `horizon` (time-strategy horizon; requires `--clock-ms`), `spin` (terminal spin excluded from the budget for A; fixed `--playouts` only, rejected with `--clock-ms`), `proven` (proven children excluded from PUCT selection for A). |
+| `--spin-relief/--no-spin-relief` | default off | Exclude terminal spin from the playout budget, so `--playouts` counts real search volume only. A consecutive-spin limit still stops a search whose frontier is all terminals (`stop=spin_exhausted`). Fixed-budget runs only; measured to raise real playouts by only ~1-2% (see [verification.md §4.5](../design/usi-engine/verification.md)). |
+| `--skip-proven/--no-skip-proven` | default off | Exclude proven children (mate / repetition / resolved subtrees) from PUCT selection, so descents open new leaves instead of backpropagating a known value (MCTS-Solver). Works under both fixed budgets and the real clock. Measured to raise real playouts per move by ~20% where proven terminals dominate; no effect where the spin comes from the depth/max-moves limit (see [verification.md §4.6](../design/usi-engine/verification.md)). |
 | `--playouts-b INT` | | Player B playout budget (`--ab-mode budget`; defaults to one eighth of `--playouts`). |
 | `--horizon INT` | | Assumed remaining moves for player A (`--ab-mode horizon`; defaults to the engine value). |
 | `--horizon-b INT` | | Assumed remaining moves for player B (`--ab-mode horizon`; default `25`). |
@@ -90,8 +92,14 @@
   `{"game_index": 0, "sfen": "...", "moves": ["7g7f", ...], "winner":
   "black"|"white"|null, "reason": "checkmate"|"resign"|"declaration"|
   "repetition"|"perpetual_check"|"max_moves"|"illegal_move",
-  "black_player": "a"|"b", "plies": N, "playouts": N, "reused_moves": N,
+  "black_player": "a"|"b", "plies": N, "playouts": N,
+  "terminal_backprops": N, "reused_moves": N,
   "carried_visits": N, "elapsed_ms": N, "remaining_ms": [N, N]|null}`.
+  (`playouts` is the **real search volume** — playouts that evaluated a
+  leaf. Descents that only hit a terminal (proven / repetition / max-moves
+  / depth limit) and backpropagated without opening a new leaf are counted
+  separately as `terminal_backprops`; the budget is consumed by the sum of
+  the two.)
   (`reused_moves` / `carried_visits` measure how often subtree reuse
   warm-started a search and how many visits it carried over — the
   effective budget the retained tree added.)
@@ -99,10 +107,18 @@
   self-play always reports `"a"`. `remaining_ms` is `[black, white]` time
   left at the end and is only filled in real-clock mode.)
 - stdout prints a summary: game count, black/white/draw results, a reason
-  histogram, totals for plies / playouts / summed game time, wall-clock
-  `throughput:` in playouts per second (the denominator is the whole run,
-  so `--parallel` sweeps are comparable), and how much subtree reuse
-  contributed.
+  histogram, totals for plies / playouts / summed game time, a
+  `terminal spin:` line, wall-clock `throughput:` in playouts per second
+  (the denominator is the whole run, so `--parallel` sweeps are
+  comparable), and how much subtree reuse contributed.
+- `terminal spin:` reports the backprops that never reached a leaf
+  evaluation and their share of the consumed budget. Endgames dominated by
+  proven terminals, repetition, or the max-moves horizon spend most of the
+  budget here, so the real search volume falls far below the nominal one
+  (measured: 98.1% spin with the draw horizon two plies away). The
+  `throughput:` numerator counts **real playouts only** — a figure above
+  the evaluator's physical ceiling means an older build that folded spin
+  into `playouts`.
 - With `--ab-mode` the summary additionally reports, from player A's point
   of view: `W/D/L`, the score with a Wilson 95% interval, the Elo
   conversion with its interval, the paired statistics (pairs, mean, SE,
