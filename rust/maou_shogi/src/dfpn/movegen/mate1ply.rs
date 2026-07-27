@@ -48,7 +48,11 @@ impl DfPnSolver {
             if mate_cand_enabled() {
                 record_mate_cand(board, cached, mm, turn);
             }
-            return (mm, !cached.is_empty());
+            let has_checks = !cached.is_empty();
+            if mate1ply_verify() {
+                self.verify_mate1ply_sound(board, mm, "cached_checks");
+            }
+            return (mm, has_checks);
         }
         mate_cand_bump_cache(true, false);
         let moves = self.generate_check_moves(board);
@@ -56,6 +60,9 @@ impl DfPnSolver {
         let mm = board.mate_move_in_1ply(moves.as_slice(), turn);
         if mate_cand_enabled() {
             record_mate_cand(board, moves.as_slice(), mm, turn);
+        }
+        if mate1ply_verify() {
+            self.verify_mate1ply_sound(board, mm, "cached_checks");
         }
         (mm, !moves.is_empty())
     }
@@ -71,11 +78,19 @@ impl DfPnSolver {
         let hash = board.hash;
         let turn = board.turn;
         if let Some(cached) = self.check_cache.get_slice(hash) {
-            return board.mate_move_in_1ply_maxdist(cached, turn, 2);
+            let mm = board.mate_move_in_1ply_maxdist(cached, turn, 2);
+            if mate1ply_verify() {
+                self.verify_mate1ply_sound(board, mm, "near2");
+            }
+            return mm;
         }
         let moves = self.generate_check_moves(board);
         self.check_cache.insert(hash, &moves);
-        board.mate_move_in_1ply_maxdist(moves.as_slice(), turn, 2)
+        let mm = board.mate_move_in_1ply_maxdist(moves.as_slice(), turn, 2);
+        if mate1ply_verify() {
+            self.verify_mate1ply_sound(board, mm, "near2");
+        }
+        mm
     }
 
     /// 敵玉隣接 geometry から候補を構成する look-ahead 1 手詰判定．
@@ -119,6 +134,9 @@ impl DfPnSolver {
                 board.sfen()
             );
         }
+        if mate1ply_verify() {
+            self.verify_mate1ply_sound(board, fused, "fused");
+        }
         fused
     }
 
@@ -156,6 +174,29 @@ impl DfPnSolver {
             }
         }
         bitboard_mate
+    }
+
+    /// `MATE1PLY_VERIFY` 用の **soundness 専用**チェック: 1 手詰と申告した手は必ず真の 1 手詰
+    /// (do_move 後に王手 かつ 合法手 0) でなければならない．
+    ///
+    /// [`Self::verify_mate1ply`] と違い full scan との一致照合を行わないため，参照実装である
+    /// [`Self::mate1ply_with_cached_checks`] 自身からも**再帰せずに**呼べる．production が実際に
+    /// 通る全経路 (fused look-ahead / near2 / cached full scan) に挿し，偽 1 手詰がどこから出ても
+    /// 捕まるようにする (これらを素通りしていたため二歩起因の偽 1 手詰を検出できなかった)．
+    fn verify_mate1ply_sound(&self, board: &mut Board, m: Option<Move>, site: &str) {
+        let Some(mv) = m else { return };
+        let defender = board.turn.opponent();
+        let cap = board.do_move(mv);
+        let real = board.is_in_check(defender) && !crate::movegen::has_any_legal_move(board);
+        board.undo_move(mv, cap);
+        record_mate1ply_sound(!real);
+        if !real {
+            eprintln!(
+                "[mate1ply] FALSE MATE site={site} m={} sfen={}",
+                mv.to_usi(),
+                board.sfen(),
+            );
+        }
     }
 
     /// `MATE1PLY_VERIFY` 用: 候補列挙の健全性と従来 full scan との一致を照合し統計へ加算する．
@@ -243,8 +284,8 @@ fn m1_fused_verify() -> bool {
 }
 
 thread_local! {
-    /// [calls, mate_found, diffmove, mate_miss, false_pos]．`MATE1PLY_VERIFY` 時のみ加算．
-    static MATE1PLY_STATS: std::cell::Cell<[u64; 5]> = const { std::cell::Cell::new([0; 5]) };
+    /// [calls, mate_found, diffmove, mate_miss, false_pos, sound_checks]．`MATE1PLY_VERIFY` 時のみ加算．
+    static MATE1PLY_STATS: std::cell::Cell<[u64; 6]> = const { std::cell::Cell::new([0; 6]) };
     /// mate_miss dump の出力件数 (最初の数件のみ詳細を出す)．
     static MATE1PLY_MISS_DUMP: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -269,9 +310,21 @@ fn record_mate1ply(kh: Option<Move>, full: Option<Move>, false_pos: bool) {
     });
 }
 
+/// soundness 専用チェック 1 件分を加算する ([`DfPnSolver::verify_mate1ply_sound`])．
+fn record_mate1ply_sound(false_pos: bool) {
+    MATE1PLY_STATS.with(|s| {
+        let mut v = s.get();
+        v[5] += 1;
+        if false_pos {
+            v[4] += 1;
+        }
+        s.set(v);
+    });
+}
+
 /// kh verify 統計を reset する (solve 開始時)．
 pub(crate) fn reset_mate1ply_stats() {
-    MATE1PLY_STATS.with(|s| s.set([0; 5]));
+    MATE1PLY_STATS.with(|s| s.set([0; 6]));
 }
 
 /// kh verify 統計を report する (solve 終了時; gate off なら no-op)．
@@ -281,12 +334,12 @@ pub(crate) fn report_mate1ply_stats() {
     }
     MATE1PLY_STATS.with(|s| {
         let v = s.get();
-        if v[0] == 0 {
+        if v[0] == 0 && v[5] == 0 {
             return;
         }
         eprintln!(
-            "[mate1ply] calls={} mate_found={} | vs full: diffmove={} mate_miss(full=Some,kh=None)={} | FALSE_MATE(bug)={}",
-            v[0], v[1], v[2], v[3], v[4],
+            "[mate1ply] calls={} mate_found={} | vs full: diffmove={} mate_miss(full=Some,kh=None)={} | sound_checks={} FALSE_MATE(bug)={}",
+            v[0], v[1], v[2], v[3], v[5], v[4],
         );
     });
 }

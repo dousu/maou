@@ -53,9 +53,13 @@ impl DfPnSolver {
         dep_out: &mut usize,
         fast: bool,
     ) -> Option<u16> {
+        let vdiag = super::vdiag_enabled();
         if *budget == 0 {
             // budget 枯渇 None は経路にも memo 状態にも依存する → 最大汚染として伝播し
             // 祖先にも memo させない (偽 None のキャッシュ化を防ぐ)．
+            if vdiag {
+                eprintln!("[vdiag] L{} budget-exhausted -> None", path.len());
+            }
             *dep_out = 0;
             return None;
         }
@@ -63,6 +67,9 @@ impl DfPnSolver {
         let h = board.hash;
         if let Some(anc) = path.iter().position(|&x| x == h) {
             // 千日手 = 受け方脱出 = 不詰．ただし path[anc] (祖先) に依存する経路依存の結論．
+            if vdiag {
+                eprintln!("[vdiag] L{} repetition(anc={anc}) -> None", path.len());
+            }
             *dep_out = (*dep_out).min(anc);
             return None;
         }
@@ -82,6 +89,22 @@ impl DfPnSolver {
                 let cap = board.do_move(mv);
                 let mated = self.generate_defense_moves_inner(board, false).is_empty()
                     && board.is_in_check(board.turn);
+                if vdiag && !mated {
+                    // mate1ply が 1 手詰と申告したが replay では詰んでいない = 偽 1 手詰．
+                    let defs: Vec<String> = self
+                        .generate_defense_moves_inner(board, false)
+                        .as_slice()
+                        .iter()
+                        .map(|d| d.to_usi())
+                        .collect();
+                    eprintln!(
+                        "[vdiag] L{} FALSE-mate1ply {} in_check={} defenses={:?}",
+                        path.len(),
+                        mv.to_usi(),
+                        board.is_in_check(board.turn),
+                        defs,
+                    );
+                }
                 board.undo_move(mv, cap);
                 if mated {
                     pv_choice.insert(h, mv);
@@ -117,6 +140,19 @@ impl DfPnSolver {
                     }
                 }
                 cands.sort_by_key(|&(_, l)| l);
+                if vdiag {
+                    let cs: Vec<String> = cands
+                        .iter()
+                        .map(|&(m, l)| format!("{}(len{l})", m.to_usi()))
+                        .collect();
+                    eprintln!(
+                        "[vdiag] L{} OR checks={} proven_cands={:?} mate1ply=miss sfen={}",
+                        path.len(),
+                        moves.len(),
+                        cs,
+                        board.sfen(),
+                    );
+                }
                 path.push(h);
                 let mut best: Option<(Move, u16)> = None;
                 for (mv, _) in cands {
@@ -160,6 +196,14 @@ impl DfPnSolver {
                 if board.is_in_check(board.turn) {
                     Some(0) // 受けなし & 王手 = 詰み
                 } else {
+                    // 非王手なのに AND ノード = 攻め方の直前手が王手になっていない．
+                    if vdiag {
+                        eprintln!(
+                            "[vdiag] L{} AND no-defense-but-NOT-in-check -> None sfen={}",
+                            path.len(),
+                            board.sfen(),
+                        );
+                    }
                     None // stalemate 非王手 = 詰みでない
                 }
             } else {
@@ -199,6 +243,15 @@ impl DfPnSolver {
                             infos.push((*m, d, is_drop, recapture_transparent));
                         }
                         None => {
+                            if vdiag {
+                                eprintln!(
+                                    "[vdiag] L{} AND legal={} escape={} -> None sfen={}",
+                                    path.len(),
+                                    legal.len(),
+                                    m.to_usi(),
+                                    board.sfen(),
+                                );
+                            }
                             ok = false;
                             break;
                         }
@@ -241,6 +294,17 @@ impl DfPnSolver {
         // 経路非依存で常に memo 可)．None は祖先の千日手拒否 / budget 枯渇に汚染されている場合
         // (dep < my_level) memo せず，別文脈で再検証させる．dep_out へも None のみ伝播する
         // (Some まで汚染扱いすると循環近傍で巨大 subtree を再検証し verify wall が膨張する)．
+        if vdiag && result.is_none() {
+            eprintln!(
+                "[vdiag] L{my_level} {} -> None (dep={})",
+                if or_node { "OR" } else { "AND" },
+                if dep == usize::MAX {
+                    "-".to_string()
+                } else {
+                    dep.to_string()
+                },
+            );
+        }
         if result.is_some() || dep >= my_level {
             memo.insert(h, result);
         }

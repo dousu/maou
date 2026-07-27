@@ -138,6 +138,15 @@ fn no_dag() -> bool {
     *C.get_or_init(|| std::env::var("NODAG").is_ok())
 }
 
+/// `VDIAG` env: STRICT verify ([`DfPnSolver::verify_proof`]) の判定を局面ごとに dump する
+/// 診断用 (process 内 1 回読み)．偽証明 (`STRICT VERIFY None`) が **どの分岐で** 生じたかを
+/// 局所化する — OR (proven child 無し) / AND (逃れ手あり) / 千日手拒否 / budget 枯渇の区別．
+/// verify は proven 後に 1 回だけ走るため探索 hot path には乗らない．
+pub(super) fn vdiag_enabled() -> bool {
+    static C: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *C.get_or_init(|| std::env::var("VDIAG").is_ok())
+}
+
 /// `DFPN_STATS` env: solve 終了時の統計サマリ (`[dfpn] root ...`) を stderr に出す診断用
 /// (process 内 1 回読み)．default OFF — leaf-mate 統合探索や棋譜解析では solve が
 /// 局面ごと・葉ごとに大量に走るため，常時出力だと stderr が診断行で溢れる．
@@ -644,7 +653,6 @@ impl DfPnSolver {
             );
         }
         super::movegen::mate1ply::report_mate_cand_stats();
-        super::movegen::mate1ply::report_mate1ply_stats();
         if std::env::var("DMBREAK").is_ok() {
             let dm = DM_SITE.with(|c| c.get());
             let lq = super::movegen::legal_quick_dm();
@@ -870,6 +878,10 @@ impl DfPnSolver {
                 Vec::new(),
             )
         };
+        // mate1ply 検証統計は **STRICT verify フェーズを含めた**最後に report する
+        // (verify も `mate1ply_with_cached_checks` を呼ぶため，探索直後に出すと
+        // verify 中に検出した偽 1 手詰が集計から漏れ `FALSE_MATE(bug)=0` と誤表示される)．
+        super::movegen::mate1ply::report_mate1ply_stats();
         // 診断メタデータを 1 回だけ組み立てて返す (per-node コスト無し)．
         let elapsed_ms = self.start_time.elapsed().as_millis() as u64;
         SearchReport {
