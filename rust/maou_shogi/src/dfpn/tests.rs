@@ -1830,7 +1830,7 @@ fn test_no_false_mate1ply_when_check_capture_clears_nifu() {
 /// 回帰: 上記の偽 1 手詰が **探索の偽証明** (`[dfpn] STRICT VERIFY None` =
 /// [`StopReason::FalseProof`]) として顕在化した root 局面．
 ///
-/// 実際には 3 手詰 (`5b4a 1d1c L*1d`)．修正前は look-ahead が偽 1 手詰 `1g1e` を掴んで
+/// **正解 = 3 手詰 `5b4a 1d1c L*1d`** (user 確認済み oracle)．修正前は look-ahead が偽 1 手詰 `1g1e` を掴んで
 /// root に pn=0 (mate_len=3) を立て，STRICT verify が実 replay で否定して `Unknown` に
 /// 落としていた (= 詰みを指せない)．修正後は本物の詰み `L*1d` を拾って解ける．
 #[test]
