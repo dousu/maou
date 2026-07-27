@@ -4,6 +4,7 @@ import click
 
 import maou.interface.usi as usi_interface
 from maou.infra.console.common import (
+    exit_skipping_teardown,
     handle_exception,
 )
 
@@ -306,6 +307,9 @@ def usi(
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_cache_dir,
     )
+    # `quit` を受けて USI ループが戻った後．TensorRT EP の teardown が abort
+    # すると GUI からクラッシュと見なされるので destructor を経由せず終える
+    exit_skipping_teardown(tensorrt=tensorrt)
 
 
 def main() -> None:

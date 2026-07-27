@@ -93,6 +93,7 @@
 | `--cuda/--no-cuda` | default off | Enable CUDA Execution Provider (requires a wheel built with `onnx-cuda`). |
 | `--tensorrt/--no-tensorrt` | default off | Enable TensorRT Execution Provider (requires a wheel built with `onnx-tensorrt`). |
 | `--trt-cache-dir PATH` | | TensorRT engine cache directory. Created automatically if missing; startup fails with a clear error when the parent path is unavailable (e.g. Google Drive not mounted on Colab). |
+| `--tensorrt/--no-tensorrt` (終了時の挙動) | | With TensorRT enabled the command flushes its output and then exits **without running destructors**: the TensorRT EP teardown corrupts the glibc heap and aborts (deterministic; see [verification.md §8.5](../design/usi-engine/verification.md)). Results are already written when this happens, and the exit code stays 0. Runs without TensorRT use the normal exit path. |
 
 ## USI options (`setoption`)
 
