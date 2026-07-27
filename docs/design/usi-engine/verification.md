@@ -3,11 +3,13 @@
 [設計本体](index.md) の未決事項のうち，**DevContainer (CPU) では原理的に
 閉じられないもの**の手順書．CPU で閉じた項目の根拠は index.md §12 を見ること．
 
-| 残件 | 必要な環境 | 手順 |
-|---|---|---|
-| 未決 1 TimeStrategy の定数 | GPU (探索速度が要る) | [§4](#4-未決-1-timestrategy-の想定残り手数) |
-| 未決 5 バッチ aggregator | GPU | [§5](#5-未決-5-バッチ-aggregator-の採否) |
-| 未決 2 keep-alive の既定値 | GUI 実機 | [§8](#8-gui-実機検証-将来課題-未実施) — **将来課題** |
+| 残件 | 必要な環境 | 状態 | 手順 |
+|---|---|---|---|
+| 未決 1 TimeStrategy の定数 | GPU (探索速度が要る) | **決着 2026-07-27** (horizon 40 据え置き) | [§4](#4-未決-1-timestrategy-の想定残り手数) |
+| 未決 5 バッチ aggregator | GPU | **決着 2026-07-27** (現行構成では採用しない) | [§5](#5-未決-5-バッチ-aggregator-の採否) |
+| 未決 2 keep-alive の既定値 | GUI 実機 | **未実施 (将来課題)** | [§8](#8-gui-実機検証-将来課題-未実施) |
+
+手順は再実行できる形で残してある (別モデル・別 GPU で測り直すときに使う)．
 
 **GPU 環境は Colab (L4) のみ**という前提で，検証は **Release `latest` の
 事前ビルド wheel** で行う (Rust ツールチェイン不要)．A/B ハーネスは
@@ -32,9 +34,16 @@ GPU 実行の共通フラグ:
 
 ```bash
 --model-path /content/model_fp16.onnx \
---tensorrt --cuda --threads 2 --batch-size 256 \
+--tensorrt --cuda --threads 1 --batch-size 256 \
 --trt-cache-dir /content/trt_cache
 ```
+
+- **`--threads 1` が最適** (実測 2026-07-27): threads 2 はどの並列度でも
+  約 4 割遅い．1 手 800 playouts 級の短い探索では探索内スレッド並列が
+  オーバーヘッドにしかならない (単発 30 秒探索のような長い探索でのみ有効)．
+- 実効速度 (L4 / ViT 19.8M fp16 / threads 1): **単発 30 秒 = 10,909
+  playouts/秒，500ms = 8,101 playouts/秒**．短い探索ほど遅いのは木が育つ
+  まで評価バッチが埋まらないため．
 
 - TensorRT の初回エンジンビルドは **バッチ shape ごとに数十秒〜数分**．
   `--trt-cache-dir` を必ず指定し，同じセッション内で使い回す．
@@ -47,7 +56,7 @@ GPU 実行の共通フラグ:
 # 1 局面探索の NPS (warmup はエンジンビルドを計測区間から外す)
 !maou search --sfen "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1" \
     --model-path /content/model_fp16.onnx --tensorrt --cuda \
-    --threads 2 --batch-size 256 --time-ms 30000 --root-dfpn \
+    --threads 1 --batch-size 256 --time-ms 30000 --root-dfpn \
     --trt-cache-dir /content/trt_cache
 ```
 
@@ -55,7 +64,7 @@ GPU 実行の共通フラグ:
 # 自己対局 1 局の smoke (対局経路が GPU で通ることの確認 + TRT キャッシュ温め)
 !maou selfplay --games 1 --playouts 800 --max-moves 64 \
     --model-path /content/model_fp16.onnx --tensorrt --cuda \
-    --threads 2 --batch-size 256 --trt-cache-dir /content/trt_cache
+    --threads 1 --batch-size 256 --trt-cache-dir /content/trt_cache
 ```
 
 得られた **playouts/秒 (以下 `NPS`)** を控える．CPU (DevContainer) の実測は
@@ -73,7 +82,7 @@ driver で棋力差を測ること自体が成立していない．同時に **G
 !maou selfplay --games 24 --ab-mode budget --playouts 800 --playouts-b 200 \
     --opening-random-plies 8 --seed 1 --max-moves 256 \
     --model-path /content/model_fp16.onnx --tensorrt --cuda \
-    --threads 2 --batch-size 256 --trt-cache-dir /content/trt_cache \
+    --threads 1 --batch-size 256 --trt-cache-dir /content/trt_cache \
     --output /content/ab_budget.jsonl
 ```
 
@@ -96,14 +105,19 @@ CPU での 3 回の失敗はすべて **regime を外したこと**が原因で�
 以前の問題だった (worklog 2026-07-26)．次の 3 条件を満たす時計設定でのみ
 結果を採用する:
 
-1. **早期終了しない** — `reasons` が `resign` / `checkmate` に支配されて
-   いない (`--resign-value 0` で投了を切る)．
-2. **`min_think` に張り付かない** — `総 playouts ÷ 総手数` が
-   `NPS × min_think` を十分上回る (張り付くと両者とも同じ最小予算になり，
-   horizon の違いが消える)．
-3. **時計が実際に効く** — `time left at end` が初期持ち時間の大半を残して
-   いない (残しているなら「多く使う側が単純に得」なだけでトレードオフが
-   発生していない)．
+1. **時計を踏み越えていない** — `reasons` の `timeout` が 0〜1 局
+   (多ければ時計設定が短すぎる)．
+2. **時計が実際に効く** — `time left at end (avg)` が **A と B で明確に
+   違い**，かつ初期持ち時間の大半を残していない (残しているなら「多く使う側
+   が単純に得」なだけでトレードオフが発生していない)．
+3. **早期終了しない** — `reasons` が `resign` に支配されていない
+   (`--resign-value 0` で投了を切る)．
+
+> **`総 playouts ÷ 総手数` はゲートに使わない** (2026-07-27 に判明)．
+> 引き分け終端・千日手・証明済み局面が近いと，探索は新しい葉を開かずに
+> 終端 backprop だけを回すため，同じ wall clock で playout 数が 27,000 →
+> 260,000 まで膨らむ．**サマリの `throughput:` が NN 評価の物理上限
+> (L4 / ViT 19.8M で約 11,000 playouts/秒) を超えていたら水増しを疑うこと**．
 
 初期持ち時間の目安:
 
@@ -111,16 +125,20 @@ CPU での 3 回の失敗はすべて **regime を外したこと**が原因で�
 初期持ち時間 [秒] ≈ horizon × (目標 playouts/手 ÷ NPS)
 ```
 
-例: `NPS = 2000`，目標 1600 playouts/手，horizon 40 → 32 秒 + 加算 0.5 秒．
+例: `NPS = 8,101`，目標 4,000 playouts/手 → 1 手 0.5 秒 → `--inc-ms 500`
++ `--clock-ms 30000` (初手は A = 30000/40+500 = 1,250ms / B = 2,000ms)．
+
+**`--max-moves 512` (電竜戦値) を必須とする**: 256 以下だと終盤が上記の
+playout 膨張に汚染され，時計がニセの探索に食われる．
 
 ### 4.2 実行
 
 ```python
 !maou selfplay --games 40 --ab-mode horizon \
-    --clock-ms 32000 --inc-ms 500 --horizon 40 --horizon-b 20 \
-    --resign-value 0 --max-moves 256 --opening-random-plies 8 --seed 1 \
+    --clock-ms 30000 --inc-ms 500 --horizon 40 --horizon-b 20 \
+    --resign-value 0 --max-moves 512 --opening-random-plies 8 --seed 1 \
     --model-path /content/model_fp16.onnx --tensorrt --cuda \
-    --threads 2 --batch-size 256 --trt-cache-dir /content/trt_cache \
+    --threads 1 --batch-size 256 --trt-cache-dir /content/trt_cache \
     --output /content/ab_horizon.jsonl
 ```
 
@@ -138,6 +156,19 @@ CPU での 3 回の失敗はすべて **regime を外したこと**が原因で�
 - 既定値を変える場合は `TimeStrategyConfig::horizon_moves` (rust/maou_usi)
   と [docs/commands/usi.md](../../commands/usi.md) を同時に更新する．
 
+### 4.4 実測結果 (2026-07-27, Colab L4 / ViT 19.8M fp16 / 30s+0.5s / 40 局)
+
+| 比較 | A のスコア | Elo | paired | 終局時残り |
+|---|---|---|---|---|
+| 40 vs 20 | 62.5% (CI [47.0, 75.8]) | +89 [-21, +198] | mean +0.250, **t = +1.75**, A 優位 7/20 (同着 11) | A 5.5s / B 1.6s |
+| 60 vs 40 | 41.2% (CI [27.4, 56.6]) | -61 [-169, +46] | mean -0.175, **t = -2.10**, A 優位 **0/20** (同着 16) | A 10.1s / B 6.5s |
+
+**結論: 既定 `horizon_moves = 40` を据え置く**．どちらへ動かしても悪化する
+(20 へ = -89 Elo / 60 へ = -61 Elo)．終局時の残り時間が horizon 20/40/60 で
+1.6s / 5.5-6.5s / 10.1s と単調に増えており，レバーが時間配分を実際に変えて
+いることも確認できている (regime ゲート 2 の合格)．40 vs 50 級の細かい調整は
+30 Elo 差の検出に n≈400 局を要するため未検証．
+
 ## 5. 未決 5: バッチ aggregator の採否
 
 同時対局数を振って **wall clock ベースの playouts/秒** (`throughput:` 行) を
@@ -148,7 +179,7 @@ CPU での 3 回の失敗はすべて **regime を外したこと**が原因で�
 for p in (1, 2, 4, 8):
     !maou selfplay --games 8 --parallel {p} --playouts 800 --max-moves 120 \
         --model-path /content/model_fp16.onnx --tensorrt --cuda \
-        --threads 2 --batch-size 256 --trt-cache-dir /content/trt_cache --quiet
+        --threads 1 --batch-size 256 --trt-cache-dir /content/trt_cache --quiet
 ```
 
 判定規則:
@@ -161,6 +192,21 @@ for p in (1, 2, 4, 8):
 - 中間 (1.5〜3 倍) は `--batch-size` を振って上限がバッチ側か直列化側かを
   切り分ける (バッチを上げて改善するなら aggregator の余地がある)．
 
+### 5.1 実測結果 (2026-07-27, Colab L4 / 8 局 / 800 playouts/手 / dfpn off)
+
+| threads | parallel 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| 1 | 4,682 | 5,644 | 5,882 | 5,879 playouts/秒 |
+| 2 | 2,767 | — | 3,062 | — |
+
+**結論: 現行構成では aggregator を採用しない．ただし伸びしろは確認された**．
+並列は **1.26 倍で頭打ち**で判定規則の「採用検討」側だが，単発の長い探索は
+10,909 playouts/秒 出るため律速は GPU 飽和ではなく**評価バッチの充填**．
+対局をまたいで評価要求をまとめれば約 2 倍の余地がある → **次 campaign の
+課題として起票**．なお **threads 2 はどの並列度でも約 4 割遅い** (短い探索
+では探索内スレッド並列がオーバーヘッド)．dfpn 併走のコストは wall +18% /
+throughput -15% で，実配置で切る理由はない．
+
 ## 6. subtree 再利用の GPU 実挙動 (`--ab-mode subtree`)
 
 CPU では「探索手の 90% で reroot 成功・引き継ぎは playout の 18-20%」が
@@ -171,7 +217,7 @@ CPU では「探索手の 90% で reroot 成功・引き継ぎは playout の 18
 !maou selfplay --games 24 --ab-mode subtree --playouts 800 \
     --opening-random-plies 8 --seed 1 --max-moves 256 \
     --model-path /content/model_fp16.onnx --tensorrt --cuda \
-    --threads 2 --batch-size 256 --trt-cache-dir /content/trt_cache
+    --threads 1 --batch-size 256 --trt-cache-dir /content/trt_cache
 ```
 
 `subtree reuse:` 行の引き継ぎ率が CPU と同水準 (18-20%) なら，CPU で出した
@@ -273,6 +319,22 @@ ShogiGUI / ShogiHome) を動かせないので，§7 の headless smoke で代�
 - [ ] ponder の実挙動 (GUI が `go ponder` を送るか，`ponderhit` /
       `stop` 後の応答が速いか)．
 - [ ] 1 局を最後まで完走 (投了・入玉宣言・千日手の表示が GUI と食い違わない)．
+
+## 8.5 既知の課題 (検証中に判明．未解決)
+
+いずれも worklog/2026-07-27-140516.md に詳細．
+
+- **dfpn の偽証明アラート** — `[dfpn] STRICT VERIFY None (偽証明/不完全)`
+  が 40 局で 9 件，同設定の追試で 126 件．**実害は出ていない** (STRICT 検証
+  が最終権威なので `Unknown` に落ち，偽の詰みは指されない) が，探索が pn=0 を
+  誤って立てる頻度としては看過できない．原因候補は TT 再利用による GHI．
+- **終端再訪による探索の空回り** — 引き分け終端・千日手・証明済み局面が
+  近いと新しい葉を開かずカウントだけ回り，時間制では予算を空回りに使う．
+  実戦 (電竜戦 512 手上限の終盤・千日手模様) でも起きる効率問題．
+- **`corrupted double-linked list`** — Colab の `--parallel 4` 実行の
+  **終了時**に 1 回発生 (サマリ出力後なので数値は有効)．DevContainer の
+  mock・parallel 4 × 12 回では再現せず → ONNX Runtime / TensorRT EP の終了
+  処理側が疑わしい．切り分けは `--cuda` のみ (TRT 無し) で再現するか．
 
 ## 9. 結果の記録先
 
