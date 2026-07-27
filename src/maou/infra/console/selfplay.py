@@ -7,6 +7,7 @@ import click
 
 import maou.interface.selfplay as selfplay_interface
 from maou.infra.console.common import (
+    exit_skipping_teardown,
     handle_exception,
 )
 
@@ -521,6 +522,9 @@ def selfplay(
         parallel=parallel,
         ab_mode=ab_mode,
     )
+    # サマリ・JSONL の出力が終わってから．TensorRT EP の teardown が abort
+    # するため destructor を経由せず終える
+    exit_skipping_teardown(tensorrt=tensorrt)
 
 
 def _elo(value: float | None) -> str:

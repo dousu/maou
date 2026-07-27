@@ -84,6 +84,7 @@
 | `--cuda/--no-cuda` | default off | CUDA Execution Provider (requires a wheel built with `onnx-cuda`). |
 | `--tensorrt/--no-tensorrt` | default off | TensorRT Execution Provider (requires a wheel built with `onnx-tensorrt`). |
 | `--trt-cache-dir PATH` | | TensorRT engine cache directory. |
+| `--tensorrt/--no-tensorrt` (終了時の挙動) | | With TensorRT enabled the command flushes its output and then exits **without running destructors**: the TensorRT EP teardown corrupts the glibc heap and aborts (deterministic; see [verification.md §8.5](../design/usi-engine/verification.md)). Results are already written when this happens, and the exit code stays 0. Runs without TensorRT use the normal exit path. |
 | `--quiet` | default off | Suppress per-game progress lines on stderr. |
 
 ## Output

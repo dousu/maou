@@ -4,6 +4,7 @@ import click
 
 import maou.interface.search as search_interface
 from maou.infra.console.common import (
+    exit_skipping_teardown,
     handle_exception,
 )
 
@@ -228,3 +229,6 @@ def search_board(
             trt_engine_cache_dir=trt_cache_dir,
         )
     )
+    # TensorRT EP の teardown はヒープを壊して abort する — 出力後に
+    # destructor を経由せず終える (common.exit_skipping_teardown の docstring)
+    exit_skipping_teardown(tensorrt=tensorrt)

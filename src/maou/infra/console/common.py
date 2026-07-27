@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import os
+import sys
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
@@ -212,6 +215,33 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "FileSystem",
     ),
 }
+
+
+def exit_skipping_teardown(*, tensorrt: bool) -> None:
+    """TensorRT EP を使った実行を destructor を経由せず終了する．
+
+    TensorRT EP の teardown は glibc のヒープを壊して abort する
+    (``corrupted double-linked list``)．Colab L4 / ort 静的 1.22 + pip
+    onnxruntime-gpu 1.22 で **3/3 決定的**に再現し，``--cuda`` のみでは
+    0/3 なので **TensorRT EP 固有**である (詳細は
+    docs/design/usi-engine/verification.md §8.5)．全出力が終わった
+    プロセス終了時に起きるため数値・棋譜は有効だが，終了コードが SIGABRT に
+    なるため GUI や対局サーバからはクラッシュと見なされ得る．
+
+    原因は外部ライブラリ側で当面直せないので，出力を flush してから
+    destructor を走らせずにプロセスを終える．**TensorRT を使っていない
+    ときは何もしない** (通常の終了パスを保ち，将来の teardown バグを
+    隠さないため)．
+
+    Args:
+        tensorrt: TensorRT EP を有効にして実行したか．
+    """
+    if not tensorrt:
+        return
+    sys.stdout.flush()
+    sys.stderr.flush()
+    logging.shutdown()
+    os._exit(0)
 
 
 def __getattr__(name: str) -> Any:
