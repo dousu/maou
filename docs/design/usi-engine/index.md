@@ -4,9 +4,9 @@
 > 2026-07-17，未決事項 1-6 すべて提案どおり)．
 > 各節に「実装済み」「設計方針 (未実装)」「未決」のいずれかを明記する．
 > 本ドキュメント起草時点では全節が設計方針 (マイルストーン M1-M4 で実装)．
-> 2026-07-26: M1-M4 実装完了 (M1=#393/#394, M2=#395, M3=#397, M4=#401)．
-> 未決事項は 3/4/6 が決着，1/5 が GPU 実測待ち，2 が GUI 実機待ち
-> (現状は §12 の表，検証手順は [verification.md](verification.md))．
+> 2026-07-27: M1-M4 実装完了 (M1=#393/#394, M2=#395, M3=#397, M4=#401)．
+> **未決事項 1/3/4/5/6 は決着**，2 のみ GUI 実機待ち
+> (現状は §12 の表，検証手順と既知の課題は [verification.md](verification.md))．
 
 ## 1. 目的とスコープ
 
@@ -285,11 +285,11 @@ minor (M1 で 0.47.0)．
 
 | # | 未決 | 決め方 | 現状 (2026-07-26) |
 |---|---|---|---|
-| 1 | TimeStrategy の定数 (想定残り手数カーブ・margin 既定値) | 実装時に自己対局で調整，worklog 記録 | **GPU 実測待ち** — CPU (約 23 playouts/秒) では「時計が効くが枯渇しない」regime を作れず測定不能．基盤 (持ち時間モード + `--ab-mode horizon`) は実装済み．手順: [verification.md §4](verification.md) |
+| 1 | TimeStrategy の定数 (想定残り手数カーブ・margin 既定値) | 実装時に自己対局で調整，worklog 記録 | **決着 — 既定 `horizon_moves = 40` を据え置き**．Colab L4 / ViT 19.8M / 30s+0.5s で **40 vs 20 = +89 Elo (paired t=+1.75)**，**60 vs 40 = 40 側が +61 Elo (paired t=-2.10)** と両側から検証．終局時の残り持ち時間は horizon 20/40/60 で 1.6s / 5.5-6.5s / 10.1s と単調に増え，配分が実際に効いていることを確認済み．40 vs 50 級の細かい調整は n≈400 局を要し未検証 |
 | 2 | keep-alive 空行の default | 将棋所実機で挙動確認後 | **GUI 実機待ち (将来課題)** — 実装済み・既定 off．手元に GUI 環境がなく未実施．確認項目: [verification.md §8](verification.md) |
 | 3 | USI_Hash → NodeCapacity 換算係数 | NodePool のノード実サイズから実装時決定 | **決着** — 実測レイアウト由来の 808 B/node (Node 48B + 分岐 62 × Edge 12B + 諸経費)．旧 512B は 1.6 倍の過小評価 |
 | 4 | MaxMovesToDraw の in-search 対応 | M4 で効果計測後 | **決着 (on)** — 発火は上限直前の探索深さ分のみで 60 局の勝敗は不変．採否の根拠は棋力ではなく「最大手数時の詰みも引き分け」という電竜戦ルールへの適合．既定 0 では bit-identical |
-| 5 | バッチ aggregator (自己対局並列時) | M4 で計測後 | **GPU 実測待ち** — CPU では評価器の `Mutex<Session>` が上限で `parallel 1/2/4` が 64/65/65 playouts/秒 と完全に頭打ち．GPU でのバッチ効果で採否確定．手順: [verification.md §5](verification.md) |
+| 5 | バッチ aggregator (自己対局並列時) | M4 で計測後 | **決着 (現行構成では採用しない)** — GPU でも並列は `parallel 1/2/4/8 = 4.7k/5.6k/5.9k/5.9k playouts/秒` と **1.26 倍で頭打ち**．ただし単発の長い探索は 10.9k 出るため律速は GPU 飽和ではなく**バッチ充填**で，対局をまたぐ aggregator には約 2 倍の伸びしろがある → **次 campaign の課題として起票**．CPU では `Mutex<Session>` が上限で 64/65/65 と完全に平坦だった |
 | 6 | subtree 再利用の採否 | M3 で効果計測後 | **決着 (on 継続)** — 探索手の 90% で reroot 成功，引き継ぎは playout の 18-20% (予算 64/256/800 で一定)．勝率 40 局は +44 Elo (CI が 0 を含む) で，予算較正の予測と整合．GPU 実挙動の確認: [verification.md §6](verification.md) |
 
 GPU (Colab) / GUI 実機での検証手順は [verification.md](verification.md) に
