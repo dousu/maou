@@ -8,12 +8,16 @@ from pathlib import Path
 from maou.infra.console.common import exit_skipping_teardown
 
 
-def test_exit_skipping_teardown_is_noop_without_tensorrt() -> None:
+def test_exit_skipping_teardown_is_noop_without_tensorrt() -> (
+    None
+):
     """TensorRT を使っていなければ何もせず戻る (通常の終了パスを保つ)."""
     exit_skipping_teardown(tensorrt=False)
 
 
-def test_exit_skipping_teardown_flushes_and_exits(tmp_path: Path) -> None:
+def test_exit_skipping_teardown_flushes_and_exits(
+    tmp_path: Path,
+) -> None:
     """TensorRT 有効時は出力を flush してから即座にプロセスを終える.
 
     `os._exit` は destructor・atexit を走らせないため，バッファ済みの出力が
