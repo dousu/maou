@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 9e6a722
 date: 2026-07-27
 target:
   - docs/commands/search.md
