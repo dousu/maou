@@ -148,6 +148,18 @@ pub struct SearchOptions {
     /// なので subtree 再利用でも stale しない．USI の `MaxMovesToDraw` から
     /// 渡される (docs/design/usi-engine/index.md §8.3, 未決 4)．
     pub max_moves_to_draw: u32,
+    /// **空回りを playout 予算から外す** (既定 false = 従来どおり合算)．
+    ///
+    /// true にすると [`SearchLimits::max_playouts`] は葉評価を伴う playout
+    /// だけを数える — 終端に当たって折り返しただけの降下は予算を消費しない．
+    /// 終盤では消費予算の 9 割超が空回りになるため，公称予算に対する実探索量
+    /// が桁で増える (実測: 引き分け地平が 2 手先で 98.1% が空回り)．
+    ///
+    /// 停止性は [`SPIN_STREAK_LIMIT`] 連続空回りで担保する — 深さ上限超過は
+    /// `mark_terminal` しない (証明で畳めない) ため，この上限が無いと葉収集
+    /// ループが永久に回る．**棋力への影響が大きいので A/B で確認するまで
+    /// 既定は false**．
+    pub spin_budget_relief: bool,
     /// ノードプール GC を有効にするか．有効ならプール枯渇時に
     /// [`NodePool::compact`] で低訪問サブツリーを刈り取って探索を継続する．
     pub gc_enabled: bool,
@@ -196,6 +208,7 @@ impl Default for SearchOptions {
             node_capacity: 1 << 20,
             max_ply: 512,
             max_moves_to_draw: 0,
+            spin_budget_relief: false,
             gc_enabled: true,
             gc_keep_ratio: 0.5,
             draw_value: 0.5,
@@ -258,6 +271,13 @@ pub enum StopCause {
     RootProven,
     /// 外部の停止フラグ ([`SearchLimits::stop`]) が立てられた．
     External,
+    /// 空回りが続いて新しい葉に到達できなくなった
+    /// ([`SearchOptions::spin_budget_relief`] 有効時のみ)．
+    ///
+    /// 予算から空回りを外すと，終端しか無い領域では playout 上限に永久に
+    /// 到達しない．[`SPIN_STREAK_LIMIT`] 回連続で葉評価に届かなかったら
+    /// 「これ以上開ける葉が無い」と判断して停止する (停止性の担保)．
+    SpinExhausted,
 }
 
 impl StopCause {
@@ -269,6 +289,7 @@ impl StopCause {
             StopCause::RootTerminal => 4,
             StopCause::RootProven => 5,
             StopCause::External => 6,
+            StopCause::SpinExhausted => 7,
         }
     }
 
@@ -280,6 +301,7 @@ impl StopCause {
             4 => Some(StopCause::RootTerminal),
             5 => Some(StopCause::RootProven),
             6 => Some(StopCause::External),
+            7 => Some(StopCause::SpinExhausted),
             _ => None,
         }
     }
@@ -576,8 +598,10 @@ struct Shared<'a, E: Evaluator> {
     /// 葉評価を伴って完了した playout 数 ([`SearchStats::playouts`])．
     playouts: AtomicU64,
     /// 終端到達で折り返した空回り数 ([`SearchStats::terminal_backprops`])．
-    /// 予算判定では `playouts` との合計を使う．
+    /// 予算判定では `playouts` との合計を使う (relief 有効時は使わない)．
     terminal_backprops: AtomicU64,
+    /// 直近の葉評価からの連続空回り数 ([`SPIN_STREAK_LIMIT`] の判定用)．
+    spin_streak: AtomicU64,
     collisions: AtomicU64,
     eval_batches: AtomicU64,
     eval_items: AtomicU64,
@@ -678,21 +702,38 @@ impl<E: Evaluator> Shared<'_, E> {
     }
 
     /// 葉評価を伴う playout 完了を n 件計上し，予算到達なら停止フラグを立てる．
+    /// 葉に到達したので連続空回り ([`SPIN_STREAK_LIMIT`]) はリセットする．
     fn complete_playouts(&self, n: u64) {
         let prev = self.playouts.fetch_add(n, Ordering::Relaxed);
-        self.check_budget(prev + n + self.terminal_backprops.load(Ordering::Relaxed));
+        self.spin_streak.store(0, Ordering::Relaxed);
+        let used = if self.opts.spin_budget_relief {
+            prev + n
+        } else {
+            prev + n + self.terminal_backprops.load(Ordering::Relaxed)
+        };
+        self.check_budget(used);
     }
 
-    /// 終端到達だけで折り返した空回りを n 件計上し，予算到達なら停止フラグを
-    /// 立てる．
+    /// 終端到達だけで折り返した空回りを n 件計上する．
     ///
-    /// **予算は `playouts` との合計で見る**．空回りを予算から外すと，終端しか
-    /// 無い領域 (深さ上限超過は `mark_terminal` しないため証明で畳めない) で
-    /// 葉収集ループが永久に回り，playout 制の探索が停止しなくなる — 現状の
-    /// 停止性はこの計上に依存している．空回りに予算を使わせない案は，別途
-    /// 空回り自体の上限を設けたうえで A/B すること．
+    /// 既定 ([`SearchOptions::spin_budget_relief`] = false) では **予算を
+    /// `playouts` との合計で見る**．空回りを予算から外すと，終端しか無い領域
+    /// (深さ上限超過は `mark_terminal` しないため証明で畳めない) で葉収集
+    /// ループが永久に回り，playout 制の探索が停止しなくなるためで，既定の
+    /// 停止性はこの計上に依存している．
+    ///
+    /// relief 有効時は予算を消費させない代わりに，連続空回りが
+    /// [`SPIN_STREAK_LIMIT`] に達した時点で [`StopCause::SpinExhausted`] で
+    /// 止める (葉が開けなくなったことの検出)．
     fn complete_terminal_backprops(&self, n: u64) {
         let prev = self.terminal_backprops.fetch_add(n, Ordering::Relaxed);
+        if self.opts.spin_budget_relief {
+            let streak = self.spin_streak.fetch_add(n, Ordering::Relaxed) + n;
+            if streak >= SPIN_STREAK_LIMIT {
+                self.set_stop(StopCause::SpinExhausted);
+            }
+            return;
+        }
         self.check_budget(prev + n + self.playouts.load(Ordering::Relaxed));
     }
 
@@ -1109,6 +1150,14 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
     }
 }
 
+/// 連続空回りの上限 ([`SearchOptions::spin_budget_relief`] 有効時)．これだけ
+/// 続けて葉評価に到達しなければ「開ける葉が無い」と判断して探索を止める．
+///
+/// 健全な局面では空回りと葉評価が交互に起きるため streak は伸びない (終盤の
+/// 実測でも空回り/葉評価は約 50:1 で，連続 4096 回はその 80 倍に相当する)．
+/// 予算に比例させないのは，予算が大きいほど無駄な走査が伸びるのを避けるため．
+const SPIN_STREAK_LIMIT: u64 = 4096;
+
 /// 終端連続時に期限を確認する間隔 (backprop 回数)．`Instant::now()` の頻度を
 /// 抑えつつ，時間制の停止が終端の連続で無限に遅れるのを防ぐ．
 const DEADLINE_CHECK_INTERVAL: u32 = 64;
@@ -1435,6 +1484,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             stop_cause: AtomicU8::new(CAUSE_NONE),
             playouts: AtomicU64::new(0),
             terminal_backprops: AtomicU64::new(0),
+            spin_streak: AtomicU64::new(0),
             collisions: AtomicU64::new(0),
             eval_batches: AtomicU64::new(0),
             eval_items: AtomicU64::new(0),
@@ -1785,6 +1835,45 @@ mod tests {
             result.stats.playouts, result.stats.eval_items,
             "playouts は葉評価数と一致する"
         );
+    }
+
+    #[test]
+    fn test_spin_budget_relief_stops_instead_of_spinning_forever() {
+        // relief 有効時は空回りが予算を消費しないので，終端しか無い領域では
+        // playout 上限に永久に到達しない．SPIN_STREAK_LIMIT 連続で葉に届か
+        // なければ SpinExhausted で止まる (これが無いと無限ループ)．
+        let result = run(
+            MATE_IN_1,
+            SearchOptions {
+                threads: 1,
+                batch_size: 4,
+                node_capacity: 1 << 14,
+                max_moves_to_draw: 1,
+                spin_budget_relief: true,
+                ..pure_mcts_opts()
+            },
+            SearchLimits {
+                max_playouts: Some(1000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        assert_eq!(
+            result.stop,
+            StopCause::SpinExhausted,
+            "葉が開けなくなったら停止する (予算到達では止まれない)"
+        );
+        assert!(
+            result.stats.playouts < 1000,
+            "playout 予算には到達していない: {}",
+            result.stats.playouts
+        );
+        assert!(
+            result.stats.terminal_backprops >= SPIN_STREAK_LIMIT,
+            "連続空回りの上限まで回ってから止まる: {}",
+            result.stats.terminal_backprops
+        );
+        assert!(result.best_move.is_some(), "合法手は返す");
     }
 
     #[test]

@@ -38,6 +38,7 @@ def selfplay(
     tensorrt: bool = False,
     trt_engine_cache_dir: Path | None = None,
     min_think_ms: int | None = None,
+    spin_budget_relief: bool = False,
     ab_mode: str | None = None,
     playouts_b: int | None = None,
     horizon_moves: int | None = None,
@@ -78,8 +79,9 @@ def selfplay(
         tensorrt: TensorRT Execution Provider を使うか．
         trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
         min_think_ms: 最低思考時間ミリ秒 (None = エンジン既定)．
-        ab_mode: A/B 対戦のレバー (subtree/maxmoves/budget/horizon．
-            None = 純粋自己対局)．
+        spin_budget_relief: 空回りを playout 予算から外す (既定 False)．
+        ab_mode: A/B 対戦のレバー (subtree/maxmoves/budget/horizon/spin．
+            None = 純粋自己対局)．spin は固定 playout 予算専用．
         playouts_b: ab_mode="budget" の B 側予算 (None = A の 1/8)．
         horizon_moves: ab_mode="horizon" の A 側想定残り手数．
         horizon_moves_b: 同 B 側想定残り手数．
@@ -118,6 +120,13 @@ def selfplay(
         raise ValueError(
             "ab_mode=horizon は持ち時間モード (clock_ms > 0) が必要"
         )
+    if ab_mode == "spin" and clock_ms:
+        # 空回りの会計は固定 playout 予算でのみ効く (時計が拘束条件の
+        # モードでは消費 wall clock が変わらず「効果なし」に見える)
+        raise ValueError(
+            "ab_mode=spin は固定 playout 予算専用 "
+            "(clock_ms とは併用できない)"
+        )
     if clock_ms and parallel > 1:
         # 消費時間を壁時計で測るため，同時対局の CPU 競合で歪む
         raise ValueError(
@@ -152,6 +161,7 @@ def selfplay(
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_engine_cache_dir,
         min_think_ms=min_think_ms,
+        spin_budget_relief=spin_budget_relief,
         ab_mode=ab_mode,
         playouts_b=playouts_b,
         horizon_moves=horizon_moves,

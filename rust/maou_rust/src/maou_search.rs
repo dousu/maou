@@ -62,7 +62,7 @@ impl SearchRootChild {
 /// - `pv`: 読み筋 (USI 形式のリスト)．
 /// - `root_children`: ルート直下の全候補手の統計 (合法手生成順)．
 /// - `stop`: 停止理由 (`"playout_limit"` / `"time_limit"` / `"pool_exhausted"` /
-///   `"root_terminal"` / `"root_proven"`)．
+///   `"root_terminal"` / `"root_proven"` / `"spin_exhausted"`)．
 /// - 統計: `playouts` (葉評価を伴う実 playout のみ) / `terminal_backprops`
 ///   (終端到達だけで折り返した空回り; 予算は両者の合計で消費) /
 ///   `warmup_ms` (ルート評価/エンジンビルドの所要; 計測
@@ -131,6 +131,7 @@ fn stop_cause_str(stop: StopCause) -> &'static str {
         StopCause::RootTerminal => "root_terminal",
         StopCause::RootProven => "root_proven",
         StopCause::External => "external",
+        StopCause::SpinExhausted => "spin_exhausted",
     }
 }
 

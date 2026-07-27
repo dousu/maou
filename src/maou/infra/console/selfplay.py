@@ -202,14 +202,27 @@ logger: logging.Logger = logging.getLogger(__name__)
     required=False,
 )
 @click.option(
+    "--spin-relief/--no-spin-relief",
+    type=bool,
+    is_flag=True,
+    help="Exclude terminal spin (backprops that never reach a leaf) from "
+    "the playout budget, so --playouts counts real search volume only "
+    "(default off). Bounded by a consecutive-spin limit so a frontier "
+    "made entirely of terminals still stops. Fixed-budget runs only.",
+    default=False,
+    required=False,
+)
+@click.option(
     "--ab-mode",
     help="Play an A/B match instead of plain self-play: player A runs "
     "the lever on, player B off, everything else identical. "
     "'subtree' = subtree reuse, 'maxmoves' = in-search draw terminal, "
     "'budget' = same config with a smaller budget for B (harness sanity "
-    "check), 'horizon' = time-strategy horizon (needs --clock-ms).",
+    "check), 'horizon' = time-strategy horizon (needs --clock-ms), "
+    "'spin' = exclude terminal spin from the playout budget (fixed "
+    "--playouts only; the clock mode is bounded by time, not playouts).",
     type=click.Choice(
-        ["subtree", "maxmoves", "budget", "horizon"]
+        ["subtree", "maxmoves", "budget", "horizon", "spin"]
     ),
     default=None,
     required=False,
@@ -353,6 +366,7 @@ def selfplay(
     byoyomi_ms: int,
     inc_ms: int,
     min_think_ms: int | None,
+    spin_relief: bool,
     ab_mode: str | None,
     playouts_b: int | None,
     horizon: int | None,
@@ -409,6 +423,7 @@ def selfplay(
         byoyomi_ms: Byoyomi in milliseconds (real-clock mode).
         inc_ms: Fischer increment per move (real-clock mode).
         min_think_ms: Minimum thinking time per move.
+        spin_relief: Exclude terminal spin from the playout budget.
         ab_mode: Lever compared in an A/B match (None = plain self-play).
         playouts_b: Player B playout budget (``--ab-mode budget``).
         horizon: Player A assumed remaining moves (``--ab-mode horizon``).
@@ -454,6 +469,7 @@ def selfplay(
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_cache_dir,
         min_think_ms=min_think_ms,
+        spin_budget_relief=spin_relief,
         ab_mode=ab_mode,
         playouts_b=playouts_b,
         horizon_moves=horizon,

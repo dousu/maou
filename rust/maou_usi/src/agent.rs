@@ -85,6 +85,11 @@ pub struct EngineConfig {
     /// 未決 6) で off 側を作るためのもので，USI option には宣言しない
     /// (§10 に無い — M3 での user 決定)．
     pub subtree_reuse: bool,
+    /// 空回り (終端到達だけで折り返した降下) を playout 予算から外すか
+    /// (既定 false = 従来どおり合算)．**計測用トグル** — 自己対局 A/B
+    /// (`--ab-mode spin`) で on 側を作るためのもので，棋力への影響が確認
+    /// できるまで USI option には宣言しない．
+    pub spin_budget_relief: bool,
     /// `isready` の応答待ち中に空行を送る間隔 (ミリ秒．0 = 送らない = 既定)．
     ///
     /// モデルロード + warmup (TensorRT の初回エンジンビルドは数十秒) が
@@ -131,6 +136,7 @@ impl Default for EngineConfig {
             max_moves_to_draw: 0,
             opening_script: None,
             subtree_reuse: true,
+            spin_budget_relief: false,
             keep_alive_ms: 0,
             usi_ponder: true,
             root_dfpn: None,

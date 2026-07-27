@@ -34,6 +34,11 @@ pub enum AbMode {
     Budget,
     /// 持ち時間モードで `TimeStrategy` の想定残り手数を A/B (未決 1)．
     Horizon,
+    /// A = 空回りを playout 予算から外す / B = 従来どおり合算．
+    ///
+    /// **固定 playout 予算でのみ意味を持つ** (`--playouts`)．持ち時間モードは
+    /// 時計が拘束条件なので，会計を変えても消費 wall clock は変わらない．
+    Spin,
 }
 
 impl AbMode {
@@ -44,6 +49,7 @@ impl AbMode {
             "maxmoves" => Some(AbMode::MaxMoves),
             "budget" => Some(AbMode::Budget),
             "horizon" => Some(AbMode::Horizon),
+            "spin" => Some(AbMode::Spin),
             _ => None,
         }
     }
@@ -55,6 +61,7 @@ impl AbMode {
             AbMode::MaxMoves => "maxmoves",
             AbMode::Budget => "budget",
             AbMode::Horizon => "horizon",
+            AbMode::Spin => "spin",
         }
     }
 
@@ -124,6 +131,10 @@ pub fn build_ab(base: &EngineConfig, opts: &AbOptions, playouts: Option<u64>) ->
         AbMode::Horizon => {
             engine_a.time.horizon_moves = opts.horizon_a;
             engine_b.time.horizon_moves = opts.horizon_b;
+        }
+        AbMode::Spin => {
+            engine_a.spin_budget_relief = true;
+            engine_b.spin_budget_relief = false;
         }
     }
     AbSetup {

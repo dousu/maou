@@ -114,6 +114,7 @@ pub(crate) fn search_options(config: &EngineConfig) -> SearchOptions {
     if let Some(v) = config.leaf_mate_threads {
         options.leaf_mate_threads = v;
     }
+    options.spin_budget_relief = config.spin_budget_relief;
     options
 }
 
