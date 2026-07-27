@@ -1075,6 +1075,10 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
     }
 }
 
+/// 終端連続時に期限を確認する間隔 (backprop 回数)．`Instant::now()` の頻度を
+/// 抑えつつ，時間制の停止が終端の連続で無限に遅れるのを防ぐ．
+const DEADLINE_CHECK_INTERVAL: u32 = 64;
+
 /// 探索スレッドのメインループ．
 fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
     let batch_size = shared.opts.batch_size.max(1);
@@ -1095,6 +1099,12 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
         items.clear();
         let mut had_collision = false;
 
+        // 終端ばかりで葉が集まらない局面 (in-search 引き分け終端が目前など) では
+        // このループが評価に到達せず回り続ける．playout 制なら complete_playouts が
+        // 上限で止めるが，**時間制は上限が無限**なので内側でも期限を見ないと
+        // 停止しない (時間制 go が返らなくなる)．Instant::now() を毎回叩かない
+        // よう間引く
+        let mut terminal_hits = 0u32;
         while items.len() < batch_size && !shared.stopped() {
             match select_leaf(shared) {
                 Selection::Leaf { path, item } => {
@@ -1103,6 +1113,10 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
                 }
                 Selection::Backpropped => {
                     shared.complete_playouts(1);
+                    terminal_hits += 1;
+                    if terminal_hits.is_multiple_of(DEADLINE_CHECK_INTERVAL) {
+                        shared.check_deadline();
+                    }
                 }
                 Selection::Collision => {
                     shared.collisions.fetch_add(1, Ordering::Relaxed);
