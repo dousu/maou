@@ -225,8 +225,14 @@ pub struct SearchOutcome {
     pub winrate: f64,
     /// 読み筋 (USI 表記)．
     pub pv: Vec<String>,
-    /// 完了 playout 数．
+    /// 葉評価を伴って完了した playout 数 (空回りを含まない実探索量)．
     pub playouts: u64,
+    /// 終端到達で葉評価に至らなかった backprop 数 (空回り)．
+    ///
+    /// 予算は `playouts` との合計で消費されるため，証明済み終端・千日手・
+    /// 深さ上限が近い局面ではこれが `playouts` を桁で上回る．throughput の
+    /// 分母から外し，空回りの比率を別に見るために持つ (統計目的のみ)．
+    pub terminal_backprops: u64,
     /// 所要時間 (ミリ秒，warmup 込みの壁時計)．
     pub elapsed_ms: u64,
     /// playout 毎秒．
@@ -364,6 +370,8 @@ where
     /// 直近の `go` で前回木から引き継いだ訪問数 (subtree 再利用の実効量)．
     /// 計測用 ([`Agent::last_carried_visits`])．対局判断には使わない．
     last_carried_visits: u64,
+    /// 計測用 ([`Agent::last_terminal_backprops`])．対局判断には使わない．
+    last_terminal_backprops: u64,
     /// ponder 的中シグナル．transport (stdio reader) が行の到着順で更新する:
     /// `go` 行で false，`ponderhit` 行で true (stop フラグと同じ race-free 規約)．
     /// 探索中の [`GoObserver`] がポーリングし，的中したら無期限の ponder 探索を
@@ -386,6 +394,7 @@ where
             stop: Arc::new(AtomicBool::new(false)),
             resign_streak: 0,
             last_carried_visits: 0,
+            last_terminal_backprops: 0,
             ponderhit: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -403,6 +412,15 @@ where
     /// 応じた手 (OpeningScript・宣言勝ち) では更新されない．
     pub fn last_carried_visits(&self) -> u64 {
         self.last_carried_visits
+    }
+
+    /// 直近の `go` で終端到達だけで折り返した backprop 数 (空回り)．
+    ///
+    /// 予算は playout との合計で消費されるため，証明済み終端・千日手が近い
+    /// 終盤ではこれが実 playout を桁で上回る．自己対局 driver が
+    /// 「予算のどれだけが空回りに消えたか」を集計するための計測フック．
+    pub fn last_terminal_backprops(&self) -> u64 {
+        self.last_terminal_backprops
     }
 
     /// 探索停止フラグのハンドル．
@@ -860,6 +878,7 @@ where
         };
 
         self.last_carried_visits = outcome.carried_visits;
+        self.last_terminal_backprops = outcome.terminal_backprops;
         // 探索サマリ info (最終) → bestmove (予想相手手 = 自探索 PV の 2 手目)
         emit(EngineCommand::Info(build_info(&outcome)));
         let mv = self.decide_bestmove(&outcome);
@@ -1267,6 +1286,7 @@ mod tests {
             winrate: 0.6,
             pv: vec!["7g7f".to_string(), "3c3d".to_string()],
             playouts: 1000,
+            terminal_backprops: 0,
             elapsed_ms: 900,
             nps: 1100,
             max_depth: 8,

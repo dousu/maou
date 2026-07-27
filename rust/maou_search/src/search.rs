@@ -410,8 +410,17 @@ fn extract_pv(pool: &NodePool, first_mv: Move, first_child: u32) -> Vec<Move> {
 /// 探索の実行統計．
 #[derive(Clone, Debug)]
 pub struct SearchStats {
-    /// 完了した playout 数 (評価 + 終端到達)．
+    /// 葉評価を伴って完了した playout 数．**終端到達だけで折り返した空回り
+    /// ([`Self::terminal_backprops`]) は含まない** — 探索量の指標として読める
+    /// 値はこちら．予算 ([`SearchLimits::max_playouts`]) は両者の合計で消費する．
     pub playouts: u64,
+    /// 終端に当たって葉評価に到達しなかった backprop 数 (空回り)．
+    ///
+    /// 引き分け終端・千日手・終端マーク済みノードの再訪・深さ上限超過は，新しい
+    /// 葉を開かずカウントだけ回す．証明済み局面が近いと `playouts` の数十倍に
+    /// 達するため，**別掲して throughput の水増しを防ぐ** (旧実装は両者を
+    /// `playouts` に合算しており，実測で物理上限の約 61 倍を報告していた)．
+    pub terminal_backprops: u64,
     /// ルート評価 (初回推論 = TensorRT エンジンビルド/ロード等) の所要時間
     /// (ミリ秒)．1 回限りの固定コストであり，計測区間 (`elapsed_ms`/`nps`) から
     /// 除外して別掲する (onnx_bench の warmup と同義)．
@@ -564,7 +573,11 @@ struct Shared<'a, E: Evaluator> {
     ext_stop: Option<Arc<AtomicBool>>,
     stop: AtomicBool,
     stop_cause: AtomicU8,
+    /// 葉評価を伴って完了した playout 数 ([`SearchStats::playouts`])．
     playouts: AtomicU64,
+    /// 終端到達で折り返した空回り数 ([`SearchStats::terminal_backprops`])．
+    /// 予算判定では `playouts` との合計を使う．
+    terminal_backprops: AtomicU64,
     collisions: AtomicU64,
     eval_batches: AtomicU64,
     eval_items: AtomicU64,
@@ -664,10 +677,31 @@ impl<E: Evaluator> Shared<'_, E> {
         false
     }
 
-    /// playout 完了を n 件計上し，上限到達なら停止フラグを立てる．
+    /// 葉評価を伴う playout 完了を n 件計上し，予算到達なら停止フラグを立てる．
     fn complete_playouts(&self, n: u64) {
         let prev = self.playouts.fetch_add(n, Ordering::Relaxed);
-        if prev + n >= self.max_playouts {
+        self.check_budget(prev + n + self.terminal_backprops.load(Ordering::Relaxed));
+    }
+
+    /// 終端到達だけで折り返した空回りを n 件計上し，予算到達なら停止フラグを
+    /// 立てる．
+    ///
+    /// **予算は `playouts` との合計で見る**．空回りを予算から外すと，終端しか
+    /// 無い領域 (深さ上限超過は `mark_terminal` しないため証明で畳めない) で
+    /// 葉収集ループが永久に回り，playout 制の探索が停止しなくなる — 現状の
+    /// 停止性はこの計上に依存している．空回りに予算を使わせない案は，別途
+    /// 空回り自体の上限を設けたうえで A/B すること．
+    fn complete_terminal_backprops(&self, n: u64) {
+        let prev = self.terminal_backprops.fetch_add(n, Ordering::Relaxed);
+        self.check_budget(prev + n + self.playouts.load(Ordering::Relaxed));
+    }
+
+    /// 消費合計が予算に達していれば停止フラグを立てる．
+    ///
+    /// 2 つの counter を Relaxed で読むため境界では 1-2 件の前後がありうるが，
+    /// 元から複数 worker が同時に計上する近似値であり，停止点の意味は変わらない．
+    fn check_budget(&self, used: u64) {
+        if used >= self.max_playouts {
             self.set_stop(StopCause::PlayoutLimit);
         }
     }
@@ -1112,7 +1146,7 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
                     items.push(*item);
                 }
                 Selection::Backpropped => {
-                    shared.complete_playouts(1);
+                    shared.complete_terminal_backprops(1);
                     terminal_hits += 1;
                     if terminal_hits.is_multiple_of(DEADLINE_CHECK_INTERVAL) {
                         shared.check_deadline();
@@ -1304,6 +1338,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                 stop: StopCause::RootTerminal,
                 stats: SearchStats {
                     playouts: 0,
+                    terminal_backprops: 0,
                     warmup_ms: warmup_start.elapsed().as_millis() as u64,
                     elapsed_ms: 0,
                     nps: 0.0,
@@ -1399,6 +1434,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             stop: AtomicBool::new(false),
             stop_cause: AtomicU8::new(CAUSE_NONE),
             playouts: AtomicU64::new(0),
+            terminal_backprops: AtomicU64::new(0),
             collisions: AtomicU64::new(0),
             eval_batches: AtomicU64::new(0),
             eval_items: AtomicU64::new(0),
@@ -1568,6 +1604,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         let eval_items = shared.eval_items.load(Ordering::Relaxed);
         let stats = SearchStats {
             playouts,
+            terminal_backprops: shared.terminal_backprops.load(Ordering::Relaxed),
             warmup_ms,
             elapsed_ms: elapsed.as_millis() as u64,
             nps: playouts as f64 / elapsed.as_secs_f64().max(1e-9),
@@ -1705,6 +1742,48 @@ mod tests {
             (0.4..=0.6).contains(&result.winrate),
             "全 playout が引き分けなので勝率はほぼ draw_value (0.5): {}",
             result.winrate
+        );
+    }
+
+    #[test]
+    fn test_terminal_spin_is_separated_from_playouts() {
+        // 深さ上限を超えた降下は葉評価に到達せず，`mark_terminal` もしないので
+        // 証明でも畳めない = 予算を使い切るまで空回りが続く．この空回りを
+        // `playouts` に合算していた頃は throughput が NN 評価の物理上限を
+        // 超えて報告されていた (実測 668,449 playouts/秒 = 上限の約 61 倍)．
+        let result = run(
+            MATE_IN_1,
+            SearchOptions {
+                threads: 1,
+                batch_size: 4,
+                node_capacity: 1 << 14,
+                max_moves_to_draw: 1,
+                ..pure_mcts_opts()
+            },
+            SearchLimits {
+                max_playouts: Some(1000),
+                ..SearchLimits::default()
+            },
+            42,
+        );
+        // 停止性は空回りの計上に依存する: 予算から外すとこの探索は永久に回る
+        assert_eq!(result.stop, StopCause::PlayoutLimit);
+        assert!(
+            result.stats.terminal_backprops >= 900,
+            "ほぼ全ての予算が空回りに消えるはず: {}",
+            result.stats.terminal_backprops
+        );
+        assert!(
+            result.stats.playouts <= 100,
+            "葉評価は root 直下のみ (空回りは playouts に入らない): {}",
+            result.stats.playouts
+        );
+        // 予算は両者の合計で消費する (旧実装と同じ停止点)
+        assert!(result.stats.playouts + result.stats.terminal_backprops >= 1000);
+        // `playouts` = 評価した葉の数 (throughput の分子として意味を持つ値)
+        assert_eq!(
+            result.stats.playouts, result.stats.eval_items,
+            "playouts は葉評価数と一致する"
         );
     }
 

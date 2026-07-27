@@ -525,8 +525,22 @@ def _echo_summary(
         f"playouts: {total_playouts} total, "
         f"game time: {int(summary['total_game_ms']) / 1000.0:.1f}s summed"
     )
+    # 空回り: 終端 (証明済み・千日手・最大手数・深さ上限) に当たって葉評価に
+    # 至らなかった backprop．予算は playout との合計で消費されるため，比が
+    # 大きいほど公称予算に対する実探索量が小さい
+    spin = int(summary.get("total_terminal_backprops", 0))
+    budget_used = total_playouts + spin
+    spin_pct = (
+        100.0 * spin / budget_used if budget_used else 0.0
+    )
+    click.echo(
+        f"terminal spin: {spin} backprop(s) without leaf eval "
+        f"({spin_pct:.1f}% of the consumed budget)"
+    )
     # 並列スループット: 分母は wall clock (対局ごとの合計ではない)．
-    # --parallel を振ってこの値が伸びるかがバッチ aggregator 採否の材料
+    # --parallel を振ってこの値が伸びるかがバッチ aggregator 採否の材料．
+    # 分子は**実 playout のみ** (空回りを含めると NN 評価の物理上限を超えた
+    # 水増し値になる)
     wall_s = wall_ms / 1000.0
     click.echo(
         f"throughput: {total_playouts / wall_s if wall_s else 0.0:.1f} "

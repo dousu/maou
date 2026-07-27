@@ -199,6 +199,7 @@ fn outcome_to_dict<'py>(py: Python<'py>, o: &GameOutcome) -> PyResult<Bound<'py,
     d.set_item("black_player", if o.black_is_a { "a" } else { "b" })?;
     d.set_item("plies", o.moves.len())?;
     d.set_item("playouts", o.playouts)?;
+    d.set_item("terminal_backprops", o.terminal_backprops)?;
     d.set_item("reused_moves", o.reused_moves)?;
     d.set_item("carried_visits", o.carried_visits)?;
     d.set_item("elapsed_ms", o.elapsed_ms)?;
@@ -221,6 +222,7 @@ fn summary_to_dict<'py>(py: Python<'py>, s: &RunSummary) -> PyResult<Bound<'py, 
     d.set_item("reasons", reasons)?;
     d.set_item("total_plies", s.total_plies)?;
     d.set_item("total_playouts", s.total_playouts)?;
+    d.set_item("total_terminal_backprops", s.total_terminal_backprops)?;
     d.set_item("total_game_ms", s.total_game_ms)?;
     d.set_item("reused_moves", s.reused_moves)?;
     d.set_item("carried_visits", s.carried_visits)?;

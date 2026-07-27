@@ -169,7 +169,14 @@ pub struct GameOutcome {
     /// 終局理由．
     pub reason: GameEndReason,
     /// 両側合計の playout 数 (探索した手のみ．script/ランダム手は 0)．
+    /// **葉評価を伴う実探索量のみ** — 空回りは `terminal_backprops` に分離する．
     pub playouts: u64,
+    /// 両側合計の空回り数 (終端到達だけで折り返した backprop)．
+    ///
+    /// 予算は `playouts` との合計で消費される．終盤 (証明済み終端・千日手・
+    /// 最大手数が近い) ではこれが `playouts` を桁で上回り，実質の探索量が
+    /// 公称予算を大きく下回る — その診断に使う (統計目的のみ)．
+    pub terminal_backprops: u64,
     /// subtree 再利用が発火した手数 (前回木から訪問を引き継いだ手)．
     pub reused_moves: u32,
     /// 前回木から引き継いだ訪問数の合計 (再利用の実効量．`playouts` に対する
@@ -383,6 +390,7 @@ fn play_game(
 
     let mut moves: Vec<String> = Vec::new();
     let mut playouts: u64 = 0;
+    let mut terminal_backprops: u64 = 0;
     let mut reused_moves: u32 = 0;
     let mut carried_visits: u64 = 0;
     // 持ち時間モードの残時間 (先手, 後手)．非該当モードでは使わない
@@ -463,6 +471,8 @@ fn play_game(
                     _ => None,
                 })
                 .unwrap_or(0);
+            // 空回り (終端到達だけで折り返した backprop) の集計
+            terminal_backprops += agent.last_terminal_backprops();
             // subtree 再利用の実効量 (前回木から引き継いだ訪問数．0 = fresh)
             let carried = agent.last_carried_visits();
             if carried > 0 {
@@ -538,6 +548,7 @@ fn play_game(
         winner,
         reason,
         playouts,
+        terminal_backprops,
         reused_moves,
         carried_visits,
         elapsed_ms: start.elapsed().as_millis() as u64,
@@ -798,11 +809,22 @@ mod tests {
         let outcomes = run_selfplay(&cfg, None).expect("成功");
         let o = &outcomes[0];
         assert_eq!(o.moves.len(), 6);
-        // 先手 3 手 × 64 + 後手 3 手 × 16 = 240 前後 (バッチ粒度で超過し得る)
+        // 先手 3 手 × 64 + 後手 3 手 × 16 = 240 前後 (バッチ粒度で超過し得る)．
+        // 予算は実 playout と空回りの合計で消費されるので，予算差はこの合計に
+        // 出る (`playouts` 単独は空回りの分だけ小さい — この局数・手数でも
+        // 2 割強が終端の空回りに消える)
+        let budget_used = o.playouts + o.terminal_backprops;
         assert!(
-            (200..400).contains(&o.playouts),
-            "A/B 予算差が playout 合計に出るはず: {}",
-            o.playouts
+            (200..400).contains(&budget_used),
+            "A/B 予算差が消費予算の合計に出るはず: playouts={} spin={}",
+            o.playouts,
+            o.terminal_backprops
+        );
+        assert!(
+            o.playouts > 0 && o.playouts < budget_used,
+            "実 playout は予算より小さい (空回り分): playouts={} spin={}",
+            o.playouts,
+            o.terminal_backprops
         );
     }
 

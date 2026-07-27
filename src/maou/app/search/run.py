@@ -166,7 +166,9 @@ class SearchRunner:
             "PV": " ".join(result.pv),
             "Candidates": "\n".join(candidates),
             "Stats": (
-                f"playouts={result.playouts} nps={result.nps:.0f} "
+                f"playouts={result.playouts} "
+                f"terminal_backprops={result.terminal_backprops} "
+                f"nps={result.nps:.0f} "
                 f"elapsed_ms={result.elapsed_ms} "
                 f"warmup_ms={result.warmup_ms} "
                 f"max_depth={result.max_depth} "
