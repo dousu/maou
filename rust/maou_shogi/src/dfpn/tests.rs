@@ -1785,3 +1785,191 @@ fn test_external_stop_flag_aborts_search() {
     );
     assert_eq!(report.stop_reason, StopReason::Timeout);
 }
+
+/// 回帰: **王手手自身が守備の歩を取って二歩を解消する**場合の偽 1 手詰．
+///
+/// 後手玉 1c / 後手歩 1e / 後手持駒 歩．先手 `1g1e` (香が 1e の歩を取る) は 1 筋の王手だが，
+/// **取ったことで後手の 1 筋の二歩が解消され** `P*1d` の合駒が合法になるため詰みではない．
+/// 修正前は `can_interpose_bb` の二歩判定が **移動前**の歩ビットボード (1e の歩を含む) を見て
+/// 歩合を非合法と誤判定し，1 手詰と申告していた (= soundness 違反)．
+#[test]
+fn test_no_false_mate1ply_when_check_capture_clears_nifu() {
+    const SFEN: &str =
+        "1g1+N+N+B+P1l/9/4Np+P1k/l1p1p1pp1/3PsnP1p/+r4P3/1pPG3PL/p2S1SGbP/SRK6 b GLPp 143";
+    let mut board = Board::new();
+    board.set_sfen(SFEN).expect("正当な SFEN");
+    let m = board.move_from_usi("1g1e").expect("1g1e は合法手");
+    board.do_move(m);
+    assert!(board.is_in_check(board.turn()), "1g1e は王手であるべき");
+    let defenses: Vec<String> = movegen::generate_legal_moves(&mut board)
+        .iter()
+        .map(|d| d.to_usi())
+        .collect();
+    assert!(
+        defenses.iter().any(|d| d == "P*1d"),
+        "1e の歩を取ったことで 1 筋の二歩が解消され P*1d が合法になるはず: {defenses:?}",
+    );
+
+    // mate1ply が返す手は必ず真の 1 手詰でなければならない (偽 1 手詰 = soundness 違反)．
+    let mut b = Board::new();
+    b.set_sfen(SFEN).expect("正当な SFEN");
+    let solver = DfPnSolver::default_solver();
+    if let (Some(mv), _) = solver.mate1ply_with_cached_checks(&mut b) {
+        assert_ne!(mv.to_usi(), "1g1e", "1g1e は偽 1 手詰 (P*1d で受かる)");
+        let cap = b.do_move(mv);
+        let real = b.is_in_check(b.turn()) && movegen::generate_legal_moves(&mut b).is_empty();
+        b.undo_move(mv, cap);
+        assert!(
+            real,
+            "mate1ply が返す手は真の 1 手詰であるべき: {}",
+            mv.to_usi()
+        );
+    }
+}
+
+/// 回帰: 上記の偽 1 手詰が **探索の偽証明** (`[dfpn] STRICT VERIFY None` =
+/// [`StopReason::FalseProof`]) として顕在化した root 局面．
+///
+/// **正解 = 3 手詰 `5b4a 1d1c L*1d`** (user 確認済み oracle)．修正前は look-ahead が偽 1 手詰 `1g1e` を掴んで
+/// root に pn=0 (mate_len=3) を立て，STRICT verify が実 replay で否定して `Unknown` に
+/// 落としていた (= 詰みを指せない)．修正後は本物の詰み `L*1d` を拾って解ける．
+#[test]
+fn test_no_false_proof_when_check_capture_clears_nifu() {
+    const SFEN: &str =
+        "1g1+N+N1+P1l/4+B4/4Np+P2/l1p1p1ppk/3PsnP1p/+r4P3/1pPG3PL/p2S1SGbP/SRK6 b GLPp 141";
+    let mut board = Board::new();
+    board.set_sfen(SFEN).expect("正当な SFEN");
+    let mut solver = DfPnSolver::with_timeout(31, 1_000_000, 30);
+    let report = solver.solve_report(&mut board);
+    assert_ne!(
+        report.stop_reason,
+        StopReason::FalseProof,
+        "偽証明が再発している: {:?}",
+        report.result,
+    );
+    match report.result {
+        TsumeResult::Checkmate { ref moves, .. } => {
+            let usi: Vec<String> = moves.iter().map(|m| m.to_usi()).collect();
+            assert_eq!(moves.len(), 3, "3 手詰であるべき: {usi:?}");
+            let mut chk = Board::new();
+            chk.set_sfen(SFEN).expect("正当な SFEN");
+            for m in moves {
+                chk.do_move(*m);
+            }
+            assert!(
+                chk.is_in_check(chk.turn()) && movegen::generate_legal_moves(&mut chk).is_empty(),
+                "PV 終局面は真の詰みであるべき: {usi:?}",
+            );
+        }
+        ref other => panic!("3 手詰が返るべき: {other:?}"),
+    }
+}
+
+/// 偽証明ハンター (**[SLOW]**, 診断用)．
+///
+/// 自己対局で観測された `[dfpn] STRICT VERIFY None` (= [`StopReason::FalseProof`]
+/// = 「verify budget が残っているのに `verify_proof` が None を返した」) を，
+/// NN やモデルに依存しない最小構成で再現するための探索ハーネス．
+///
+/// seeded LCG のランダム対局で局面列を作り，**手番側に王手手段がある局面**
+/// (`does_have_mate_possibility` — leaf-mate の enqueue gate と同一) だけを
+/// leaf-mate と同一設定 (`new_leaf_mate(NODES, 1)`: `find_shortest=false` /
+/// 小 TT / 1s) で solve し，`FalseProof` になった局面の SFEN を出力する．
+///
+/// production と同様に **ソルバーは 1 個を使い回す** (`check_cache` が solve を
+/// 跨ぐ唯一の状態)．検出局面は続けて **fresh solver で再 solve** し，再現が
+/// solver の持ち越し状態に依存するか (= check_cache 由来) 局面固有かを切り分ける．
+///
+/// env: `SEED` (既定 1) / `GAMES` (既定 200) / `PLIES` (既定 160) /
+/// `NODES` (既定 50 = leaf-mate の既定予算) / `MAXHITS` (既定 20)．
+#[test]
+#[ignore]
+fn test_false_proof_hunt() {
+    /// 決定的な LCG (外部 rand 依存を避ける)．
+    fn lcg(state: &mut u64) -> u64 {
+        *state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        *state >> 33
+    }
+    fn env_u64(key: &str, default: u64) -> u64 {
+        std::env::var(key)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(default)
+    }
+
+    let seed = env_u64("SEED", 1);
+    let games = env_u64("GAMES", 200);
+    let plies = env_u64("PLIES", 160);
+    let nodes = env_u64("NODES", 50);
+    let max_hits = env_u64("MAXHITS", 20) as usize;
+    const STARTPOS: &str = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
+
+    // production の leaf-mate と同じく 1 ソルバーを使い回す．
+    let mut solver = DfPnSolver::new_leaf_mate(nodes, 1);
+    let mut hits: Vec<String> = Vec::new();
+    let (mut probed, mut mated) = (0u64, 0u64);
+    let t0 = std::time::Instant::now();
+
+    'outer: for g in 0..games {
+        let mut state = seed ^ g.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let mut board = Board::new();
+        board.set_sfen(STARTPOS).expect("startpos は正当な SFEN");
+        for _ in 0..plies {
+            let legal = movegen::generate_legal_moves(&mut board);
+            if legal.is_empty() {
+                break;
+            }
+            if board.does_have_mate_possibility(board.turn()) {
+                let sfen = board.sfen();
+                let mut b = Board::new();
+                b.set_sfen(&sfen).expect("生成局面は正当な SFEN");
+                let rep = solver.solve_report(&mut b);
+                probed += 1;
+                if matches!(
+                    rep.result,
+                    TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }
+                ) {
+                    mated += 1;
+                }
+                if rep.stop_reason == StopReason::FalseProof {
+                    eprintln!(
+                        "[fp] HIT #{:<3} game={g} root_pn={} root_dn={} mate_len_found={:?} sfen={sfen}",
+                        hits.len() + 1,
+                        rep.root_pn,
+                        rep.root_dn,
+                        rep.mate_len_found,
+                    );
+                    hits.push(sfen);
+                    if hits.len() >= max_hits {
+                        break 'outer;
+                    }
+                }
+            }
+            let m = legal[(lcg(&mut state) as usize) % legal.len()];
+            board.do_move(m);
+        }
+    }
+
+    eprintln!(
+        "[fp] SUMMARY seed={seed} games={games} plies={plies} nodes={nodes} | probed={probed} mated={mated} false_proof={} | {:.1}s",
+        hits.len(),
+        t0.elapsed().as_secs_f64(),
+    );
+
+    // 検出局面を fresh solver で再 solve — 再現が solver 持ち越し状態に依存するか切り分け．
+    for (i, sfen) in hits.iter().enumerate() {
+        let mut b = Board::new();
+        b.set_sfen(sfen).expect("hit 局面は正当な SFEN");
+        let mut fresh = DfPnSolver::new_leaf_mate(nodes, 1);
+        let rep = fresh.solve_report(&mut b);
+        eprintln!(
+            "[fp] REPLAY #{:<3} fresh_solver stop={:<14} nodes={:<6} (isolated={}) sfen={sfen}",
+            i + 1,
+            rep.stop_reason.as_str(),
+            fresh.nodes,
+            rep.stop_reason == StopReason::FalseProof,
+        );
+    }
+}
