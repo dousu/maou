@@ -90,6 +90,10 @@ pub struct EngineConfig {
     /// (`--ab-mode spin`) で on 側を作るためのもので，棋力への影響が確認
     /// できるまで USI option には宣言しない．
     pub spin_budget_relief: bool,
+    /// 確定済み (proven) の子を PUCT の選択候補から外すか (既定 false)．
+    /// **計測用トグル** — 自己対局 A/B (`--ab-mode proven`) で on 側を作る．
+    /// 空回りの降下自体を消すので固定予算・持ち時間モードのどちらでも効く．
+    pub skip_proven_children: bool,
     /// `isready` の応答待ち中に空行を送る間隔 (ミリ秒．0 = 送らない = 既定)．
     ///
     /// モデルロード + warmup (TensorRT の初回エンジンビルドは数十秒) が
@@ -137,6 +141,7 @@ impl Default for EngineConfig {
             opening_script: None,
             subtree_reuse: true,
             spin_budget_relief: false,
+            skip_proven_children: false,
             keep_alive_ms: 0,
             usi_ponder: true,
             root_dfpn: None,

@@ -115,6 +115,7 @@ pub(crate) fn search_options(config: &EngineConfig) -> SearchOptions {
         options.leaf_mate_threads = v;
     }
     options.spin_budget_relief = config.spin_budget_relief;
+    options.skip_proven_children = config.skip_proven_children;
     options
 }
 

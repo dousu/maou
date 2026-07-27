@@ -307,7 +307,7 @@ fn summary_to_dict<'py>(py: Python<'py>, s: &RunSummary) -> PyResult<Bound<'py, 
 /// 設定不正・モデルロード失敗・対局中の内部エラーは `RuntimeError`，
 /// 未知の `ab_mode` は `ValueError`．
 #[pyfunction]
-#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, spin_budget_relief=None, min_think_ms=None, ab_mode=None, playouts_b=None, horizon_moves=None, horizon_moves_b=None, alternate_colors=None, clock_ms=None, byoyomi_ms=None, inc_ms=None))]
+#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, spin_budget_relief=None, skip_proven_children=None, min_think_ms=None, ab_mode=None, playouts_b=None, horizon_moves=None, horizon_moves_b=None, alternate_colors=None, clock_ms=None, byoyomi_ms=None, inc_ms=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_selfplay(
     py: Python<'_>,
@@ -339,6 +339,7 @@ fn run_selfplay(
     leaf_mate_nodes: Option<u64>,
     leaf_mate_threads: Option<usize>,
     spin_budget_relief: Option<bool>,
+    skip_proven_children: Option<bool>,
     min_think_ms: Option<u64>,
     ab_mode: Option<String>,
     playouts_b: Option<u64>,
@@ -374,6 +375,9 @@ fn run_selfplay(
     if let Some(v) = spin_budget_relief {
         engine.spin_budget_relief = v;
     }
+    if let Some(v) = skip_proven_children {
+        engine.skip_proven_children = v;
+    }
     // 自己対局に伝送遅延はない (movetime をそのまま思考時間にする)
     engine.time.network_delay_ms = 0;
     if let Some(v) = min_think_ms {
@@ -397,7 +401,8 @@ fn run_selfplay(
         None => None,
         Some(name) => Some(AbMode::parse(name).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(format!(
-                "未知の ab_mode: {name} (subtree | maxmoves | budget | horizon | spin)"
+                "未知の ab_mode: {name} \
+                 (subtree | maxmoves | budget | horizon | spin | proven)"
             ))
         })?),
     };

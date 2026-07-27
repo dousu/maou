@@ -34,6 +34,10 @@ pub enum AbMode {
     Budget,
     /// 持ち時間モードで `TimeStrategy` の想定残り手数を A/B (未決 1)．
     Horizon,
+    /// A = 確定済みの子を選択候補から外す (MCTS-Solver) / B = 従来どおり．
+    ///
+    /// 空回りの降下自体が消えるので，固定予算でも持ち時間モードでも効く．
+    Proven,
     /// A = 空回りを playout 予算から外す / B = 従来どおり合算．
     ///
     /// **固定 playout 予算でのみ意味を持つ** (`--playouts`)．持ち時間モードは
@@ -50,6 +54,7 @@ impl AbMode {
             "budget" => Some(AbMode::Budget),
             "horizon" => Some(AbMode::Horizon),
             "spin" => Some(AbMode::Spin),
+            "proven" => Some(AbMode::Proven),
             _ => None,
         }
     }
@@ -62,6 +67,7 @@ impl AbMode {
             AbMode::Budget => "budget",
             AbMode::Horizon => "horizon",
             AbMode::Spin => "spin",
+            AbMode::Proven => "proven",
         }
     }
 
@@ -135,6 +141,10 @@ pub fn build_ab(base: &EngineConfig, opts: &AbOptions, playouts: Option<u64>) ->
         AbMode::Spin => {
             engine_a.spin_budget_relief = true;
             engine_b.spin_budget_relief = false;
+        }
+        AbMode::Proven => {
+            engine_a.skip_proven_children = true;
+            engine_b.skip_proven_children = false;
         }
     }
     AbSetup {

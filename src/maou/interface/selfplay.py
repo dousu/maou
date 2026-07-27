@@ -39,6 +39,7 @@ def selfplay(
     trt_engine_cache_dir: Path | None = None,
     min_think_ms: int | None = None,
     spin_budget_relief: bool = False,
+    skip_proven_children: bool = False,
     ab_mode: str | None = None,
     playouts_b: int | None = None,
     horizon_moves: int | None = None,
@@ -80,7 +81,9 @@ def selfplay(
         trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
         min_think_ms: 最低思考時間ミリ秒 (None = エンジン既定)．
         spin_budget_relief: 空回りを playout 予算から外す (既定 False)．
-        ab_mode: A/B 対戦のレバー (subtree/maxmoves/budget/horizon/spin．
+        skip_proven_children: 確定済みの子を PUCT 候補から外す (既定 False)．
+        ab_mode: A/B 対戦のレバー
+            (subtree/maxmoves/budget/horizon/spin/proven．
             None = 純粋自己対局)．spin は固定 playout 予算専用．
         playouts_b: ab_mode="budget" の B 側予算 (None = A の 1/8)．
         horizon_moves: ab_mode="horizon" の A 側想定残り手数．
@@ -162,6 +165,7 @@ def selfplay(
         trt_engine_cache_dir=trt_engine_cache_dir,
         min_think_ms=min_think_ms,
         spin_budget_relief=spin_budget_relief,
+        skip_proven_children=skip_proven_children,
         ab_mode=ab_mode,
         playouts_b=playouts_b,
         horizon_moves=horizon_moves,

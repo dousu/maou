@@ -18,6 +18,7 @@ AB_MODES: tuple[str, ...] = (
     "budget",
     "horizon",
     "spin",
+    "proven",
 )
 """A/B 対戦で比較できるレバー (Rust maou_usi::ab::AbMode と対応)."""
 
@@ -64,6 +65,7 @@ class SelfplayRunner:
             leaf_mate_nodes: leaf-mate 1 回あたりのノード予算．
             leaf_mate_threads: leaf-mate 専用スレッド数．
             spin_budget_relief: 空回りを playout 予算から外すか．
+            skip_proven_children: 確定済みの子を PUCT 候補から外すか．
             cuda: CUDA Execution Provider を使うか．
             tensorrt: TensorRT Execution Provider を使うか．
             trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
@@ -109,6 +111,7 @@ class SelfplayRunner:
         leaf_mate_nodes: int = 50
         leaf_mate_threads: int = 1
         spin_budget_relief: bool = False
+        skip_proven_children: bool = False
         cuda: bool = False
         tensorrt: bool = False
         trt_engine_cache_dir: Path | None = None
@@ -200,6 +203,7 @@ class SelfplayRunner:
             leaf_mate_nodes=option.leaf_mate_nodes,
             leaf_mate_threads=option.leaf_mate_threads,
             spin_budget_relief=option.spin_budget_relief,
+            skip_proven_children=option.skip_proven_children,
             min_think_ms=option.min_think_ms,
             ab_mode=option.ab_mode,
             playouts_b=option.playouts_b,

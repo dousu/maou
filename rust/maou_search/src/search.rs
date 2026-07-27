@@ -65,7 +65,7 @@ use maou_shogi::moves::Move;
 use crate::evaluator::{EvalItem, Evaluator};
 use crate::position::{build_board_and_history, PositionSetupError};
 use crate::repetition::{find_repetition, HistoryEntry, RepetitionOutcome};
-use crate::tree::{node_state, proven, Edge, NodePool, NULL_NODE};
+use crate::tree::{node_state, proven, Edge, Node, NodePool, NULL_NODE};
 
 /// ルートノードの pool index (最初の alloc で必ず 0 になる)．
 const ROOT_IDX: u32 = 0;
@@ -160,6 +160,18 @@ pub struct SearchOptions {
     /// ループが永久に回る．**棋力への影響が大きいので A/B で確認するまで
     /// 既定は false**．
     pub spin_budget_relief: bool,
+    /// **確定済み (proven) の子を PUCT の選択候補から外す** (既定 false)．
+    ///
+    /// 詰み・千日手・最大手数で確定した子は値が既知なので，降りても
+    /// no-op backprop (空回り) になるだけで新しい葉は開かない．候補から
+    /// 外すと同じ予算・同じ wall clock で実 playout が増える (MCTS-Solver
+    /// 相当)．全子が確定した親はその場で確定化して畳む．
+    ///
+    /// 着手選択への影響: 確定済みの子は訪問が伸びなくなるため robust child
+    /// では選ばれなくなる．有効時は [`best_root_index`] が確定値で上書き
+    /// 判定する (確実な引き分けと不確実な劣勢を取り違えないため)．
+    /// **棋力への影響が大きいので A/B で確認するまで既定は false**．
+    pub skip_proven_children: bool,
     /// ノードプール GC を有効にするか．有効ならプール枯渇時に
     /// [`NodePool::compact`] で低訪問サブツリーを刈り取って探索を継続する．
     pub gc_enabled: bool,
@@ -209,6 +221,7 @@ impl Default for SearchOptions {
             max_ply: 512,
             max_moves_to_draw: 0,
             spin_budget_relief: false,
+            skip_proven_children: false,
             gc_enabled: true,
             gc_keep_ratio: 0.5,
             draw_value: 0.5,
@@ -386,8 +399,28 @@ fn root_children_of(pool: &NodePool) -> Vec<RootChildStat> {
 /// 勝ち確定なら root 視点の確定値 (1) の子，引き分け確定なら 0.5 の子を選ぶ
 /// (訪問回数最大は確定前の探索の偏りを引きずり得る)．負け確定は全子が負け
 /// 確定なので robust child のまま (どれでも同値)．
-fn best_root_index(children: &[RootChildStat], root_proven: Option<f64>) -> usize {
+fn best_root_index(
+    children: &[RootChildStat],
+    root_proven: Option<f64>,
+    skip_proven_children: bool,
+) -> usize {
     let mut best_i = select_best_root_index(children);
+    // 確定済みの子を選択候補から外していると，その子は訪問が伸びないので
+    // robust child では選ばれない．確定値 (厳密) が robust child の推定値
+    // (q) を上回るなら確定側で上書きする — 「確実な引き分け」を「不確実な
+    // 劣勢」と取り違えないため
+    if skip_proven_children {
+        let base_value = children[best_i].proven.unwrap_or(children[best_i].q);
+        let better_proven = children
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| c.proven.map(|v| (i, v)))
+            .filter(|&(_, v)| v > base_value)
+            .max_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((i, _)) = better_proven {
+            best_i = i;
+        }
+    }
     if let Some(rv) = root_proven {
         if rv > 0.0 {
             if let Some(i) = children.iter().position(|c| c.proven == Some(rv)) {
@@ -818,7 +851,7 @@ impl<E: Evaluator> Shared<'_, E> {
         }
         let root_node = pool.get(ROOT_IDX);
         let root_proven = root_node.proven_value();
-        let best_i = best_root_index(&children, root_proven);
+        let best_i = best_root_index(&children, root_proven, self.opts.skip_proven_children);
         let best = &children[best_i];
         let second_visits = children
             .iter()
@@ -908,6 +941,34 @@ fn terminal_leaf_value<E: Evaluator>(shared: &Shared<'_, E>, state: u8, path_len
     }
 }
 
+/// 全子の確定値から親の確定値を AND 集約する (未確定の子が 1 つでもあれば
+/// `None`)．親視点の値は `1 - min(子の確定値)` — 相手は親視点で最悪の子，
+/// すなわち子視点で最小値の子を選べる．
+///
+/// 兄弟スキャンは SeqCst 版 ([`Node::proven_value_sync`]) を使う: 最後の
+/// 2 兄弟を同時に確定した 2 スレッドが互いを未確定と読むと，親の確定が
+/// 回復不能に失われるため．
+fn aggregate_proven(pool: &NodePool, parent: &Node) -> Option<u8> {
+    let mut min_cv = f64::INFINITY;
+    for e in parent.edges() {
+        let c = e.child.load(Ordering::Acquire);
+        if c == NULL_NODE {
+            return None;
+        }
+        min_cv = min_cv.min(pool.get(c).proven_value_sync()?);
+    }
+    if !min_cv.is_finite() {
+        return None; // 子が無い (展開済みノードでは起きない)
+    }
+    Some(if min_cv == 0.0 {
+        proven::WIN
+    } else if min_cv == 0.5 {
+        proven::DRAW
+    } else {
+        proven::LOSS
+    })
+}
+
 /// path 末尾の確定値を AND-OR 論理で祖先へ伝播する ([`crate::tree::proven`])．
 ///
 /// - いずれかの子が手番側負け確定 (値 0) → 親は勝ち確定 (OR)
@@ -930,32 +991,11 @@ fn propagate_proven(pool: &NodePool, path: &[u32]) -> u64 {
         let p = if cv == 0.0 {
             proven::WIN
         } else {
-            let mut min_cv = cv;
-            let mut all_proven = true;
-            for e in parent.edges() {
-                let c = e.child.load(Ordering::Acquire);
-                if c == NULL_NODE {
-                    all_proven = false;
-                    break;
-                }
-                match pool.get(c).proven_value_sync() {
-                    None => {
-                        all_proven = false;
-                        break;
-                    }
-                    Some(v) => min_cv = min_cv.min(v),
-                }
-            }
-            if !all_proven {
+            // 全子が確定していなければ親は確定できない (AND 集約)
+            let Some(p) = aggregate_proven(pool, parent) else {
                 break;
-            }
-            if min_cv == 0.0 {
-                proven::WIN
-            } else if min_cv == 0.5 {
-                proven::DRAW
-            } else {
-                proven::LOSS
-            }
+            };
+            p
         };
         if parent.try_mark_proven(p) {
             newly += 1;
@@ -1013,13 +1053,18 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
             node_state::EXPANDED => {
                 let edges = node.edges();
                 let sqrt_pn = (node.visits() as f32).sqrt();
-                let mut best_i = 0usize;
+                let mut best_i = usize::MAX;
                 let mut best_score = f32::NEG_INFINITY;
                 for (i, e) in edges.iter().enumerate() {
                     let (q, n) = match e.child.load(Ordering::Acquire) {
                         NULL_NODE => (opts.fpu, 0u64),
                         c => {
                             let child = pool.get(c);
+                            // 確定済みの子は値が既知 — 降りても no-op backprop
+                            // にしかならないので候補から外す (MCTS-Solver)
+                            if opts.skip_proven_children && child.proven_value().is_some() {
+                                continue;
+                            }
                             let v = child.visits();
                             if v == 0 {
                                 (opts.fpu, 0)
@@ -1034,6 +1079,24 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
                         best_score = score;
                         best_i = i;
                     }
+                }
+                if best_i == usize::MAX {
+                    // 全子が確定済み — この親も確定する (伝播の取りこぼしを
+                    // ここで回収し，以後この部分木へは降りなくなる)．
+                    // skip_proven_children が false なら best_i は必ず埋まる
+                    if let Some(p) = aggregate_proven(pool, node) {
+                        node.try_mark_proven(p);
+                    }
+                    shared.note_depth(path.len());
+                    let v = node.proven_value().unwrap_or(0.5);
+                    let leaf = if v == 0.5 {
+                        shared.draw_leaf_value(path.len())
+                    } else {
+                        v
+                    };
+                    backprop(shared, &path, leaf);
+                    propagate_proven_from(shared, &path);
+                    return Selection::Backpropped;
                 }
                 let edge = &edges[best_i];
                 board.do_move(edge.mv);
@@ -1641,7 +1704,11 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
 
         // 負け確定除外の robust child + root 確定手の優先 (build_snapshot と共有)
         let root_proven = root_node.proven_value();
-        let best_i = best_root_index(&root_children, root_proven);
+        let best_i = best_root_index(
+            &root_children,
+            root_proven,
+            shared.opts.skip_proven_children,
+        );
         let best = &root_children[best_i];
 
         // PV: 先頭は best_move に一致させ，以降は訪問回数最大の辺を辿る
@@ -1835,6 +1902,99 @@ mod tests {
             result.stats.playouts, result.stats.eval_items,
             "playouts は葉評価数と一致する"
         );
+    }
+
+    #[test]
+    fn test_skip_proven_children_prefers_sure_draw_over_worse_guess() {
+        // 確定済みの子は訪問が伸びないので robust child では選ばれない．
+        // 確定値 (0.5 = 引き分け) が robust child の推定 q (0.2) を上回るなら
+        // 確定側を選ぶ — 「確実な引き分け」を「不確実な劣勢」と取り違えない
+        let mv = |usi: &str| Move::from_usi(usi).expect("正当な USI");
+        let children = vec![
+            RootChildStat {
+                mv: mv("7g7f"),
+                visits: 1000,
+                q: 0.2,
+                prior: 0.5,
+                proven: None,
+            },
+            RootChildStat {
+                mv: mv("2g2f"),
+                visits: 3,
+                q: 0.5,
+                prior: 0.5,
+                proven: Some(0.5),
+            },
+        ];
+        assert_eq!(
+            best_root_index(&children, None, true),
+            1,
+            "確実な引き分けを選ぶ"
+        );
+        assert_eq!(
+            best_root_index(&children, None, false),
+            0,
+            "レバー off では従来どおり robust child"
+        );
+    }
+
+    #[test]
+    fn test_skip_proven_children_keeps_better_unproven_move() {
+        // 逆に robust child の推定が引き分けより良いなら，確定値では
+        // 上書きしない (確定 = 常に優先ではない)
+        let mv = |usi: &str| Move::from_usi(usi).expect("正当な USI");
+        let children = vec![
+            RootChildStat {
+                mv: mv("7g7f"),
+                visits: 1000,
+                q: 0.8,
+                prior: 0.5,
+                proven: None,
+            },
+            RootChildStat {
+                mv: mv("2g2f"),
+                visits: 3,
+                q: 0.5,
+                prior: 0.5,
+                proven: Some(0.5),
+            },
+        ];
+        assert_eq!(best_root_index(&children, None, true), 0);
+    }
+
+    #[test]
+    fn test_skip_proven_children_cuts_spin_on_mate_adjacent_tree() {
+        // 詰み・千日手が近い局面では，確定済みの部分木へ降りる空回りが
+        // 予算を食う．確定済みの子を候補から外すと空回りが減り，同じ予算で
+        // 実 playout が増える (レバーの発火確認)．
+        // 玉だけの局面は千日手終端 (mark_terminal + 確定伝播) がすぐ溜まる
+        let bare_kings = "4k4/9/9/9/9/9/9/9/4K4 b - 1";
+        let opts = |skip: bool| SearchOptions {
+            threads: 1,
+            batch_size: 4,
+            node_capacity: 1 << 14,
+            skip_proven_children: skip,
+            ..pure_mcts_opts()
+        };
+        let limits = SearchLimits {
+            max_playouts: Some(2000),
+            ..SearchLimits::default()
+        };
+        let off = run(bare_kings, opts(false), limits.clone(), 42);
+        let on = run(bare_kings, opts(true), limits, 42);
+        assert!(
+            on.stats.terminal_backprops < off.stats.terminal_backprops,
+            "空回りが減るはず: off={} on={}",
+            off.stats.terminal_backprops,
+            on.stats.terminal_backprops
+        );
+        assert!(
+            on.stats.playouts >= off.stats.playouts,
+            "実 playout は減らない: off={} on={}",
+            off.stats.playouts,
+            on.stats.playouts
+        );
+        assert!(on.best_move.is_some());
     }
 
     #[test]
