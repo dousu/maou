@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: cbe0eeb
 date: 2026-07-28
 target:
   - docs/design/usi-engine/verification.md
