@@ -413,6 +413,12 @@ fn play_game(
                 },
                 _ => go.clone(),
             };
+            // transport 規約: `go` の直前に stop フラグをクリアする (stdio.rs の
+            // reader と同じ役割を driver が担う)．怠ると observer が時間切れで
+            // 立てた stop が次の go まで残り，2 手目以降の探索が即座に打ち切られて
+            // playouts=0 になる (時間制 go = movetime / 持ち時間モードのみ発現．
+            // playout 制では observer が stop を立てないため露見しなかった)．
+            agent.stop_handle().store(false, Ordering::Release);
             let move_started = Instant::now();
             let out = agent
                 .handle(GuiCommand::Go(go))
@@ -574,6 +580,41 @@ mod tests {
         assert_eq!(o.reason, GameEndReason::MaxMoves);
         assert_eq!(o.winner, None);
         assert_eq!(o.moves.len(), 4);
+    }
+
+    /// 時間制 (`movetime`) でも 3 手目以降が探索される (stop フラグ持ち越し回帰)．
+    ///
+    /// driver が `go` の前に stop をクリアしないと，1 手目の観測者が時間切れで
+    /// 立てた stop が残り 2 手目以降が playouts=0 で即返る．手数を伸ばしても
+    /// 総 playout が増えないことで検出する (機械速度に依らない比率判定)．
+    #[test]
+    fn test_selfplay_movetime_searches_every_move() {
+        let timed = |max_moves: u32| -> u64 {
+            let config = SelfplayConfig {
+                // 時間制では playout 数が青天井なので木のプールを広めに取る
+                // (test_engine の 4096 では GC が回り続けて計測にならない)
+                engine: EngineConfig {
+                    node_capacity: Some(1 << 16),
+                    ..test_engine()
+                },
+                games: 1,
+                playouts: None,
+                movetime_ms: Some(20),
+                max_moves,
+                // in-search 引き分け終端は別バグ (時間制 + 終端間近で無限ループ)
+                // を踏むため本テストでは切る．ここで見たいのは stop 規約のみ
+                sync_max_moves_to_draw: false,
+                ..SelfplayConfig::default()
+            };
+            run_selfplay(&config, None).expect("mock 自己対局は成功する")[0].playouts
+        };
+        let short = timed(2);
+        let long = timed(10);
+        assert!(short > 0, "1-2 手目は素の探索なので playout が出る");
+        assert!(
+            long > short * 3,
+            "手数を 5 倍にしたら playout も増えるはず (short={short}, long={long})"
+        );
     }
 
     #[test]
