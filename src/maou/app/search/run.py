@@ -169,6 +169,13 @@ class SearchRunner:
                 f"playouts={result.playouts} "
                 f"terminal_backprops={result.terminal_backprops} "
                 f"nps={result.nps:.0f} "
+                # 充填率 (avg_batch / batch_size) は nps の解釈に必須:
+                # TensorRT は pad_to=batch_size で毎バッチを埋めるため，
+                # 充填率が下がると GPU の仕事量が同じでも nps が下がる
+                f"eval_batches={result.eval_batches} "
+                f"avg_batch={result.avg_batch:.1f} "
+                f"collisions={result.collisions} "
+                f"nodes_used={result.nodes_used} "
                 f"elapsed_ms={result.elapsed_ms} "
                 f"warmup_ms={result.warmup_ms} "
                 f"max_depth={result.max_depth} "

@@ -80,7 +80,7 @@ PV: G*5b
 Candidates:
 G*5b (visits=1, winrate=1.0000, eval=16578.56, prior=0.0187, proven=win)
 ...
-Stats: playouts=38 terminal_backprops=1 nps=435 elapsed_ms=87 warmup_ms=0 max_depth=4 repetitions=0 proven_nodes=1 stop=root_proven
+Stats: playouts=38 terminal_backprops=1 nps=435 eval_batches=5 avg_batch=7.6 collisions=0 nodes_used=39 elapsed_ms=87 warmup_ms=0 max_depth=4 repetitions=0 proven_nodes=1 stop=root_proven
 <ASCII board>
 ```
 
@@ -106,6 +106,13 @@ Stats: playouts=38 terminal_backprops=1 nps=435 elapsed_ms=87 warmup_ms=0 max_de
   without opening a leaf are reported separately as `terminal_backprops`. The
   budget is consumed by the sum of the two, so `nps` stays comparable with the
   evaluator's physical throughput.
+  `eval_batches` / `avg_batch` / `collisions` / `nodes_used` describe **how the
+  evaluator was fed**, and `avg_batch ÷ --batch-size` is the batch fill rate.
+  Read the fill rate before reading `nps`: with TensorRT every batch is padded
+  to `--batch-size` (fixed shapes), so a drop in fill rate lowers `nps` even
+  when the GPU does the same amount of work. A collision count that grows with
+  `--threads` is the usual cause of a low fill rate (a collision submits the
+  partially collected batch immediately).
   `warmup_ms` is the one-time root evaluation cost (the first inference, which
   triggers the TensorRT engine build/load) — it is measured **outside** the
   timed region, so `nps`/`elapsed_ms` reflect only the search itself. With
