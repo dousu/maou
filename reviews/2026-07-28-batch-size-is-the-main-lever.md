@@ -3,8 +3,12 @@ status: pending
 date: 2026-07-28
 target:
   - docs/design/position-search/eval-batching.md (§3-§5 を GPU 実測で全面改訂)
-  - docs/design/usi-engine/verification.md (§5 の分解を訂正 + batch_size A/B 手順を追加)
-  - docs/commands/selfplay.md (`--ab-mode batch` / `--batch-size-b` の追加)
+  - docs/design/usi-engine/verification.md (§5 の分解を訂正 + batch_size A/B 手順を追加
+    + 手順中の `--batch-size 256` を 64 へ，10 箇所)
+  - docs/commands/selfplay.md (`--ab-mode batch` / `--batch-size-b` の追加 + 推奨値)
+  - docs/commands/search.md (推奨値)
+  - src/maou/infra/console/{selfplay,search_board,usi}.py (`--batch-size` の help
+    "use around 256 on GPU" → 64．**既定値 8 は据え置き**)
 risk: medium
 reversibility: easy
 ---
@@ -158,13 +162,60 @@ compass VETO 「レバーは『より強い』ことを A/B で確認してか�
 
 n の見積り: +88 Elo を 95% で検出するには **n ≈ 100 局** (約 3.5 時間)．
 
+## 5.1 A/B 実測結果 (2026-07-28, 48 局) — **A = batch 64 の勝ち**
+
+`--ab-mode batch --batch-size 64 --batch-size-b 256 --clock-ms 30000 --inc-ms 500
+--max-moves 256 --opening-random-plies 8 --seed 1 --alternate-colors --parallel 1
+--threads 1 --no-root-dfpn --no-leaf-mate`:
+
+```
+A result: 33W 0D 15L / A score: 68.8% (Wilson 95% CI [54.7%, 80.1%])
+A Elo: +137 [+33, +241]
+paired: 24 pairs, mean +0.375 (SE 0.118), t = +3.19, A ahead in 10/24 (tied 13)
+time left at end (avg): A 5.5s / B 5.4s
+```
+
+**t = +3.19 / CI 下限 +33** でゼロを明確に超える．色バランス (先手 23 / 後手 25) も
+残り持ち時間 (A 5.5s / B 5.4s) も公平で，n=48 で決着した．
+
+**予測 (+59 Elo) を 2.3 倍上回った**．予測は throughput +34.1% を換算しただけの値で，
+差分の **+78 Elo 相当は 1 playout あたりの質の向上**と解釈できる — batch を下げると
+in-flight 葉が減って virtual loss の歪みが小さくなる (§2.3 の visits 分布) ことが，
+棋力として実測された．**罠 2 の逆**が起きており，質の寄与のほうが速度の寄与より
+大きい可能性がある．
+
+なお **1 doubling あたり Elo は n=24 で +140 [+51, +229] に更新済** (旧 +208 [+52,
++364])．本レビュー中の Elo 換算はすべて 140 で計算し直してある．
+
+## 5.2 変更対象は「既定値」ではなく「推奨値」だった
+
+調査の結果，**コードの既定は 8** (`EngineConfig::default()` / CLI `default=8`) で，
+256 は **CLI ヘルプの推奨文と docs の手順 10 箇所**が指定している値だった．
+
+| | 現状 | 実測での位置 |
+|---|---|---|
+| コード既定 | 8 | GPU では 64 比 **−38%** (7,096 vs 11,459 nps)．**CPU では未測定** |
+| 推奨値 (help + docs) | 256 | **A/B で 64 に −137 Elo と判定** |
+| 実測最適 | — | **64** (32/128 とはプラトー内) |
+
+**提案: 推奨値を 256 → 64 に直し，コード既定 8 は据え置く．**
+
+既定 8 を 64 へ変えない理由: CPU は TRT の padding 損が無くコストが実 items に比例
+するため，速度メリットが無いまま質だけ落とす可能性がある．**CPU-only 動作は compass
+VETO の回帰条件**であり，未測定のまま既定を GPU 前提の値へ倒すべきでない．
+GPU 利用者は `--tensorrt --cuda --model-path` を明示する必要がある以上，
+`--batch-size` も明示する運用で一貫する．
+
 ## 6. 未検証事項
 
 - **持ち時間モードのスイープは各 4 局で交絡がある** — plies が 462〜621 と
   ばらつき，対局の長さ (局面の性質) が throughput に混ざっている．
   32/64/128 が固まり 256 だけ外れるパターンは一貫しているが，n は小さい
-- **32 と 64 の差 (3.4%) は分離できていない**．プラトーの内側なので実用上は
-  どちらでもよい
+- **32 が 64 より強い可能性が残る**．速度は 32/64/128 がプラトー (±2%) だが，
+  質は batch が小さいほど良い方向で，A/B の +137 Elo は質の寄与が大きいと
+  読める．**64 vs 32 の A/B (n=48) で決着させる価値がある**
+- **CPU での最適 batch_size は未測定**．既定 8 を据え置く根拠は「TRT の padding
+  損が無いので速度メリットが無い」という機構的推論であって実測ではない
 - **質の向上は visits 分布からの示唆にとどまる**．等 playout A/B (E1) で
   測っていない
 - **Elo 換算係数 208 が n=12** — task #2 (n ≥ 24) が未了
