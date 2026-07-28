@@ -72,7 +72,7 @@
 | --- | --- | --- |
 | `--model-path PATH` | | ONNX model file path. When omitted, the mock evaluator is used (announced via `info string`). Can also be set from the GUI via `setoption name ModelPath`. |
 | `--threads INT` | default `1` | Number of search threads. |
-| `--batch-size INT` | default `8` | Evaluation batch size (use around 256 on GPU; also the TensorRT padding size). |
+| `--batch-size INT` | default `8` | Evaluation batch size; also the TensorRT padding size. **Use around 64 on GPU** — the measured optimum (L4 + TensorRT + ViT 19.8M fp16); batch 256 lost an A/B by 137 Elo. See [eval-batching.md](../design/position-search/eval-batching.md). |
 | `--node-capacity INT` | | Node pool capacity (default 2^20 nodes). |
 | `--network-delay-ms INT` | default `1000` | Communication overhead margin in milliseconds. The GUI/server measures elapsed time including transport, so the per-move budget is reduced by this amount. |
 | `--min-think-ms INT` | default `100` | Minimum thinking time in milliseconds. |
@@ -125,6 +125,6 @@ printf 'usi\nisready\nposition startpos\ngo btime 0 wtime 0 byoyomi 1000\nquit\n
   | maou-usi
 
 # Start with a model and GPU (initial values; setoption can override)
-maou usi --model-path model.onnx --threads 2 --batch-size 256 \
+maou usi --model-path model.onnx --threads 2 --batch-size 64 \
   --tensorrt --trt-cache-dir /path/to/trt-cache
 ```

@@ -45,7 +45,9 @@ from maou.infra.console.common import (
 )
 @click.option(
     "--batch-size",
-    help="Evaluation batch size (use around 256 on GPU).",
+    help="Evaluation batch size (use around 64 on GPU: measured optimum on "
+    "L4 + TensorRT. Larger batches pay padding for slots they cannot fill, "
+    "smaller ones leave the GPU idle).",
     type=int,
     default=8,
     show_default=True,

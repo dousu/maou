@@ -99,10 +99,12 @@ value を経路に沿ってバックプロパゲーションする (視点は 1 
   `Evaluator::evaluate_batch` に一括で渡す (per-thread batching)．
 - 複数スレッドの葉を単一 GPU バッチに束ねる global collector は，同じ
   `Evaluator` trait の背後に実装できる．**実測の結論: 1 局の棋力には効かない**
-  — threads=1 の充填率は既に 99.6% で，束ねても得られるのは CPU 収集と GPU
-  推論のオーバーラップ分 (**上限約 2.5%**) にとどまる．self-play の
-  スループット改善としては別枠で価値がある
-  ([eval-batching.md §3.3・§7](eval-batching.md))．
+  — 利得が対局間にしか出ないため，実戦 (1 局) にも A/B の Elo 差にも現れない．
+  加えて **TensorRT のコストは padding 後の長さにほぼ比例し固定費が無い**ので，
+  「まとめて呼び出し回数を減らす」こと自体に価値が無い．**充填を上げる正しい
+  手段は `batch_size` を飽和点まで下げること** (実測 64．256 に対し棋力 A/B で
+  +137 Elo)．self-play のスループット改善としては別枠で価値がある
+  ([eval-batching.md](eval-batching.md))．
 
 ### 3.4 展開の同期 (マルチスレッド)
 

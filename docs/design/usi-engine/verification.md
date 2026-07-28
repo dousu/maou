@@ -6,7 +6,7 @@
 | 残件 | 必要な環境 | 状態 | 手順 |
 |---|---|---|---|
 | 未決 1 TimeStrategy の定数 | GPU (探索速度が要る) | **決着 2026-07-27** (horizon 40 据え置き) | [§4](#4-未決-1-timestrategy-の想定残り手数) |
-| 未決 5 バッチ aggregator | GPU | **決着 2026-07-27** (現行構成では採用しない) | [§5](#5-未決-5-バッチ-aggregator-の採否) |
+| 未決 5 バッチ aggregator | GPU | **決着 2026-07-28** (棋力の主経路ではない．主レバーは `--batch-size` で，64 が 256 に +137 Elo) | [§5](#5-未決-5-バッチ-aggregator-の採否) |
 | 未決 2 keep-alive の既定値 | GUI 実機 | **未実施 (将来課題)** | [§8](#8-gui-実機検証-将来課題-未実施) |
 | 空回りの予算開放 | CPU で判定可 | **棄却 2026-07-27** (実 playout +1.34%) | [§4.5](#45-空回りの予算開放---ab-mode-spin--cpu-スクリーニングで棄却) |
 | 確定済み子の選択除外 | GPU (発火量) | **棄却 2026-07-27** (実探索 +1.8% / throughput +0.35%) | [§4.6](#46-確定済み子の選択除外---ab-mode-proven--gpu-発火測定で棄却) |
@@ -36,7 +36,7 @@ GPU 実行の共通フラグ:
 
 ```bash
 --model-path /content/model_fp16.onnx \
---tensorrt --cuda --threads 1 --batch-size 256 \
+--tensorrt --cuda --threads 1 --batch-size 64 \
 --trt-cache-dir /content/trt_cache
 ```
 
@@ -104,7 +104,7 @@ GPU 実行の共通フラグ:
 # 1 局面探索の NPS (warmup はエンジンビルドを計測区間から外す)
 !maou search --sfen "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1" \
     --model-path /content/model_fp16.onnx --tensorrt --cuda \
-    --threads 1 --batch-size 256 --time-ms 30000 --root-dfpn \
+    --threads 1 --batch-size 64 --time-ms 30000 --root-dfpn \
     --trt-cache-dir /content/trt_cache
 ```
 
@@ -112,7 +112,7 @@ GPU 実行の共通フラグ:
 # 自己対局 1 局の smoke (対局経路が GPU で通ることの確認 + TRT キャッシュ温め)
 !maou selfplay --games 1 --playouts 800 --max-moves 64 \
     --model-path /content/model_fp16.onnx --tensorrt --cuda \
-    --threads 1 --batch-size 256 --trt-cache-dir /content/trt_cache
+    --threads 1 --batch-size 64 --trt-cache-dir /content/trt_cache
 ```
 
 得られた **playouts/秒 (以下 `NPS`)** を控える．CPU (DevContainer) の実測は
@@ -130,7 +130,7 @@ driver で棋力差を測ること自体が成立していない．同時に **G
 !maou selfplay --games 24 --ab-mode budget --playouts 800 --playouts-b 200 \
     --opening-random-plies 8 --seed 1 --max-moves 256 \
     --model-path /content/model_fp16.onnx --tensorrt --cuda \
-    --threads 1 --batch-size 256 --trt-cache-dir /content/trt_cache \
+    --threads 1 --batch-size 64 --trt-cache-dir /content/trt_cache \
     --output /content/ab_budget.jsonl
 ```
 
@@ -235,7 +235,7 @@ playout 膨張に汚染され，時計がニセの探索に食われる．
     --clock-ms 30000 --inc-ms 500 --horizon 40 --horizon-b 20 \
     --resign-value 0 --max-moves 512 --opening-random-plies 8 --seed 1 \
     --model-path /content/model_fp16.onnx --tensorrt --cuda \
-    --threads 1 --batch-size 256 --trt-cache-dir /content/trt_cache \
+    --threads 1 --batch-size 64 --trt-cache-dir /content/trt_cache \
     --output /content/ab_horizon.jsonl
 ```
 
@@ -334,7 +334,7 @@ PUCT の降下先は終端のままで，新しい葉にはならない．引き
        !maou selfplay --games 4 --playouts 800 --max-moves 512 \
            --opening-random-plies 8 --seed 1 {f} \
            --model-path /content/model_fp16.onnx --tensorrt --cuda \
-           --threads 1 --batch-size 256 --trt-cache-dir /content/trt_cache
+           --threads 1 --batch-size 64 --trt-cache-dir /content/trt_cache
    ```
 
    **1 手あたりに直して比べる** (`playouts ÷ plies`)．局数・手数が変わるため総量は
@@ -347,7 +347,7 @@ PUCT の降下先は終端のままで，新しい葉にはならない．引き
    !maou selfplay --games 40 --ab-mode proven --playouts 800 \
        --resign-value 0 --max-moves 512 --opening-random-plies 8 --seed 1 \
        --model-path /content/model_fp16.onnx --tensorrt --cuda \
-       --threads 1 --batch-size 256 --trt-cache-dir /content/trt_cache \
+       --threads 1 --batch-size 64 --trt-cache-dir /content/trt_cache \
        --output /content/ab_proven.jsonl
    ```
 
@@ -414,7 +414,7 @@ GPU が評価している間の**遊んでいる CPU 時間**で起きるため�
 for p in (1, 2, 4, 8):
     !maou selfplay --games 8 --parallel {p} --playouts 800 --max-moves 120 \
         --model-path /content/model_fp16.onnx --tensorrt --cuda \
-        --threads 1 --batch-size 256 --trt-cache-dir /content/trt_cache --quiet
+        --threads 1 --batch-size 64 --trt-cache-dir /content/trt_cache --quiet
 ```
 
 判定規則:
@@ -458,29 +458,86 @@ for p in (1, 2, 4, 8):
 - 全設定で plies 864 / playouts 724,528 / 空回り 49,056 が **bit-identical** =
   並列度は探索結果を変えない．
 
-**結論 (2026-07-28 改訂): 対局間 aggregator は棋力の主経路ではない**．
+**結論 (2026-07-28 再改訂): 対局間 aggregator は棋力の主経路ではない．
+主レバーは `--batch-size` だった**．
 
 伸びしろ約 2 倍は当初「対局をまたいで評価要求をまとめれば取れる」と読んで
-いたが，CPU 実測 (`nps_bench`) で機構を分解した結果この筋書きは成立しない
-ことが分かった (詳細:
+いたが，GPU 実測で否定された (詳細:
 [position-search/eval-batching.md](../position-search/eval-batching.md)):
 
-- **threads=1 の充填率は既に 99.6%** (51,200 playouts / batch 256)．束ねても
-  得られるのは threads=1 と同じ 255 件/回で，上積みは CPU 収集と GPU 推論の
-  オーバーラップ分だけ ⇒ **上限約 2.5%**．
-- **2 倍差の正体は手ごとの固定費**: (a) 完了検知の 100ms ポーリング (約 1.2×)，
-  (b) root 評価が 1 件バッチで TRT では満杯 1 回分のコスト (約 1.2×)，
-  (c) reroot 直後のバッチ充填 82.3% (約 1.2×)．**いずれも探索の挙動を
-  変えずに除去できる** ((a) は de15d54 で除去済，(b)(c) は `--pad-buckets`)．
+- **TensorRT のコストは padding 後の長さにほぼ比例する** — `cost(n) ≈ 0.15 +
+  0.084·n` [ms] で **固定費はほぼ無い** (batch 8/32/64/128/256 で
+  1.13/2.85/5.39/10.95/25.47 ms/call)．したがって**呼び出し回数を減らしても
+  得はなく，効くのは padding を減らすことだけ**である．
+- **`--batch-size 256` は充填率 80% で padding を捨てていた**．batch 64 は
+  fill 97% で，**単発 6,400 playouts で 11,459 vs 8,004 nps**，
+  **持ち時間 30s+0.5s で 10,257 vs 7,646 p/s (+34.1%)**．
+- **棋力 A/B で決着** (§5.2): batch 64 が batch 256 に **+137 Elo [+33, +241]**
+  (48 局 / t = +3.19)．batch 32 vs 64 は有意差なし (t = −0.44) で，
+  **充填が飽和する最小値 = 64 が最適**．
+- 対局間 aggregator を降ろす根拠も差し替わった．旧稿は「threads=1 の充填率が
+  99.6% だから束ねる余地がない」としたが，その 99.6% は 51,200 playouts の
+  **定常値**で，実配置の短い探索では 31-55% である．**降ろす理由は罠 1 —
+  利得が対局間にしか出ず，実戦 (1 局) にも A/B の Elo 差にも現れない**こと．
 - **threads 2 が約 4 割遅い**のは，衝突 1 回でバッチ収集を打ち切るため
-  1 バッチが平均 69 件になり，TRT の `pad_to = batch_size` により GPU
-  呼び出し回数がそのままコストになるから (threads 1/2/4 = 201/743/3,052 回)．
+  1 バッチが平均 69 件になり，GPU 呼び出し回数がそのままコストになるから
+  (threads 1/2/4 = 201/743/3,052 回)．
 
 **当面の方針は棋力を直接狙うこと**．対局間 aggregator は **self-play の
 データ生成レートと実験 wall clock の改善**として別枠で残す
 ([eval-batching.md §7](../position-search/eval-batching.md))．
 
 なお dfpn 併走のコストは wall +18% / throughput -15% で，実配置で切る理由はない．
+
+### 5.2 `--batch-size` の A/B (`--ab-mode batch`)
+
+バッチサイズは**速度と探索の質の両方**に効く — 大きいバッチは padding を捨てる
+一方，in-flight の葉が増えて virtual loss が PUCT を歪める．**必ず持ち時間モードで
+回すこと**: 固定 playout 予算では両者とも同じ playout 数を使うので，速度差が
+棋力差にならない．
+
+```python
+!maou selfplay --games 48 --parallel 1 --ab-mode batch \
+    --batch-size 64 --batch-size-b 256 \
+    --clock-ms 30000 --inc-ms 500 --max-moves 256 \
+    --opening-random-plies 8 --seed 1 --alternate-colors \
+    --no-root-dfpn --no-leaf-mate \
+    --model-path /content/model_fp16.onnx --tensorrt --cuda \
+    --threads 1 --trt-cache-dir /content/trt_cache \
+    --output /content/ab_batch.jsonl
+```
+
+#### 実測結果 (2026-07-28, Colab L4 / 各 48 局)
+
+| A / B | A Elo | paired t | 判定 |
+|---|---|---|---|
+| **64 / 256** | **+137 [+33, +241]** | **+3.19** | **64 の勝ち** |
+| 32 / 64 | −22 [−119, +75] | −0.44 | 有意差なし |
+
+64 vs 256 は 33W 0D 15L (68.8%)．色バランス (先手 23 / 後手 25) も残り持ち時間
+(A 5.5s / B 5.4s) も公平．
+
+**予測を 2.3 倍上回った**．throughput +34.1% の換算値は +59 Elo
+(1 doubling ≈ +140) で，差分の **+78 Elo 相当は 1 playout あたりの質の向上**と
+解釈できる．**throughput からの Elo 換算は棋力の下界として扱うこと** —
+バッチを縮める変更では質の向上分が上乗せされる．
+
+#### 一般則
+
+| batch | fill | 状態 |
+|---|---|---|
+| 8 | 100% | 充填は満点だが **GPU が遊ぶ** (7,096 nps) |
+| 32 / **64** | 99% / 97% | **飽和点 = 最適**．両者に棋力差なし |
+| 128 | 91% | わずかに padding 損 |
+| 256 | 80% | **padding 損が大きい** → 64 に −137 Elo |
+
+⇒ **`batch_size` は「充填が飽和する最小値」に置く**．それより大きいと padding を
+捨て，小さいと GPU が遊ぶ．**別モデル・別 GPU では測り直すこと** (最適値は
+モデルの計算量と GPU の並列度で決まる)．
+
+**コードの既定値 8 は据え置いている**: CPU は padding が無くコストが実 items に
+比例するため速度メリットが無く，質だけ落とす可能性がある．CPU での最適値は未測定．
+
 
 ## 6. subtree 再利用の GPU 実挙動 (`--ab-mode subtree`)
 
@@ -492,7 +549,7 @@ CPU では「探索手の 90% で reroot 成功・引き継ぎは playout の 18
 !maou selfplay --games 24 --ab-mode subtree --playouts 800 \
     --opening-random-plies 8 --seed 1 --max-moves 256 \
     --model-path /content/model_fp16.onnx --tensorrt --cuda \
-    --threads 1 --batch-size 256 --trt-cache-dir /content/trt_cache
+    --threads 1 --batch-size 64 --trt-cache-dir /content/trt_cache
 ```
 
 `subtree reuse:` 行の引き継ぎ率が CPU と同水準 (18-20%) なら，CPU で出した
@@ -625,7 +682,7 @@ ShogiGUI / ShogiHome) を動かせないので，§7 の headless smoke で代�
   ```bash
   maou search --sfen "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1" \
     --model-path /content/model_fp16.onnx --tensorrt --cuda \
-    --threads 2 --batch-size 256 --time-ms 3000 --trt-cache-dir /content/trt_cache
+    --threads 2 --batch-size 64 --time-ms 3000 --trt-cache-dir /content/trt_cache
   ```
 
   **切り分け完了 (2026-07-27)**: 同一コマンド 3 回で **3/3 決定的**に再現し，

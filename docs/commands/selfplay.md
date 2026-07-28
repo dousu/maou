@@ -57,7 +57,7 @@
 | `--seed INT` | default `0` | Random seed for the opening randomization (mixed with the game index). |
 | `--output PATH` | | Write per-game records as JSON Lines. |
 | `--threads INT` | default `1` | Search threads per move. |
-| `--batch-size INT` | default `8` | Evaluation batch size (use around 256 on GPU). |
+| `--batch-size INT` | default `8` | Evaluation batch size. **Use around 64 on GPU** — the measured optimum (L4 + TensorRT + ViT 19.8M fp16); batch 256 lost an A/B by 137 Elo. See [eval-batching.md](../design/position-search/eval-batching.md). |
 | `--node-capacity INT` | default `65536` | Node pool capacity per agent (two agents per game; pools are pre-allocated). |
 | `--draw-value-black INT` | default `500` | Draw value for Black in permille (Denryu-sen `400`). |
 | `--draw-value-white INT` | default `500` | Draw value for White in permille (Denryu-sen `600`). |
@@ -68,10 +68,11 @@
 | `--byoyomi-ms INT` | default `0` | Byoyomi in milliseconds (real-clock mode only). |
 | `--inc-ms INT` | default `0` | Fischer increment per move in milliseconds (real-clock mode only). |
 | `--min-think-ms INT` | | Minimum thinking time per move (engine default `100`); only meaningful in real-clock mode. |
-| `--ab-mode MODE` | | A/B match instead of plain self-play: `subtree` (subtree reuse), `maxmoves` (in-search draw terminal), `budget` (same config, smaller budget for B — harness sanity check), `horizon` (time-strategy horizon; requires `--clock-ms`), `spin` (terminal spin excluded from the budget for A; fixed `--playouts` only, rejected with `--clock-ms`), `proven` (proven children excluded from PUCT selection for A). |
+| `--ab-mode MODE` | | A/B match instead of plain self-play: `subtree` (subtree reuse), `maxmoves` (in-search draw terminal), `budget` (same config, smaller budget for B — harness sanity check), `horizon` (time-strategy horizon; requires `--clock-ms`), `spin` (terminal spin excluded from the budget for A; fixed `--playouts` only, rejected with `--clock-ms`), `proven` (proven children excluded from PUCT selection for A), `batch` (evaluation batch size: A = `--batch-size` / B = `--batch-size-b`; **run it under the clock** — a fixed playout budget gives both sides the same playout count, so a speed difference cannot become a strength difference). |
 | `--spin-relief/--no-spin-relief` | default off | Exclude terminal spin from the playout budget, so `--playouts` counts real search volume only. A consecutive-spin limit still stops a search whose frontier is all terminals (`stop=spin_exhausted`). Fixed-budget runs only; measured to raise real playouts by only ~1-2% (see [verification.md §4.5](../design/usi-engine/verification.md)). |
 | `--skip-proven/--no-skip-proven` | default off | Exclude proven children (mate / repetition / resolved subtrees) from PUCT selection, so descents open new leaves instead of backpropagating a known value (MCTS-Solver). Works under both fixed budgets and the real clock. Measured to raise real playouts per move by ~20% where proven terminals dominate; no effect where the spin comes from the depth/max-moves limit (see [verification.md §4.6](../design/usi-engine/verification.md)). |
 | `--playouts-b INT` | | Player B playout budget (`--ab-mode budget`; defaults to one eighth of `--playouts`). |
+| `--batch-size-b INT` | `--batch-size` × 4 | Evaluation batch size for player B (`--ab-mode batch`). |
 | `--horizon INT` | | Assumed remaining moves for player A (`--ab-mode horizon`; defaults to the engine value). |
 | `--horizon-b INT` | | Assumed remaining moves for player B (`--ab-mode horizon`; default `25`). |
 | `--alternate-colors/--no-alternate-colors` | default: on with `--ab-mode` | Swap colors every game and pair the openings (2n, 2n+1). |
