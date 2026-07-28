@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import locale
 import queue
 import subprocess
 import sys
@@ -28,6 +29,55 @@ from typing import Optional
 # 先手 5三歩 + 持駒金 / 後手 5一玉 = G*5b の 1 手詰め．dfpn 単独で解けるので
 # モデルが無くても `go mate` を検証できる
 MATE_IN_1_SFEN = "4k4/9/4P4/9/9/9/9/9/9 b G 1"
+
+# maou._rust (Windows) が要求する DLL のうち，OS に必ずあるとは限らないもの．
+# `objdump -p _rust.cp312-win_amd64.pyd` の import table から抜いた．
+# `ImportError: DLL load failed` は欠けた DLL の名前を出さないので，ここを
+# 個別に読み込んで特定する．
+WINDOWS_DLL_DEPS: tuple[tuple[str, str], ...] = (
+    (
+        "MSVCP140.dll",
+        "VC++ 再頒布可能パッケージ (winget install Microsoft.VCRedist.2015+.x64)",
+    ),
+    ("MSVCP140_1.dll", "VC++ 再頒布可能パッケージ"),
+    ("VCRUNTIME140.dll", "VC++ 再頒布可能パッケージ"),
+    ("VCRUNTIME140_1.dll", "VC++ 再頒布可能パッケージ"),
+    (
+        "DirectML.dll",
+        "ONNX Runtime の DirectML EP (Windows 10 1903+ に同梱)",
+    ),
+    ("d3d12.dll", "Direct3D 12 (Windows 10+ に同梱)"),
+    ("dxgi.dll", "DXGI (Windows に同梱)"),
+    ("dxcore.dll", "DXCore (Windows 10 1903+ に同梱)"),
+    ("dbghelp.dll", "Debug Help Library (Windows に同梱)"),
+)
+
+
+def diagnose_windows_dlls() -> None:
+    """エンジンが起動しなかったとき，欠けている依存 DLL を名指しする.
+
+    Windows 以外では何もしない.
+    """
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    missing = []
+    for name, note in WINDOWS_DLL_DEPS:
+        try:
+            ctypes.WinDLL(name)
+        except OSError:
+            missing.append((name, note))
+    print("--- DLL 依存の診断 ---", flush=True)
+    if not missing:
+        print(
+            "  必要な DLL は全て読み込めた (別の原因)",
+            flush=True,
+        )
+    else:
+        for name, note in missing:
+            print(f"  MISSING: {name} — {note}", flush=True)
+    print("--- end 診断 ---", flush=True)
 
 
 class Engine:
@@ -46,7 +96,11 @@ class Engine:
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            encoding="utf-8",
+            # プロトコル出力は ASCII 安全なのでどの encoding でも読めるが，
+            # 起動失敗時の Python traceback は子プロセスのロケール encoding
+            # (日本語 Windows なら cp932) で書かれる．utf-8 固定にすると
+            # 肝心のエラーメッセージが化けて読めない
+            encoding=locale.getpreferredencoding(False),
             errors="replace",
         )
         self.stdout_q: queue.Queue[Optional[str]] = (
@@ -200,6 +254,10 @@ def run_smoke(
         print("smoke ok", flush=True)
     except BaseException:
         eng.dump_stderr()
+        if eng.proc.poll() is not None:
+            # 応答を返す前に死んでいる = 起動そのものの失敗．
+            # Windows なら欠けた DLL が最有力なので名指しする
+            diagnose_windows_dlls()
         eng.proc.kill()
         raise
 
