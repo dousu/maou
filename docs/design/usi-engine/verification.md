@@ -563,61 +563,18 @@ GUI を使わずに確認できる範囲 (`go mate` / ponder / keep-alive / TRT 
 `quit` が先に届いて `stop` が立ち，探索が 0 playout で終わる (既知の罠)．
 必ず応答を待ってから次を送る:
 
-```python
-%%writefile /content/usi_smoke.py
-import subprocess, time
-
-def send(p, line):
-    p.stdin.write(line + "\n"); p.stdin.flush(); print(">", line)
-
-def wait(p, token, timeout=600.0):
-    """token で始まる行が来るまで読み，途中の行 (空行含む) も表示する."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        line = p.stdout.readline()
-        if line == "":
-            raise RuntimeError("engine exited")
-        print("<", repr(line.rstrip("\n")))
-        if line.startswith(token):
-            return line.rstrip("\n")
-    raise TimeoutError(token)
-
-p = subprocess.Popen(["maou-usi"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                     text=True, bufsize=1)
-send(p, "usi"); wait(p, "usiok")
-for opt in [
-    "setoption name ModelPath value /content/model_fp16.onnx",
-    "setoption name UseTensorRT value true",
-    "setoption name UseCuda value true",
-    "setoption name TrtCacheDir value /content/trt_cache",
-    "setoption name KeepAlive value 5000",   # 未決 2: 空行の生存通知
-    "setoption name USI_Ponder value true",
-]:
-    send(p, opt)
-t0 = time.monotonic(); send(p, "isready"); wait(p, "readyok")
-print(f"isready took {time.monotonic() - t0:.1f}s")   # TRT 初回ビルド込み
-
-send(p, "position startpos")
-send(p, "go btime 30000 wtime 30000 binc 500 winc 500")
-best = wait(p, "bestmove")            # "bestmove <手> [ponder <予想手>]"
-tokens = best.split()
-assert len(tokens) >= 4, f"ponder 予想手が付かない: {best}"
-# GUI と同じ手順: 自分の手 + 予想した相手の手を進めてから go ponder
-send(p, f"position startpos moves {tokens[1]} {tokens[3]}")
-send(p, "go ponder btime 30000 wtime 30000 binc 500 winc 500")
-time.sleep(2.0); send(p, "ponderhit"); wait(p, "bestmove")
-
-# go mate: 先手 5三歩 + 持駒金 / 後手 5一玉 = G*5b の 1 手詰め
-send(p, "position sfen 4k4/9/4P4/9/9/9/9/9/9 b G 1")
-send(p, "go mate 10000"); wait(p, "checkmate")
-
-send(p, "quit"); p.wait(timeout=30)
-print("smoke ok")
+```bash
+# GUI 機・Colab のどちらでも同じスクリプトを使う (既定は mock 評価器なので
+# モデル転送前でも疎通だけ確認できる)．起動に失敗したら欠落 DLL を名指しする
+python scripts/usi_smoke.py \
+    --model-path /content/model_fp16.onnx \
+    --keep-alive 200
 ```
 
-```python
-!python /content/usi_smoke.py
-```
+`--engine` で実行ファイルを指定できる (既定 `maou-usi`)．Windows なら
+`--engine <venv>\Scripts\maou-usi.exe`．`[isready] N.Ns / KeepAlive 空行 M 行`
+を出すので，**M を数えてから** GUI 側の確認へ進む — M = 0 のまま GUI で
+「何も起きなかった」を見ても，無視されたのか発火していないのかが区別できない．
 
 確認項目:
 
@@ -626,31 +583,54 @@ print("smoke ok")
 - `bestmove ... ponder ...` が付くこと，`ponderhit` 後に `bestmove` が返ること．
 - `go mate` が `checkmate <手順>` を返すこと．
 
-## 8. GUI 実機検証 (将来課題 — 未実施)
+## 8. GUI 実機検証 (実施済み — 2026-07-28)
 
-**現時点で GUI を動かせる環境がないため未実施**．Colab では GUI (将棋所 /
-ShogiGUI / ShogiHome) を動かせないので，§7 の headless smoke で代替できない
-項目だけがここに残る．
+**環境**: Windows / **ShogiHome** (winget 経由で導入) / AMD Ryzen 5 3500U
+(4C8T / 15W モバイル APU) / RAM 5.9GB / CPU 推論 (GPU なし)．
+エンジンは Actions artifact の Windows wheel を venv へ pip install し，
+`<venv>\Scripts\maou-usi.exe` を直接登録した (引数なしエントリポイントなので
+bat ラッパーは不要)．
 
-環境要件: GUI を動かせるデスクトップ環境 (Windows / Linux)．GPU は必須では
-ないが，TRT 初回ビルドの待ち時間を実機で見るには GPU 機が望ましい．
+GUI の入手は **winget を使う** — 将棋 GUI はいずれも未署名なので，ブラウザで
+ダウンロードすると Mark of the Web が付いて SmartScreen の警告が出る．GUI を
+変えても避けられないので，変えるべきは入手経路の方:
+
+```powershell
+winget install sunfish-shogi.shogihome
+winget install shogixyz.ShogiGUI
+```
 
 チェックリスト:
 
-- [ ] エンジン登録 (`maou-usi` を引数なしで起動．[usi.md](../../commands/usi.md)
-      の登録手順) と `usi` → `usiok` → option 一覧の表示．
-- [ ] **`KeepAlive` の空行を GUI が無害に無視するか** — 無視するなら既定を
-      on にできる (**未決 2 の判断はこれだけが根拠になる**)．壊れる GUI が
-      あるなら既定 off のまま，該当 GUI 名を docs に残す．
-- [ ] **TRT 初回エンジンビルド中に `readyok` を待てるか** (GUI 側の
-      タイムアウトに引っかからないか)．`TrtCacheDir` 指定で 2 回目が短縮
-      されることも確認．
-- [ ] **`OpeningScript` が実サーバ/GUI 経由で正しく消化されるか** (電竜戦
-      HWT の玉往復ハンデ)．指定局面方式で手数付きの局面を渡された場合に
-      再発火しないこと (手数 1 ガード) も確認．
-- [ ] ponder の実挙動 (GUI が `go ponder` を送るか，`ponderhit` /
-      `stop` 後の応答が速いか)．
-- [ ] 1 局を最後まで完走 (投了・入玉宣言・千日手の表示が GUI と食い違わない)．
+- [x] エンジン登録 (`maou-usi` を引数なしで起動) と `usi` → `usiok` →
+      option 一覧の表示．
+- [x] **`KeepAlive` の空行を GUI が無害に無視するか** — **ShogiHome は無視した**．
+      `KeepAlive 200` で `isready` 中に空行 2 行が流れ，GUI はそのまま
+      `usinewgame` へ進み `close=0` で正常終了．⇒ 既定を **on (5000ms)** に
+      反転 (未決 2 決着)．他の GUI は未確認．
+- [ ] **TRT 初回エンジンビルド中に `readyok` を待てるか** — CPU 機なので
+      該当せず未確認．GPU 機での確認が要る．
+- [ ] **`OpeningScript` が実サーバ/GUI 経由で正しく消化されるか** — 未実施．
+- [x] ponder の実挙動 — GUI は `go ponder` を送る．ただし**予想手はほぼ当たらない**
+      (1 手 24 playouts 級では当然) ので毎手 `stop` が飛ぶ．`stop` から
+      `bestmove` までは `evaluate_batch` が中断不能なぶん遅れる (下記)．
+- [x] 1 局を最後まで完走 (詰みまで)．投了・入玉宣言・千日手の表示は今回の
+      対局では発生せず未確認．
+
+**実測 (この機械)**: `maou search` 30 秒 / batch 8 / threads 1 で
+`playouts=172 nps=6 avg_batch=7.8 warmup_ms=270`．同条件の DevContainer は
+`playouts=676 nps=22`．**3.7 倍遅い**．ORT の推論スレッドは 1 に固定
+(`backend.rs`) で `Mutex<Session>` 直列なので，**コア数は速度に寄与しない**．
+Zen+ が AVX2 を内部 128bit 幅で実装していること + 15W の持続クロックで説明が付く．
+**この速度では棋力の評価はできない** (1 手 180 playouts 級)．§8 が見るのは
+GUI 互換性なので目的には支障しない．
+
+**この検証で見つかった不具合**: 秒読み 5 秒の対局で切れ負けした．エンジンの
+期限判定が warmup の後から始まり，かつ中断不能な `evaluate_batch` を予約して
+いなかったため，壁時計が予算を超えていた．超過量は `batch_size ÷ nps` に比例
+するので GPU (6ms 級) では露見せず，6 playouts 秒の機械で初めて出た．
+修正済み (maou_search 0.26.1)．**回避策としては `NetworkDelay` を 2500 に
+上げると安定した**．
 
 ## 8.5 既知の課題 (検証中に判明)
 

@@ -104,8 +104,12 @@ pub struct EngineConfig {
     ///
     /// モデルロード + warmup (TensorRT の初回エンジンビルドは数十秒) が
     /// GUI 側のタイムアウトを超えると対局に入れないため，生存通知として
-    /// 空行を流す逃げ道 (設計 §7)．GUI が空行をどう扱うかは実機確認が必要
-    /// なので既定は off (設計 §12 未決 2 — 既定値の判断のみ実機待ち)．
+    /// 空行を流す逃げ道 (設計 §7)．
+    ///
+    /// 既定 on (5000ms)．ShogiHome の実機で空行が無害に無視される (対局へ
+    /// 進み正常終了する) ことを確認したため既定を off から反転した
+    /// (設計 §12 未決 2 の決着)．`isready` が速い環境では 1 行も出ないので
+    /// 無音が正常．0 で送らない．
     pub keep_alive_ms: u64,
     /// ponder (先読み) を有効にするか (既定 true)．true のとき `USI_Ponder`
     /// option を宣言し，`bestmove` に予想相手手 (自探索 PV の 2 手目) を付ける．
@@ -149,7 +153,7 @@ impl Default for EngineConfig {
             subtree_reuse: true,
             spin_budget_relief: false,
             skip_proven_children: false,
-            keep_alive_ms: 0,
+            keep_alive_ms: 5000,
             usi_ponder: true,
             root_dfpn: None,
             root_dfpn_nodes: None,

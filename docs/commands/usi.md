@@ -59,6 +59,15 @@
   - Linux / macOS: register `<venv>/bin/maou-usi`.
   - Windows: register `<venv>\Scripts\maou-usi.exe` (in Shogidokoro's file
     dialog, switch the filter to "all files" if needed).
+- **Windows prerequisite**: the wheel links ONNX Runtime (C++) statically, so
+  it needs the Microsoft Visual C++ Redistributable 2015-2022 (x64) —
+  `MSVCP140.dll` ships with neither Python nor Windows. Without it the engine
+  dies at startup with `ImportError: DLL load failed while importing _rust`,
+  which does *not* name the missing DLL. Install it with
+  `winget install Microsoft.VCRedist.2015+.x64`. CI cannot catch this: GitHub's
+  Windows runners have it preinstalled. Prebuilt Windows wheels are not
+  distributed — build on demand via the `Build Windows Wheel` workflow
+  (manual dispatch).
 - Alternatively register a one-line wrapper script that runs
   `maou usi --model-path ... --threads ...` to bake in CLI defaults.
 - Configure `ModelPath` (and `UseCuda` / `UseTensorRT` on GPU machines) in
@@ -76,7 +85,7 @@
 | `--node-capacity INT` | | Node pool capacity (default 2^20 nodes). |
 | `--network-delay-ms INT` | default `1000` | Communication overhead margin in milliseconds. The GUI/server measures elapsed time including transport, so the per-move budget is reduced by this amount. |
 | `--min-think-ms INT` | default `100` | Minimum thinking time in milliseconds. |
-| `--keep-alive-ms INT` | default `0` (off) | While answering `isready`, send a blank line every N milliseconds as a liveness signal. Intended for setups where the first TensorRT engine build exceeds the GUI's `readyok` timeout. Opt-in because GUI handling of blank lines is not yet verified on real hardware. |
+| `--keep-alive-ms INT` | default `5000` | While answering `isready`, send a blank line every N milliseconds as a liveness signal, so the GUI does not time out when the first TensorRT engine build outlasts its `readyok` timeout. `0` disables it. A fast `isready` emits no blank line at all — silence is normal. Verified on **ShogiHome**, which ignores the blank lines harmlessly; other GUIs are unverified. |
 | `--draw-value-black INT` | default `500` | Draw value for Black in permille. Repetition / max-moves draw terminals are valued at this (root side-to-move view). Denryu-sen Black 0.4 win = `400`. |
 | `--draw-value-white INT` | default `500` | Draw value for White in permille (Denryu-sen White 0.6 win = `600`). |
 | `--resign-value INT` | default `0` | Resign when the root win rate stays below this permille for `--resign-consecutive` moves. `0` = never resign. |
@@ -108,7 +117,7 @@ Declared in the `usi` response; defaults reflect the CLI flags above.
 | `TrtCacheDir` | string | TensorRT engine cache directory. |
 | `NetworkDelay` | spin (ms) | Communication margin subtracted from each move budget. |
 | `MinimumThinkingTime` | spin (ms) | Minimum thinking time. |
-| `KeepAlive` | spin (ms) | Blank-line keep-alive interval while answering `isready` (0 = disabled). |
+| `KeepAlive` | spin (ms) | Blank-line keep-alive interval while answering `isready` (default 5000; 0 = disabled). |
 | `DrawValueBlack` / `DrawValueWhite` | spin (permille) | Draw value per side (default 500; Denryu-sen 400 / 600). Converted to the search's side-to-move `draw_value`. |
 | `ResignValue` | spin (permille) | Resign win-rate threshold (0 = never). |
 | `ResignConsecutive` | spin | Consecutive below-threshold moves required to resign. |
