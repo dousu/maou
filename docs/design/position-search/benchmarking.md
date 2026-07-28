@@ -107,9 +107,12 @@ with open("/etc/ld.so.conf.d/maou.conf", "w") as f:
 !maou search \
     --sfen "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1" \
     --model-path /content/model_fp16.onnx \
-    --tensorrt --cuda --threads 2 --batch-size 256 --time-ms 30000 --root-dfpn \
+    --tensorrt --cuda --threads 2 --batch-size 64 --time-ms 30000 --root-dfpn \
     --trt-cache-dir /content/trt_cache
 # Stats: stop=time_limit を確認．warmup_ms に engine build (初回のみ数十秒)．
+# --batch-size 64 は L4 + TRT + ViT 19.8M fp16 での実測最適値
+# (docs/design/position-search/eval-batching.md)．2026-07-28 より前に記録した
+# NPS は batch 256 での測定なので，直接比較しないこと．
 # dfpn 併走の NPS 影響は --root-dfpn 有無の A/B で見る (詰みのない局面では
 # dfpn は王手手段がなく即終了するため通常は無視できる)．
 ```

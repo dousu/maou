@@ -10,6 +10,11 @@ target:
   - docs/commands/search.md (推奨値)
   - src/maou/infra/console/{selfplay,search_board,usi}.py (`--batch-size` の help
     "use around 256 on GPU" → 64．**既定値 8 は据え置き**)
+  - docs/design/position-search/benchmarking.md (North-star 計測手順の
+    `--batch-size 256` → 64．**user 追加指示 2026-07-28**)
+  - docs/performance.md は**対象外** — `benchmark-dataloader` /
+    `benchmark-training` の `--batch-size 256` は**学習ミニバッチ**であり
+    評価バッチサイズとは別概念 (同様に utility_benchmark_training.md も対象外)
 risk: medium
 reversibility: easy
 ---
