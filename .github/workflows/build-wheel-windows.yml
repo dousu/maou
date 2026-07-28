@@ -1,19 +1,23 @@
 name: Build Windows Wheel
 
 # Windows x86_64 の CPU 専用 wheel を Actions artifact として出す．
-# GUI 実機検証 (docs/design/usi-engine/verification.md §8) 用の手段であり，
-# Release latest の配布方針 (単一 manylinux wheel —
-# reviews/2026-07-16-unified-wheel-build.md) には手を付けない．
+#
+# **休眠 (手動実行のみ)**．maou の主対象は高性能 GPU 環境 (現状は主に
+# Colab) で，Windows は配布対象ではない — Release latest の配布方針
+# (単一 manylinux wheel — reviews/2026-07-16-unified-wheel-build.md) には
+# 手を付けない．GUI 実機検証など Windows バイナリが要るときだけ Actions の
+# 画面から起こす．知見は docs/rust-build-optimization.md にある．
+#
+# 実証済み (2026-07-28): ort の ONNX Runtime 静的リンクは MSVC で通り，
+# onnxruntime.dll への依存は無い (.pyd 44.5MB / wheel 13.8MB)．ただし実行機に
+# **VC++ 再頒布可能パッケージが要る** (MSVCP140.dll は Python にも Windows
+# にも同梱されない)．runner には入っているのでこの CI では検出できない．
 #
 # cargo features は onnx のみ (cuda/tensorrt は付けない):
-# Windows 機は CPU 動作の検証にしか使わず，CUDA/TensorRT の SDK を runner に
-# 用意する必要も無いため．ONNX Runtime のコアは ort が静的リンクする．
+# Windows は CPU 動作の検証にしか使わず，CUDA/TensorRT の SDK を runner に
+# 用意する必要も無いため．
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - .github/workflows/build-wheel-windows.yml
-      - scripts/usi_smoke.py
 
 concurrency:
   group: build-wheel-windows-${{ github.ref }}
