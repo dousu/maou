@@ -156,6 +156,15 @@ from maou.infra.console.common import (
     default=None,
     required=False,
 )
+@click.option(
+    "--pad-buckets/--no-pad-buckets",
+    help="Round the TensorRT padding up to a power-of-two bucket instead of "
+    "always padding to --batch-size. Measurement toggle: fixed padding makes a "
+    "1-item root evaluation cost a full batch, but bucketing adds one TensorRT "
+    "engine build per shape and can change numeric results.",
+    default=False,
+    required=False,
+)
 @handle_exception
 def search_board(
     sfen: str,
@@ -175,6 +184,7 @@ def search_board(
     cuda: bool,
     tensorrt: bool,
     trt_cache_dir: Path | None,
+    pad_buckets: bool,
 ) -> None:
     """Search a Shogi position with the MCTS engine (Rust maou_search).
 
@@ -203,6 +213,7 @@ def search_board(
         cuda: Enable CUDA Execution Provider.
         tensorrt: Enable TensorRT Execution Provider.
         trt_cache_dir: TensorRT engine cache directory.
+        pad_buckets: Round TensorRT padding to a power-of-two bucket.
     """
     if (cuda or tensorrt) and model_path is None:
         raise click.UsageError(
@@ -227,6 +238,7 @@ def search_board(
             cuda=cuda,
             tensorrt=tensorrt,
             trt_engine_cache_dir=trt_cache_dir,
+            pad_buckets=pad_buckets,
         )
     )
     # TensorRT EP の teardown はヒープを壊して abort する — 出力後に

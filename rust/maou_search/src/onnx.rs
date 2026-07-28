@@ -56,6 +56,17 @@ pub struct OnnxOptions {
     /// まま渡すと shape 数だけビルドが走る．探索側の batch_size と同値を
     /// 指定して shape を固定するのが推奨 (余剰スロットの出力は捨てる)．
     pub pad_to: Option<usize>,
+    /// `pad_to` を上限として，実バッチ長を 2 冪バケットへ切り上げる
+    /// (既定 false = 常に `pad_to` へ固定)．
+    ///
+    /// TensorRT では padding したスロットも推論コストを払うため，`pad_to`
+    /// 固定だと **1 件の root 評価も `pad_to` 件分のコスト**になる．バケット化は
+    /// この浪費を減らすが，shape が増える分だけエンジンビルドが要る
+    /// (`pad_to` = 256 なら 1/2/4/…/256 の 9 通り．キャッシュされるので
+    /// 初回のみ)．**shape が変わると数値が変わり得る**ため，
+    /// 「並列度を変えても bit-identical」という再現性の前提に影響する．
+    /// 既定 off のまま A/B で確認してから既定化すること．
+    pub pad_buckets: bool,
 }
 
 impl Default for OnnxOptions {
@@ -66,6 +77,7 @@ impl Default for OnnxOptions {
             use_tensorrt: false,
             trt_engine_cache_dir: None,
             pad_to: None,
+            pad_buckets: false,
         }
     }
 }
@@ -74,6 +86,7 @@ impl Default for OnnxOptions {
 pub struct OnnxEvaluator {
     session: Mutex<Session>,
     pad_to: Option<usize>,
+    pad_buckets: bool,
 }
 
 impl OnnxEvaluator {
@@ -134,7 +147,27 @@ impl OnnxEvaluator {
         Ok(OnnxEvaluator {
             session: Mutex::new(session),
             pad_to: options.pad_to,
+            pad_buckets: options.pad_buckets,
         })
+    }
+}
+
+/// 実バッチ長 `n` を padding 後の長さへ写す．
+///
+/// - `buckets` が false: 常に `cap` (従来動作．`n > cap` なら `n` を素通し)
+/// - `buckets` が true: `cap` を上限とする 2 冪へ切り上げ
+///
+/// TensorRT は shape ごとにエンジンを持つため，任意長を許すとビルドが発散する．
+/// 2 冪バケットなら shape 数は `log2(cap) + 1` に有界．
+fn padded_len(n: usize, cap: usize, buckets: bool) -> usize {
+    if n > cap {
+        // 呼び出し側が上限を超えるバッチを渡した場合は素通し (切り捨てない)
+        return n;
+    }
+    if buckets {
+        n.next_power_of_two().min(cap)
+    } else {
+        cap
     }
 }
 
@@ -161,9 +194,15 @@ fn sigmoid(x: f32) -> f32 {
 impl Evaluator for OnnxEvaluator {
     fn evaluate_batch(&self, items: &[EvalItem]) -> Vec<EvalResult> {
         let batch = items.len();
+        if batch == 0 {
+            return Vec::new();
+        }
         // pad_to 指定時は shape を固定する (余剰スロットは空盤面のダミー入力．
-        // ゼロ初期化がそのまま EMPTY 盤面 + 持ち駒なしに一致する)
-        let padded = self.pad_to.map_or(batch, |p| p.max(batch));
+        // ゼロ初期化がそのまま EMPTY 盤面 + 持ち駒なしに一致する)．
+        // pad_buckets 有効時は 2 冪バケットへ切り上げて padding の無駄を削る
+        let padded = self
+            .pad_to
+            .map_or(batch, |p| padded_len(batch, p, self.pad_buckets));
         let mut board_data = vec![0i32; padded * BOARD_FEATURE_LEN];
         let mut hand_data = vec![0f32; padded * HAND_FEATURE_LEN];
         for (i, item) in items.iter().enumerate() {
@@ -223,5 +262,55 @@ impl Evaluator for OnnxEvaluator {
                 }
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::padded_len;
+
+    #[test]
+    fn padded_len_fixed_is_always_cap() {
+        // 従来動作: 1 件でも cap 件分の shape になる (TensorRT の padding 損)
+        assert_eq!(padded_len(1, 256, false), 256);
+        assert_eq!(padded_len(210, 256, false), 256);
+        assert_eq!(padded_len(256, 256, false), 256);
+    }
+
+    #[test]
+    fn padded_len_buckets_round_up_to_power_of_two() {
+        assert_eq!(padded_len(1, 256, true), 1);
+        assert_eq!(padded_len(2, 256, true), 2);
+        assert_eq!(padded_len(3, 256, true), 4);
+        assert_eq!(padded_len(30, 256, true), 32);
+        assert_eq!(padded_len(210, 256, true), 256);
+        assert_eq!(padded_len(256, 256, true), 256);
+    }
+
+    #[test]
+    fn padded_len_buckets_are_clamped_to_cap() {
+        // cap が 2 冪でない場合，最上位バケットは cap そのもの
+        assert_eq!(padded_len(70, 100, true), 100);
+        assert_eq!(padded_len(64, 100, true), 64);
+    }
+
+    #[test]
+    fn padded_len_passes_through_oversized_batches() {
+        // 上限を超えるバッチは切り捨てず素通し (両モード共通)
+        assert_eq!(padded_len(300, 256, false), 300);
+        assert_eq!(padded_len(300, 256, true), 300);
+    }
+
+    #[test]
+    fn padded_len_never_shrinks_the_batch() {
+        for cap in [1usize, 8, 100, 256] {
+            for n in 1usize..=300 {
+                assert!(
+                    padded_len(n, cap, true) >= n,
+                    "padded_len({n}, {cap}, true) が実バッチ長を下回った"
+                );
+                assert!(padded_len(n, cap, false) >= n);
+            }
+        }
     }
 }

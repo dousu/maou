@@ -251,6 +251,10 @@ fn validate_root_dfpn_depth(root_dfpn_depth: Option<u32>) -> PyResult<()> {
 ///   に固定して shape 別エンジンビルドを防ぐ．
 /// - `trt_engine_cache_dir` (str, optional): TensorRT エンジンキャッシュ保存先．
 /// - `pad_to` (int, optional): 評価バッチをこのサイズへゼロ局面 padding する．
+/// - `pad_buckets` (bool, optional): `pad_to` を上限に，実バッチ長を 2 冪バケットへ
+///   切り上げる (デフォルト False = 常に `pad_to` へ固定)．固定 padding では
+///   1 件の root 評価も `pad_to` 件分の推論コストを払うため，その浪費を削る計測用
+///   トグル．shape が増える分エンジンビルドが増え，数値も変わり得る．
 /// - `intra_threads` (int, optional): ONNX Runtime の intra-op スレッド数 (デフォルト 1)．
 ///
 /// # 注意
@@ -258,7 +262,7 @@ fn validate_root_dfpn_depth(root_dfpn_depth: Option<u32>) -> PyResult<()> {
 /// - 探索中は GIL を解放するが Python シグナルは処理しない — Ctrl-C は探索が
 ///   返るまで効かない．中断制御は `max_playouts` / `time_ms` で行うこと．
 #[pyfunction]
-#[pyo3(signature = (sfen, *, moves=None, model_path=None, threads=None, batch_size=None, max_playouts=None, time_ms=None, node_capacity=None, c_puct=None, fpu=None, max_ply=None, gc_keep_ratio=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_to=None, intra_threads=None))]
+#[pyo3(signature = (sfen, *, moves=None, model_path=None, threads=None, batch_size=None, max_playouts=None, time_ms=None, node_capacity=None, c_puct=None, fpu=None, max_ply=None, gc_keep_ratio=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_to=None, pad_buckets=None, intra_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn search(
     py: Python<'_>,
@@ -284,6 +288,7 @@ fn search(
     use_tensorrt: Option<bool>,
     trt_engine_cache_dir: Option<String>,
     pad_to: Option<usize>,
+    pad_buckets: Option<bool>,
     intra_threads: Option<usize>,
 ) -> PyResult<PySearchResult> {
     // 基準局面 + 対局履歴 (千日手判定用) を構築する
@@ -345,6 +350,7 @@ fn search(
                 use_tensorrt,
                 trt_engine_cache_dir,
                 pad_to,
+                pad_buckets,
                 intra_threads,
             );
             let evaluator = maou_search::MockEvaluator::new(0);
@@ -363,6 +369,7 @@ fn search(
                 } else {
                     None
                 }),
+                pad_buckets: pad_buckets.unwrap_or(false),
             };
             let evaluator =
                 maou_search::OnnxEvaluator::from_file(&path, &onnx_options).map_err(|e| {
@@ -410,6 +417,8 @@ enum EngineEvaluator {
 /// - `use_tensorrt` (bool, optional): TensorRT Execution Provider
 ///   (`onnx-tensorrt` feature 必要)．
 /// - `trt_engine_cache_dir` (str, optional): TensorRT エンジンキャッシュ保存先．
+/// - `pad_buckets` (bool, optional): TensorRT の padding を `batch_size` 固定でなく
+///   2 冪バケットへ切り上げる (デフォルト False)．計測用トグル．
 #[pyclass(frozen)]
 struct SearchEngine {
     evaluator: EngineEvaluator,
@@ -420,7 +429,7 @@ struct SearchEngine {
 #[pymethods]
 impl SearchEngine {
     #[new]
-    #[pyo3(signature = (*, model_path=None, threads=None, batch_size=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None))]
+    #[pyo3(signature = (*, model_path=None, threads=None, batch_size=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None))]
     fn new(
         model_path: Option<String>,
         threads: Option<usize>,
@@ -428,6 +437,7 @@ impl SearchEngine {
         use_cuda: Option<bool>,
         use_tensorrt: Option<bool>,
         trt_engine_cache_dir: Option<String>,
+        pad_buckets: Option<bool>,
     ) -> PyResult<Self> {
         let defaults = SearchOptions::default();
         let threads = threads.unwrap_or(defaults.threads);
@@ -435,7 +445,7 @@ impl SearchEngine {
         let evaluator = match model_path {
             None => {
                 // mock 評価器 (決定論的擬似乱数)．API 検証/開発用
-                let _ = (use_cuda, use_tensorrt, trt_engine_cache_dir);
+                let _ = (use_cuda, use_tensorrt, trt_engine_cache_dir, pad_buckets);
                 EngineEvaluator::Mock(maou_search::MockEvaluator::new(0))
             }
             #[cfg(feature = "onnx")]
@@ -451,6 +461,7 @@ impl SearchEngine {
                     } else {
                         None
                     },
+                    pad_buckets: pad_buckets.unwrap_or(false),
                 };
                 EngineEvaluator::Onnx(
                     maou_search::OnnxEvaluator::from_file(&path, &onnx_options).map_err(|e| {

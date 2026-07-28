@@ -37,6 +37,7 @@ def selfplay(
     cuda: bool = False,
     tensorrt: bool = False,
     trt_engine_cache_dir: Path | None = None,
+    pad_buckets: bool = False,
     min_think_ms: int | None = None,
     spin_budget_relief: bool = False,
     skip_proven_children: bool = False,
@@ -79,6 +80,8 @@ def selfplay(
         cuda: CUDA Execution Provider を使うか．
         tensorrt: TensorRT Execution Provider を使うか．
         trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
+        pad_buckets: TensorRT の padding を 2 冪バケットへ切り上げるか
+            (計測用トグル，既定 False)．
         min_think_ms: 最低思考時間ミリ秒 (None = エンジン既定)．
         spin_budget_relief: 空回りを playout 予算から外す (既定 False)．
         skip_proven_children: 確定済みの子を PUCT 候補から外す (既定 False)．
@@ -163,6 +166,7 @@ def selfplay(
         cuda=cuda,
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_engine_cache_dir,
+        pad_buckets=pad_buckets,
         min_think_ms=min_think_ms,
         spin_budget_relief=spin_budget_relief,
         skip_proven_children=skip_proven_children,

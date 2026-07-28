@@ -19,6 +19,7 @@ fn apply_common_engine_args(
     use_cuda: Option<bool>,
     use_tensorrt: Option<bool>,
     trt_engine_cache_dir: Option<String>,
+    pad_buckets: Option<bool>,
     draw_value_black: Option<u32>,
     draw_value_white: Option<u32>,
     resign_value: Option<u32>,
@@ -42,6 +43,7 @@ fn apply_common_engine_args(
     config.use_cuda = use_cuda.unwrap_or(false);
     config.use_tensorrt = use_tensorrt.unwrap_or(false);
     config.trt_cache_dir = trt_engine_cache_dir;
+    config.pad_buckets = pad_buckets.unwrap_or(false);
     if let Some(v) = draw_value_black {
         config.draw_value_black = v;
     }
@@ -104,7 +106,7 @@ fn apply_common_engine_args(
 ///
 /// モデルロード失敗・不正局面などの致命的エラーは `RuntimeError`．
 #[pyfunction]
-#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, network_delay_ms=None, min_think_ms=None, keep_alive_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, max_moves_to_draw=None, usi_ponder=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, network_delay_ms=None, min_think_ms=None, keep_alive_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, max_moves_to_draw=None, usi_ponder=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_usi(
     py: Python<'_>,
@@ -117,6 +119,7 @@ fn run_usi(
     use_cuda: Option<bool>,
     use_tensorrt: Option<bool>,
     trt_engine_cache_dir: Option<String>,
+    pad_buckets: Option<bool>,
     network_delay_ms: Option<u64>,
     min_think_ms: Option<u64>,
     keep_alive_ms: Option<u64>,
@@ -165,6 +168,7 @@ fn run_usi(
         use_cuda,
         use_tensorrt,
         trt_engine_cache_dir,
+        pad_buckets,
         draw_value_black,
         draw_value_white,
         resign_value,
@@ -307,7 +311,7 @@ fn summary_to_dict<'py>(py: Python<'py>, s: &RunSummary) -> PyResult<Bound<'py, 
 /// 設定不正・モデルロード失敗・対局中の内部エラーは `RuntimeError`，
 /// 未知の `ab_mode` は `ValueError`．
 #[pyfunction]
-#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, spin_budget_relief=None, skip_proven_children=None, min_think_ms=None, ab_mode=None, playouts_b=None, horizon_moves=None, horizon_moves_b=None, alternate_colors=None, clock_ms=None, byoyomi_ms=None, inc_ms=None))]
+#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, spin_budget_relief=None, skip_proven_children=None, min_think_ms=None, ab_mode=None, playouts_b=None, horizon_moves=None, horizon_moves_b=None, alternate_colors=None, clock_ms=None, byoyomi_ms=None, inc_ms=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_selfplay(
     py: Python<'_>,
@@ -327,6 +331,7 @@ fn run_selfplay(
     use_cuda: Option<bool>,
     use_tensorrt: Option<bool>,
     trt_engine_cache_dir: Option<String>,
+    pad_buckets: Option<bool>,
     draw_value_black: Option<u32>,
     draw_value_white: Option<u32>,
     resign_value: Option<u32>,
@@ -360,6 +365,7 @@ fn run_selfplay(
         use_cuda,
         use_tensorrt,
         trt_engine_cache_dir,
+        pad_buckets,
         draw_value_black,
         draw_value_white,
         resign_value,

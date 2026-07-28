@@ -42,6 +42,8 @@ class SearchRunner:
             cuda: CUDA Execution Provider を使うか．
             tensorrt: TensorRT Execution Provider を使うか．
             trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
+            pad_buckets: TensorRT の padding を batch_size 固定でなく 2 冪
+                バケットへ切り上げるか (計測用トグル，既定 False)．
             board_view: 盤面 ASCII 表示を含めるか．
         """
 
@@ -62,6 +64,7 @@ class SearchRunner:
         cuda: bool = False
         tensorrt: bool = False
         trt_engine_cache_dir: Path | None = None
+        pad_buckets: bool = False
         board_view: bool = True
 
     def run(self, config: SearchOption) -> dict[str, str]:
@@ -102,6 +105,7 @@ class SearchRunner:
                 if config.trt_engine_cache_dir is not None
                 else None
             ),
+            pad_buckets=config.pad_buckets,
         )
 
         winrate = float(result.winrate)
