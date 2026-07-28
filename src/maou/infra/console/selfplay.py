@@ -233,7 +233,10 @@ logger: logging.Logger = logging.getLogger(__name__)
     "check), 'horizon' = time-strategy horizon (needs --clock-ms), "
     "'spin' = exclude terminal spin from the playout budget (fixed "
     "--playouts only; the clock mode is bounded by time, not playouts), "
-    "'proven' = exclude proven children from PUCT selection.",
+    "'proven' = exclude proven children from PUCT selection, "
+    "'batch' = evaluation batch size (--batch-size vs --batch-size-b; run it "
+    "under the clock, since a fixed playout budget turns speed into no "
+    "strength difference).",
     type=click.Choice(
         [
             "subtree",
@@ -242,6 +245,7 @@ logger: logging.Logger = logging.getLogger(__name__)
             "horizon",
             "spin",
             "proven",
+            "batch",
         ]
     ),
     default=None,
@@ -251,6 +255,14 @@ logger: logging.Logger = logging.getLogger(__name__)
     "--playouts-b",
     help="Per-move playout budget for player B (--ab-mode budget; "
     "defaults to one eighth of --playouts).",
+    type=int,
+    default=None,
+    required=False,
+)
+@click.option(
+    "--batch-size-b",
+    help="Evaluation batch size for player B (--ab-mode batch; defaults to "
+    "four times --batch-size).",
     type=int,
     default=None,
     required=False,
@@ -399,6 +411,7 @@ def selfplay(
     skip_proven: bool,
     ab_mode: str | None,
     playouts_b: int | None,
+    batch_size_b: int | None,
     horizon: int | None,
     horizon_b: int | None,
     alternate_colors: bool | None,
@@ -458,6 +471,7 @@ def selfplay(
         skip_proven: Exclude proven children from PUCT selection.
         ab_mode: Lever compared in an A/B match (None = plain self-play).
         playouts_b: Player B playout budget (``--ab-mode budget``).
+        batch_size_b: Player B evaluation batch size (``--ab-mode batch``).
         horizon: Player A assumed remaining moves (``--ab-mode horizon``).
         horizon_b: Player B assumed remaining moves.
         alternate_colors: Swap colors per game and pair the openings.
@@ -507,6 +521,7 @@ def selfplay(
         skip_proven_children=skip_proven,
         ab_mode=ab_mode,
         playouts_b=playouts_b,
+        batch_size_b=batch_size_b,
         horizon_moves=horizon,
         horizon_moves_b=horizon_b,
         alternate_colors=alternate_colors,

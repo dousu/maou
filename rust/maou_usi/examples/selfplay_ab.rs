@@ -17,6 +17,9 @@
 //! - `--mode horizon`: 持ち時間モードで TimeStrategy の想定残り手数を A/B
 //!   (`--horizon` vs `--horizon-b`)．時計は `--clock-ms` / `--byoyomi-ms` /
 //!   `--inc-ms`．壁時計を測るので parallel=1
+//! - `--mode batch`: A = `--batch-size` / B = `--batch-size-b` (既定 A の 4 倍)．
+//!   **持ち時間モードで回すこと** — 固定 playout 予算では速度差が棋力差に
+//!   ならない
 
 use maou_usi::ab::{build_ab, summarize, AbMode, AbOptions, SummaryOptions};
 use maou_usi::selfplay::{run_selfplay, ClockSetting, GameOutcome, SelfplayConfig};
@@ -80,6 +83,7 @@ fn main() {
             max_moves,
             horizon_a,
             horizon_b,
+            batch_size_b: arg_value(&args, "--batch-size-b"),
         },
         Some(playouts),
     );
