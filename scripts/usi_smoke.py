@@ -17,6 +17,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import io
 import queue
 import subprocess
 import sys
@@ -205,6 +206,15 @@ def run_smoke(
 
 def main() -> int:
     """コマンドラインから smoke test を走らせる."""
+    # Windows の既定コンソール encoding (cp1252 / cp932) では，このスクリプト
+    # 自身が出す日本語で UnicodeEncodeError になる (エンジンのプロトコル出力は
+    # ASCII 安全なので無関係)．診断メッセージが化けても落ちない方を選ぶ
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(
+                encoding="utf-8", errors="replace"
+            )
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--engine",
