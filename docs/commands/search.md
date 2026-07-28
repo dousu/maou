@@ -31,7 +31,7 @@
 | `--moves STRING` | | USI moves applied from the SFEN position (space-separated, like the USI `position ... moves ...` command). Intermediate positions are used as the game history for repetition detection. Illegal moves raise an error. |
 | `--model-path PATH` | | ONNX model file path. When omitted, a deterministic mock evaluator is used (API verification only — move quality is meaningless). Requires a wheel built with the `onnx` cargo feature (see notes below). |
 | `--threads INT` | default `1` | Number of search threads. Threads beyond 2 are not useful when GPU-bound. |
-| `--batch-size INT` | default `8` | Evaluation batch size. Use around 256 on GPU. |
+| `--batch-size INT` | default `8` | Evaluation batch size. **Use around 64 on GPU** — the measured optimum (L4 + TensorRT + ViT 19.8M fp16). Larger batches pay padding for slots they cannot fill; smaller ones leave the GPU idle. See [eval-batching.md](../design/position-search/eval-batching.md). |
 | `--playouts INT` | | Maximum number of playouts. |
 | `--time-ms INT` | | Time limit in milliseconds. Defaults to 1000 when neither `--playouts` nor `--time-ms` is specified. |
 | `--num-moves INT` | default `5` | Number of candidate moves to display. The best move is always listed first. |
@@ -128,7 +128,7 @@ uv run maou search \
   --model-path artifacts/eval.onnx \
   --time-ms 3000 \
   --threads 2 \
-  --batch-size 256 \
+  --batch-size 64 \
   --root-dfpn
 ```
 
