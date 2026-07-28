@@ -1,0 +1,68 @@
+name: Build Windows Wheel
+
+# Windows x86_64 の CPU 専用 wheel を Actions artifact として出す．
+#
+# **休眠 (手動実行のみ)**．maou の主対象は高性能 GPU 環境 (現状は主に
+# Colab) で，Windows は配布対象ではない — Release latest の配布方針
+# (単一 manylinux wheel — reviews/2026-07-16-unified-wheel-build.md) には
+# 手を付けない．GUI 実機検証など Windows バイナリが要るときだけ Actions の
+# 画面から起こす．知見は docs/rust-build-optimization.md にある．
+#
+# 実証済み (2026-07-28): ort の ONNX Runtime 静的リンクは MSVC で通り，
+# onnxruntime.dll への依存は無い (.pyd 44.5MB / wheel 13.8MB)．ただし実行機に
+# **VC++ 再頒布可能パッケージが要る** (MSVCP140.dll は Python にも Windows
+# にも同梱されない)．runner には入っているのでこの CI では検出できない．
+#
+# cargo features は onnx のみ (cuda/tensorrt は付けない):
+# Windows は CPU 動作の検証にしか使わず，CUDA/TensorRT の SDK を runner に
+# 用意する必要も無いため．
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-wheel-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1.50.1
+        with:
+          target: x86_64-pc-windows-msvc
+          sccache: "true"
+          # 既定の profile は dev (pyproject.toml [tool.maturin]) なので
+          # --release を明示する．--features の onnx を落とすと pure Rust
+          # ビルドになり ModelPath が使えない (backend.rs の feature gate)
+          args: --release --out dist -i python --features pyo3/extension-module,onnx
+
+      - name: Install wheel
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          $whl = Get-ChildItem dist/*.whl | Select-Object -First 1
+          python -m pip install "$whl"
+
+      - name: USI headless smoke (mock evaluator)
+        shell: pwsh
+        run: python scripts/usi_smoke.py --timeout 180
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maou-windows-wheel-py${{ matrix.python-version }}
+          path: dist/*.whl
+          if-no-files-found: error

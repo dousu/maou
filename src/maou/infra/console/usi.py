@@ -66,12 +66,12 @@ from maou.infra.console.common import (
 @click.option(
     "--keep-alive-ms",
     help="While answering isready, send a blank line every N milliseconds "
-    "as a liveness signal (0 = disabled, the default). Useful when the "
-    "first TensorRT engine build takes longer than the GUI's readyok "
-    "timeout. GUI behaviour with blank lines is unverified, so this is "
-    "opt-in. Also `setoption name KeepAlive`.",
+    "as a liveness signal (0 = disabled). Keeps the GUI from timing out "
+    "when the first TensorRT engine build outlasts its readyok timeout. "
+    "A fast isready emits no blank line at all, which is normal. "
+    "Also `setoption name KeepAlive`.",
     type=int,
-    default=0,
+    default=5000,
     show_default=True,
     required=False,
 )

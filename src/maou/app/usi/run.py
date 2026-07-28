@@ -34,8 +34,9 @@ class UsiRunner:
                 短くなる．
             min_think_ms: 最低思考時間 (ミリ秒)．
             keep_alive_ms: isready 応答待ち中に空行を送る間隔 (ミリ秒．
-                既定 0 = 送らない)．TensorRT 初回ビルドが GUI の
-                タイムアウトを超える構成での生存通知．
+                既定 5000．0 = 送らない)．TensorRT 初回ビルドが GUI の
+                タイムアウトを超える構成での生存通知．isready が速い環境では
+                1 行も出ないので無音が正常．
             draw_value_black: 先手番の引き分け価値 (千分率，既定 500)．
             draw_value_white: 後手番の引き分け価値 (千分率，既定 500)．
             resign_value: 投了する root 勝率 (千分率，既定 0 = 投了しない)．
@@ -66,7 +67,7 @@ class UsiRunner:
         node_capacity: int | None = None
         network_delay_ms: int = 1000
         min_think_ms: int = 100
-        keep_alive_ms: int = 0
+        keep_alive_ms: int = 5000
         draw_value_black: int = 500
         draw_value_white: int = 500
         resign_value: int = 0

@@ -102,7 +102,25 @@ main ブランチへの push をトリガーに wheel をビルドし，GitHub R
 | **`manylinux_2_28` x86_64 + CPython 3.12** | Codespaces (Ubuntu)，Colab (Ubuntu) | **必須** |
 | **`manylinux_2_28` x86_64 + CPython 3.11** | Python 3.11 環境 (Colab 等) | **必須** |
 | macOS arm64 | ローカル開発 (Apple Silicon) | 当面不要(ローカルは sccache で対応) |
-| Windows x86_64 | Windows 開発者 | 当面不要 |
+| Windows x86_64 | Windows 開発者 | 当面不要 (下記の脚注参照) |
+
+**Windows について** (2026-07-28 に一度だけ踏破した記録．配布対象ではない):
+
+- **ビルドは通る**．`windows-latest` / `x86_64-pc-windows-msvc` / maturin で
+  ort の ONNX Runtime 静的リンクが問題なく通り，`onnxruntime.dll` への依存は
+  無い (`.pyd` 44.5MB / wheel 13.8MB)．workflow は
+  `.github/workflows/build-wheel-windows.yml` に**休眠** (手動実行のみ) で
+  置いてある．
+- **必須フラグが 2 つあり，どちらも既定では付かない**:
+  `--features pyo3/extension-module,onnx` (省くと pure Rust ビルドになり
+  `ModelPath` が使えない) と `--release` (`[tool.maturin] profile = "dev"`
+  のため省くと debug ビルド)．
+- **実行機に VC++ 再頒布可能パッケージ (2015-2022 x64) が要る**．
+  `MSVCP140.dll` は Python にも Windows にも同梱されず，ONNX Runtime が
+  C++ なのでこれが要る．無いと `ImportError: DLL load failed while
+  importing _rust` で起動に失敗し，**Windows は欠けた DLL の名前を出さない**．
+  `winget install Microsoft.VCRedist.2015+.x64` で解決する．
+  **CI では原理的に検出できない** — GitHub runner には最初から入っている．
 
 **補足**: `requires-python = ">=3.11,<3.13"` のため，CPython 3.11 と 3.12 の両方の wheel をビルドする．Colab のデフォルト Python バージョンに依存しない安全な選択とする．
 
