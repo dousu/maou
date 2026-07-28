@@ -25,6 +25,7 @@ def search(
     cuda: bool = False,
     tensorrt: bool = False,
     trt_engine_cache_dir: Path | None = None,
+    pad_buckets: bool = False,
 ) -> str:
     """1 局面を MCTS で探索して結果を文字列で返す．
 
@@ -48,6 +49,8 @@ def search(
         cuda: CUDA Execution Provider を使うか．
         tensorrt: TensorRT Execution Provider を使うか．
         trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
+        pad_buckets: TensorRT の padding を 2 冪バケットへ切り上げるか
+            (計測用トグル，既定 False)．
 
     Returns:
         探索結果のフォーマット済み文字列 (Bestmove / Eval / WinRate / PV /
@@ -76,6 +79,7 @@ def search(
         cuda=cuda,
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_engine_cache_dir,
+        pad_buckets=pad_buckets,
     )
     runner = SearchRunner()
     result = runner.run(option)

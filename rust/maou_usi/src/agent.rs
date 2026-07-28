@@ -58,6 +58,12 @@ pub struct EngineConfig {
     pub use_tensorrt: bool,
     /// TensorRT エンジンキャッシュ保存先．
     pub trt_cache_dir: Option<String>,
+    /// TensorRT の padding を `batch_size` 固定でなく 2 冪バケットへ切り上げるか
+    /// (既定 false = 従来どおり固定)．**計測用トグル** — 固定 padding では
+    /// 1 件の root 評価も `batch_size` 件分の推論コストを払うため，その浪費を
+    /// 削る狙い．shape が増えるとエンジンビルドが増え，数値も変わり得る
+    /// (再現性への影響) ので，GPU で確認できるまで既定 off．
+    pub pad_buckets: bool,
     /// 時間戦略の設定．
     pub time: TimeStrategyConfig,
     /// 先手番の引き分け価値 (千分率，既定 500)．千日手・最大手数の引き分けを
@@ -132,6 +138,7 @@ impl Default for EngineConfig {
             use_cuda: false,
             use_tensorrt: false,
             trt_cache_dir: None,
+            pad_buckets: false,
             time: TimeStrategyConfig::default(),
             draw_value_black: 500,
             draw_value_white: 500,

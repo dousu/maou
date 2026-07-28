@@ -69,6 +69,8 @@ class SelfplayRunner:
             cuda: CUDA Execution Provider を使うか．
             tensorrt: TensorRT Execution Provider を使うか．
             trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
+            pad_buckets: TensorRT の padding を batch_size 固定でなく 2 冪
+                バケットへ切り上げるか (計測用トグル，既定 False)．
             min_think_ms: 最低思考時間ミリ秒 (None = エンジン既定 100)．
                 持ち時間モードで 1 手の下限を変えるときだけ指定する．
             ab_mode: A/B 対戦で比較するレバー ([`AB_MODES`]．None = 純粋
@@ -115,6 +117,7 @@ class SelfplayRunner:
         cuda: bool = False
         tensorrt: bool = False
         trt_engine_cache_dir: Path | None = None
+        pad_buckets: bool = False
         min_think_ms: int | None = None
         ab_mode: str | None = None
         playouts_b: int | None = None
@@ -191,6 +194,7 @@ class SelfplayRunner:
                 if option.trt_engine_cache_dir is not None
                 else None
             ),
+            pad_buckets=option.pad_buckets,
             draw_value_black=option.draw_value_black,
             draw_value_white=option.draw_value_white,
             resign_value=option.resign_value,

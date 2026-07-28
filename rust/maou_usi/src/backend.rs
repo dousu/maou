@@ -5,6 +5,7 @@
 //! ここで済ませ，初手の `go` を遅らせない)．
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -46,11 +47,13 @@ pub(crate) fn build_evaluator(config: &EngineConfig) -> Result<EngineEvaluator, 
                 use_tensorrt: config.use_tensorrt,
                 trt_engine_cache_dir: config.trt_cache_dir.clone(),
                 // TensorRT は shape ごとにエンジンをビルドするため batch_size に固定する
+                // (pad_buckets 有効時は batch_size を上限に 2 冪バケットへ切り上げ)
                 pad_to: if config.use_tensorrt {
                     Some(config.batch_size)
                 } else {
                     None
                 },
+                pad_buckets: config.pad_buckets,
             };
             Ok(EngineEvaluator::Onnx(
                 maou_search::OnnxEvaluator::from_file(path, &onnx_options)
@@ -209,17 +212,29 @@ impl SearchBackend for MaouSearchBackend {
         // GIL/GC を挟まない Rust 内で完結する (設計 §5)．
         let evaluator: &EngineEvaluator = &self.evaluator;
         let outcome = std::thread::scope(|s| {
-            let handle =
-                s.spawn(move || match evaluator {
+            // 完了検知を sleep 越しに行うと，探索が終わってから dispatcher が
+            // 気付くまで平均 POLL_INTERVAL/2 の死に時間が 1 手ごとに乗る
+            // (探索は既に終わっているのに wall clock だけ進む)．完了は
+            // channel の切断で即時に検知し，POLL_INTERVAL は進捗ポーリングの
+            // 間隔としてのみ使う — observer の駆動間隔は従来と同じ
+            let (done_tx, done_rx) = mpsc::channel::<()>();
+            let handle = s.spawn(move || {
+                // 探索から抜けた時点で drop され，recv 側が Disconnected を得る
+                let _done = done_tx;
+                match evaluator {
                     EngineEvaluator::Mock(e) => Searcher::new(e, options.clone())
                         .search_reusing(sfen, moves, &limits, retained),
                     #[cfg(feature = "onnx")]
                     EngineEvaluator::Onnx(e) => Searcher::new(e, options.clone())
                         .search_reusing(sfen, moves, &limits, retained),
-                });
+                }
+            });
             let start = Instant::now();
-            while !handle.is_finished() {
-                std::thread::sleep(POLL_INTERVAL);
+            // Timeout = 探索継続中 (進捗を観測する) / Disconnected = 探索終了
+            while matches!(
+                done_rx.recv_timeout(POLL_INTERVAL),
+                Err(RecvTimeoutError::Timeout)
+            ) {
                 let latest = progress.lock().ok().and_then(|g| g.clone());
                 if let Some(snap) = latest {
                     let elapsed = start.elapsed().as_millis() as u64;

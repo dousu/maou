@@ -356,6 +356,15 @@ logger: logging.Logger = logging.getLogger(__name__)
     required=False,
 )
 @click.option(
+    "--pad-buckets/--no-pad-buckets",
+    help="Round the TensorRT padding up to a power-of-two bucket instead of "
+    "always padding to --batch-size. Measurement toggle: fixed padding makes a "
+    "1-item root evaluation cost a full batch, but bucketing adds one TensorRT "
+    "engine build per shape and can change numeric results.",
+    default=False,
+    required=False,
+)
+@click.option(
     "--quiet",
     is_flag=True,
     help="Suppress per-game progress lines on stderr.",
@@ -402,6 +411,7 @@ def selfplay(
     cuda: bool,
     tensorrt: bool,
     trt_cache_dir: Path | None,
+    pad_buckets: bool,
     quiet: bool,
 ) -> None:
     """Run in-process self-play games and report the results.
@@ -460,6 +470,7 @@ def selfplay(
         cuda: Enable CUDA Execution Provider.
         tensorrt: Enable TensorRT Execution Provider.
         trt_cache_dir: TensorRT engine cache directory.
+        pad_buckets: Round TensorRT padding to a power-of-two bucket.
         quiet: Suppress per-game progress lines.
     """
     result = selfplay_interface.selfplay(
@@ -490,6 +501,7 @@ def selfplay(
         cuda=cuda,
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_cache_dir,
+        pad_buckets=pad_buckets,
         min_think_ms=min_think_ms,
         spin_budget_relief=spin_relief,
         skip_proven_children=skip_proven,

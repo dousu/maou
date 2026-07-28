@@ -41,7 +41,7 @@ fn main() {
             "usage: onnx_bench --model PATH [--sfen SFEN] [--threads N] [--batch N] \
              [--playouts N] [--time-ms N] [--capacity N] [--cpuct F] [--fpu F] \
              [--keep-ratio F] [--no-gc] [--ort-threads N] [--cuda] [--tensorrt] \
-             [--trt-cache DIR] [--pad N] [--root-dfpn]"
+             [--trt-cache DIR] [--pad N] [--pad-buckets] [--root-dfpn]"
         );
         return;
     }
@@ -92,6 +92,8 @@ fn main() {
         } else {
             None
         }),
+        // --pad-buckets: pad_to を上限に 2 冪バケットへ切り上げる (計測用)
+        pad_buckets: args.iter().any(|a| a == "--pad-buckets"),
     };
 
     #[cfg(debug_assertions)]

@@ -44,6 +44,7 @@
 | `--cuda/--no-cuda` | default `--no-cuda` | Enable the CUDA Execution Provider. Requires `--model-path` and a wheel built with `onnx-cuda`. |
 | `--tensorrt/--no-tensorrt` | default `--no-tensorrt` | Enable the TensorRT Execution Provider (FP16 + engine cache). Requires `--model-path` and a wheel built with `onnx-tensorrt`. Batches are padded to `--batch-size` to keep the input shape fixed. |
 | `--trt-cache-dir PATH` | | TensorRT engine cache directory (default: `trt_cache/` in the current directory). |
+| `--pad-buckets/--no-pad-buckets` | default off | Round the TensorRT padding up to a power-of-two bucket instead of always padding to `--batch-size`. Fixed padding makes a 1-item root evaluation cost a full batch; bucketing removes that waste but adds one TensorRT engine build per shape and can change numeric results, so it is a measurement toggle until verified on GPU (see [eval-batching.md](../design/position-search/eval-batching.md)). |
 | `--tensorrt/--no-tensorrt` (終了時の挙動) | | With TensorRT enabled the command flushes its output and then exits **without running destructors**: the TensorRT EP teardown corrupts the glibc heap and aborts (deterministic; see [verification.md §8.5](../design/usi-engine/verification.md)). Results are already written when this happens, and the exit code stays 0. Runs without TensorRT use the normal exit path. |
 
 ## Wheel build requirements (cargo features)
