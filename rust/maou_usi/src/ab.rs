@@ -43,6 +43,14 @@ pub enum AbMode {
     /// **固定 playout 予算でのみ意味を持つ** (`--playouts`)．持ち時間モードは
     /// 時計が拘束条件なので，会計を変えても消費 wall clock は変わらない．
     Spin,
+    /// A/B で評価バッチサイズだけを変える．
+    ///
+    /// バッチサイズは**速度と探索の質の両方**に効く: TensorRT のコストは
+    /// padding 後の長さにほぼ比例する (固定費はほぼ無い) ので，充填しきれない
+    /// 大きなバッチは払った padding を捨てている．一方で in-flight の葉が
+    /// 増えるほど virtual loss が PUCT を歪める．**持ち時間モードで測ること**
+    /// — 固定 playout 予算では速度差が棋力差にならない．
+    Batch,
 }
 
 impl AbMode {
@@ -55,6 +63,7 @@ impl AbMode {
             "horizon" => Some(AbMode::Horizon),
             "spin" => Some(AbMode::Spin),
             "proven" => Some(AbMode::Proven),
+            "batch" => Some(AbMode::Batch),
             _ => None,
         }
     }
@@ -68,6 +77,7 @@ impl AbMode {
             AbMode::Horizon => "horizon",
             AbMode::Spin => "spin",
             AbMode::Proven => "proven",
+            AbMode::Batch => "batch",
         }
     }
 
@@ -90,6 +100,8 @@ pub struct AbOptions {
     pub horizon_a: u64,
     /// [`AbMode::Horizon`] の B 側 想定残り手数．
     pub horizon_b: u64,
+    /// [`AbMode::Batch`] で B に渡す評価バッチサイズ (`None` = A の 4 倍)．
+    pub batch_size_b: Option<usize>,
 }
 
 /// [`build_ab`] の出力 ([`crate::selfplay::SelfplayConfig`] へそのまま載せる)．
@@ -145,6 +157,12 @@ pub fn build_ab(base: &EngineConfig, opts: &AbOptions, playouts: Option<u64>) ->
         AbMode::Proven => {
             engine_a.skip_proven_children = true;
             engine_b.skip_proven_children = false;
+        }
+        AbMode::Batch => {
+            // A は base の batch_size をそのまま使い，B だけを変える
+            engine_b.batch_size = opts
+                .batch_size_b
+                .unwrap_or_else(|| engine_a.batch_size.saturating_mul(4).max(1));
         }
     }
     AbSetup {
@@ -527,6 +545,62 @@ mod tests {
     }
 
     #[test]
+    fn test_build_ab_batch_changes_only_batch_size() {
+        let base = EngineConfig {
+            batch_size: 64,
+            ..EngineConfig::default()
+        };
+        let opts = AbOptions {
+            mode: AbMode::Batch,
+            playouts_b: None,
+            max_moves: 512,
+            horizon_a: 40,
+            horizon_b: 25,
+            batch_size_b: Some(256),
+        };
+        let setup = build_ab(&base, &opts, Some(64));
+        assert_eq!(setup.engine_a.batch_size, 64, "A は base のまま");
+        assert_eq!(setup.engine_b.batch_size, 256);
+        // 差は batch_size ただ 1 つであること
+        assert_eq!(setup.engine_a.threads, setup.engine_b.threads);
+        assert_eq!(setup.engine_a.subtree_reuse, setup.engine_b.subtree_reuse);
+        assert_eq!(
+            setup.engine_a.spin_budget_relief,
+            setup.engine_b.spin_budget_relief
+        );
+        assert!(setup.playouts_b.is_none(), "予算は動かさない");
+    }
+
+    #[test]
+    fn test_build_ab_batch_defaults_b_to_four_times_a() {
+        let base = EngineConfig {
+            batch_size: 64,
+            ..EngineConfig::default()
+        };
+        let opts = AbOptions {
+            mode: AbMode::Batch,
+            playouts_b: None,
+            max_moves: 512,
+            horizon_a: 40,
+            horizon_b: 25,
+            batch_size_b: None,
+        };
+        let setup = build_ab(&base, &opts, Some(64));
+        assert_eq!(setup.engine_b.batch_size, 256);
+    }
+
+    #[test]
+    fn test_ab_mode_batch_round_trips_through_cli_string() {
+        // Rust 側の列挙と CLI 文字列がずれると「未知の ab_mode」で落ちる
+        assert_eq!(AbMode::parse("batch"), Some(AbMode::Batch));
+        assert_eq!(AbMode::Batch.as_str(), "batch");
+        assert!(
+            !AbMode::Batch.needs_clock(),
+            "時計は必須にしない (計測は推奨)"
+        );
+    }
+
+    #[test]
     fn test_build_ab_differs_in_exactly_one_lever() {
         let base = EngineConfig::default();
         let opts = AbOptions {
@@ -535,6 +609,7 @@ mod tests {
             max_moves: 512,
             horizon_a: 40,
             horizon_b: 25,
+            batch_size_b: None,
         };
         let setup = build_ab(&base, &opts, Some(64));
         assert!(setup.engine_a.subtree_reuse, "A は既定 (on) のまま");
@@ -555,6 +630,7 @@ mod tests {
             max_moves: 120,
             horizon_a: 40,
             horizon_b: 25,
+            batch_size_b: None,
         };
         let setup = build_ab(&EngineConfig::default(), &opts, Some(64));
         assert_eq!(setup.engine_a.max_moves_to_draw, 120);
@@ -573,6 +649,7 @@ mod tests {
             max_moves: 512,
             horizon_a: 40,
             horizon_b: 25,
+            batch_size_b: None,
         };
         let setup = build_ab(&EngineConfig::default(), &opts, Some(64));
         assert_eq!(setup.playouts_b, Some(8));
@@ -596,6 +673,7 @@ mod tests {
             max_moves: 512,
             horizon_a: 40,
             horizon_b: 20,
+            batch_size_b: None,
         };
         let setup = build_ab(&EngineConfig::default(), &opts, None);
         assert_eq!(setup.engine_a.time.horizon_moves, 40);

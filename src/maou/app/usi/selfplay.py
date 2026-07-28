@@ -19,6 +19,7 @@ AB_MODES: tuple[str, ...] = (
     "horizon",
     "spin",
     "proven",
+    "batch",
 )
 """A/B 対戦で比較できるレバー (Rust maou_usi::ab::AbMode と対応)."""
 
@@ -77,6 +78,8 @@ class SelfplayRunner:
                 自己対局)．指定するとレバー off 側の相手 B が作られ，
                 レバー以外の設定は A と同一になる．
             playouts_b: ``ab_mode="budget"`` の B 側予算 (None = A の 1/8)．
+            batch_size_b: ``ab_mode="batch"`` の B 側評価バッチサイズ
+                (None = A の 4 倍)．
             horizon_moves: ``ab_mode="horizon"`` の A 側想定残り手数
                 (None = エンジン既定)．
             horizon_moves_b: 同 B 側想定残り手数 (None = 25)．
@@ -121,6 +124,7 @@ class SelfplayRunner:
         min_think_ms: int | None = None
         ab_mode: str | None = None
         playouts_b: int | None = None
+        batch_size_b: int | None = None
         horizon_moves: int | None = None
         horizon_moves_b: int | None = None
         alternate_colors: bool | None = None
@@ -211,6 +215,7 @@ class SelfplayRunner:
             min_think_ms=option.min_think_ms,
             ab_mode=option.ab_mode,
             playouts_b=option.playouts_b,
+            batch_size_b=option.batch_size_b,
             horizon_moves=option.horizon_moves,
             horizon_moves_b=option.horizon_moves_b,
             alternate_colors=option.alternate_colors,

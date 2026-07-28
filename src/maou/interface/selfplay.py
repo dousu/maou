@@ -43,6 +43,7 @@ def selfplay(
     skip_proven_children: bool = False,
     ab_mode: str | None = None,
     playouts_b: int | None = None,
+    batch_size_b: int | None = None,
     horizon_moves: int | None = None,
     horizon_moves_b: int | None = None,
     alternate_colors: bool | None = None,
@@ -89,6 +90,7 @@ def selfplay(
             (subtree/maxmoves/budget/horizon/spin/proven．
             None = 純粋自己対局)．spin は固定 playout 予算専用．
         playouts_b: ab_mode="budget" の B 側予算 (None = A の 1/8)．
+        batch_size_b: ab_mode="batch" の B 側評価バッチサイズ (None = A の 4 倍)．
         horizon_moves: ab_mode="horizon" の A 側想定残り手数．
         horizon_moves_b: 同 B 側想定残り手数．
         alternate_colors: 先後交代 + ペア開局 (None = ab_mode 指定時 True)．
@@ -172,6 +174,7 @@ def selfplay(
         skip_proven_children=skip_proven_children,
         ab_mode=ab_mode,
         playouts_b=playouts_b,
+        batch_size_b=batch_size_b,
         horizon_moves=horizon_moves,
         horizon_moves_b=horizon_moves_b,
         alternate_colors=alternate_colors,

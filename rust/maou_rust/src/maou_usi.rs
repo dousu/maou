@@ -286,6 +286,8 @@ fn summary_to_dict<'py>(py: Python<'py>, s: &RunSummary) -> PyResult<Bound<'py, 
 ///
 /// # A/B 対戦 (レバーの効果計測．設計 §12)
 ///
+/// - `batch_size_b` (int, optional): `ab_mode="batch"` の B 側評価バッチサイズ
+///   (未指定なら A の 4 倍)．
 /// - `ab_mode` (str, optional): `"subtree"` / `"maxmoves"` / `"budget"` /
 ///   `"spin"` (空回りを予算から外す; 固定 playout 予算専用) /
 ///   `"horizon"`．指定するとプレイヤー B (レバー off 側) が作られ，A 視点の
@@ -311,7 +313,7 @@ fn summary_to_dict<'py>(py: Python<'py>, s: &RunSummary) -> PyResult<Bound<'py, 
 /// 設定不正・モデルロード失敗・対局中の内部エラーは `RuntimeError`，
 /// 未知の `ab_mode` は `ValueError`．
 #[pyfunction]
-#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, spin_budget_relief=None, skip_proven_children=None, min_think_ms=None, ab_mode=None, playouts_b=None, horizon_moves=None, horizon_moves_b=None, alternate_colors=None, clock_ms=None, byoyomi_ms=None, inc_ms=None))]
+#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, spin_budget_relief=None, skip_proven_children=None, min_think_ms=None, ab_mode=None, playouts_b=None, batch_size_b=None, horizon_moves=None, horizon_moves_b=None, alternate_colors=None, clock_ms=None, byoyomi_ms=None, inc_ms=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_selfplay(
     py: Python<'_>,
@@ -348,6 +350,7 @@ fn run_selfplay(
     min_think_ms: Option<u64>,
     ab_mode: Option<String>,
     playouts_b: Option<u64>,
+    batch_size_b: Option<usize>,
     horizon_moves: Option<u64>,
     horizon_moves_b: Option<u64>,
     alternate_colors: Option<bool>,
@@ -437,6 +440,7 @@ fn run_selfplay(
                 max_moves,
                 horizon_a: horizon_moves.unwrap_or(engine.time.horizon_moves),
                 horizon_b: horizon_moves_b.unwrap_or(25),
+                batch_size_b,
             },
             playouts,
         )
