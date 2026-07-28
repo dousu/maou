@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in: 292fbd2
+applied_in: 292fbd2, 01e1ba4
 date: 2026-07-28
 target:
   - docs/design/position-search/eval-batching.md (§3-§5 を GPU 実測で全面改訂)
