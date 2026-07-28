@@ -1,7 +1,8 @@
 ---
 title: Windows ビルド・実行の知見を docs に残し，Windows wheel CI は休眠させる
 date: 2026-07-28
-status: approved
+status: applied
+applied_in: 2672e2f
 target:
   - docs/rust-build-optimization.md
   - docs/commands/usi.md

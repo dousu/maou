@@ -1,7 +1,8 @@
 ---
 title: keep-alive 空行の既定を on (5000ms) にする — 未決 2 の決着
 date: 2026-07-28
-status: approved
+status: applied
+applied_in: 2672e2f
 target:
   - docs/design/usi-engine/index.md
   - docs/commands/usi.md
