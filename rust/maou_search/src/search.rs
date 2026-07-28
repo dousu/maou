@@ -623,6 +623,12 @@ struct Shared<'a, E: Evaluator> {
     /// 手数から path 長へ換算) の小さい方．
     max_path_len: usize,
     deadline: Option<Instant>,
+    /// 直近の `evaluate_batch` の所要 (ミリ秒)．バッチ評価は**中断できない**
+    /// ため，期限判定はこの分を予約して「今から 1 バッチ回すと超過する」時点で
+    /// 止める必要がある．予約しないと 1 手の壁時計が最大このぶん期限を超え，
+    /// GUI 側では秒読みを割って切れ負けになる (遅い CPU で顕在化: batch 8 /
+    /// 6 playouts 秒なら 1 バッチ ≒ 1.3 秒)．
+    batch_cost_ms: AtomicU64,
     max_playouts: u64,
     /// 外部からの協調停止フラグ ([`SearchLimits::stop`])．
     ext_stop: Option<Arc<AtomicBool>>,
@@ -783,7 +789,11 @@ impl<E: Evaluator> Shared<'_, E> {
     /// 時間上限を過ぎていたら停止フラグを立てる．
     fn check_deadline(&self) {
         if let Some(d) = self.deadline {
-            if Instant::now() >= d {
+            // 直近のバッチ所要を予約する: バッチ評価中は停止も期限も見られない
+            // ので，「今から 1 バッチ回すと超過する」時点で止めないと壁時計が
+            // 期限を超える
+            let reserve = Duration::from_millis(self.batch_cost_ms.load(Ordering::Relaxed));
+            if Instant::now() + reserve >= d {
                 self.set_stop(StopCause::TimeLimit);
             }
         }
@@ -1285,7 +1295,14 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
             continue;
         }
 
+        let batch_started = Instant::now();
         let results = shared.evaluator.evaluate_batch(&items);
+        // 次回の期限判定で予約する分 (中断不能区間の実測)．直近値を使うので
+        // 評価器やバッチ長の変化に自動で追随する
+        shared.batch_cost_ms.store(
+            batch_started.elapsed().as_millis() as u64,
+            Ordering::Relaxed,
+        );
         assert_eq!(
             results.len(),
             items.len(),
@@ -1413,7 +1430,8 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         game_history: &[HistoryEntry],
         limits: &SearchLimits,
     ) -> SearchResult {
-        self.run_search(root_board, game_history, limits, None).0
+        self.run_search(root_board, game_history, limits, None, Instant::now())
+            .0
     }
 
     /// [`Searcher::search_with_history`] の本体 + subtree 再利用の入口．
@@ -1424,17 +1442,23 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
     /// プールで root を同期評価する — このとき挙動は `reused` 導入前と
     /// **bit-identical** (canonical 29te/39te で担保)．戻り値のプールは次回に
     /// `reused` として渡せる (呼び出し側で保持する)．
+    ///
+    /// `budget_start` は**呼び出し側が `go` を受け取った時刻**．時間制の期限は
+    /// この時刻を起点に張る — GUI/サーバは指し手を送ってから `bestmove` を
+    /// 受け取るまでを消費時間として計測するので，reroot・ルート評価も予算の
+    /// 内側で数えないと壁時計が予算を超える (超過分が秒読みを割ると切れ負け)．
     fn run_search(
         &self,
         root_board: &Board,
         game_history: &[HistoryEntry],
         limits: &SearchLimits,
         reused: Option<NodePool>,
+        budget_start: Instant,
     ) -> (SearchResult, NodePool) {
         // ルート評価 (初回推論 = TensorRT エンジンビルド等) は 1 回限りの固定
-        // コストなので計測区間の外で済ませ，warmup_ms として別掲する
-        // (onnx_bench の out-of-timer warmup と同義)．計測 (start/deadline) は
-        // ルート展開が終わってから開始する．
+        // コストなので**スループット指標 (nps) の**計測区間の外で済ませ，
+        // warmup_ms として別掲する (onnx_bench の out-of-timer warmup と同義)．
+        // ただし**期限は budget_start 起点**で，warmup も予算に数える．
         let warmup_start = Instant::now();
         let opts = &self.options;
 
@@ -1536,7 +1560,10 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             evaluator: self.evaluator,
             opts,
             max_path_len,
-            deadline: limits.time_ms.map(|ms| start + Duration::from_millis(ms)),
+            deadline: limits
+                .time_ms
+                .map(|ms| budget_start + Duration::from_millis(ms)),
+            batch_cost_ms: AtomicU64::new(0),
             max_playouts: limits.max_playouts.unwrap_or(if limits.time_ms.is_some() {
                 u64::MAX
             } else {
@@ -1673,9 +1700,11 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         limits: &SearchLimits,
         prev: Option<ReusableTree>,
     ) -> Result<(SearchResult, ReusableTree), PositionSetupError> {
+        // 局面構築と reroot も予算の内側 (呼び出し側から見れば go 受領後の時間)
+        let budget_start = Instant::now();
         let (board, history) = build_board_and_history(sfen, moves)?;
         let reused = prev.and_then(|t| reuse_pool(t, sfen, moves));
-        let (result, pool) = self.run_search(&board, &history, limits, reused);
+        let (result, pool) = self.run_search(&board, &history, limits, reused, budget_start);
         Ok((
             result,
             ReusableTree {
@@ -2424,6 +2453,71 @@ mod tests {
         );
         assert_eq!(result.stop, StopCause::TimeLimit);
         assert!(result.best_move.is_some());
+    }
+
+    /// 1 件あたり一定時間かかる評価器 (CPU 推論の近似: padding が無いので
+    /// コストは実 items 数に比例する)．root 評価は 1 件なので安く，バッチは
+    /// `batch_size` 倍かかる — 中断不能区間が予算に対して無視できない状況を作る．
+    struct SlowEvaluator {
+        per_item: Duration,
+        inner: MockEvaluator,
+    }
+
+    impl Evaluator for SlowEvaluator {
+        fn evaluate_batch(&self, items: &[EvalItem]) -> Vec<crate::EvalResult> {
+            std::thread::sleep(self.per_item * items.len() as u32);
+            self.inner.evaluate_batch(items)
+        }
+    }
+
+    /// **壁時計が時間予算を超えないこと**の回帰テスト．
+    ///
+    /// GUI/サーバは指し手送信から `bestmove` 受信までを消費時間として計るので，
+    /// 「予算 = 探索ループの経過時間」では足りない．過去に 2 つの穴があった:
+    ///
+    /// 1. 期限の起点が warmup (reroot + root 評価) の**後**だったため，その分
+    ///    まるごと予算からはみ出していた
+    /// 2. `evaluate_batch` は中断できないのに予約せず期限判定していたため，
+    ///    壁時計が最大 1 バッチぶん超過していた
+    ///
+    /// 実機 (Ryzen 5 3500U / 6 playouts 秒 / batch 8 = 1 バッチ 1.3 秒) では
+    /// 秒読み 5 秒の対局で切れ負けとして現れた．
+    #[test]
+    fn test_wall_clock_stays_within_time_budget() {
+        const BUDGET_MS: u64 = 1000;
+        // 1 バッチ = 80ms × 8 = 640ms — 予算 1000ms に対して無視できない
+        let evaluator = SlowEvaluator {
+            per_item: Duration::from_millis(80),
+            inner: MockEvaluator::new(0),
+        };
+        let searcher = Searcher::new(
+            &evaluator,
+            SearchOptions {
+                threads: 1,
+                batch_size: 8,
+                node_capacity: 1 << 14,
+                ..pure_mcts_opts()
+            },
+        );
+        let started = Instant::now();
+        let result = searcher
+            .search_sfen(
+                STARTPOS,
+                &SearchLimits {
+                    time_ms: Some(BUDGET_MS),
+                    ..SearchLimits::default()
+                },
+            )
+            .expect("テスト SFEN は正当");
+        let wall_ms = started.elapsed().as_millis() as u64;
+
+        assert!(result.best_move.is_some(), "予算内でも指し手は返すこと");
+        // 余裕は 1 件分の評価 + スケジューリング．1 バッチ (640ms) は許さない
+        assert!(
+            wall_ms <= BUDGET_MS + 200,
+            "壁時計 {wall_ms}ms が予算 {BUDGET_MS}ms を超過した \
+             (期限の起点か中断不能区間の予約が壊れている)"
+        );
     }
 
     /// 既存ノード idx を n_children 個の子付きで展開し，子の index 列を返す．
