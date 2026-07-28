@@ -1,5 +1,6 @@
 ---
-status: pending
+status: applied
+applied_in: 3322941
 date: 2026-07-28
 target:
   - docs/design/position-search/eval-batching.md (新規)
