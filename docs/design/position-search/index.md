@@ -97,8 +97,12 @@ value を経路に沿ってバックプロパゲーションする (視点は 1 
   持たない — 親手番視点の統計だからこそ N+=1 だけで済む)．
 - 各探索スレッドは葉を最大 `batch_size` 個収集してから
   `Evaluator::evaluate_batch` に一括で渡す (per-thread batching)．
-- 将来: 複数スレッドの葉を単一 GPU バッチに束ねる global collector は，
-  同じ `Evaluator` trait の背後に実装できる (未決 — per-thread で足りるか実測で判断)．
+- 複数スレッドの葉を単一 GPU バッチに束ねる global collector は，同じ
+  `Evaluator` trait の背後に実装できる．**実測の結論: 1 局の棋力には効かない**
+  — threads=1 の充填率は既に 99.6% で，束ねても得られるのは CPU 収集と GPU
+  推論のオーバーラップ分 (**上限約 2.5%**) にとどまる．self-play の
+  スループット改善としては別枠で価値がある
+  ([eval-batching.md §3.3・§7](eval-batching.md))．
 
 ### 3.4 展開の同期 (マルチスレッド)
 
