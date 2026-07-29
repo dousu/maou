@@ -1,7 +1,7 @@
 ---
 title: warmup を予算の外で前払いする位置づけを設計 doc に明記する
 date: 2026-07-29
-status: pending
+status: approved
 target:
   - docs/design/position-search/index.md
 risk: low
@@ -45,7 +45,10 @@ Stats: playouts=0 ... elapsed_ms=175 warmup_ms=32227 stop=time_limit
 一方で CLI (`maou search`) は対局経路ではなく計測・検査の道具であり，
 「指定した秒数だけ探索する」が期待される挙動．
 
-## 提案する記述 (§3.5 として新設)
+## 提案する記述 (§5.1 として新設)
+
+> 起票時は §3.5 としていたが，その番号は既存 (木の表現とメモリ)．
+> 予算の話なので §5「予算 API と停止」の配下に置く．
 
 > ### 3.5 初回推論の固定費 (warmup) をどこで払うか
 >

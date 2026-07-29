@@ -195,6 +195,47 @@ pub struct SearchLimits { pub max_playouts: Option<u64>, pub time_ms: Option<u64
 - playout 上限はバッチ粒度により最大 `threads × batch_size` 超過し得る (仕様)．
 - 将来: depth 予算，詰将棋ソルバーと同様のノード数予算の意味論統一 (未決)．
 
+### 5.1 初回推論の固定費 (warmup) をどこで払うか (実装済み — maou_search v0.28.0)
+
+ONNX Runtime の TensorRT EP は**最初の推論時に**エンジンをビルドする
+(cold cache で数十秒)．CUDA EP もコンテキスト初期化を初回に行う．
+
+時間予算の期限は `budget_start` (= 呼び出し側が `go` を受けた時刻) 起点で
+張る．これは対局経路の要件であり**緩めない** — GUI/サーバは指し手送信から
+`bestmove` 受信までを消費時間として計るため，予算の外で払った時間はそのまま
+持ち時間の超過になる (回帰テスト `test_wall_clock_stays_within_time_budget`
+が過去のバグ 2 件を記録している)．
+
+したがって**固定費は「1 手ぶんの予算を張る前」に前払いする**．
+`maou_search::warmup` (平手初期局面を 1 回評価するだけ) を各経路の適切な
+位置で呼ぶ:
+
+| 経路 | 前払いの位置 | 根拠 |
+|---|---|---|
+| USI | `isready` 処理中 (`readyok` を返す前) | GUI は `isready` に時間制限を課さない |
+| CSA (floodgate) | 対局ループ開始前 (プロセス内 1 回) | 連続対局で共有 |
+| 自己対局 | driver 起動時 (全対局で共有) | 同上 |
+| CLI `maou search` | 探索開始前 | 予算 = 探索時間．壁時計は warmup + 予算 |
+| `SearchEngine` (棋譜解析) | コンストラクタ | 局面ごとに予算を配分するため，初手だけ削られるのを防ぐ |
+
+**CLI と対局経路で予算の意味が違う**ことは意図的である．CLI は計測・検査の
+道具で「N ミリ秒*探索*する」が期待される挙動．対局経路は「`go` から N
+ミリ秒以内に `bestmove` を返す」が要件．予算セマンティクス自体
+(`budget_start` 起点) は両者で共通で，違うのは前払いの有無だけ．
+
+実機で踏んだ事象 (Colab L4 / TensorRT cold cache): `maou search --time-ms
+3000` に対しエンジンビルドが 32.2 秒かかり `playouts=0` / `warmup_ms=32227`
+となった．このとき `best_move` は §6 の基準で合法手生成順の先頭になり，
+評価に基づかない手が返る．
+
+却下した代替案:
+
+- **`SearchLimits` に `exclude_warmup` フラグを足す**: 予算セマンティクスに
+  分岐が増え，対局経路で誤って有効化すると切れ負けに直結する．前払いは
+  呼び出し側で完結するので探索側に選択肢を持たせる必要がない．
+- **`maou search` に `--warmup/--no-warmup` を露出する**: 前払いしない側に
+  用途がない (playouts=0 になるだけ)．
+
 ## 6. 最終手選択 (実装済み — maou_search v0.15.0)
 
 採用基準 (2026-07-11 確定．優先順):
