@@ -127,7 +127,11 @@ python-source = "src"
 module-name = "maou._rust"
 manifest-path = "rust/maou_rust/Cargo.toml"
 binding = "pyo3"
-features = ["pyo3/extension-module"]
+# onnx を既定に含める: これを外すと ModelPath が使えない拡張ができあがり，
+# `uv sync` / `uv run` の暗黙リビルドが明示ビルドを黙って上書きして
+# 「this build has no onnx feature」で実行時に落ちる (2026-07-29 に踏んだ)．
+# cuda/tensorrt は HW 依存なので既定に入れない (実行時 opt-in のまま)．
+features = ["pyo3/extension-module", "onnx"]
 profile = "dev"
 
 [dependency-groups]

@@ -147,6 +147,15 @@ pub fn run_csa(config: CsaConfig) -> Result<CsaSessionSummary, String> {
     if config.login_name.trim().is_empty() {
         return Err("ログイン名が空".to_string());
     }
+    if cfg!(debug_assertions) {
+        // maturin の既定 profile は dev なので `uv sync` / `uv run` の暗黙
+        // リビルドは debug になる (release 比で約 6 倍遅い)．レーティング対局を
+        // 遅いビルドで打つと棋力の測定値が丸ごと無意味になるため名指しで警告する
+        eprintln!(
+            "[csa] 警告: debug ビルドで実行している (release 比で約 6 倍遅い)．\
+             実対局の前に `maturin develop --release` でビルドし直すこと"
+        );
+    }
     // 評価器はプロセス内 1 個 (モデルロード/warmup を連続対局で 1 回だけ)
     let evaluator = build_evaluator(&config.engine)?;
     warmup_evaluator(&evaluator)?;

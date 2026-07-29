@@ -46,8 +46,10 @@ jobs:
           target: x86_64-pc-windows-msvc
           sccache: "true"
           # 既定の profile は dev (pyproject.toml [tool.maturin]) なので
-          # --release を明示する．--features の onnx を落とすと pure Rust
-          # ビルドになり ModelPath が使えない (backend.rs の feature gate)
+          # --release を明示する．features は pyproject の既定
+          # (pyo3/extension-module + onnx) と同じものを明示指定している —
+          # この workflow が何でビルドされるかをファイル内で読み取れるように
+          # するため．cuda/tensorrt は付けない (Windows は CPU 実行のみ)
           args: --release --out dist -i python --features pyo3/extension-module,onnx
 
       - name: Install wheel

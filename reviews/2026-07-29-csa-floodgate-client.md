@@ -122,13 +122,40 @@ user 質問「Python CLI を介すオーバーヘッドは自動対局のレス�
 生成 trip が消える**．trip は失うと同じ識別子に戻れない唯一の出力なので
 stdout へ移した (docs/commands/floodgate.md も追随．回帰テストで固定)．
 
-### 環境の罠 (再発防止)
+### 環境の罠と，その機構的な解消 (user 指示 2026-07-29)
 
 `uv run pytest` 等の**暗黙 re-sync が maturin ビルドの `.so` を onnx feature
 なしで上書きする**．最初の実行が
 `this build has no onnx feature; ModelPath is unavailable` で落ちた．
 compass の「暗黙リビルドは debug」と同種で，**feature も落ちる**．
-対策は再ビルド後に `uv run` を挟まず `.venv/bin/maou` を直接叩くこと．
+
+user 指示「maturin ビルドはデフォルトで onnx feature を入れる．その方が
+暗黙的な事故を減らせる」に従い，**`pyproject.toml` の
+`[tool.maturin] features` を `["pyo3/extension-module", "onnx"]` に変更**した．
+検証: 事故が起きた経路 (`uv run maou floodgate --model-path ...`) を再実行し，
+モデルのロードが通って TCP 接続失敗まで到達することを確認した．
+
+- CI は features を明示指定しており (linux は `onnx-cuda,onnx-tensorrt`，
+  windows は `onnx`)，いずれも既定と同じか上位集合なので影響しない．
+- `cargo test` / `cargo clippy` は pyproject を読まないので従来どおり
+  feature なしで速いまま．
+- cuda/tensorrt は HW 依存なので**既定に入れない** (実行時 opt-in を維持)．
+  可搬性 VETO は「HW/EP は runtime gate のみ」であり，ONNX の CPU 実行を
+  既定に含めることはこれに抵触しない (配布 wheel は既に onnx 込みの単一 wheel)．
+
+**この変更が生む副作用を明示する**: 従来 onnx なしのビルドは
+「ModelPath 使用時に大きな声で落ちる」状態だったが，既定に入れたことで
+「動くが debug のまま約 6 倍遅い」に変わり得る．**声の大きい失敗を
+静かな性能劣化に取り替えない**ため，`run_csa` の起動時に
+`cfg!(debug_assertions)` で debug ビルドを名指し警告するようにした
+(compass の TRIPWIRE「性能数値を報告する前に release か確認」の機構化)．
+
+## 追加で提案する docs 変更
+
+3. **`docs/rust-build-optimization.md:115`** — 「`--features
+   pyo3/extension-module,onnx` (省くと pure Rust ビルドになり…)」は
+   maturin 経由では既定に含まれるようになったため記述を更新する
+   (`cargo` 直叩きでは依然 feature 指定が要る点は残す)．
 
 ## 設計判断 (durable にする価値があるもの)
 
