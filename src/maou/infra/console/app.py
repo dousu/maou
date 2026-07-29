@@ -308,6 +308,11 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
         "maou.infra.console.selfplay",
         "selfplay",
     ),
+    # CSA サーバ対局 (floodgate でのレーティング計測; 追加依存なし)
+    "floodgate": LazyCommandSpec(
+        "maou.infra.console.floodgate",
+        "floodgate",
+    ),
     # 棋譜 1 局の自動解析 (1 手ずつ 1 局面探索; 追加依存なし)
     "analyze-game": LazyCommandSpec(
         "maou.infra.console.analyze_game",

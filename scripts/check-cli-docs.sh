@@ -15,6 +15,7 @@ declare -A CLI_DOC_MAP=(
   ["hcpe_convert.py"]="hcpe_convert.md"
   ["pre_process.py"]="pre_process.md"
   ["visualize.py"]="visualize.md"
+  ["floodgate.py"]="floodgate.md"
   # screenshot.py is a subcommand of utility group; mapped via UTILITY_DOCS
 )
 
