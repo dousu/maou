@@ -54,6 +54,46 @@ ver 1.2.1 (<http://www.computer-shogi.org/protocol/tcp_ip_server_121.html>)
 「ログイン名 + trip が同一性の単位」という user の理解は正しく，それが
 floodgate 公式の `trip` の定義そのものだった．
 
+## 実機検証 (2026-07-29 実施．goal 達成)
+
+DevContainer (CPU 推論 / ViT 19.8M fp16 / batch 8 / threads 1) から実 floodgate へ
+接続し，**2 局連続**で対局した．
+
+| | 対局 1 | 対局 2 |
+|---|---|---|
+| 開始 | 09:30:06 | 10:00:07 |
+| 相手 | `910` | `komadokun_depth5` |
+| 手番 | 先手 | 先手 |
+| 結果 | **勝ち** (#RESIGN) | **勝ち** (#RESIGN) |
+| 手数 | 91 | 81 |
+| 所要 | 789 秒 | 683 秒 |
+
+三者一致で盤面同期とプロトコル適合を確認した:
+
+1. クライアントの報告 — 91 手 / win (#RESIGN)
+2. サーバの棋譜 — `'summary:toryo:maou_test win:910 lose`
+3. **自前の CSA パーサ** (`parse_csa_str`) で再読込 — 91 手 / `%TORYO` / win=1
+
+確認できた挙動:
+
+- `LOGIN <name> floodgate-300-10F,<trip>` が通り `LOGIN:maou_test OK` を受領．
+- 待機中の keep-alive (空行) にサーバが空行で応答する．
+- **対局後にログアウトして再接続する連続対局が実機で回った** (`> LOGOUT` →
+  次の接続 → 再ログイン → 次の枠で対局)．
+- 対局条件のパースが実際の floodgate 通知と一致
+  (300 秒 / 加算 10 秒 / 秒読み 0 / 最大手数 512)．
+- 時間配分: 初手 33 秒 (hard 予算) → 以降 16 秒/手に収束．1 手 16 秒消費・
+  10 秒加算で残り時間は減るが，予算式 (`残り/40 + 加算`) が残量に比例して縮み，
+  `ceiling = 残り − マージン` が上限を押さえるため**時間切れは起きなかった**．
+
+### 環境の罠 (再発防止)
+
+`uv run pytest` 等の**暗黙 re-sync が maturin ビルドの `.so` を onnx feature
+なしで上書きする**．最初の実行が
+`this build has no onnx feature; ModelPath is unavailable` で落ちた．
+compass の「暗黙リビルドは debug」と同種で，**feature も落ちる**．
+対策は再ビルド後に `uv run` を挟まず `.venv/bin/maou` を直接叩くこと．
+
 ## 設計判断 (durable にする価値があるもの)
 
 - **持ち時間の責務分界は USI と同一**．CSA は対局開始時に持ち時間規定を
