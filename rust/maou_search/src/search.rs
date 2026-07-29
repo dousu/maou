@@ -1806,8 +1806,8 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
 mod tests {
     use super::*;
     use crate::evaluator::MockEvaluator;
+    use crate::STARTPOS_SFEN as STARTPOS;
 
-    const STARTPOS: &str = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
     /// 先手: 5三歩・金 1 枚 (持駒)，後手: 5一玉のみ．G*5b (5二金打) の 1 手詰め．
     const MATE_IN_1: &str = "4k4/9/4P4/9/9/9/9/9/9 b G 1";
 
@@ -2468,6 +2468,82 @@ mod tests {
             std::thread::sleep(self.per_item * items.len() as u32);
             self.inner.evaluate_batch(items)
         }
+    }
+
+    /// 初回推論だけが極端に遅い評価器 (TensorRT のエンジンビルドを模す)．
+    ///
+    /// ONNX Runtime の TensorRT EP は最初の `evaluate_batch` でエンジンを
+    /// ビルドするため，1 回目だけ数十秒かかり 2 回目以降は速い．
+    struct SlowFirstCallEvaluator {
+        first_call_delay: Duration,
+        called: AtomicBool,
+        inner: MockEvaluator,
+    }
+
+    impl SlowFirstCallEvaluator {
+        fn new(first_call_delay: Duration) -> Self {
+            SlowFirstCallEvaluator {
+                first_call_delay,
+                called: AtomicBool::new(false),
+                inner: MockEvaluator::new(0),
+            }
+        }
+    }
+
+    impl Evaluator for SlowFirstCallEvaluator {
+        fn evaluate_batch(&self, items: &[EvalItem]) -> Vec<crate::EvalResult> {
+            if !self.called.swap(true, Ordering::SeqCst) {
+                std::thread::sleep(self.first_call_delay);
+            }
+            self.inner.evaluate_batch(items)
+        }
+    }
+
+    /// **warmup を予算の外で前払いすると探索できる**ことの回帰テスト．
+    ///
+    /// 期限は `budget_start` (= 呼び出し時刻) 起点なので，初回推論の固定費を
+    /// 予算の内側で払うと短い予算では playout が 0 になる．実機で
+    /// `maou search --time-ms 3000` が TensorRT の cold cache (32 秒の
+    /// エンジンビルド) で playouts=0 になった (2026-07-29)．
+    ///
+    /// 予算セマンティクス自体は変えない (USI/CSA の切れ負け防止に必要) —
+    /// 呼び出し側が予算を張る前に [`crate::warmup`] を呼ぶ，が解法．
+    #[test]
+    fn test_warmup_before_budget_enables_search_under_short_budget() {
+        const BUDGET_MS: u64 = 300;
+        // 初回推論が予算より長い = 前払いしなければ確実に playout 0 になる
+        let first_call = Duration::from_millis(BUDGET_MS * 2);
+        let opts = || SearchOptions {
+            threads: 1,
+            batch_size: 4,
+            node_capacity: 1 << 12,
+            ..pure_mcts_opts()
+        };
+        let limits = SearchLimits {
+            time_ms: Some(BUDGET_MS),
+            ..SearchLimits::default()
+        };
+        let mut board = Board::empty();
+        board.set_sfen(STARTPOS).expect("startpos");
+
+        // 前払いなし: 初回推論 (= root 評価) が予算を食い切る
+        let cold = SlowFirstCallEvaluator::new(first_call);
+        let cold_result = Searcher::new(&cold, opts()).search(&board, &limits);
+
+        // 前払いあり: 予算の外で初回推論を済ませてから探索する
+        let warm = SlowFirstCallEvaluator::new(first_call);
+        crate::warmup(&warm);
+        let warm_result = Searcher::new(&warm, opts()).search(&board, &limits);
+
+        assert_eq!(
+            cold_result.stats.playouts, 0,
+            "前払いしなければ初回推論で予算を使い切る (この前提が崩れたらテストが無意味)"
+        );
+        assert!(
+            warm_result.stats.playouts > 0,
+            "前払いすれば予算ぶん探索できる: playouts={}",
+            warm_result.stats.playouts
+        );
     }
 
     /// **壁時計が時間予算を超えないこと**の回帰テスト．

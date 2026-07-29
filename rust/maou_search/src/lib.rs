@@ -49,7 +49,7 @@ pub mod search;
 pub mod tree;
 
 pub use eval::winrate_to_eval;
-pub use evaluator::{EvalItem, EvalResult, Evaluator, MockEvaluator};
+pub use evaluator::{warmup, EvalItem, EvalResult, Evaluator, MockEvaluator, STARTPOS_SFEN};
 #[cfg(feature = "onnx")]
 pub use onnx::OnnxEvaluator;
 pub use position::{build_board_and_history, PositionSetupError};

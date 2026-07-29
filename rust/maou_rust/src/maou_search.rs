@@ -171,6 +171,13 @@ fn to_py_result(r: SearchResult) -> PySearchResult {
 }
 
 /// GIL を解放して探索を実行する (solve_tsume と同じパターン)．
+///
+/// 探索の**前に** [`maou_search::warmup`] で初回推論 (TensorRT エンジンビルド
+/// 等) を済ませる．時間予算は `search_with_history` の呼び出し時刻を起点に
+/// 張られるため，これを予算の内側で払うと短い予算では playout が 0 になる
+/// (実測: cold cache の TensorRT で 32 秒．`--time-ms 3000` が丸ごと消えた)．
+/// USI が `isready`，CSA が対局開始前に同じ前払いをしているのと揃える —
+/// CLI では「指定した秒数だけ探索する」が期待される挙動．
 fn run_search<E: Evaluator>(
     py: Python<'_>,
     evaluator: E,
@@ -180,6 +187,7 @@ fn run_search<E: Evaluator>(
     limits: SearchLimits,
 ) -> PySearchResult {
     let result = py.detach(move || {
+        maou_search::warmup(&evaluator);
         let searcher = Searcher::new(&evaluator, options);
         searcher.search_with_history(&board, &history, &limits)
     });
@@ -491,7 +499,9 @@ struct SearchEngine {
 impl SearchEngine {
     #[new]
     #[pyo3(signature = (*, model_path=None, threads=None, batch_size=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
+        py: Python<'_>,
         model_path: Option<String>,
         threads: Option<usize>,
         batch_size: Option<usize>,
@@ -511,6 +521,15 @@ impl SearchEngine {
             trt_engine_cache_dir,
             pad_buckets,
         )?;
+        // 初回推論 (TensorRT エンジンビルド等) をここで前払いする — USI の
+        // `isready` と同じ位置づけ．`search` の時間予算は呼び出しごとに
+        // 張られるので，これを怠ると最初の 1 局面だけ予算を食い潰される
+        // (棋譜解析は局面ごとに予算を配分するため影響が大きい)
+        py.detach(|| match &evaluator {
+            EngineEvaluator::Mock(ev) => maou_search::warmup(ev),
+            #[cfg(feature = "onnx")]
+            EngineEvaluator::Onnx(ev) => maou_search::warmup(ev),
+        });
         Ok(SearchEngine {
             evaluator,
             threads,

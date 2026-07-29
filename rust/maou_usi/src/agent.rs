@@ -22,7 +22,9 @@ use crate::time::{allocate, should_stop, TimeBudget, TimeStrategyConfig};
 pub type Emit<'a> = dyn FnMut(EngineCommand) + 'a;
 
 /// 平手初期局面 (USI `position startpos`)．
-pub const STARTPOS_SFEN: &str = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
+///
+/// 定義は [`maou_search::STARTPOS_SFEN`] が正 (warmup と共有する単一実装)．
+pub use maou_search::STARTPOS_SFEN;
 
 /// `USI_Hash` (MB) → ノードプール容量の換算に使う 1 ノードあたりの概算バイト数．
 ///
