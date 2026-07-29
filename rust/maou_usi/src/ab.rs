@@ -34,6 +34,12 @@ pub enum AbMode {
     Budget,
     /// 持ち時間モードで `TimeStrategy` の想定残り手数を A/B (未決 1)．
     Horizon,
+    /// A = 手数カーブ (中盤重み付け) on / B = 一律配分 (現行の既定)．
+    ///
+    /// 序盤は定跡化された分岐で探索時間の限界効用が低く，終盤は dfpn の詰み
+    /// 判定が効くという想定を，裁量枠の中盤寄せとして検証する．**持ち時間
+    /// モードでのみ意味を持つ** — 固定 playout 予算では配分そのものが無い．
+    TimeCurve,
     /// A = 確定済みの子を選択候補から外す (MCTS-Solver) / B = 従来どおり．
     ///
     /// 空回りの降下自体が消えるので，固定予算でも持ち時間モードでも効く．
@@ -61,6 +67,7 @@ impl AbMode {
             "maxmoves" => Some(AbMode::MaxMoves),
             "budget" => Some(AbMode::Budget),
             "horizon" => Some(AbMode::Horizon),
+            "timecurve" => Some(AbMode::TimeCurve),
             "spin" => Some(AbMode::Spin),
             "proven" => Some(AbMode::Proven),
             "batch" => Some(AbMode::Batch),
@@ -75,6 +82,7 @@ impl AbMode {
             AbMode::MaxMoves => "maxmoves",
             AbMode::Budget => "budget",
             AbMode::Horizon => "horizon",
+            AbMode::TimeCurve => "timecurve",
             AbMode::Spin => "spin",
             AbMode::Proven => "proven",
             AbMode::Batch => "batch",
@@ -83,7 +91,7 @@ impl AbMode {
 
     /// 持ち時間モード (実時計) を必要とするか．
     pub fn needs_clock(&self) -> bool {
-        matches!(self, AbMode::Horizon)
+        matches!(self, AbMode::Horizon | AbMode::TimeCurve)
     }
 }
 
@@ -149,6 +157,12 @@ pub fn build_ab(base: &EngineConfig, opts: &AbOptions, playouts: Option<u64>) ->
         AbMode::Horizon => {
             engine_a.time.horizon_moves = opts.horizon_a;
             engine_b.time.horizon_moves = opts.horizon_b;
+        }
+        AbMode::TimeCurve => {
+            // パラメータ (`curve_params`) は CLI から両者に同じ値が入っている．
+            // 差は「掛けるか掛けないか」だけにする
+            engine_a.time.curve_enabled = true;
+            engine_b.time.curve_enabled = false;
         }
         AbMode::Spin => {
             engine_a.spin_budget_relief = true;
@@ -678,6 +692,38 @@ mod tests {
         let setup = build_ab(&EngineConfig::default(), &opts, None);
         assert_eq!(setup.engine_a.time.horizon_moves, 40);
         assert_eq!(setup.engine_b.time.horizon_moves, 20);
+    }
+
+    #[test]
+    fn test_build_ab_timecurve_splits_only_the_enable_flag() {
+        let mut base = EngineConfig::default();
+        base.time.curve_params.peak_ply = 60;
+        let opts = AbOptions {
+            mode: AbMode::TimeCurve,
+            playouts_b: None,
+            max_moves: 512,
+            horizon_a: 40,
+            horizon_b: 25,
+            batch_size_b: None,
+        };
+        let setup = build_ab(&base, &opts, None);
+        assert!(setup.engine_a.time.curve_enabled);
+        assert!(!setup.engine_b.time.curve_enabled);
+        // パラメータと想定残り手数は両者で同一 (差は on/off だけ)
+        assert_eq!(setup.engine_a.time.curve_params.peak_ply, 60);
+        assert_eq!(setup.engine_b.time.curve_params.peak_ply, 60);
+        assert_eq!(
+            setup.engine_a.time.horizon_moves,
+            setup.engine_b.time.horizon_moves
+        );
+    }
+
+    #[test]
+    fn test_timecurve_needs_clock() {
+        // 固定 playout 予算では配分そのものが無いので実時計が要る
+        assert!(AbMode::TimeCurve.needs_clock());
+        assert_eq!(AbMode::parse("timecurve"), Some(AbMode::TimeCurve));
+        assert_eq!(AbMode::TimeCurve.as_str(), "timecurve");
     }
 
     #[test]

@@ -64,6 +64,62 @@ from maou.infra.console.common import (
     required=False,
 )
 @click.option(
+    "--time-curve/--no-time-curve",
+    type=bool,
+    is_flag=True,
+    help="Weight the per-move budget towards the midgame. The multiplier "
+    "scales only the discretionary share (remaining time / horizon), never "
+    "byoyomi or the Fischer increment, so the guaranteed floor survives. "
+    "Off by default until a self-play A/B says it is stronger. "
+    "Also `setoption name TimeCurve`.",
+    default=False,
+    show_default=True,
+    required=False,
+)
+@click.option(
+    "--time-curve-peak-ply",
+    help="Ply where the time curve peaks (--time-curve).",
+    type=int,
+    default=55,
+    show_default=True,
+    required=False,
+)
+@click.option(
+    "--time-curve-half-width-ply",
+    help="Plies from the peak down to the floor weight (--time-curve).",
+    type=int,
+    default=35,
+    show_default=True,
+    required=False,
+)
+@click.option(
+    "--time-curve-peak-permille",
+    help="Multiplier at the peak, per mille (--time-curve).",
+    type=int,
+    default=1800,
+    show_default=True,
+    required=False,
+)
+@click.option(
+    "--time-curve-opening-floor-permille",
+    help="Multiplier before the peak, per mille (--time-curve). The opening "
+    "is book-like, so search time buys little there.",
+    type=int,
+    default=700,
+    show_default=True,
+    required=False,
+)
+@click.option(
+    "--time-curve-endgame-floor-permille",
+    help="Multiplier after the peak, per mille (--time-curve). Defaults to "
+    "1000 = the flat allocation: df-pn covers mate detection, but with no "
+    "byoyomi or increment there is no floor left to protect the endgame.",
+    type=int,
+    default=1000,
+    show_default=True,
+    required=False,
+)
+@click.option(
     "--keep-alive-ms",
     help="While answering isready, send a blank line every N milliseconds "
     "as a liveness signal (0 = disabled). Keeps the GUI from timing out "
@@ -228,6 +284,12 @@ def usi(
     node_capacity: int | None,
     network_delay_ms: int,
     min_think_ms: int,
+    time_curve: bool,
+    time_curve_peak_ply: int,
+    time_curve_half_width_ply: int,
+    time_curve_peak_permille: int,
+    time_curve_opening_floor_permille: int,
+    time_curve_endgame_floor_permille: int,
     keep_alive_ms: int,
     draw_value_black: int,
     draw_value_white: int,
@@ -265,6 +327,12 @@ def usi(
         node_capacity: Node pool capacity.
         network_delay_ms: Communication overhead margin in milliseconds.
         min_think_ms: Minimum thinking time in milliseconds.
+        time_curve: Weight the per-move budget towards the midgame.
+        time_curve_peak_ply: Ply where the time curve peaks.
+        time_curve_half_width_ply: Plies from the peak down to the floor.
+        time_curve_peak_permille: Peak multiplier, per mille.
+        time_curve_opening_floor_permille: Pre-peak multiplier, per mille.
+        time_curve_endgame_floor_permille: Post-peak multiplier, per mille.
         keep_alive_ms: Blank-line keep-alive interval while answering
             isready (0 = disabled).
         draw_value_black: Draw value for Black in permille (default 500).
@@ -291,6 +359,12 @@ def usi(
         node_capacity=node_capacity,
         network_delay_ms=network_delay_ms,
         min_think_ms=min_think_ms,
+        time_curve=time_curve,
+        time_curve_peak_ply=time_curve_peak_ply,
+        time_curve_half_width_ply=time_curve_half_width_ply,
+        time_curve_peak_permille=time_curve_peak_permille,
+        time_curve_opening_floor_permille=time_curve_opening_floor_permille,
+        time_curve_endgame_floor_permille=time_curve_endgame_floor_permille,
         keep_alive_ms=keep_alive_ms,
         draw_value_black=draw_value_black,
         draw_value_white=draw_value_white,

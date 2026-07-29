@@ -196,6 +196,44 @@ def test_selfplay_rejects_horizon_without_clock() -> None:
     assert result.exit_code != 0
 
 
+def test_selfplay_rejects_timecurve_without_clock() -> None:
+    """--ab-mode timecurve も配分のレバーなので持ち時間モードが必須．"""
+    result = CliRunner().invoke(
+        selfplay, ["--ab-mode", "timecurve", *_FAST]
+    )
+    assert result.exit_code != 0
+
+
+def test_selfplay_accepts_time_curve_parameters() -> None:
+    """カーブのパラメータが click → interface まで通ること．"""
+    result = CliRunner().invoke(
+        selfplay,
+        [
+            "--ab-mode",
+            "timecurve",
+            "--clock-ms",
+            "2000",
+            "--inc-ms",
+            "100",
+            "--games",
+            "1",
+            "--max-moves",
+            "6",
+            "--time-curve-peak-ply",
+            "3",
+            "--time-curve-half-width-ply",
+            "2",
+            "--time-curve-peak-permille",
+            "1500",
+            "--time-curve-opening-floor-permille",
+            "600",
+            "--time-curve-endgame-floor-permille",
+            "1100",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+
 def test_selfplay_rejects_clock_with_parallel() -> None:
     """持ち時間モードは壁時計依存なので parallel=1 限定．"""
     result = CliRunner().invoke(

@@ -621,6 +621,12 @@ where
                 },
             },
             OptionDecl {
+                name: "TimeCurve",
+                kind: OptionKind::Check {
+                    default: c.time.curve_enabled,
+                },
+            },
+            OptionDecl {
                 name: "RootDfpn",
                 kind: OptionKind::Check {
                     default: c.root_dfpn.unwrap_or(true),
@@ -764,6 +770,11 @@ where
                 if let Ok(n) = v.parse() {
                     self.config.time.min_think_ms = n;
                 }
+                invalidate = false;
+            }
+            // 時間配分だけを変える (探索木の内容には影響しない)
+            "TimeCurve" => {
+                self.config.time.curve_enabled = parse_bool();
                 invalidate = false;
             }
             "DrawValueBlack" => {
@@ -1054,7 +1065,12 @@ where
     /// 持ち時間 → 時間予算 (soft/hard)．`allocate` に MaxMovesToDraw 目前の絞り
     /// (§8.3) を重ねたもの．通常 go と ponderhit 後の予算計算で共有する．
     fn timed_budget(&self, clock: &crate::protocol::ClockParams) -> TimeBudget {
-        let mut budget = allocate(&self.config.time, clock, self.game.side_to_move());
+        let mut budget = allocate(
+            &self.config.time,
+            clock,
+            self.game.side_to_move(),
+            self.game.move_number(),
+        );
         // MaxMovesToDraw が近ければ予算を絞る (引き分け目前で深追いしない．§8.3)
         if let Some(cap) = self.max_moves_draw_cap() {
             budget.soft_ms = budget.soft_ms.min(cap);

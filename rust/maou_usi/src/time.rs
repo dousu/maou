@@ -35,6 +35,75 @@ pub struct TimeBudget {
     pub hard_ms: u64,
 }
 
+/// 重み 1.0 を表す permille 値 (整数演算のスケール)．
+const FLAT_PERMILLE: u64 = 1000;
+
+/// 手数に応じて**裁量枠**に掛ける乗数を決めるカーブ (中盤重み付け)．
+///
+/// 山型の折れ線で，`peak_ply` を頂点に `half_width_ply` かけて底まで線形に
+/// 落ちる．頂点から `half_width_ply` 以上離れた手数は一律その側の底．
+///
+/// **底は序盤側と終盤側で別**にする．序盤は定跡化された分岐で探索時間の
+/// 限界効用が低い (強く削ってよい) のに対し，終盤は dfpn の詰み判定が効く
+/// ぶん「少し短くても足りる場合がある」という弱い主張しか立たない．同じ底を
+/// 使うと，切れ負け (毎手戻ってくる時間が無い) で終盤が必要以上に痩せる．
+///
+/// **裁量枠 (`残時間 / horizon`) にのみ掛かり，毎手戻ってくる時間
+/// (秒読み・フィッシャー加算) には掛からない** ([`allocate`])．これにより
+/// 秒読みでは終盤の重みを下げても秒読み分は必ず残り，フィッシャーでは
+/// 終盤が加算ペースに収束したうえでバンクを中盤へ寄せられる．
+///
+/// 配分の土台が常に**その時点の残時間**の分数である以上，カーブは配分を
+/// 歪めるだけで総消費を増やす方向には倒れない (使えば残りが減り，以降の
+/// 配分が自動的に小さくなる)．
+///
+/// `peak_permille` が底を下回る退化した設定では，その側の山が消えて一律
+/// 底の値になる (安全側)．
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimeCurve {
+    /// 重みが最大になる手数 (ply．`GameState::move_number` と同じ数え方)．
+    pub peak_ply: u64,
+    /// 頂点から底に達するまでの手数．0 は 1 として扱う．
+    pub half_width_ply: u64,
+    /// 頂点での乗数 (permille．1000 = 1.0 倍)．
+    pub peak_permille: u64,
+    /// 序盤側 (`ply < peak_ply`) の底の乗数 (permille)．
+    pub opening_floor_permille: u64,
+    /// 終盤側 (`ply >= peak_ply`) の底の乗数 (permille)．
+    pub endgame_floor_permille: u64,
+}
+
+impl TimeCurve {
+    /// 中盤重み付けの既定プリセット．
+    ///
+    /// 山を中盤 (ply 55 前後) に置き，序盤の底を深く (0.7 倍)，終盤の底を
+    /// 現行配分と同じ (1.0 倍) に取る．値は A/B の出発点であって決着値では
+    /// ない．
+    pub const MIDGAME: TimeCurve = TimeCurve {
+        peak_ply: 55,
+        half_width_ply: 35,
+        peak_permille: 1800,
+        opening_floor_permille: 700,
+        endgame_floor_permille: 1000,
+    };
+
+    /// 手数に対する乗数 (permille)．
+    pub fn weight_permille(&self, ply: u64) -> u64 {
+        let half = self.half_width_ply.max(1);
+        let dist = ply.abs_diff(self.peak_ply);
+        let floor = if ply < self.peak_ply {
+            self.opening_floor_permille
+        } else {
+            self.endgame_floor_permille
+        };
+        if dist >= half {
+            return floor;
+        }
+        let span = self.peak_permille.saturating_sub(floor);
+        floor + span.saturating_mul(half - dist) / half
+    }
+}
+
 /// 時間戦略の設定 (USI オプション / CLI から与える)．
 #[derive(Clone, Debug)]
 pub struct TimeStrategyConfig {
@@ -44,8 +113,26 @@ pub struct TimeStrategyConfig {
     pub network_delay_ms: u64,
     /// 最低思考時間 (ミリ秒)．マージン控除後もこれを下回らない．
     pub min_think_ms: u64,
-    /// 持ち時間を配分する想定残り手数 (M1 は固定．M2 で手数カーブ化)．
+    /// 持ち時間を配分する想定残り手数．
     pub horizon_moves: u64,
+    /// 手数カーブを有効にするか．
+    ///
+    /// 棋力に効くレバーなので**既定は off** とし，自己対局 A/B で「より強い」を
+    /// 確認してから既定化する．
+    pub curve_enabled: bool,
+    /// 手数カーブのパラメータ．`curve_enabled` と独立に**常に保持**する．
+    ///
+    /// USI の `setoption` は到着順が保証されない (GUI が `TimeCurve` の前後
+    /// どちらでパラメータを送るか決められない) ため，パラメータを有効化フラグ
+    /// と同じ `Option` に畳み込むと順序次第で設定が失われる．
+    pub curve_params: TimeCurve,
+}
+
+impl TimeStrategyConfig {
+    /// 実効カーブ (無効なら `None`)．
+    pub fn curve(&self) -> Option<TimeCurve> {
+        self.curve_enabled.then_some(self.curve_params)
+    }
 }
 
 impl Default for TimeStrategyConfig {
@@ -54,6 +141,8 @@ impl Default for TimeStrategyConfig {
             network_delay_ms: 1000,
             min_think_ms: 100,
             horizon_moves: 40,
+            curve_enabled: false,
+            curve_params: TimeCurve::MIDGAME,
         }
     }
 }
@@ -61,9 +150,13 @@ impl Default for TimeStrategyConfig {
 /// 自分の手番の残り時間・加算を取り出して 1 手予算 (soft/hard) を計算する．
 ///
 /// 三態 (秒読み / フィッシャー / 切れ負け) を扱う:
-/// - 秒読み: `残時間 / horizon + byoyomi − margin`
-/// - フィッシャー: `残時間 / horizon + inc − margin`
-/// - 切れ負け: `残時間 / horizon − margin` (安全側)
+/// - 秒読み: `残時間 / horizon × w(ply) + byoyomi − margin`
+/// - フィッシャー: `残時間 / horizon × w(ply) + inc − margin`
+/// - 切れ負け: `残時間 / horizon × w(ply) − margin` (安全側)
+///
+/// `w(ply)` は手数カーブ ([`TimeCurve`]) の乗数で，`cfg.curve` が `None` なら
+/// 一律 1.0．**裁量枠にのみ掛かり，毎手戻ってくる時間 (秒読み・加算) には
+/// 掛からない** — 終盤の重みを下げても保証された床は削られない．
 ///
 /// - `soft_ms` = 通常打ち切り目標 (上記 base 配分)．
 /// - `hard_ms` = 延長上限 = `soft × EXT_NUM/EXT_DEN`．ただし今使える時間の
@@ -71,7 +164,14 @@ impl Default for TimeStrategyConfig {
 ///
 /// いずれも `min_think_ms` を下回らない．ceiling に張り付く局面 (秒読みのみ・
 /// 残り僅少) では `soft == hard` になり延長余地はない (安全側)．
-pub fn allocate(cfg: &TimeStrategyConfig, clock: &ClockParams, my_color: Color) -> TimeBudget {
+///
+/// `move_number` は手番側から見た現在の手数 (`GameState::move_number`)．
+pub fn allocate(
+    cfg: &TimeStrategyConfig,
+    clock: &ClockParams,
+    my_color: Color,
+    move_number: u64,
+) -> TimeBudget {
     let (my_time, my_inc) = match my_color {
         Color::Black => (clock.btime.unwrap_or(0), clock.binc.unwrap_or(0)),
         Color::White => (clock.wtime.unwrap_or(0), clock.winc.unwrap_or(0)),
@@ -79,8 +179,14 @@ pub fn allocate(cfg: &TimeStrategyConfig, clock: &ClockParams, my_color: Color) 
     let byoyomi = clock.byoyomi.unwrap_or(0);
     let horizon = cfg.horizon_moves.max(1);
 
+    // 裁量枠 (バンクの取り崩し)．手数カーブはここにだけ掛ける
+    let weight = cfg
+        .curve()
+        .map_or(FLAT_PERMILLE, |c| c.weight_permille(move_number));
+    let discretionary = (my_time / horizon).saturating_mul(weight) / FLAT_PERMILLE;
+
     // 1 手のベース配分 + 毎手戻ってくる時間 (秒読み or フィッシャー加算)
-    let base = my_time / horizon + byoyomi + my_inc;
+    let base = discretionary + byoyomi + my_inc;
     let budget = base.saturating_sub(cfg.network_delay_ms);
 
     // 今使える時間の絶対上限: 残時間 + 秒読み − マージン
@@ -139,11 +245,24 @@ fn is_best_stable(best_visits: u64, second_visits: u64) -> bool {
 mod tests {
     use super::*;
 
+    /// カーブ off の設定では手数が結果に影響しないことを明示する番人．
+    const ANY_PLY: u64 = 1;
+
     fn cfg() -> TimeStrategyConfig {
         TimeStrategyConfig {
             network_delay_ms: 1000,
             min_think_ms: 100,
             horizon_moves: 40,
+            curve_enabled: false,
+            curve_params: TimeCurve::MIDGAME,
+        }
+    }
+
+    fn cfg_curved(curve: TimeCurve) -> TimeStrategyConfig {
+        TimeStrategyConfig {
+            curve_enabled: true,
+            curve_params: curve,
+            ..cfg()
         }
     }
 
@@ -156,7 +275,7 @@ mod tests {
             byoyomi: Some(10_000),
             ..ClockParams::default()
         };
-        let b = allocate(&cfg(), &clock, Color::Black);
+        let b = allocate(&cfg(), &clock, Color::Black, ANY_PLY);
         assert_eq!(b.soft_ms, 9_000);
         assert_eq!(b.hard_ms, 9_000);
     }
@@ -170,7 +289,7 @@ mod tests {
             byoyomi: Some(10_000),
             ..ClockParams::default()
         };
-        let b = allocate(&cfg(), &clock, Color::Black);
+        let b = allocate(&cfg(), &clock, Color::Black, ANY_PLY);
         assert_eq!(b.soft_ms, 19_000);
     }
 
@@ -184,8 +303,8 @@ mod tests {
             winc: Some(2_000),
             ..ClockParams::default()
         };
-        let black = allocate(&cfg(), &clock, Color::Black);
-        let white = allocate(&cfg(), &clock, Color::White);
+        let black = allocate(&cfg(), &clock, Color::Black, ANY_PLY);
+        let white = allocate(&cfg(), &clock, Color::White, ANY_PLY);
         // 先手: 300s/40 + 2s − 1s = 8.5s / 後手: 600s/40 + 2s − 1s = 16s
         assert_eq!(black.soft_ms, 8_500);
         assert_eq!(white.soft_ms, 16_000);
@@ -199,7 +318,7 @@ mod tests {
             wtime: Some(40_000),
             ..ClockParams::default()
         };
-        let b = allocate(&cfg(), &clock, Color::Black);
+        let b = allocate(&cfg(), &clock, Color::Black, ANY_PLY);
         assert_eq!(b.soft_ms, 100);
     }
 
@@ -214,7 +333,7 @@ mod tests {
             winc: Some(5_000),
             ..ClockParams::default()
         };
-        let b = allocate(&cfg(), &clock, Color::Black);
+        let b = allocate(&cfg(), &clock, Color::Black, ANY_PLY);
         assert_eq!(b.soft_ms, 1_000);
     }
 
@@ -227,7 +346,7 @@ mod tests {
             ..ClockParams::default()
         };
         // 500 − 1000 は負 → 最低思考時間 100ms
-        let b = allocate(&cfg(), &clock, Color::Black);
+        let b = allocate(&cfg(), &clock, Color::Black, ANY_PLY);
         assert_eq!(b.soft_ms, 100);
     }
 
@@ -240,7 +359,7 @@ mod tests {
             byoyomi: Some(10_000),
             ..ClockParams::default()
         };
-        let b = allocate(&cfg(), &clock, Color::Black);
+        let b = allocate(&cfg(), &clock, Color::Black, ANY_PLY);
         assert_eq!(b.soft_ms, 19_000);
         assert_eq!(b.hard_ms, 38_000);
     }
@@ -254,7 +373,7 @@ mod tests {
             byoyomi: Some(10_000),
             ..ClockParams::default()
         };
-        let b = allocate(&cfg(), &clock, Color::Black);
+        let b = allocate(&cfg(), &clock, Color::Black, ANY_PLY);
         assert_eq!(b.soft_ms, 9_000);
         assert_eq!(b.hard_ms, 9_000);
     }
@@ -298,5 +417,230 @@ mod tests {
         };
         // root 確定は soft 未満でも即停止
         assert!(should_stop(&b, 10, 1, 0, true));
+    }
+
+    #[test]
+    fn test_curve_weight_shape() {
+        let c = TimeCurve::MIDGAME;
+        // 頂点で peak，頂点から half_width 以上離れればその側の底
+        assert_eq!(c.weight_permille(55), 1800);
+        assert_eq!(c.weight_permille(20), 700);
+        assert_eq!(c.weight_permille(1), 700);
+        assert_eq!(c.weight_permille(90), 1000);
+        assert_eq!(c.weight_permille(200), 1000);
+        // 中間は線形 (頂点から半分の距離なら振幅の半分)
+        assert_eq!(c.weight_permille(55 - 35 / 2), 700 + 1100 * 18 / 35);
+        assert_eq!(c.weight_permille(55 + 35 / 2), 1000 + 800 * 18 / 35);
+        // 底が非対称なので山も非対称 — 終盤側が必ず厚い
+        for d in 1..40 {
+            assert!(
+                c.weight_permille(55 + d) > c.weight_permille(55 - d),
+                "ply 55±{d} で終盤側が序盤側を上回らない"
+            );
+        }
+    }
+
+    #[test]
+    fn test_curve_endgame_floor_is_not_below_flat() {
+        // 終盤側の底は現行配分 (1.0 倍) と同じ — dfpn 頼みで削りすぎない
+        assert_eq!(TimeCurve::MIDGAME.endgame_floor_permille, FLAT_PERMILLE);
+        const { assert!(TimeCurve::MIDGAME.opening_floor_permille < FLAT_PERMILLE) };
+    }
+
+    #[test]
+    fn test_curve_is_off_by_default() {
+        // 既定はレバー off — カーブ導入前と同じ配分でなければならない
+        assert!(TimeStrategyConfig::default().curve().is_none());
+        let clock = ClockParams {
+            btime: Some(400_000),
+            wtime: Some(400_000),
+            byoyomi: Some(10_000),
+            ..ClockParams::default()
+        };
+        for ply in [1, 30, 55, 80, 150] {
+            let b = allocate(&cfg(), &clock, Color::Black, ply);
+            assert_eq!(b.soft_ms, 19_000, "ply {ply} で配分が変わってはならない");
+        }
+    }
+
+    #[test]
+    fn test_curve_weights_only_discretionary_part() {
+        // 秒読み 10s + 残 400s．裁量枠 400s/40 = 10s にのみ乗数が掛かる．
+        // 頂点 (×1.8): 10s×1.8 + 10s − 1s = 27s
+        // 底   (×0.7): 10s×0.7 +  10s − 1s = 16s
+        let clock = ClockParams {
+            btime: Some(400_000),
+            wtime: Some(400_000),
+            byoyomi: Some(10_000),
+            ..ClockParams::default()
+        };
+        let cfg = cfg_curved(TimeCurve::MIDGAME);
+        assert_eq!(allocate(&cfg, &clock, Color::Black, 55).soft_ms, 27_000);
+        assert_eq!(allocate(&cfg, &clock, Color::Black, 1).soft_ms, 16_000);
+    }
+
+    #[test]
+    fn test_curve_never_cuts_into_byoyomi_floor() {
+        // 主時間を使い切った秒読み局面では，どの手数でも秒読み分が残る
+        // (乗数は裁量枠にしか掛からないため)．
+        let clock = ClockParams {
+            btime: Some(0),
+            wtime: Some(0),
+            byoyomi: Some(10_000),
+            ..ClockParams::default()
+        };
+        let cfg = cfg_curved(TimeCurve::MIDGAME);
+        for ply in [1, 55, 120, 300] {
+            let b = allocate(&cfg, &clock, Color::Black, ply);
+            assert_eq!(b.soft_ms, 9_000, "ply {ply} で秒読みの床が削られた");
+        }
+    }
+
+    #[test]
+    fn test_curve_endgame_keeps_fischer_increment() {
+        // フィッシャー 10s 加算．終盤 (底 1.0 倍) でも加算分は丸ごと残る:
+        // 200s/40 × 1.0 + 10s − 1s = 14s
+        let clock = ClockParams {
+            btime: Some(200_000),
+            wtime: Some(200_000),
+            binc: Some(10_000),
+            winc: Some(10_000),
+            ..ClockParams::default()
+        };
+        let b = allocate(&cfg_curved(TimeCurve::MIDGAME), &clock, Color::Black, 120);
+        assert_eq!(b.soft_ms, 14_000);
+    }
+
+    #[test]
+    fn test_curve_sudden_death_endgame_matches_flat() {
+        // 切れ負け (毎手戻ってくる時間なし) の終盤は，カーブ on/off で
+        // 同じ配分になる — 守ってくれる床が無い regime で削らない
+        let clock = ClockParams {
+            btime: Some(120_000),
+            wtime: Some(120_000),
+            ..ClockParams::default()
+        };
+        let flat = allocate(&cfg(), &clock, Color::Black, 120);
+        let curved = allocate(&cfg_curved(TimeCurve::MIDGAME), &clock, Color::Black, 120);
+        assert_eq!(curved.soft_ms, flat.soft_ms);
+    }
+
+    #[test]
+    fn test_curve_respects_ceiling_and_min_think() {
+        // 残り僅少ではカーブがあっても ceiling / min_think の保護が先に効く
+        let clock = ClockParams {
+            btime: Some(2_000),
+            wtime: Some(2_000),
+            binc: Some(5_000),
+            winc: Some(5_000),
+            ..ClockParams::default()
+        };
+        let b = allocate(&cfg_curved(TimeCurve::MIDGAME), &clock, Color::Black, 55);
+        assert_eq!(b.soft_ms, 1_000);
+
+        let broke = ClockParams {
+            btime: Some(40_000),
+            wtime: Some(40_000),
+            ..ClockParams::default()
+        };
+        let b = allocate(&cfg_curved(TimeCurve::MIDGAME), &broke, Color::Black, 120);
+        assert_eq!(b.soft_ms, 100);
+    }
+
+    /// 残時間を実際に減らしながら 1 局分の soft 配分を追う
+    /// (消費 = 思考 + 通信マージン．フィッシャーは指した後に加算)．
+    fn simulate_soft(
+        cfg: &TimeStrategyConfig,
+        main_ms: u64,
+        inc_ms: u64,
+        plies: u64,
+    ) -> Vec<(u64, u64)> {
+        let mut remaining = main_ms;
+        let mut out = Vec::new();
+        let mut ply = 1;
+        while ply <= plies {
+            let clock = ClockParams {
+                btime: Some(remaining),
+                wtime: Some(remaining),
+                binc: Some(inc_ms),
+                winc: Some(inc_ms),
+                ..ClockParams::default()
+            };
+            let b = allocate(cfg, &clock, Color::Black, ply);
+            let consumed = (b.soft_ms + cfg.network_delay_ms).min(remaining);
+            out.push((ply, b.soft_ms));
+            remaining = remaining.saturating_sub(consumed) + inc_ms;
+            ply += 2;
+        }
+        out
+    }
+
+    #[test]
+    fn test_curve_moves_the_peak_into_the_midgame() {
+        // この機能の存在理由そのもの: 一律配分は `残時間 / horizon` の等比
+        // 減衰なので**初手が最も厚い**．カーブはその山を中盤へ移す．
+        // (300s 切れ負け / 180s + 5s フィッシャー，100 手で決着)
+        for (main_ms, inc_ms) in [(300_000, 0), (180_000, 5_000)] {
+            let flat = simulate_soft(&cfg(), main_ms, inc_ms, 100);
+            let curved = simulate_soft(&cfg_curved(TimeCurve::MIDGAME), main_ms, inc_ms, 100);
+
+            assert_eq!(
+                flat.iter().max_by_key(|(_, ms)| *ms).unwrap().0,
+                1,
+                "一律配分の最厚手が初手でない (前提が変わった)"
+            );
+            let peak_ply = curved.iter().max_by_key(|(_, ms)| *ms).unwrap().0;
+            assert!(
+                (30..=70).contains(&peak_ply),
+                "カーブの山が中盤に無い: ply {peak_ply}"
+            );
+            // 中盤へ寄せるのであって節約ではない — 総思考は減らない
+            let total = |v: &[(u64, u64)]| v.iter().map(|(_, ms)| ms).sum::<u64>();
+            assert!(
+                total(&curved) > total(&flat),
+                "カーブ有効で総思考時間が減った"
+            );
+        }
+    }
+
+    #[test]
+    fn test_curve_params_survive_toggle_order() {
+        // setoption の到着順に依存しない: パラメータを先に入れても後から
+        // 有効化して効く / 無効化してもパラメータは残る
+        let mut c = cfg();
+        c.curve_params.peak_ply = 70;
+        assert!(c.curve().is_none());
+        c.curve_enabled = true;
+        assert_eq!(c.curve().unwrap().peak_ply, 70);
+        c.curve_enabled = false;
+        assert_eq!(c.curve_params.peak_ply, 70);
+    }
+
+    #[test]
+    fn test_curve_degenerate_peak_below_floor_is_flat() {
+        // peak が底を下回る退化設定は山が消えて一律 底 (安全側)
+        let c = TimeCurve {
+            peak_ply: 55,
+            half_width_ply: 35,
+            peak_permille: 500,
+            opening_floor_permille: 1000,
+            endgame_floor_permille: 1200,
+        };
+        assert_eq!(c.weight_permille(1), 1000);
+        assert_eq!(c.weight_permille(54), 1000);
+        assert_eq!(c.weight_permille(55), 1200);
+        assert_eq!(c.weight_permille(200), 1200);
+    }
+
+    #[test]
+    fn test_curve_zero_half_width_is_flat_floor_off_peak() {
+        // half_width 0 は 1 として扱う (0 除算なし)
+        let c = TimeCurve {
+            half_width_ply: 0,
+            ..TimeCurve::MIDGAME
+        };
+        assert_eq!(c.weight_permille(55), 1800);
+        assert_eq!(c.weight_permille(54), 700);
+        assert_eq!(c.weight_permille(56), 1000);
     }
 }

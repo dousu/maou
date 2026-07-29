@@ -85,6 +85,12 @@
 | `--node-capacity INT` | | Node pool capacity (default 2^20 nodes). |
 | `--network-delay-ms INT` | default `1000` | Communication overhead margin in milliseconds. The GUI/server measures elapsed time including transport, so the per-move budget is reduced by this amount. |
 | `--min-think-ms INT` | default `100` | Minimum thinking time in milliseconds. |
+| `--time-curve/--no-time-curve` | **default off** | Weight the per-move budget towards the midgame: the opening is book-like, and df-pn covers the endgame. The multiplier scales **only the discretionary share** (`remaining / horizon`), never byoyomi or the Fischer increment, so the guaranteed floor survives. Off until a self-play A/B says it is stronger — see [verification.md §4.4.1](../design/usi-engine/verification.md). Also `setoption name TimeCurve`. |
+| `--time-curve-peak-ply INT` | default `55` | Ply where the curve peaks. |
+| `--time-curve-half-width-ply INT` | default `35` | Plies from the peak down to the floor weight. |
+| `--time-curve-peak-permille INT` | default `1800` | Multiplier at the peak, per mille (`1000` = 1.0x). |
+| `--time-curve-opening-floor-permille INT` | default `700` | Multiplier before the peak, per mille. |
+| `--time-curve-endgame-floor-permille INT` | default `1000` | Multiplier after the peak, per mille. `1000` = the flat allocation: df-pn covers mate detection, but in sudden death there is no byoyomi or increment left to protect the endgame, so the two sides of the curve do **not** get the same floor. Raise it above `1000` to spend the leftover bank late. |
 | `--keep-alive-ms INT` | default `5000` | While answering `isready`, send a blank line every N milliseconds as a liveness signal, so the GUI does not time out when the first TensorRT engine build outlasts its `readyok` timeout. `0` disables it. A fast `isready` emits no blank line at all — silence is normal. Verified on **ShogiHome**, which ignores the blank lines harmlessly; other GUIs are unverified. |
 | `--draw-value-black INT` | default `500` | Draw value for Black in permille. Repetition / max-moves draw terminals are valued at this (root side-to-move view). Denryu-sen Black 0.4 win = `400`. |
 | `--draw-value-white INT` | default `500` | Draw value for White in permille (Denryu-sen White 0.6 win = `600`). |
@@ -117,6 +123,7 @@ Declared in the `usi` response; defaults reflect the CLI flags above.
 | `TrtCacheDir` | string | TensorRT engine cache directory. |
 | `NetworkDelay` | spin (ms) | Communication margin subtracted from each move budget. |
 | `MinimumThinkingTime` | spin (ms) | Minimum thinking time. |
+| `TimeCurve` | check | Midgame-weighted time curve (default off). The curve **parameters** are deliberately not exposed here: `setoption` arrival order is not guaranteed, so they are fixed by the CLI flags above and this option only toggles them on. |
 | `KeepAlive` | spin (ms) | Blank-line keep-alive interval while answering `isready` (default 5000; 0 = disabled). |
 | `DrawValueBlack` / `DrawValueWhite` | spin (permille) | Draw value per side (default 500; Denryu-sen 400 / 600). Converted to the search's side-to-move `draw_value`. |
 | `ResignValue` | spin (permille) | Resign win-rate threshold (0 = never). |

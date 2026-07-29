@@ -8,6 +8,41 @@ use maou_usi::csa::{run_csa as rust_run_csa, CsaConfig, CsaGameResult};
 use maou_usi::selfplay::{ClockSetting, GameOutcome, SelfplayConfig};
 use maou_usi::{EngineConfig, TimeStrategyConfig};
 
+/// 手数カーブ (中盤重み付け) の引数を [`TimeStrategyConfig`] へ反映する
+/// (USI / 自己対局 / CSA の 3 経路で共有する単一実装)．
+///
+/// 指定がなければ既定値 (カーブ off + [`maou_usi::TimeCurve::MIDGAME`]) のまま．
+/// パラメータは `time_curve` の指定と独立に反映されるので，カーブ off の
+/// まま値だけ渡しておき，あとから有効化しても効く．
+fn apply_time_curve_args(
+    time: &mut TimeStrategyConfig,
+    time_curve: Option<bool>,
+    peak_ply: Option<u64>,
+    half_width_ply: Option<u64>,
+    peak_permille: Option<u64>,
+    opening_floor_permille: Option<u64>,
+    endgame_floor_permille: Option<u64>,
+) {
+    if let Some(v) = time_curve {
+        time.curve_enabled = v;
+    }
+    if let Some(v) = peak_ply {
+        time.curve_params.peak_ply = v;
+    }
+    if let Some(v) = half_width_ply {
+        time.curve_params.half_width_ply = v;
+    }
+    if let Some(v) = peak_permille {
+        time.curve_params.peak_permille = v;
+    }
+    if let Some(v) = opening_floor_permille {
+        time.curve_params.opening_floor_permille = v;
+    }
+    if let Some(v) = endgame_floor_permille {
+        time.curve_params.endgame_floor_permille = v;
+    }
+}
+
 /// 評価器・探索・戦略の共通引数を [`EngineConfig`] へ反映する
 /// (`run_usi` / `run_selfplay` で共有する単一実装)．
 #[allow(clippy::too_many_arguments)]
@@ -86,6 +121,12 @@ fn apply_common_engine_args(
 /// - `trt_engine_cache_dir` (str, optional): TensorRT エンジンキャッシュ保存先．
 /// - `network_delay_ms` (int, optional): 通信マージン (デフォルト 1000)．
 /// - `min_think_ms` (int, optional): 最低思考時間 (デフォルト 100)．
+/// - `time_curve` (bool, optional): 手数カーブ (中盤重み付け) を有効にする
+///   (デフォルト False)．`time_curve_peak_ply` / `time_curve_half_width_ply` /
+///   `time_curve_peak_permille` / `time_curve_opening_floor_permille` /
+///   `time_curve_endgame_floor_permille` (int, optional) で山の位置・幅・振幅と
+///   両側の底を指定する (デフォルト 55 / 35 / 1800 / 700 / 1000)．
+///   乗数は裁量枠 (残時間 ÷ horizon) にのみ掛かり，秒読み・加算には掛からない．
 /// - `draw_value_black` / `draw_value_white` (int, optional): 先手/後手の引き分け
 ///   価値 (千分率，デフォルト 500．電竜戦 0.4/0.6 勝 = 400/600)．
 /// - `resign_value` (int, optional): 投了する root 勝率 (千分率，デフォルト
@@ -107,7 +148,7 @@ fn apply_common_engine_args(
 ///
 /// モデルロード失敗・不正局面などの致命的エラーは `RuntimeError`．
 #[pyfunction]
-#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, network_delay_ms=None, min_think_ms=None, keep_alive_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, max_moves_to_draw=None, usi_ponder=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, network_delay_ms=None, min_think_ms=None, time_curve=None, time_curve_peak_ply=None, time_curve_half_width_ply=None, time_curve_peak_permille=None, time_curve_opening_floor_permille=None, time_curve_endgame_floor_permille=None, keep_alive_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, max_moves_to_draw=None, usi_ponder=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_usi(
     py: Python<'_>,
@@ -123,6 +164,12 @@ fn run_usi(
     pad_buckets: Option<bool>,
     network_delay_ms: Option<u64>,
     min_think_ms: Option<u64>,
+    time_curve: Option<bool>,
+    time_curve_peak_ply: Option<u64>,
+    time_curve_half_width_ply: Option<u64>,
+    time_curve_peak_permille: Option<u64>,
+    time_curve_opening_floor_permille: Option<u64>,
+    time_curve_endgame_floor_permille: Option<u64>,
     keep_alive_ms: Option<u64>,
     draw_value_black: Option<u32>,
     draw_value_white: Option<u32>,
@@ -149,8 +196,17 @@ fn run_usi(
     config.time = TimeStrategyConfig {
         network_delay_ms: network_delay_ms.unwrap_or(time_defaults.network_delay_ms),
         min_think_ms: min_think_ms.unwrap_or(time_defaults.min_think_ms),
-        horizon_moves: time_defaults.horizon_moves,
+        ..time_defaults
     };
+    apply_time_curve_args(
+        &mut config.time,
+        time_curve,
+        time_curve_peak_ply,
+        time_curve_half_width_ply,
+        time_curve_peak_permille,
+        time_curve_opening_floor_permille,
+        time_curve_endgame_floor_permille,
+    );
     if let Some(v) = keep_alive_ms {
         config.keep_alive_ms = v;
     }
@@ -282,6 +338,11 @@ fn summary_to_dict<'py>(py: Python<'py>, s: &RunSummary) -> PyResult<Bound<'py, 
 /// - `verbose` (bool, optional): 対局ごとの進捗を stderr へ出す (デフォルト
 ///   true)．
 /// - `min_think_ms` (int, optional): 最低思考時間 (持ち時間モードの下限)．
+/// - `time_curve_peak_ply` / `time_curve_half_width_ply` /
+///   `time_curve_peak_permille` / `time_curve_opening_floor_permille` /
+///   `time_curve_endgame_floor_permille` (int, optional):
+///   手数カーブのパラメータ．A/B の**両者に同じ値**が入り，`ab_mode="timecurve"`
+///   が on/off だけを割り振る (有効化フラグ自体は引数で渡さない)．
 /// - 残りは `run_usi` と同名の評価器・探索・戦略引数
 ///   (`opening_script` は両側エージェントに適用される)．
 ///
@@ -314,7 +375,7 @@ fn summary_to_dict<'py>(py: Python<'py>, s: &RunSummary) -> PyResult<Bound<'py, 
 /// 設定不正・モデルロード失敗・対局中の内部エラーは `RuntimeError`，
 /// 未知の `ab_mode` は `ValueError`．
 #[pyfunction]
-#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, spin_budget_relief=None, skip_proven_children=None, min_think_ms=None, ab_mode=None, playouts_b=None, batch_size_b=None, horizon_moves=None, horizon_moves_b=None, alternate_colors=None, clock_ms=None, byoyomi_ms=None, inc_ms=None))]
+#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, spin_budget_relief=None, skip_proven_children=None, min_think_ms=None, time_curve_peak_ply=None, time_curve_half_width_ply=None, time_curve_peak_permille=None, time_curve_opening_floor_permille=None, time_curve_endgame_floor_permille=None, ab_mode=None, playouts_b=None, batch_size_b=None, horizon_moves=None, horizon_moves_b=None, alternate_colors=None, clock_ms=None, byoyomi_ms=None, inc_ms=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_selfplay(
     py: Python<'_>,
@@ -349,6 +410,11 @@ fn run_selfplay(
     spin_budget_relief: Option<bool>,
     skip_proven_children: Option<bool>,
     min_think_ms: Option<u64>,
+    time_curve_peak_ply: Option<u64>,
+    time_curve_half_width_ply: Option<u64>,
+    time_curve_peak_permille: Option<u64>,
+    time_curve_opening_floor_permille: Option<u64>,
+    time_curve_endgame_floor_permille: Option<u64>,
     ab_mode: Option<String>,
     playouts_b: Option<u64>,
     batch_size_b: Option<usize>,
@@ -390,6 +456,17 @@ fn run_selfplay(
     }
     // 自己対局に伝送遅延はない (movetime をそのまま思考時間にする)
     engine.time.network_delay_ms = 0;
+    // カーブのパラメータは A/B の両者に同じ値を入れる (差は on/off だけ．
+    // `AbMode::TimeCurve` が `curve_enabled` を割り振る)
+    apply_time_curve_args(
+        &mut engine.time,
+        None,
+        time_curve_peak_ply,
+        time_curve_half_width_ply,
+        time_curve_peak_permille,
+        time_curve_opening_floor_permille,
+        time_curve_endgame_floor_permille,
+    );
     if let Some(v) = min_think_ms {
         engine.time.min_think_ms = v;
     }
@@ -412,15 +489,16 @@ fn run_selfplay(
         Some(name) => Some(AbMode::parse(name).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(format!(
                 "未知の ab_mode: {name} \
-                 (subtree | maxmoves | budget | horizon | spin | proven)"
+                 (subtree | maxmoves | budget | horizon | timecurve | spin | proven | batch)"
             ))
         })?),
     };
     if let Some(m) = mode {
         if m.needs_clock() && clock.is_none() {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "ab_mode=horizon は持ち時間モード (clock_ms > 0) が必要",
-            ));
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "ab_mode={} は持ち時間モード (clock_ms > 0) が必要",
+                m.as_str()
+            )));
         }
         // 空回りの会計は固定 playout 予算でのみ効く．持ち時間モードは時計が
         // 拘束条件なので，レバーを入れても消費 wall clock は変わらない
@@ -540,6 +618,9 @@ fn csa_result_to_dict<'py>(py: Python<'py>, r: &CsaGameResult) -> PyResult<Bound
 /// - `login_name`: ログイン名 (レーティングの単位となる識別子)．
 /// - `password`: パスワード欄．floodgate では `<ゲーム名>,<trip>` 形式．
 /// - `games`: 対局数 (0 = 無制限)．
+/// - `time_curve` ほか手数カーブの引数は `run_usi` と同じ．floodgate は
+///   フィッシャー (300 秒 + 10 秒) なので，中盤へ寄せても加算分が終盤の
+///   床として丸ごと残る．
 /// - その他の引数は `run_usi` と同じ (評価器・探索・戦略の設定)．
 ///
 /// # 戻り値
@@ -551,7 +632,7 @@ fn csa_result_to_dict<'py>(py: Python<'py>, r: &CsaGameResult) -> PyResult<Bound
 ///
 /// ログイン拒否・モデルロード失敗など復帰できないものは `RuntimeError`．
 #[pyfunction]
-#[pyo3(signature = (*, host, port, login_name, password, games=None, keep_alive_sec=None, connect_timeout_sec=None, game_wait_sec=None, reconnect_wait_sec=None, verbose=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, network_delay_ms=None, min_think_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+#[pyo3(signature = (*, host, port, login_name, password, games=None, keep_alive_sec=None, connect_timeout_sec=None, game_wait_sec=None, reconnect_wait_sec=None, verbose=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, network_delay_ms=None, min_think_ms=None, time_curve=None, time_curve_peak_ply=None, time_curve_half_width_ply=None, time_curve_peak_permille=None, time_curve_opening_floor_permille=None, time_curve_endgame_floor_permille=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_csa(
     py: Python<'_>,
@@ -575,6 +656,12 @@ fn run_csa(
     pad_buckets: Option<bool>,
     network_delay_ms: Option<u64>,
     min_think_ms: Option<u64>,
+    time_curve: Option<bool>,
+    time_curve_peak_ply: Option<u64>,
+    time_curve_half_width_ply: Option<u64>,
+    time_curve_peak_permille: Option<u64>,
+    time_curve_opening_floor_permille: Option<u64>,
+    time_curve_endgame_floor_permille: Option<u64>,
     draw_value_black: Option<u32>,
     draw_value_white: Option<u32>,
     resign_value: Option<u32>,
@@ -592,8 +679,17 @@ fn run_csa(
     engine.time = TimeStrategyConfig {
         network_delay_ms: network_delay_ms.unwrap_or(time_defaults.network_delay_ms),
         min_think_ms: min_think_ms.unwrap_or(time_defaults.min_think_ms),
-        horizon_moves: time_defaults.horizon_moves,
+        ..time_defaults
     };
+    apply_time_curve_args(
+        &mut engine.time,
+        time_curve,
+        time_curve_peak_ply,
+        time_curve_half_width_ply,
+        time_curve_peak_permille,
+        time_curve_opening_floor_permille,
+        time_curve_endgame_floor_permille,
+    );
     apply_common_engine_args(
         &mut engine,
         model_path,
