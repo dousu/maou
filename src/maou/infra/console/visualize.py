@@ -61,12 +61,6 @@ _is_google_colab = is_google_colab
     default="127.0.0.1",
 )
 @click.option(
-    "--model-path",
-    help="オプショナルなONNXモデルパス（評価表示用）．",
-    type=click.Path(exists=True, path_type=Path),
-    required=False,
-)
-@click.option(
     "--debug-mode",
     help="詳細ログを有効化する．",
     is_flag=True,
@@ -85,7 +79,6 @@ def visualize(
     port: int | None,
     share: bool,
     server_name: str,
-    model_path: Path | None,
     debug_mode: bool,
     use_mock_data: bool,
 ) -> None:
@@ -221,7 +214,6 @@ def visualize(
             port=port,
             share=share,
             server_name=server_name,
-            model_path=model_path,
             debug=debug_mode,
             use_mock_data=use_mock_data,
         )

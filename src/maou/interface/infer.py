@@ -1,55 +1,75 @@
 import logging
 from pathlib import Path
 
-from maou.app.inference.run import InferenceRunner, ModelType
+from maou._rust.maou_search import evaluate as _rust_evaluate
+from maou.domain.board.shogi import Board
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 
 def infer(
     *,
-    model_type: str,
     model_path: Path | None = None,
-    cuda: bool,
     num_moves: int,
     sfen: str,
-    trt_workspace_size: int = 256,
-    engine_path: Path | None = None,
+    cuda: bool = False,
+    tensorrt: bool = False,
+    trt_cache_dir: Path | None = None,
 ) -> str:
-    """局面を推論して結果を文字列で返す．
+    """局面を 0 手読みで評価して結果を文字列で返す．
+
+    推論本体は Rust (``maou._rust.maou_search.evaluate``) が GIL を解放して
+    実行する．本関数はオプションの受け渡しと表示用整形だけを担う．
 
     Args:
-        model_type: モデル種別文字列（``"ONNX"`` or ``"TENSORRT"``）．
-        model_path: ONNXモデルファイルパス．engine_path未指定時は必須．
-        cuda: CUDA利用フラグ．
+        model_path: ONNXモデルファイルパス．未指定ならmock評価器．
         num_moves: 上位候補手数．
         sfen: SFEN文字列．
-        trt_workspace_size: TensorRTワークスペースサイズ(MB)．
-        engine_path: ビルド済みTensorRTエンジンファイルパス．
+        cuda: CUDA Execution Provider を使うか．
+        tensorrt: TensorRT Execution Provider を使うか．
+        trt_cache_dir: TensorRTエンジンキャッシュ保存先．
 
     Returns:
         推論結果のフォーマット済み文字列．
+
+    Raises:
+        ValueError: num_movesが負の場合．
     """
-    try:
-        model_type_enum = ModelType[model_type]
-    except KeyError as e:
+    if num_moves < 0:
         raise ValueError(
-            f"Invalid model type: {model_type}. Choose from {[mt.name for mt in ModelType]}"
-        ) from e
-    option = InferenceRunner.InferenceOption(
-        model_path=model_path,
-        model_type=model_type_enum,
-        cuda=cuda,
+            f"num_moves must be non-negative: {num_moves}"
+        )
+
+    result = _rust_evaluate(
+        sfen,
+        model_path=str(model_path)
+        if model_path is not None
+        else None,
         num_moves=num_moves,
-        sfen=sfen,
-        trt_workspace_size_mb=trt_workspace_size,
-        engine_path=engine_path,
+        use_cuda=cuda,
+        use_tensorrt=tensorrt,
+        trt_engine_cache_dir=str(trt_cache_dir)
+        if trt_cache_dir is not None
+        else None,
     )
-    runner = InferenceRunner()
-    result = runner.infer(option)
+
+    if result.moves:
+        policy = ", ".join(
+            f"{m.usi} ({m.prior:.4f})" for m in result.moves
+        )
+    elif result.legal_move_count == 0:
+        policy = "(no legal moves)"
+    else:
+        # num_moves=0 が指定された: 合法手はあるが表示しない
+        policy = f"(suppressed; {result.legal_move_count} legal moves)"
+
+    # 盤面表示はドメインのBoardに委ねる (推論経路には関与しない)
+    board = Board()
+    board.set_sfen(sfen)
+
     return f"""
 
-Policy: {result["Policy"]}
-Eval: {result["Eval"]}
-WinRate: {result["WinRate"]}
-{result["Board"]}"""
+Policy: {policy}
+Eval: {result.eval_score:.2f}
+WinRate: {result.winrate:.4f}
+{board.to_pretty_board()}"""

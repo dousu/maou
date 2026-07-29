@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from maou._rust.maou_search import search as _rust_search
-from maou.app.inference.eval import Evaluation
+from maou._rust.maou_search import winrate_to_eval
 from maou.domain.board.shogi import Board
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -14,8 +14,8 @@ class SearchRunner:
 
     探索本体は Rust 側 (`maou._rust.maou_search.search`) が GIL を解放して
     実行する．本クラスはオプションの受け渡しと，評価値スコア
-    (:class:`maou.app.inference.eval.Evaluation` — `maou evaluate` と同一の
-    Ponanza 係数 600 の変換) を含む表示用整形を担う．
+    (`maou._rust.maou_search.winrate_to_eval` — `maou evaluate` や USI の
+    `score cp` と同一の Ponanza 係数 600 の変換) を含む表示用整形を担う．
     """
 
     @dataclass(kw_only=True, frozen=True)
@@ -109,9 +109,7 @@ class SearchRunner:
         )
 
         winrate = float(result.winrate)
-        eval_score = float(
-            Evaluation.get_eval_from_winrate(winrate)
-        )
+        eval_score = float(winrate_to_eval(winrate))
 
         # 候補手: best_move を先頭に，残りは訪問回数の降順に上位 num_moves 件
         # (勝敗確定時の best_move は訪問回数が少ないことがあり，訪問数順
@@ -149,9 +147,7 @@ class SearchRunner:
                 )
                 continue
             child_winrate = float(child.winrate)
-            child_eval = float(
-                Evaluation.get_eval_from_winrate(child_winrate)
-            )
+            child_eval = float(winrate_to_eval(child_winrate))
             candidates.append(
                 f"{child.usi} (visits={child.visits}, "
                 f"winrate={child_winrate:.4f}, eval={child_eval:.2f}, "

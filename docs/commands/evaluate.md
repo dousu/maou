@@ -2,76 +2,87 @@
 
 ## Overview
 
-- Scores an arbitrary SFEN position without launching the full training or
-  benchmarking stacks. The CLI forwards every option from
-  `src/maou/infra/console/evaluate_board.py` to the interface layer so the same
-  validation logic is reused everywhere.【F:src/maou/infra/console/evaluate_board.py†L1-L51】【F:src/maou/interface/infer.py†L1-L38】
-- Supports both ONNX Runtime and (optionally) TensorRT backends through the
-  shared `InferenceRunner`, letting you flip between CPU-only inference and CUDA
-  acceleration with a single flag.【F:src/maou/app/inference/run.py†L40-L180】【F:src/maou/app/inference/onnx_inference.py†L1-L37】【F:src/maou/app/inference/tensorrt_inference.py†L1-L75】
+- 任意の SFEN 局面をニューラルネットワークで **0 手読み** 評価する．探索は
+  行わず，NN 推論を 1 回だけ実行して policy 上位手・評価値・勝率・盤面を出力する．
+- **推論は Rust (`maou_search`) が実行する**．Python 側は CLI のオプション
+  受け渡しと表示整形だけを担い，モデルのロードも forward pass も行わない
+  (`maou search` / `maou usi` / `maou selfplay` と同一の評価器を共有する)．
+- ONNX Runtime を静的リンクした Rust wheel が推論を担うため，**CPU 実行に
+  追加の Python 依存は不要**．CUDA / TensorRT Execution Provider を使う場合
+  のみ extra が要る (下記 § Execution Provider)．
 
 ## CLI options
 
-### Core flags
-
 | Flag | Required | Description |
 | --- | --- | --- |
-| `--model-type {ONNX,TENSORRT}` | default `ONNX` | Passed verbatim to `ModelType[model_type]`. Any value outside the enum raises a `ValueError` before inference starts, so stick to the spellings used in `ModelType`.【F:src/maou/interface/infer.py†L10-L38】【F:src/maou/app/inference/run.py†L17-L38】 |
-| `--model-path PATH` | conditional | Absolute or relative path to the exported network. Required when `--engine-path` is not specified. `click.Path` checks that it already exists, so you get early feedback when pointing at the wrong file before any GPU context is created.【F:src/maou/infra/console/evaluate_board.py†L16-L24】 |
-| `--cuda/--no-cuda` | default `--no-cuda` | Turns GPU execution on or off for both ONNX Runtime and TensorRT. TensorRT requires `--cuda` (see guardrails below).【F:src/maou/infra/console/evaluate_board.py†L25-L33】【F:src/maou/app/inference/run.py†L80-L139】 |
-| `--num-moves INT` | default `5` | Controls how many candidate moves are requested from the backend. The value is stored inside `InferenceRunner.InferenceOption.num_moves`.【F:src/maou/infra/console/evaluate_board.py†L34-L42】【F:src/maou/app/inference/run.py†L40-L103】 |
-| `--sfen STRING` | ✅ | Full SFEN describing the position (piece placement, side to move, hands, move count). The string is passed to `Board.set_sfen`, so anything accepted by the Rust engine (`maou_shogi`) works here.【F:src/maou/infra/console/evaluate_board.py†L43-L51】【F:src/maou/domain/board/shogi.py†L1-L77】 |
-| `--trt-workspace-size INT` | default `256` | TensorRT workspace size in MB. Default is sufficient for this project's models. Increase for larger models or max speed. Decrease if GPU memory is limited. Only used with `--model-type TENSORRT`. |
-| `--engine-path PATH` | default `None` | Pre-built TensorRT engine file path. When specified, the engine is loaded from this file and ONNX-to-TensorRT build is skipped. Build an engine first with `maou build-engine`. When `--engine-path` is provided, `--model-path` is not required and `--model-type` is automatically treated as `TENSORRT`.【F:src/maou/infra/console/evaluate_board.py†L63-L73】 |
+| `--sfen STRING` | ✅ | 評価する局面 (駒配置・手番・持ち駒・手数)．Rust の `maou_shogi` が受理する SFEN が使える． |
+| `--model-path PATH` | — | ONNX モデルファイルパス．**未指定時は決定論的な mock 評価器**が使われる (API 疎通確認用．出力の中身に意味はない)．`click.Path(exists=True)` が存在を先に検査する． |
+| `--num-moves INT` | default `5` | 返す候補手の数 (0 以上)．合法手数より大きい値は合法手数に丸められる． |
+| `--cuda/--no-cuda` | default `--no-cuda` | CUDA Execution Provider を有効にする (`onnx-cuda` feature 付き wheel が必要)．`--model-path` が必須． |
+| `--tensorrt/--no-tensorrt` | default `--no-tensorrt` | TensorRT Execution Provider を有効にする (`onnx-tensorrt` feature 付き wheel が必要)．`--model-path` が必須． |
+| `--trt-cache-dir PATH` | default `None` | TensorRT エンジンキャッシュの保存先．初回のエンジンビルドを次回以降再利用する． |
+
+オプション体系は `maou search` と揃えてある (同じ評価器を同じフラグで駆動する)．
 
 ## Execution flow
 
-1. **CLI validation** – `evaluate_board.py` ensures the model path exists, the
-   SFEN is present, and the CUDA flag is parsed before calling the interface
-   helper.【F:src/maou/infra/console/evaluate_board.py†L1-L51】
-2. **Interface hand-off** – `maou.interface.infer.infer` converts
-   `--model-type` into the `ModelType` enum, wraps the rest of the options into
-   `InferenceRunner.InferenceOption`, and constructs a `Board` from the SFEN
-   string before invoking `InferenceRunner`.【F:src/maou/interface/infer.py†L1-L38】【F:src/maou/app/inference/run.py†L40-L79】
-3. **Backend dispatch** – `InferenceRunner` sends the normalized tensor to
-   either `ONNXInference` or `TensorRTInference` depending on the enum and CUDA
-   flag, then receives the policy/value outputs. TensorRT is only available when
-   the optional extra is installed and CUDA is active.【F:src/maou/app/inference/run.py†L80-L139】【F:src/maou/app/inference/onnx_inference.py†L1-L37】【F:src/maou/app/inference/tensorrt_inference.py†L1-L75】
-4. **Result formatting** – The runner translates the top `--num-moves` labels
-   into USI strings, computes evaluation/win-rate pairs, and builds the ASCII
-   board representation that the CLI prints verbatim.【F:src/maou/app/inference/run.py†L140-L180】
+1. **CLI 検証** — `src/maou/infra/console/evaluate_board.py` が
+   `--num-moves` の範囲と，`--cuda` / `--tensorrt` に `--model-path` が
+   伴うことを検査する．
+2. **interface 委譲** — `src/maou/interface/infer.py` が
+   `maou._rust.maou_search.evaluate` を呼ぶ．
+3. **Rust 推論** — `rust/maou_rust/src/maou_search.rs` の `evaluate` が
+   局面から合法手を生成し，`maou_search::OnnxEvaluator`
+   (または mock) で 1 局面を評価する．**推論中は GIL を解放する**．
+4. **結果整形** — policy 事前確率の降順に候補手を並べ，勝率を
+   `maou_search::eval::winrate_to_eval` で評価値へ変換して返す．Python 側は
+   受け取った値を文字列に整形するだけ．
+
+## Policy の規約
+
+候補手は**合法手のみ**で，policy logits を**合法手の中で softmax 正規化**した
+事前確率の降順に並ぶ．これは MCTS (`maou search` / USI) が使う事前確率と
+同一の規約であり，非合法ラベルが出力に混ざることはない．
+
+出力形式は `<USI 指し手> (<事前確率>)` のカンマ区切り:
+
+```
+Policy: 2g2f (0.4158), 7g7f (0.2350), 1g1f (0.0613), 6i7h (0.0604), 3i4h (0.0402)
+```
+
+合法手が無い局面 (詰み) では `Policy: (no legal moves)`，`--num-moves 0` を
+指定した場合は `Policy: (suppressed; N legal moves)` になる．
 
 ## Validation and guardrails
 
-- Invalid model types are rejected immediately because `ModelType[model_type]`
-  raises a `KeyError`, which the interface wraps into a descriptive error
-  message.【F:src/maou/interface/infer.py†L10-L38】
-- `--model-path` must already exist (`click.Path(exists=True)`), so typos are
-  caught before GPU contexts or TensorRT engines are created.【F:src/maou/infra/console/evaluate_board.py†L16-L24】
-- TensorRT runs fail with `ValueError("TensorRT requires CUDA.")` when `--cuda`
-  is omitted; ONNX runs simply stay on CPU if CUDA is off.【F:src/maou/app/inference/run.py†L80-L139】
-- `Board.set_sfen` (Rust engine) validates the supplied SFEN string and raises when the
-  placement or hand descriptors are malformed, preventing undefined board
-  states.【F:src/maou/domain/board/shogi.py†L1-L77】
+- `--model-path` は `click.Path(exists=True)` で存在を先に検査するため，
+  GPU コンテキストや TensorRT エンジンが作られる前に誤りが分かる．
+- `--cuda` / `--tensorrt` を `--model-path` なしで指定すると
+  `UsageError` になる (mock 評価器に EP は無意味なため)．
+- `--num-moves` は `click.IntRange(min=0)` で負値を弾く．
+- SFEN の妥当性は Rust 側 (`maou_shogi`) が検証し，駒配置や持ち駒の記述が
+  壊れていれば例外になる．
+- `onnx` feature 無しでビルドされた wheel で `--model-path` を指定すると，
+  ビルド方法を案内する `RuntimeError` になる．
+- TensorRT 使用時はプロセス終了時の EP teardown がヒープを壊すため，出力後に
+  デストラクタを経由せず終了する (`maou search` と同じ回避策)．
 
-## Outputs and usage
+## Execution Provider
 
-- The interface returns a formatted string with `Policy`, `Eval`, `WinRate`, and
-  `Board` sections. Illegal labels are logged and replaced with
-  `"failed to convert"` so diagnostics stay visible.【F:src/maou/app/inference/run.py†L140-L180】
-- Evaluation scores are paired with win-rate estimates based on the active side
-  to move, making the output suitable for bug reports or quick comparisons.
-- TensorRT and ONNX outputs share the same format, so scripts can parse the
-  CLI's stdout without branching on backend type.【F:src/maou/interface/infer.py†L25-L38】
+| 実行環境 | 追加依存 | 備考 |
+| --- | --- | --- |
+| CPU | なし | Rust wheel が ONNX Runtime を静的リンクする |
+| CUDA | `uv sync --extra onnx-gpu-infer` | `onnx-cuda` feature 付き wheel が必要 |
+| TensorRT | `uv sync --extra tensorrt-infer` | `onnx-tensorrt` feature 付き wheel が必要．`--trt-cache-dir` の指定を推奨 |
 
 ## 評価値の解釈
 
 ### 評価値スコア（Eval）について
 
-評価値スコアは，モデルの生出力（logit）を600倍したものです:
+評価値スコアは，モデル出力の logit を600倍したものです:
 
 ```
-eval = 600 × logit
+eval = 600 × logit = 600 × ln(勝率 / (1 - 勝率))
 ```
 
 係数600は，Ponanzaという著名な将棋AIで使われていた定数で，将棋AIコミュニティでは標準的に使用されています．この係数により，評価値が人間にとって直感的な範囲（数百～数千）になります．
@@ -82,6 +93,10 @@ eval = 600 × logit
 - `eval = ±1200`: 有利/不利（勝率88%/12%）
 - `eval = ±1800`: 勝勢/敗勢（勝率95%/5%）
 - `eval ≥ ±3000`: 勝敗がほぼ決している
+
+勝率 0 / 1 でも発散しないよう内側にクランプするため，評価値は約 ±16570 で飽和します．
+
+この変換は `maou_search::eval::winrate_to_eval` の**単一実装**で，`maou evaluate` / `maou search` / `maou analyze-game` / USI の `score cp` が共有します．
 
 ### 評価値と手番の関係
 
@@ -98,22 +113,39 @@ eval = 600 × logit
 
 **注意**: この評価値は将棋の「点数」（駒の価値）とは異なります．あくまで「勝ちやすさ」を表す指標です．
 
-### Example invocation
+## Example invocation
 
 ```bash
-poetry run maou evaluate \
-  --model-type ONNX \
+# CPU (追加依存なし)
+uv run maou evaluate \
   --model-path artifacts/eval.onnx \
-  --cuda \
   --num-moves 7 \
   --sfen "lnsgkgsnl/1r5b1/p1pppp1pp/6p2/9/2P6/PP1PPPPPP/1B5R1/LNSGKGSNL b - 1"
+
+# TensorRT
+uv run maou evaluate \
+  --model-path artifacts/eval.onnx \
+  --tensorrt --cuda \
+  --trt-cache-dir .trt-cache \
+  --sfen "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
+```
+
+出力例:
+
+```
+Policy: 2g2f (0.4158), 7g7f (0.2350), 1g1f (0.0613), 6i7h (0.0604), 3i4h (0.0402)
+Eval: 279.93
+WinRate: 0.6146
+後手の持駒：なし
+  ９ ８ ７ ６ ５ ４ ３ ２ １
+...
 ```
 
 ## Implementation references
 
-- CLI definition and flag parsing – `src/maou/infra/console/evaluate_board.py`.【F:src/maou/infra/console/evaluate_board.py†L1-L51】
-- Interface adapter – `src/maou/interface/infer.py`.【F:src/maou/interface/infer.py†L1-L38】
-- Runner and backend implementations – `src/maou/app/inference/run.py`,
-  `src/maou/app/inference/onnx_inference.py`,
-  `src/maou/app/inference/tensorrt_inference.py`.【F:src/maou/app/inference/run.py†L17-L180】【F:src/maou/app/inference/onnx_inference.py†L1-L37】【F:src/maou/app/inference/tensorrt_inference.py†L1-L75】
-- Board utilities – `src/maou/domain/board/shogi.py`.【F:src/maou/domain/board/shogi.py†L1-L77】
+- CLI 定義 — `src/maou/infra/console/evaluate_board.py`
+- interface アダプタ — `src/maou/interface/infer.py`
+- Rust 推論 — `rust/maou_rust/src/maou_search.rs` (`evaluate`),
+  `rust/maou_search/src/onnx.rs` (`OnnxEvaluator`),
+  `rust/maou_search/src/eval.rs` (`winrate_to_eval`)
+- 盤面表示 — `src/maou/domain/board/shogi.py`

@@ -88,8 +88,8 @@ wheel のインストールにより `maou` コマンドが利用可能になる
 !maou hcpe-convert --help   # HCPE ファイルの変換
 !maou pre-process --help    # データの前処理
 !maou learn-model --help    # モデルの学習
-!maou evaluate --help       # 局面の評価
-!maou build-engine --help   # TensorRT エンジンのビルド
+!maou evaluate --help       # 局面の評価 (0 手読み)
+!maou search --help         # 1 局面の MCTS 探索
 !maou visualize --help      # 将棋盤の可視化
 !maou utility --help        # ユーティリティ (ベンチマーク等)
 ```
@@ -101,8 +101,8 @@ wheel のインストールにより `maou` コマンドが利用可能になる
 | `hcpe-convert` | HCPE ファイルを Arrow IPC 形式に変換 | — |
 | `pre-process` | 学習データの前処理 | — |
 | `learn-model` | モデルの学習 | `torch` |
-| `evaluate` | 局面の評価値を計算 | `onnxruntime` |
-| `build-engine` | ONNX → TensorRT エンジン変換 | `tensorrt` |
+| `evaluate` | 局面の評価値を計算 (0 手読み) | — |
+| `search` | 1 局面の MCTS 探索 | — |
 | `visualize` | 将棋盤の可視化 | `gradio`, `matplotlib` |
 | `utility` | ベンチマーク・スクリーンショット等 | `torch` |
 

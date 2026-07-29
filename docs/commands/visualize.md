@@ -40,11 +40,9 @@ Gradioベースの将棋データ可視化ツール．HCPE，preprocessing，sta
 | `--share` | false | Gradio公開リンクを作成する．Google Colab環境では自動的に有効化される． |
 | `--debug-mode` | false | 詳細ログを有効化する． |
 
-### モデル評価（オプション）
-
-| フラグ | 必須 | 説明 |
-|--------|------|------|
-| `--model-path PATH` | No | ONNXモデルパス．指定すると各局面の評価値を表示できる． |
+> [!NOTE]
+> 局面の評価値表示は `maou visualize` にはない．評価には `maou evaluate`
+> (0 手読み) または `maou search` (MCTS 探索) を使う．
 
 ## 使用例
 

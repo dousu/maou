@@ -19,7 +19,7 @@
   `--no-root-dfpn --no-leaf-mate` (e.g. for pure NPS benchmarking).
 - The evaluation score uses the same Ponanza-style conversion
   (`eval = 600 × logit`) as `maou evaluate` via
-  `maou.app.inference.eval.Evaluation`, applied to the **searched** win rate.
+  `maou_search::eval::winrate_to_eval`, applied to the **searched** win rate.
   Scores are comparable in scale with `maou evaluate`, but not identical for
   the same position (search refines the raw model output).
 

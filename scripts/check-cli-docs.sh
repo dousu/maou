@@ -45,6 +45,18 @@ while IFS= read -r file; do
   esac
 done < <(git diff --cached --name-only)
 
+# 削除された CLI ファイル（コマンドの廃止）はマッピング不要として扱う．
+# 廃止したコマンドを CLI_DOC_MAP に登録させると，二度と存在しないファイルの
+# エントリが恒久的に残ってしまう．
+DELETED_CLI_FILES=()
+while IFS= read -r file; do
+  case "$file" in
+    "${CLI_DIR}"*.py)
+      DELETED_CLI_FILES+=("$(basename "$file")")
+      ;;
+  esac
+done < <(git diff --cached --diff-filter=D --name-only)
+
 # CLI ファイルがなければ即パス
 if [ ${#CLI_FILES[@]} -eq 0 ]; then
   exit 0
@@ -62,6 +74,18 @@ for cli_file in "${CLI_FILES[@]}"; do
     fi
   done
   if [ "$is_excluded" -eq 1 ]; then
+    continue
+  fi
+
+  # 削除された CLI ファイルはスキップ（コマンド廃止）
+  is_deleted=0
+  for deleted in "${DELETED_CLI_FILES[@]}"; do
+    if [ "$cli_file" = "$deleted" ]; then
+      is_deleted=1
+      break
+    fi
+  done
+  if [ "$is_deleted" -eq 1 ]; then
     continue
   fi
 
