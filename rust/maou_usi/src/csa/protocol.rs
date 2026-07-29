@@ -132,6 +132,10 @@ pub struct GameSummary {
     pub start_sfen: String,
     /// 基準局面から再開局面までの指し手 (USI 表記)．
     pub init_moves: Vec<String>,
+    /// 再開局面までに消費された時間 [先手, 後手] (`Time_Unit` 単位)．
+    ///
+    /// 再開局面から始まる対局で残り持ち時間を出すために使う．
+    pub init_consumed_units: [u64; 2],
 }
 
 /// `Game_Summary` を行単位で組み立てるパーサ．
@@ -237,7 +241,8 @@ impl GameSummaryBuilder {
             delay_ms: scale("Delay").unwrap_or(0),
             least_per_move_ms: scale("Least_Time_Per_Move").unwrap_or(0),
         };
-        let (start_sfen, init_moves) = parse_position_block(&self.position_lines)?;
+        let (start_sfen, init_moves, init_consumed_units) =
+            parse_position_block(&self.position_lines)?;
         Ok(GameSummary {
             game_id: self.field("Game_ID").unwrap_or_default().to_string(),
             name_black: self.field("Name+").unwrap_or_default().to_string(),
@@ -248,6 +253,7 @@ impl GameSummaryBuilder {
             time,
             start_sfen,
             init_moves,
+            init_consumed_units,
         })
     }
 }
@@ -276,11 +282,16 @@ fn parse_time_unit_ms(s: &str) -> u64 {
     count.saturating_mul(base)
 }
 
-/// `BEGIN Position` 階層を (基準局面 SFEN, USI 指し手列) へ．
+/// `BEGIN Position` 階層を (基準局面 SFEN, USI 指し手列, 手番別の消費時間) へ．
 ///
 /// 盤面部は CSA 棋譜として組み立て直して [`parse_csa_str`] に渡す．指し手行は
 /// 合法手照合で解決する (`move_from_csa`)．
-fn parse_position_block(lines: &[String]) -> Result<(String, Vec<String>), String> {
+///
+/// 消費時間は再開局面での残り時間を出すために手番別に合計する (単位時間のまま)．
+/// これを引かないと再開時に持ち時間を過大評価して時間切れ負けし得る．
+type PositionBlock = (String, Vec<String>, [u64; 2]);
+
+fn parse_position_block(lines: &[String]) -> Result<PositionBlock, String> {
     let mut board_lines: Vec<&str> = Vec::new();
     let mut move_lines: Vec<&str> = Vec::new();
     for line in lines {
@@ -306,15 +317,17 @@ fn parse_position_block(lines: &[String]) -> Result<(String, Vec<String>), Strin
         .set_sfen(&start_sfen)
         .map_err(|e| format!("局面 SFEN の適用に失敗: {e:?}"))?;
     let mut moves = Vec::with_capacity(move_lines.len());
+    let mut consumed = [0u64; 2];
     for line in move_lines {
-        // "+2726FU,T12" → 指し手部だけ取る
-        let token = line.split(',').next().unwrap_or(line).trim();
-        let mv = move_from_csa(&board, token)
+        // "+2726FU,T12" → 指し手部と消費時間に分ける
+        let (token, spent) = split_consumed(line);
+        let mv = move_from_csa(&board, &token)
             .ok_or_else(|| format!("再開局面の指し手が非合法: {token}"))?;
+        consumed[usize::from(board.turn() == Color::White)] += spent;
         moves.push(mv.to_usi());
         board.do_move(mv);
     }
-    Ok((start_sfen, moves))
+    Ok((start_sfen, moves, consumed))
 }
 
 /// サーバ → クライアントのメッセージ．
@@ -608,6 +621,8 @@ END Game_Summary";
         let s = build(&text);
         assert_eq!(s.init_moves, vec!["2g2f".to_string(), "3c3d".to_string()]);
         assert_eq!(s.start_sfen, STARTPOS_SFEN);
+        // 再開局面の残り持ち時間を出すため手番別に消費時間を積む
+        assert_eq!(s.init_consumed_units, [12, 6]);
     }
 
     #[test]

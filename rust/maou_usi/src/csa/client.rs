@@ -278,11 +278,17 @@ struct GameClock {
 }
 
 impl GameClock {
-    fn new(rule: &TimeRule) -> Self {
+    /// `consumed_units` は再開局面までに消費された時間 (`Time_Unit` 単位)．
+    /// 途中再開の対局で持ち時間を過大評価しないために差し引く．
+    fn new(rule: &TimeRule, consumed_units: [u64; 2]) -> Self {
         let total = rule.total_ms.unwrap_or(0);
+        let spent = |units: u64| units.saturating_mul(rule.unit_ms);
         Self {
             rule: *rule,
-            remaining: [total, total],
+            remaining: [
+                total.saturating_sub(spent(consumed_units[0])),
+                total.saturating_sub(spent(consumed_units[1])),
+            ],
             limited: rule.total_ms.is_some() || rule.byoyomi_ms > 0 || rule.increment_ms > 0,
         }
     }
@@ -534,7 +540,7 @@ where
     let mut moves = summary.init_moves.clone();
     let (mut board, _) = build_board_and_history(&summary.start_sfen, &moves)
         .map_err(|e| SessionError::Retryable(format!("再開局面の構築に失敗: {e}")))?;
-    let mut clock = GameClock::new(&summary.time);
+    let mut clock = GameClock::new(&summary.time, summary.init_consumed_units);
     let my_color = summary.my_color;
     let opponent = match my_color {
         Color::Black => summary.name_white.clone(),
@@ -669,7 +675,7 @@ mod tests {
 
     #[test]
     fn clock_tracks_increment_and_consumption() {
-        let mut clock = GameClock::new(&rule());
+        let mut clock = GameClock::new(&rule(), [0, 0]);
         assert_eq!(clock.remaining, [300_000, 300_000]);
         // 先手番の開始: 加算が乗る
         clock.add_increment(Color::Black);
@@ -682,17 +688,20 @@ mod tests {
 
     #[test]
     fn clock_floors_at_zero() {
-        let mut clock = GameClock::new(&TimeRule {
-            increment_ms: 0,
-            ..rule()
-        });
+        let mut clock = GameClock::new(
+            &TimeRule {
+                increment_ms: 0,
+                ..rule()
+            },
+            [0, 0],
+        );
         clock.consume(Color::White, 9999);
         assert_eq!(clock.remaining[1], 0);
     }
 
     #[test]
     fn go_params_map_to_usi_clock() {
-        let mut clock = GameClock::new(&rule());
+        let mut clock = GameClock::new(&rule(), [0, 0]);
         clock.add_increment(Color::Black);
         let go = clock.go_params();
         assert_eq!(go.clock.btime, Some(310_000));
@@ -705,11 +714,14 @@ mod tests {
 
     #[test]
     fn byoyomi_rule_maps_to_byoyomi() {
-        let clock = GameClock::new(&TimeRule {
-            increment_ms: 0,
-            byoyomi_ms: 10_000,
-            ..rule()
-        });
+        let clock = GameClock::new(
+            &TimeRule {
+                increment_ms: 0,
+                byoyomi_ms: 10_000,
+                ..rule()
+            },
+            [0, 0],
+        );
         let go = clock.go_params();
         assert_eq!(go.clock.byoyomi, Some(10_000));
         assert_eq!(go.clock.binc, None);
@@ -717,12 +729,15 @@ mod tests {
 
     #[test]
     fn unlimited_rule_falls_back_to_movetime() {
-        let clock = GameClock::new(&TimeRule {
-            total_ms: None,
-            byoyomi_ms: 0,
-            increment_ms: 0,
-            ..rule()
-        });
+        let clock = GameClock::new(
+            &TimeRule {
+                total_ms: None,
+                byoyomi_ms: 0,
+                increment_ms: 0,
+                ..rule()
+            },
+            [0, 0],
+        );
         let go = clock.go_params();
         assert_eq!(go.movetime, Some(NO_LIMIT_MOVETIME_MS));
         assert!(go.clock.is_empty());
@@ -731,13 +746,30 @@ mod tests {
     #[test]
     fn time_unit_scales_consumption() {
         // Time_Unit:1min の対局では T1 = 60 秒
-        let mut clock = GameClock::new(&TimeRule {
-            unit_ms: 60_000,
-            total_ms: Some(600_000),
-            increment_ms: 0,
-            ..rule()
-        });
+        let mut clock = GameClock::new(
+            &TimeRule {
+                unit_ms: 60_000,
+                total_ms: Some(600_000),
+                increment_ms: 0,
+                ..rule()
+            },
+            [0, 0],
+        );
         clock.consume(Color::Black, 1);
         assert_eq!(clock.remaining[0], 540_000);
+    }
+
+    #[test]
+    fn resumed_game_starts_from_reduced_clock() {
+        // 途中再開: Position 階層の指し手で消費された分を引いて始める
+        // (引かないと持ち時間を過大評価して時間切れ負けし得る)
+        let clock = GameClock::new(&rule(), [12, 6]);
+        assert_eq!(clock.remaining, [288_000, 294_000]);
+    }
+
+    #[test]
+    fn resumed_consumption_cannot_go_negative() {
+        let clock = GameClock::new(&rule(), [9999, 0]);
+        assert_eq!(clock.remaining[0], 0);
     }
 }
