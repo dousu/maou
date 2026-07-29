@@ -111,10 +111,12 @@ main ブランチへの push をトリガーに wheel をビルドし，GitHub R
   無い (`.pyd` 44.5MB / wheel 13.8MB)．workflow は
   `.github/workflows/build-wheel-windows.yml` に**休眠** (手動実行のみ) で
   置いてある．
-- **必須フラグが 2 つあり，どちらも既定では付かない**:
-  `--features pyo3/extension-module,onnx` (省くと pure Rust ビルドになり
-  `ModelPath` が使えない) と `--release` (`[tool.maturin] profile = "dev"`
-  のため省くと debug ビルド)．
+- **`--release` は既定では付かない** (`[tool.maturin] profile = "dev"` の
+  ため省くと debug ビルド)．features は `[tool.maturin] features` が
+  `pyo3/extension-module,onnx` を既定に含むので **maturin 経由なら省いてよい**
+  (workflow は何でビルドされるかをファイル内で読み取れるよう明示している)．
+  `cargo` を直接叩く場合は `pyproject.toml` を読まないため従来どおり
+  `--features` の指定が要る．
 - **実行機に VC++ 再頒布可能パッケージ (2015-2022 x64) が要る**．
   `MSVCP140.dll` は Python にも Windows にも同梱されず，ONNX Runtime が
   C++ なのでこれが要る．無いと `ImportError: DLL load failed while
