@@ -244,11 +244,24 @@ Use conventional commit format:
 3. **Code Review**: Appropriate reviewers assigned
 
 ### Strict Prohibitions
-- ❌ `Co-authored-by` trailers
-- ❌ AI tool references
 - ❌ Generic commit messages
 - ❌ Multiple unrelated changes
 - ❌ Breaking tests
+
+### Attribution (required)
+
+This repository **does** attribute agent-assisted work. Verify against
+`git log` / `gh pr view` rather than assuming:
+
+- ✅ Commits end with `Co-Authored-By: <model> <noreply@anthropic.com>`
+- ✅ PR bodies end with
+  `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
+
+An earlier revision prohibited both. That contradicted the repository's own
+history (17 of the 20 commits on `main` preceding 2026-07-29 carry the
+trailer, and every recent PR body carries the footer), so following it
+produced work inconsistent with the rest of the project.
+Corrected 2026-07-29 (`reviews/2026-07-29-csa-floodgate-client.md`).
 
 ## 日本語記述規則
 

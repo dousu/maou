@@ -130,8 +130,8 @@ Guide reviewers on what to focus on:
 - [ ] Architecture compliance verified
 - [ ] Docstrings added/updated
 - [ ] CLAUDE.md updated if needed
-- [ ] No Co-authored-by trailers
-- [ ] No AI tool references
+- [ ] Commits carry the `Co-Authored-By` trailer
+- [ ] PR body ends with the Claude Code footer
 ```
 
 ### 4. Create Pull Request
@@ -387,8 +387,10 @@ bundle_000.meta.json  # Metadata: {"array_id": {"offset": 0, "shape": [...]}}
 - [x] Architecture compliance verified
 - [x] Docstrings added (all public APIs)
 - [x] CLAUDE.md updated (array bundling section added)
-- [x] No Co-authored-by trailers
-- [x] No AI tool references
+- [x] Commits carry the `Co-Authored-By` trailer
+- [x] PR body ends with the Claude Code footer
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```
@@ -427,9 +429,31 @@ These will cause PR rejection:
 ❌ **Generic PR descriptions** - Be specific about changes
 ❌ **Missing impact analysis** - Always analyze breaking changes
 ❌ **No testing information** - Document all testing performed
-❌ **Co-authored-by trailers** - Never include in commits
-❌ **AI tool references** - No mentions of Claude, GPT, etc.
 ❌ **Incomplete checklists** - Verify all items before submission
+
+## Attribution (required)
+
+This repository **does** attribute agent-assisted work. Both of the
+following are the established convention — verify against `git log` /
+`gh pr view` before assuming otherwise:
+
+✅ **Commits end with the trailer**:
+
+```
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+```
+
+✅ **PR bodies end with the footer**:
+
+```
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+```
+
+An earlier revision of this skill prohibited both. That was wrong: it
+contradicted the repository's own history (17 of the 20 commits on `main`
+preceding 2026-07-29 carry the trailer, and every recent PR body carries
+the footer), and following it produced PRs inconsistent with the rest of
+the project. Corrected 2026-07-29.
 
 ## Integration with Project Standards
 

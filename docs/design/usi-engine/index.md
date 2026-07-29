@@ -98,14 +98,53 @@ ponder シーケンス: `bestmove X ponder Y` → GUI が相手番中に
 | `agent` | 対局エージェント = 状態機械 + 戦略モジュール + 探索セッション．transport 非依存 | maou_shogi, maou_search |
 | `stdio` | stdin 読取りスレッド + stdout 書込み (行バッファ+flush) + dispatch | protocol, agent |
 | `selfplay` | in-process 自己対局 driver (M4) | agent |
+| `csa` | CSA サーバプロトコル transport (`csa::protocol` = 行 ⇔ 型付きメッセージ (pure) / `csa::client` = TCP セッション + 対局ループ + 連続対局の再接続) | protocol, agent, time |
 
 プロトコル層とエージェントを分離する根拠:
 
 - 自己対局 driver が **agent を stdio/プロセスなしで直接駆動**できる
   (性能要件の核．プロトコル文字列の parse/serialize すら通らない)
-- 電竜戦本戦は CSA → 将来 CSA transport を agent 無変更で追加できる
+- 電竜戦本戦は CSA → **CSA transport を agent 無変更で追加できた**
+  (2026-07-29 実装．`agent` の変更 0 行で floodgate 対局が動いた —
+  この分離の設計上の狙いが実証された形)
 - GUI 方言を protocol/stdio に隔離し agent を clean に保つ
 - fake transport で状態機械・戦略を完全に単体テストできる
+
+### 4.1 CSA transport (floodgate 対局)
+
+コマンドは [`maou floodgate`](../../commands/floodgate.md)．接続先の既定は
+floodgate (wdoor)．一次資料 (<http://wdoor.c.u-tokyo.ac.jp/shogi/> と
+CSA プロトコル ver 1.2.1) から確定した仕様:
+
+| 事項 | 内容 |
+|---|---|
+| 接続先 | `wdoor.c.u-tokyo.ac.jp:4081` |
+| ログイン名 | 任意 (**事前登録不要**)．重複回避のためオリジナルな名前を |
+| パスワード欄 | **`floodgate-300-10F,<trip>`** — ゲーム名を埋め込む規約 |
+| 同一性 | 「ログイン名 + trip」．サーバ側の識別子は `<ログイン名>+md5(<trip>)` で公開棋譜の `'rating:` 行に現れる |
+| 対局の組まれ方 | **毎時 0 分と 30 分** |
+| 対局後 | **ログアウト状態に戻る** → 再接続する (連続対局 = 1 接続 1 対局) |
+| 持ち時間 | 300 秒 + 10 秒加算 (Fischer)．**512 手で引き分け** |
+| レーティング | 15 試合程度で計算される．**プロトコルは運ばない** (公開棋譜の `'black_rate:` / `'white_rate:` と wdoor のレーティングページにのみ存在) |
+
+責務分界は USI 経路と同一に保つ:
+
+- CSA は対局開始時に持ち時間規定を一括通知し，以後は指し手に消費時間
+  `,T<n>` を付ける (USI の毎手 `go btime wtime` とは別形式)．この差は
+  **transport が吸収**して残り時間を追跡し，USI と同じ `ClockParams` に写す．
+  1 手の予算配分は §8.1 の TimeStrategy がそのまま行う
+- **消費時間はサーバ計測が正**．クライアントの実測ではない (仕様 3.2.2 が
+  「サーバが示した消費時間を時間計算に使用すればよい」と定める)
+- 自己対局 driver の `clock_margin_ms` を CSA 経路にも適用する
+  (**時間制の経路は USI / 自己対局 / CSA の 3 本**．片方を直したら他も見る)
+- 局面 (`BEGIN Position`) は既存の CSA 棋譜パーサ
+  (`maou_shogi::kifu::parse_csa_str`) に委譲し，CSA 局面表記の 2 つ目の
+  実装を持たない．指し手の解決は合法手照合 (USI 経路の `to_usi()` 照合と
+  同じ規約) で，非合法手・盤面ずれがその場で検出される
+- **ponder は使わない** (CSA に `ponderhit` 相当の信号が無い)
+
+keep-alive は仕様 3.4 の下限 (同一クライアントからの受信後 30 秒) を機構的に
+守る — 違反はサーバが反則負けにできる．
 
 ## 5. Rust / Python 境界 (設計方針)
 
