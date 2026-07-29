@@ -10,16 +10,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use maou_search::{
-    build_board_and_history, EvalItem, Evaluator, MockEvaluator, ReusableTree, RootSnapshot,
-    SearchLimits, SearchOptions, SearchResult, Searcher, StopCause,
+    build_board_and_history, MockEvaluator, ReusableTree, RootSnapshot, SearchLimits,
+    SearchOptions, SearchResult, Searcher, StopCause,
 };
-use maou_shogi::board::Board;
 use maou_shogi::dfpn::{DfPnSolver, TsumeResult};
-use maou_shogi::movegen::generate_legal_moves;
 
 use crate::agent::{
     EngineConfig, GoRules, ProgressSnapshot, SearchBackend, SearchBudget, SearchObserver,
-    SearchOutcome, STARTPOS_SFEN,
+    SearchOutcome,
 };
 use crate::protocol::CheckmateResult;
 
@@ -70,20 +68,10 @@ pub(crate) fn build_evaluator(config: &EngineConfig) -> Result<EngineEvaluator, 
 /// 平手初期局面を 1 回評価して初回推論の固定費 (TensorRT エンジンビルド/
 /// CUDA 初期化) を前払いする (USI では `isready` 中，自己対局では起動時)．
 pub(crate) fn warmup_evaluator(evaluator: &EngineEvaluator) -> Result<(), String> {
-    let mut board = Board::empty();
-    board
-        .set_sfen(STARTPOS_SFEN)
-        .map_err(|e| format!("startpos SFEN must parse: {e:?}"))?;
-    let moves = generate_legal_moves(&mut board.clone());
-    let item = [EvalItem { board, moves }];
     match evaluator {
-        EngineEvaluator::Mock(e) => {
-            let _ = e.evaluate_batch(&item);
-        }
+        EngineEvaluator::Mock(e) => maou_search::warmup(e),
         #[cfg(feature = "onnx")]
-        EngineEvaluator::Onnx(e) => {
-            let _ = e.evaluate_batch(&item);
-        }
+        EngineEvaluator::Onnx(e) => maou_search::warmup(e),
     }
     Ok(())
 }
@@ -358,6 +346,8 @@ fn to_outcome(r: &SearchResult) -> SearchOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::STARTPOS_SFEN;
+    use maou_shogi::movegen::generate_legal_moves;
     use std::sync::atomic::Ordering;
 
     fn config() -> EngineConfig {

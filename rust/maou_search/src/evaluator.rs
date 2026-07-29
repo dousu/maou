@@ -7,7 +7,11 @@
 //! 探索側には「合法手ごとの事前確率 + 手番側勝率」だけを渡す．
 
 use maou_shogi::board::Board;
+use maou_shogi::movegen::generate_legal_moves;
 use maou_shogi::moves::Move;
+
+/// 平手初期局面の SFEN．
+pub const STARTPOS_SFEN: &str = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
 
 /// 評価リクエスト 1 件 (葉局面とその合法手)．
 pub struct EvalItem {
@@ -32,6 +36,26 @@ pub struct EvalResult {
 pub trait Evaluator: Send + Sync {
     /// 複数局面をまとめて評価する．
     fn evaluate_batch(&self, items: &[EvalItem]) -> Vec<EvalResult>;
+}
+
+/// 平手初期局面を 1 回評価して初回推論の固定費を前払いする (warmup)．
+///
+/// ONNX Runtime の TensorRT EP は**最初の推論時に**エンジンをビルドする
+/// (キャッシュがなければ数十秒かかる)．探索の時間予算は `go` 受領時刻を
+/// 起点に張るため，この固定費を予算の内側で払うと短い予算では playout が
+/// 0 になる．そこで**予算を張る前に**本関数で 1 回推論を通しておく．
+///
+/// 呼び出し箇所は「1 手ぶんの予算の外側」— USI は `isready`，CSA は対局
+/// 開始前，CLI (`maou search`) と `SearchEngine` は探索開始前．
+///
+/// 結果は捨てる (副作用としての初期化だけが目的)．
+pub fn warmup<E: Evaluator + ?Sized>(evaluator: &E) {
+    let mut board = Board::empty();
+    board
+        .set_sfen(STARTPOS_SFEN)
+        .expect("STARTPOS_SFEN は正当な SFEN");
+    let moves = generate_legal_moves(&mut board.clone());
+    let _ = evaluator.evaluate_batch(&[EvalItem { board, moves }]);
 }
 
 /// splitmix64 (決定論的擬似乱数生成)．
@@ -98,15 +122,37 @@ impl Evaluator for MockEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maou_shogi::movegen::generate_legal_moves;
-
-    const STARTPOS: &str = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
     fn startpos_item() -> EvalItem {
         let mut board = Board::empty();
-        board.set_sfen(STARTPOS).expect("startpos は正当な SFEN");
+        board
+            .set_sfen(STARTPOS_SFEN)
+            .expect("startpos は正当な SFEN");
         let moves = generate_legal_moves(&mut board);
         EvalItem { board, moves }
+    }
+
+    /// 呼び出し回数とバッチ内容を記録する評価器 (warmup の検証用)．
+    struct CountingEvaluator {
+        calls: AtomicUsize,
+        last_batch: Mutex<Vec<usize>>,
+    }
+
+    impl Evaluator for CountingEvaluator {
+        fn evaluate_batch(&self, items: &[EvalItem]) -> Vec<EvalResult> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            *self.last_batch.lock().expect("poisoned") =
+                items.iter().map(|i| i.moves.len()).collect();
+            items
+                .iter()
+                .map(|i| EvalResult {
+                    priors: vec![0.0; i.moves.len()],
+                    value: 0.5,
+                })
+                .collect()
+        }
     }
 
     #[test]
@@ -130,5 +176,41 @@ mod tests {
         let b = ev.evaluate_batch(&[startpos_item()]);
         assert_eq!(a[0].priors, b[0].priors);
         assert_eq!(a[0].value, b[0].value);
+    }
+
+    #[test]
+    fn test_warmup_runs_exactly_one_inference() {
+        let ev = CountingEvaluator {
+            calls: AtomicUsize::new(0),
+            last_batch: Mutex::new(Vec::new()),
+        };
+        warmup(&ev);
+        assert_eq!(
+            ev.calls.load(Ordering::SeqCst),
+            1,
+            "warmup は推論をちょうど 1 回だけ走らせる"
+        );
+    }
+
+    #[test]
+    fn test_warmup_evaluates_startpos_with_all_legal_moves() {
+        // 平手初期局面の合法手は 30 手．TensorRT のエンジンは shape ごとに
+        // ビルドされるため，warmup が実運用と同じ 1 局面バッチを通すことが重要
+        let ev = CountingEvaluator {
+            calls: AtomicUsize::new(0),
+            last_batch: Mutex::new(Vec::new()),
+        };
+        warmup(&ev);
+        let batch = ev.last_batch.lock().expect("poisoned").clone();
+        assert_eq!(batch, vec![30], "1 局面 × 合法手 30 手のバッチ");
+    }
+
+    #[test]
+    fn test_startpos_sfen_parses() {
+        let mut board = Board::empty();
+        board
+            .set_sfen(STARTPOS_SFEN)
+            .expect("STARTPOS_SFEN は正当な SFEN");
+        assert_eq!(generate_legal_moves(&mut board).len(), 30);
     }
 }

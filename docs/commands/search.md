@@ -114,11 +114,31 @@ Stats: playouts=38 terminal_backprops=1 nps=435 eval_batches=5 avg_batch=7.6 col
   when the GPU does the same amount of work. A collision count that grows with
   `--threads` is the usual cause of a low fill rate (a collision submits the
   partially collected batch immediately).
-  `warmup_ms` is the one-time root evaluation cost (the first inference, which
-  triggers the TensorRT engine build/load) — it is measured **outside** the
-  timed region, so `nps`/`elapsed_ms` reflect only the search itself. With
-  TensorRT the first run's `warmup_ms` can be tens of seconds; subsequent runs
-  reusing `--trt-cache-dir` drop to a few seconds.
+  `warmup_ms` is the one-time root evaluation cost — it is measured **outside**
+  the timed region, so `nps`/`elapsed_ms` reflect only the search itself.
+
+### The time budget and warmup
+
+`--time-ms` bounds the **search**, not the process. Before the budget starts,
+the CLI runs one throwaway inference to pay the lazy initialization cost
+(TensorRT engine build/load, CUDA context creation) up front, so the full
+`--time-ms` is available for playouts.
+
+This matters with a cold TensorRT cache: building an engine takes tens of
+seconds, and if it were paid inside the budget a short `--time-ms` would finish
+with `playouts=0` and a meaningless `Bestmove`. Reusing `--trt-cache-dir` drops
+the cost to roughly a second.
+
+Wall-clock time is therefore `warmup + --time-ms`, which is longer than
+`--time-ms`. That is deliberate for a CLI: you asked for N milliseconds *of
+search*.
+
+> [!NOTE]
+> The engine-playing paths do **not** work this way — there the budget covers
+> everything after `go`, because a GUI or game server measures from the move it
+> sends to the `bestmove` it receives, and overrunning loses on time. They avoid
+> the same trap by warming up earlier: USI during `isready` (before `readyok`),
+> `maou floodgate` before the first game, and `maou selfplay` at startup.
 
 ## Example invocation
 
