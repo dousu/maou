@@ -280,20 +280,6 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
             PackageRequirement("torch", _TRAINING_EXTRAS),
         ),
     ),
-    "build-engine": LazyCommandSpec(
-        "maou.infra.console.build_engine",
-        "build_engine",
-        missing_help=(
-            "Command 'build-engine' requires TensorRT dependencies. "
-            "Install with `uv sync --extra tensorrt-infer`."
-        ),
-        required_packages=(
-            PackageRequirement(
-                "tensorrt",
-                ("tensorrt-infer",),
-            ),
-        ),
-    ),
     "search": LazyCommandSpec(
         "maou.infra.console.search_board",
         "search_board",
@@ -330,24 +316,10 @@ LAZY_COMMANDS: dict[str, LazyCommandSpec] = {
             PackageRequirement("gradio", ("visualize",)),
         ),
     ),
+    # 0 手読み評価 (推論は Rust maou_search; 追加依存なし)
     "evaluate": LazyCommandSpec(
         "maou.infra.console.evaluate_board",
         "evaluate_board",
-        missing_help=(
-            "Command 'evaluate' requires inference dependencies. "
-            "Install with `uv sync --extra onnx-gpu-infer` "
-            "or `uv sync --extra tensorrt-infer`."
-        ),
-        required_packages=(
-            PackageRequirement(
-                "onnxruntime",
-                (
-                    "cpu-infer",
-                    "onnx-gpu-infer",
-                    "tensorrt-infer",
-                ),
-            ),
-        ),
     ),
     "visualize": LazyCommandSpec(
         "maou.infra.console.visualize",

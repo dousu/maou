@@ -4,41 +4,12 @@ import click
 
 import maou.interface.infer as infer
 from maou.infra.console.common import (
+    exit_skipping_teardown,
     handle_exception,
 )
 
 
 @click.command("evaluate")
-@click.option(
-    "--model-type",
-    help="Input format: 'ONNX' or 'TENSORRT'.",
-    type=str,
-    default="ONNX",
-    required=True,
-)
-@click.option(
-    "--model-path",
-    help="ONNX Model file path. "
-    "Required when --engine-path is not specified.",
-    type=click.Path(exists=True, path_type=Path),
-    default=None,
-    required=False,
-)
-@click.option(
-    "--cuda/--no-cuda",
-    type=bool,
-    is_flag=True,
-    help="Enable CUDA inference.",
-    default=False,
-    required=False,
-)
-@click.option(
-    "--num-moves",
-    help="Number of candidate moves.",
-    type=int,
-    default=5,
-    required=False,
-)
 @click.option(
     "--sfen",
     help="Set board position in SFEN notation.",
@@ -46,75 +17,84 @@ from maou.infra.console.common import (
     required=True,
 )
 @click.option(
-    "--trt-workspace-size",
-    help="TensorRT workspace size in MB. "
-    "Default is sufficient for this project's models. "
-    "Increase for larger models or max speed. "
-    "Decrease if GPU memory is limited.",
-    type=int,
-    default=256,
+    "--model-path",
+    help="ONNX model file path. "
+    "Without it a deterministic mock evaluator is used "
+    "(for API checks only; the output is meaningless).",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    required=False,
+)
+@click.option(
+    "--num-moves",
+    help="Number of candidate moves.",
+    type=click.IntRange(min=0),
+    default=5,
     show_default=True,
     required=False,
 )
 @click.option(
-    "--engine-path",
-    help="Pre-built TensorRT engine file path. "
-    "When specified, the engine is loaded from this file "
-    "and ONNX-to-TensorRT build is skipped. "
-    "Build an engine first with `maou build-engine`.",
-    type=click.Path(exists=True, path_type=Path),
+    "--cuda/--no-cuda",
+    type=bool,
+    is_flag=True,
+    help="Enable CUDA Execution Provider "
+    "(requires a wheel built with 'onnx-cuda').",
+    default=False,
+    required=False,
+)
+@click.option(
+    "--tensorrt/--no-tensorrt",
+    type=bool,
+    is_flag=True,
+    help="Enable TensorRT Execution Provider "
+    "(requires a wheel built with 'onnx-tensorrt').",
+    default=False,
+    required=False,
+)
+@click.option(
+    "--trt-cache-dir",
+    help="TensorRT engine cache directory.",
+    type=click.Path(path_type=Path),
     default=None,
     required=False,
 )
 @handle_exception
 def evaluate_board(
-    model_type: str,
-    model_path: Path | None,
-    cuda: bool,
-    num_moves: int,
     sfen: str,
-    trt_workspace_size: int,
-    engine_path: Path | None,
+    model_path: Path | None,
+    num_moves: int,
+    cuda: bool,
+    tensorrt: bool,
+    trt_cache_dir: Path | None,
 ) -> None:
-    """Evaluate a Shogi board position using a specified model.
+    """Evaluate a Shogi board position with a single network pass.
 
-    This command uses the provided model to evaluate the given Shogi board position
-    in SFEN format. It returns the top moves, evaluation score, win rate, and a
-    visual representation of the board.
+    Runs no search: the network is evaluated once and the top candidate moves
+    (legal moves only, ordered by policy prior), the evaluation score, the win
+    rate, and a visual representation of the board are printed.
 
     Args:
-        model_type: Type of the model to use for inference (e.g., 'ONNX', 'TENSORRT').
-        model_path: Path to the model file.
-        num_moves: Number of top moves to return.
         sfen: SFEN string representing the board position.
-        trt_workspace_size: TensorRT workspace size in MB.
-        engine_path: Pre-built TensorRT engine file path.
+        model_path: Path to the ONNX model file.
+        num_moves: Number of top moves to return.
+        cuda: Enable CUDA Execution Provider.
+        tensorrt: Enable TensorRT Execution Provider.
+        trt_cache_dir: TensorRT engine cache directory.
     """
-    if engine_path is None and model_path is None:
+    if (cuda or tensorrt) and model_path is None:
         raise click.UsageError(
-            "--model-path or --engine-path is required."
-        )
-    if model_type == "TENSORRT" and model_path is not None:
-        raise click.UsageError(
-            "--model-path cannot be used with --model-type TENSORRT. "
-            "Use --engine-path to specify the TensorRT engine file. "
-            "Example: maou evaluate --model-type TENSORRT "
-            "--engine-path <engine-file> --sfen ..."
-        )
-    if model_type == "ONNX" and engine_path is not None:
-        raise click.UsageError(
-            "--engine-path cannot be used with --model-type ONNX. "
-            "Use --model-type TENSORRT with --engine-path, "
-            "or use --model-path with --model-type ONNX."
+            "--cuda / --tensorrt require --model-path."
         )
     click.echo(
         infer.infer(
-            model_type=model_type,
             model_path=model_path,
             num_moves=num_moves,
-            cuda=cuda,
             sfen=sfen,
-            trt_workspace_size=trt_workspace_size,
-            engine_path=engine_path,
+            cuda=cuda,
+            tensorrt=tensorrt,
+            trt_cache_dir=trt_cache_dir,
         )
     )
+    # TensorRT EP の teardown はヒープを壊して abort する — 出力後に
+    # destructor を経由せず終える (common.exit_skipping_teardown の docstring)
+    exit_skipping_teardown(tensorrt=tensorrt)

@@ -16,6 +16,7 @@ use maou_search::{
     Evaluator, HistoryEntry, SearchLimits, SearchOptions, SearchResult, Searcher, StopCause,
 };
 use maou_shogi::board::Board;
+use maou_shogi::movegen::generate_legal_moves;
 use maou_shogi::moves::Move;
 use maou_shogi::types::Color;
 
@@ -388,11 +389,71 @@ fn search(
     }
 }
 
-/// [`SearchEngine`] が保持する評価器 (mock または ONNX)．
+/// [`SearchEngine`] / [`evaluate`] が保持する評価器 (mock または ONNX)．
 enum EngineEvaluator {
     Mock(maou_search::MockEvaluator),
     #[cfg(feature = "onnx")]
     Onnx(maou_search::OnnxEvaluator),
+}
+
+/// 評価器を構築する ([`SearchEngine`] と [`evaluate`] で共有)．
+///
+/// `model_path` 未指定なら決定論的な mock 評価器 (API 検証/開発用)．指定時は
+/// `onnx` feature 付きの wheel が必要で，無ければ `RuntimeError` を返す．
+///
+/// `pad_to` は TensorRT が shape ごとにエンジンをビルドするための固定長で，
+/// TensorRT を使う場合のみ効く．
+fn build_engine_evaluator(
+    model_path: Option<String>,
+    pad_to: usize,
+    use_cuda: Option<bool>,
+    use_tensorrt: Option<bool>,
+    trt_engine_cache_dir: Option<String>,
+    pad_buckets: Option<bool>,
+) -> PyResult<EngineEvaluator> {
+    match model_path {
+        None => {
+            // mock 評価器 (決定論的擬似乱数)．API 検証/開発用
+            // (pad_to は onnx feature 無効ビルドでも未使用にならないよう畳む)
+            let _ = (
+                pad_to,
+                use_cuda,
+                use_tensorrt,
+                trt_engine_cache_dir,
+                pad_buckets,
+            );
+            Ok(EngineEvaluator::Mock(maou_search::MockEvaluator::new(0)))
+        }
+        #[cfg(feature = "onnx")]
+        Some(path) => {
+            let onnx_options = maou_search::onnx::OnnxOptions {
+                intra_threads: 1,
+                use_cuda: use_cuda.unwrap_or(false),
+                use_tensorrt: use_tensorrt.unwrap_or(false),
+                trt_engine_cache_dir,
+                // TensorRT は shape ごとにエンジンをビルドするため pad_to に固定する
+                pad_to: if use_tensorrt.unwrap_or(false) {
+                    Some(pad_to)
+                } else {
+                    None
+                },
+                pad_buckets: pad_buckets.unwrap_or(false),
+            };
+            Ok(EngineEvaluator::Onnx(
+                maou_search::OnnxEvaluator::from_file(&path, &onnx_options).map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "ONNX モデルの読み込みに失敗: {e}"
+                    ))
+                })?,
+            ))
+        }
+        #[cfg(not(feature = "onnx"))]
+        Some(_) => Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "この wheel は onnx feature なしでビルドされているため model_path を使えません．\
+             `maturin develop --features onnx` (CUDA: onnx-cuda / TensorRT: onnx-tensorrt) \
+             でビルドしてください",
+        )),
+    }
 }
 
 /// 評価器を 1 回だけ構築・保持して複数局面を連続探索する永続エンジン．
@@ -442,44 +503,14 @@ impl SearchEngine {
         let defaults = SearchOptions::default();
         let threads = threads.unwrap_or(defaults.threads);
         let batch_size = batch_size.unwrap_or(defaults.batch_size);
-        let evaluator = match model_path {
-            None => {
-                // mock 評価器 (決定論的擬似乱数)．API 検証/開発用
-                let _ = (use_cuda, use_tensorrt, trt_engine_cache_dir, pad_buckets);
-                EngineEvaluator::Mock(maou_search::MockEvaluator::new(0))
-            }
-            #[cfg(feature = "onnx")]
-            Some(path) => {
-                let onnx_options = maou_search::onnx::OnnxOptions {
-                    intra_threads: 1,
-                    use_cuda: use_cuda.unwrap_or(false),
-                    use_tensorrt: use_tensorrt.unwrap_or(false),
-                    trt_engine_cache_dir,
-                    // TensorRT は shape ごとにエンジンをビルドするため batch_size に固定する
-                    pad_to: if use_tensorrt.unwrap_or(false) {
-                        Some(batch_size)
-                    } else {
-                        None
-                    },
-                    pad_buckets: pad_buckets.unwrap_or(false),
-                };
-                EngineEvaluator::Onnx(
-                    maou_search::OnnxEvaluator::from_file(&path, &onnx_options).map_err(|e| {
-                        pyo3::exceptions::PyRuntimeError::new_err(format!(
-                            "ONNX モデルの読み込みに失敗: {e}"
-                        ))
-                    })?,
-                )
-            }
-            #[cfg(not(feature = "onnx"))]
-            Some(_) => {
-                return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "この wheel は onnx feature なしでビルドされているため model_path を使えません．\
-                     `maturin develop --features onnx` (CUDA: onnx-cuda / TensorRT: onnx-tensorrt) \
-                     でビルドしてください",
-                ));
-            }
-        };
+        let evaluator = build_engine_evaluator(
+            model_path,
+            batch_size,
+            use_cuda,
+            use_tensorrt,
+            trt_engine_cache_dir,
+            pad_buckets,
+        )?;
         Ok(SearchEngine {
             evaluator,
             threads,
@@ -550,6 +581,159 @@ impl SearchEngine {
         };
         Ok(to_py_result(result))
     }
+}
+
+/// 0 手読み評価 ([`evaluate`]) の候補手 1 件．
+#[pyclass(frozen, skip_from_py_object)]
+#[derive(Clone)]
+struct EvaluationMove {
+    /// 指し手 (USI 形式)．
+    #[pyo3(get)]
+    usi: String,
+    /// policy 事前確率 (合法手の中で正規化済み)．
+    #[pyo3(get)]
+    prior: f32,
+}
+
+#[pymethods]
+impl EvaluationMove {
+    fn __repr__(&self) -> String {
+        format!(
+            "EvaluationMove(usi='{}', prior={:.4})",
+            self.usi, self.prior
+        )
+    }
+}
+
+/// 0 手読み評価 ([`evaluate`]) の結果．
+///
+/// - `winrate`: 手番側から見た勝率 (0-1)．
+/// - `eval_score`: `winrate` を Ponanza 係数 600 で変換した評価値スコア．
+/// - `moves`: policy 事前確率の降順に並べた候補手 (**合法手のみ**)．
+///   `num_moves` で切り詰められる．
+/// - `legal_move_count`: 局面の合法手数 (切り詰め前)．`moves` が空でも
+///   「詰みで手がない」のか「`num_moves=0` を要求された」のかを区別できる．
+#[pyclass(frozen, name = "Evaluation")]
+struct PyEvaluation {
+    #[pyo3(get)]
+    winrate: f64,
+    #[pyo3(get)]
+    eval_score: f64,
+    #[pyo3(get)]
+    moves: Vec<EvaluationMove>,
+    #[pyo3(get)]
+    legal_move_count: usize,
+}
+
+#[pymethods]
+impl PyEvaluation {
+    fn __repr__(&self) -> String {
+        format!(
+            "Evaluation(winrate={:.4}, eval_score={:.2}, moves={}, legal_move_count={})",
+            self.winrate,
+            self.eval_score,
+            self.moves.len(),
+            self.legal_move_count
+        )
+    }
+}
+
+/// 1 局面を 0 手読みで評価する (`maou evaluate` の実体)．
+///
+/// 探索を行わず NN 推論を 1 回だけ実行し，合法手の policy 事前確率と手番側
+/// 勝率を返す．推論中は GIL を解放する．
+///
+/// policy は**合法手に限定して softmax 正規化**されるため，探索
+/// ([`search`] / [`SearchEngine`]) が使う事前確率と同一の規約になる
+/// (非合法ラベルは出てこない)．
+///
+/// # 引数
+///
+/// - `sfen` (str): 評価する局面．
+/// - `model_path` (str, optional): ONNX モデルのパス．未指定なら決定論的な
+///   mock 評価器 (API 検証/開発用 — 評価の中身は無意味)．
+/// - `num_moves` (int): 返す候補手の数 (既定 5)．合法手数より多い指定は
+///   合法手数に丸められる．
+/// - `use_cuda` (bool, optional): CUDA Execution Provider (`onnx-cuda` feature 必要)．
+/// - `use_tensorrt` (bool, optional): TensorRT Execution Provider
+///   (`onnx-tensorrt` feature 必要)．
+/// - `trt_engine_cache_dir` (str, optional): TensorRT エンジンキャッシュ保存先．
+///
+/// # 返り値
+///
+/// [`PyEvaluation`]．合法手がない局面 (詰み) では `moves` が空になる
+/// (`legal_move_count` で `num_moves=0` 指定と区別できる)．
+#[pyfunction]
+#[pyo3(signature = (sfen, *, model_path=None, num_moves=5, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None))]
+fn evaluate(
+    py: Python<'_>,
+    sfen: &str,
+    model_path: Option<String>,
+    num_moves: usize,
+    use_cuda: Option<bool>,
+    use_tensorrt: Option<bool>,
+    trt_engine_cache_dir: Option<String>,
+) -> PyResult<PyEvaluation> {
+    let (mut board, _history) = build_board_and_history(sfen, None)?;
+    let legal_moves = generate_legal_moves(&mut board);
+    // 1 局面しか評価しないので TensorRT の padding も 1 に固定する
+    let evaluator = build_engine_evaluator(
+        model_path,
+        1,
+        use_cuda,
+        use_tensorrt,
+        trt_engine_cache_dir,
+        Some(false),
+    )?;
+
+    let item = maou_search::EvalItem {
+        board,
+        moves: legal_moves.clone(),
+    };
+    let mut results = py.detach(move || match &evaluator {
+        EngineEvaluator::Mock(ev) => ev.evaluate_batch(std::slice::from_ref(&item)),
+        #[cfg(feature = "onnx")]
+        EngineEvaluator::Onnx(ev) => ev.evaluate_batch(std::slice::from_ref(&item)),
+    });
+    let result = results
+        .pop()
+        .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("評価器が結果を返さなかった"))?;
+
+    // policy 事前確率の降順 (同値は合法手生成順を保つ安定ソート)
+    let mut order: Vec<usize> = (0..legal_moves.len().min(result.priors.len())).collect();
+    order.sort_by(|&a, &b| {
+        result.priors[b]
+            .partial_cmp(&result.priors[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let moves = order
+        .into_iter()
+        .take(num_moves)
+        .map(|i| EvaluationMove {
+            usi: legal_moves[i].to_usi(),
+            prior: result.priors[i],
+        })
+        .collect();
+
+    let winrate = f64::from(result.value);
+    Ok(PyEvaluation {
+        winrate,
+        eval_score: maou_search::eval::winrate_to_eval(winrate),
+        moves,
+        legal_move_count: legal_moves.len(),
+    })
+}
+
+/// 手番側の勝率 (0-1) を評価値スコアへ変換する．
+///
+/// Ponanza 係数 600 の `eval = 600 * ln(w / (1 - w))`．USI の `score cp`・
+/// `maou search`・`maou evaluate`・棋譜解析が共有する単一実装
+/// ([`maou_search::eval::winrate_to_eval`])．
+///
+/// 勝率 0 / 1 でも発散せず，約 ±16570 で飽和する．
+#[pyfunction]
+fn winrate_to_eval(winrate: f64) -> f64 {
+    maou_search::eval::winrate_to_eval(winrate)
 }
 
 /// (N, 32) の HCP 配列を検証し，(N, フラットな Vec) に変換する．
@@ -725,7 +909,11 @@ pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     m.add_class::<PySearchResult>()?;
     m.add_class::<SearchRootChild>()?;
     m.add_class::<SearchEngine>()?;
+    m.add_class::<PyEvaluation>()?;
+    m.add_class::<EvaluationMove>()?;
     m.add_function(wrap_pyfunction!(search, &m)?)?;
+    m.add_function(wrap_pyfunction!(evaluate, &m)?)?;
+    m.add_function(wrap_pyfunction!(winrate_to_eval, &m)?)?;
     m.add_function(wrap_pyfunction!(preprocess_hcpes, &m)?)?;
     m.add_function(wrap_pyfunction!(encode_hcp_features, &m)?)?;
     m.add_function(wrap_pyfunction!(legal_move_masks, &m)?)?;

@@ -36,6 +36,7 @@
 //!
 //! - 優越局面 (盤面同一で持駒優越/劣位) による千日手の一般化は未実装．
 
+pub mod eval;
 pub mod evaluator;
 pub mod feature;
 pub mod label;
@@ -47,6 +48,7 @@ pub mod repetition;
 pub mod search;
 pub mod tree;
 
+pub use eval::winrate_to_eval;
 pub use evaluator::{EvalItem, EvalResult, Evaluator, MockEvaluator};
 #[cfg(feature = "onnx")]
 pub use onnx::OnnxEvaluator;

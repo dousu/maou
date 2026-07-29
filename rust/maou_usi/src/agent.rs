@@ -364,9 +364,10 @@ impl GameState {
 /// 勝率 → 評価値 (センチポーン) 変換．
 ///
 /// Ponanza 定数系: `winrate = 1 / (1 + exp(-cp/600))` の逆関数．
+/// 変換式は `maou_search::eval` が正 (`maou search` / `maou evaluate` の
+/// 評価値表示と同一の係数・クランプを共有する)．
 pub fn winrate_to_cp(winrate: f64) -> i32 {
-    let w = winrate.clamp(1e-6, 1.0 - 1e-6);
-    (600.0 * (w / (1.0 - w)).ln()).round() as i32
+    maou_search::eval::winrate_to_eval(winrate).round() as i32
 }
 
 /// 対局エージェント．

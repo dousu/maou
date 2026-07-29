@@ -15,9 +15,11 @@ from typing import Any
 
 from tqdm.auto import tqdm
 
-from maou._rust.maou_search import SearchEngine
+from maou._rust.maou_search import (
+    SearchEngine,
+    winrate_to_eval,
+)
 from maou._rust.maou_shogi import parse_csa_str, parse_kif_str
-from maou.app.inference.eval import Evaluation
 from maou.domain.board.shogi import Board, Turn, move_to_usi
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -352,9 +354,7 @@ def position_record(
         "best_move": best_move,
         "match": match,
         "winrate": winrate,
-        "eval_cp": float(
-            Evaluation.get_eval_from_winrate(winrate)
-        ),
+        "eval_cp": float(winrate_to_eval(winrate)),
         "played_move_winrate": played_winrate,
         "winrate_loss": winrate_loss,
         "pv": list(result.pv),
