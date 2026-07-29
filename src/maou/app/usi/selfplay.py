@@ -17,6 +17,7 @@ AB_MODES: tuple[str, ...] = (
     "maxmoves",
     "budget",
     "horizon",
+    "timecurve",
     "spin",
     "proven",
     "batch",
@@ -83,6 +84,15 @@ class SelfplayRunner:
             horizon_moves: ``ab_mode="horizon"`` の A 側想定残り手数
                 (None = エンジン既定)．
             horizon_moves_b: 同 B 側想定残り手数 (None = 25)．
+            time_curve_peak_ply: 手数カーブの頂点手数 (None = 55)．
+            time_curve_half_width_ply: 頂点から底までの手数 (None = 35)．
+            time_curve_peak_permille: 頂点の乗数 permille (None = 1800)．
+            time_curve_opening_floor_permille: 序盤側の底の乗数
+                permille (None = 700)．
+            time_curve_endgame_floor_permille: 終盤側の底の乗数
+                permille (None = 1000 = 現行と同配分)．
+                ``ab_mode="timecurve"`` では A/B の両者に同じ値が入り，
+                差は on/off だけになる．
             alternate_colors: 対局ごとに先後を入れ替え，ペア (2n, 2n+1) で
                 同じ開局系列を共有するか (None = ab_mode 指定時 True)．
             clock_ms: 持ち時間モードの初期持ち時間ミリ秒 (0/None = 無効)．
@@ -127,6 +137,11 @@ class SelfplayRunner:
         batch_size_b: int | None = None
         horizon_moves: int | None = None
         horizon_moves_b: int | None = None
+        time_curve_peak_ply: int | None = None
+        time_curve_half_width_ply: int | None = None
+        time_curve_peak_permille: int | None = None
+        time_curve_opening_floor_permille: int | None = None
+        time_curve_endgame_floor_permille: int | None = None
         alternate_colors: bool | None = None
         clock_ms: int | None = None
         byoyomi_ms: int | None = None
@@ -218,6 +233,15 @@ class SelfplayRunner:
             batch_size_b=option.batch_size_b,
             horizon_moves=option.horizon_moves,
             horizon_moves_b=option.horizon_moves_b,
+            time_curve_peak_ply=option.time_curve_peak_ply,
+            time_curve_half_width_ply=option.time_curve_half_width_ply,
+            time_curve_peak_permille=option.time_curve_peak_permille,
+            time_curve_opening_floor_permille=(
+                option.time_curve_opening_floor_permille
+            ),
+            time_curve_endgame_floor_permille=(
+                option.time_curve_endgame_floor_permille
+            ),
             alternate_colors=option.alternate_colors,
             clock_ms=option.clock_ms,
             byoyomi_ms=option.byoyomi_ms,

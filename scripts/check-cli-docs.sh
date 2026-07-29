@@ -16,6 +16,8 @@ declare -A CLI_DOC_MAP=(
   ["pre_process.py"]="pre_process.md"
   ["visualize.py"]="visualize.md"
   ["floodgate.py"]="floodgate.md"
+  ["usi.py"]="usi.md"
+  ["selfplay.py"]="selfplay.md"
   # screenshot.py is a subcommand of utility group; mapped via UTILITY_DOCS
 )
 

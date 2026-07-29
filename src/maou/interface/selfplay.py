@@ -46,6 +46,11 @@ def selfplay(
     batch_size_b: int | None = None,
     horizon_moves: int | None = None,
     horizon_moves_b: int | None = None,
+    time_curve_peak_ply: int | None = None,
+    time_curve_half_width_ply: int | None = None,
+    time_curve_peak_permille: int | None = None,
+    time_curve_opening_floor_permille: int | None = None,
+    time_curve_endgame_floor_permille: int | None = None,
     alternate_colors: bool | None = None,
     clock_ms: int | None = None,
     byoyomi_ms: int | None = None,
@@ -87,12 +92,21 @@ def selfplay(
         spin_budget_relief: 空回りを playout 予算から外す (既定 False)．
         skip_proven_children: 確定済みの子を PUCT 候補から外す (既定 False)．
         ab_mode: A/B 対戦のレバー
-            (subtree/maxmoves/budget/horizon/spin/proven．
+            (subtree/maxmoves/budget/horizon/timecurve/spin/proven/batch．
             None = 純粋自己対局)．spin は固定 playout 予算専用．
         playouts_b: ab_mode="budget" の B 側予算 (None = A の 1/8)．
         batch_size_b: ab_mode="batch" の B 側評価バッチサイズ (None = A の 4 倍)．
         horizon_moves: ab_mode="horizon" の A 側想定残り手数．
         horizon_moves_b: 同 B 側想定残り手数．
+        time_curve_peak_ply: 手数カーブの頂点手数 (既定 55)．
+        time_curve_half_width_ply: 頂点から底までの手数 (既定 35)．
+        time_curve_peak_permille: 頂点の乗数 (permille．既定 1800)．
+        time_curve_opening_floor_permille: 序盤側の底の乗数
+            (permille．既定 700)．
+        time_curve_endgame_floor_permille: 終盤側の底の乗数
+            (permille．既定 1000 = 現行と同配分)．
+            いずれも ab_mode="timecurve" の**両者に同じ値**が入り，
+            A/B の差は on/off だけになる．
         alternate_colors: 先後交代 + ペア開局 (None = ab_mode 指定時 True)．
         clock_ms: 持ち時間モードの初期持ち時間ミリ秒 (0/None = 無効)．
         byoyomi_ms: 秒読みミリ秒．
@@ -124,9 +138,10 @@ def selfplay(
             f"未知の ab_mode: {ab_mode} "
             f"({' | '.join(AB_MODES)})"
         )
-    if ab_mode == "horizon" and not clock_ms:
+    if ab_mode in ("horizon", "timecurve") and not clock_ms:
+        # どちらも「持ち時間をどう配るか」のレバーなので実時計が要る
         raise ValueError(
-            "ab_mode=horizon は持ち時間モード (clock_ms > 0) が必要"
+            f"ab_mode={ab_mode} は持ち時間モード (clock_ms > 0) が必要"
         )
     if ab_mode == "spin" and clock_ms:
         # 空回りの会計は固定 playout 予算でのみ効く (時計が拘束条件の
@@ -177,6 +192,11 @@ def selfplay(
         batch_size_b=batch_size_b,
         horizon_moves=horizon_moves,
         horizon_moves_b=horizon_moves_b,
+        time_curve_peak_ply=time_curve_peak_ply,
+        time_curve_half_width_ply=time_curve_half_width_ply,
+        time_curve_peak_permille=time_curve_peak_permille,
+        time_curve_opening_floor_permille=time_curve_opening_floor_permille,
+        time_curve_endgame_floor_permille=time_curve_endgame_floor_permille,
         alternate_colors=alternate_colors,
         clock_ms=clock_ms,
         byoyomi_ms=byoyomi_ms,

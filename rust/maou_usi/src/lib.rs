@@ -27,4 +27,4 @@ pub use agent::{Agent, EngineConfig, SearchBackend, SearchBudget, SearchOutcome}
 pub use backend::MaouSearchBackend;
 pub use selfplay::{run_selfplay, GameEndReason, GameOutcome, SelfplayConfig};
 pub use stdio::run_stdio;
-pub use time::{TimeBudget, TimeStrategyConfig};
+pub use time::{TimeBudget, TimeCurve, TimeStrategyConfig};
