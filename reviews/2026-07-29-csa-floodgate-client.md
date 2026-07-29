@@ -216,5 +216,5 @@ user 指示「maturin ビルドはデフォルトで onnx feature を入れる�
 
 同コミットで `.claude/skills/gh-pr/SKILL.md` の禁止事項も実態へ修正した
 (Co-Authored-By トレーラと PR 本文の footer はどちらもリポジトリの確立した
-慣行であり，禁止は誤りだった)．**`AGENTS.md:247-248` に同じ誤った規定が
-残っている** — governance doc なので別途承認を得てから直す．
+慣行であり，禁止は誤りだった)．**`AGENTS.md` の同じ誤った規定も user 承認
+(2026-07-29) を得て修正した** — 3 箇所すべてで規定が実態に揃った．
