@@ -1,10 +1,12 @@
 ---
 title: CSA サーバ transport (floodgate 対局) の追加とドキュメント
 date: 2026-07-29
-status: pending
+status: applied
+applied_in: 8221edd
 target:
   - docs/commands/floodgate.md
   - docs/design/usi-engine/index.md
+  - docs/rust-build-optimization.md
 risk: low
 reversibility: easy
 ---
@@ -203,4 +205,16 @@ user 指示「maturin ビルドはデフォルトで onnx feature を入れる�
 
 ## 判定
 
-user 承認後に `docs/design/usi-engine/index.md` を更新して applied 化する．
+**user 承認 (2026-07-29)．8221edd で適用済み**:
+
+- `docs/design/usi-engine/index.md` — レイヤー表に `csa` を追加し，
+  「将来 CSA transport を追加できる」を「追加できた (agent 変更 0 行)」へ更新．
+  §4.1 として floodgate の接続仕様と責務分界を追記
+- `docs/rust-build-optimization.md` — maturin の既定 features が onnx を
+  含むようになったため「features は既定では付かない」を実態へ更新
+- `docs/commands/floodgate.md` — 051243a で先行追加したものを本 review が審査
+
+同コミットで `.claude/skills/gh-pr/SKILL.md` の禁止事項も実態へ修正した
+(Co-Authored-By トレーラと PR 本文の footer はどちらもリポジトリの確立した
+慣行であり，禁止は誤りだった)．**`AGENTS.md:247-248` に同じ誤った規定が
+残っている** — governance doc なので別途承認を得てから直す．
