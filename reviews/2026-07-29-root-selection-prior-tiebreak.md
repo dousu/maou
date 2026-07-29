@@ -1,5 +1,5 @@
 ---
-title: 最終手選択のタイブレークに policy 事前確率を加える
+title: playout 0 のときの最終手選択と勝率報告を評価に基づくものにする
 date: 2026-07-29
 status: pending
 target:
@@ -8,7 +8,16 @@ risk: low
 reversibility: easy
 ---
 
-# 提案: §6 最終手選択の基準に prior タイブレークを追記する
+# 提案: §6 に prior タイブレークと playout 0 時の勝率を追記する
+
+playout が 1 回も回らなかったときの報告が 2 箇所とも壊れていた．
+**(A) 指し手**が評価に基づかない (生成順の先頭)，**(B) 勝率**が
+「データなし」を「敗勢確定」として報告する．どちらも同じ根に由来するので
+1 つの提案にまとめる．
+
+---
+
+# (A) §6 最終手選択の基準に prior タイブレークを追記する
 
 ## Trigger
 
@@ -90,3 +99,65 @@ Candidates:
   - `test_prior_does_not_override_losing_exclusion` — 負け確定除外が最優先
 - **canonical 29te / 39te を RAN して照合済み** (TRIPWIRE):
   29te **396,516** ノード / 39te **17,593,615** ノード — compass 記録値と一致．
+
+---
+
+# (B) playout 0 のときの勝率に root の NN value を返す
+
+## Trigger
+
+user 指摘「playout=0のときにEvalが見た目おかしな値になっていないですか？」
+
+(A) の修正後も `Eval: -16578.61` / `WinRate: 0.0000` が出ていた．
+
+## 原因
+
+`collect_result` (`search.rs:1793`) が `winrate = root_proven.unwrap_or(best.q)`
+としており，best が未訪問なら `best.q = 0.0`．**未訪問の Q が 0.0 なのは
+「敗勢確定」ではなく「データなし」**だが，`winrate_to_eval(0.0)` は
+クランプ飽和値 **-16578** を返す．「勝率 0 を確信した」ように見える．
+
+root 局面は探索前に必ず NN 評価されている (`search.rs:1524` の
+`evaluate_batch`) が，**その value は捨てられ priors だけが使われていた**．
+
+Python 側は既にこの罠を認識していて，候補手表示では
+「未訪問の winrate 0 は『データなし』であり敗勢ではないため数値を表示しない」
+(`app/search/run.py:141`) と分岐している．同じ扱いがトップレベルの
+`Eval` / `WinRate` に無かった．
+
+## 表示だけの問題ではない
+
+`agent.rs:991` の投了判定が `outcome.winrate < threshold` を見ている．
+`resign_value` を有効にした対局で playout 0 の手番が来ると，
+**勝率 0.0 として投了カウントが進む**．既定は `resign_value = 0` (投了しない)
+なので現状は発現しないが，有効化した瞬間に踏む．
+
+## 変更内容 (実装済み — maou_search v0.29.0)
+
+- root 評価の value を `Shared::root_value: Option<f64>` に保持する
+  (warm start = subtree 再利用では root を再評価しないため `None`)．
+- `collect_result` と `Shared::build_snapshot` (探索中の `info` 用) の双方で，
+  `best.visits == 0` のとき `best.q` でなく `root_value` を返す．
+- 合法手なしの局面 (`search.rs:1488` の `winrate: 0.0`) は**本物の敗勢**
+  なので変更しない．
+
+## 提案する記述 (§6 の末尾に追記)
+
+> **playout が 1 回も回らなかったときの勝率** (maou_search v0.29.0)．
+> 予算が 1 バッチに満たないと best_move が未訪問のままになり Q が存在しない．
+> 未訪問の Q は 0.0 だが，これは「敗勢確定」ではなく「データなし」であり，
+> そのまま報告すると評価値が飽和値 (-16578) になって「勝率 0 を確信した」
+> ように見え，USI の投了判定 (`resign_value`) まで誤らせる．root 局面は探索前に
+> 必ず NN 評価されているので，**その value (= 探索抜きの評価，`maou evaluate`
+> と同じ値) を返す**．探索できなかったときは 0 手読みの評価へ縮退する，
+> という整理．合法手なしの局面は本物の敗勢なので 0.0 のままとする．
+
+## 検証
+
+- 新規テスト `test_zero_playout_reports_root_value_not_saturated_loss` —
+  初回推論が予算を超える評価器で playout 0 を作り，`winrate > 0.0` かつ
+  飽和端でないことを固定．
+- 実測 (ViT19.8M fp16 / CPU): `maou search --time-ms 1` (playouts=0) が
+  `Eval 279.93 / WinRate 0.6146` を返し，**`maou evaluate` と完全一致**．
+  `--time-ms 3000` は `Eval 140.15 / playouts=60` で非回帰．
+- canonical 29te/39te を再 RAN して照合済み (上と同値)．

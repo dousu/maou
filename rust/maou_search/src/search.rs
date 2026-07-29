@@ -535,6 +535,12 @@ pub struct SearchResult {
     pub best_move: Option<Move>,
     /// ルート手番側から見た best_move の勝率 (Q)．root の勝敗が確定した
     /// 場合 ([`StopCause::RootProven`]) は確定値 (0 / 0.5 / 1)．
+    ///
+    /// **playout が 1 回も回らなかった場合** (予算が 1 バッチに満たない等) は
+    /// best_move が未訪問で Q が存在しないため，root 局面に対する NN の value
+    /// (= 探索抜きの評価，`maou evaluate` と同じ値) を返す．未訪問の Q は 0.0
+    /// だが，これは「敗勢確定」ではなく「データなし」であり，そのまま報告すると
+    /// 評価値が飽和値 (-16578) になり投了判定 (`resign_value`) まで誤らせる．
     pub winrate: f64,
     /// 訪問回数最大の経路 (PV)．
     pub pv: Vec<Move>,
@@ -627,6 +633,12 @@ struct Shared<'a, E: Evaluator> {
     root_entry: HistoryEntry,
     /// root より前の対局履歴 (古い順)．千日手判定で経路の前に連結される．
     game_history: &'a [HistoryEntry],
+    /// root 局面に対する NN の value (手番側勝率)．探索の選択には使わないが，
+    /// **playout が 1 回も回らなかったとき**に報告する勝率として使う
+    /// (`best.q` は未訪問なら 0.0 で，これは「敗勢確定」ではなく「データなし」．
+    /// そのまま報告すると評価値が飽和値 -16578 になり誤解を招く)．
+    /// warm start (subtree 再利用) では root を再評価しないため `None`．
+    root_value: Option<f64>,
     evaluator: &'a E,
     opts: &'a SearchOptions,
     /// 引き分け打ち切りになる path 長の実効上限 (これを超えた降下は引き分け
@@ -892,7 +904,15 @@ impl<E: Evaluator> Shared<'_, E> {
             best_move: Some(best.mv),
             best_visits: best.visits,
             second_visits,
-            winrate: root_proven.unwrap_or(best.q),
+            // 未訪問の q=0.0 は「データなし」であり敗勢ではない
+            // ([`Searcher::collect_result`] と同じ扱い)
+            winrate: root_proven.unwrap_or_else(|| {
+                if best.visits == 0 {
+                    self.root_value.unwrap_or(best.q)
+                } else {
+                    best.q
+                }
+            }),
             pv,
             proven: root_proven,
         }
@@ -1511,6 +1531,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         // プール準備: 再利用可能 (保持木の root が展開済み) なら warm start —
         // root の同期評価を省き，引き継いだ統計・辺から探索を継続する．さもなくば
         // 新規プールで root を同期評価して展開する (従来経路 = bit-identical)．
+        let mut root_value: Option<f64> = None;
         let pool = match reused {
             Some(p) if p.used() > 0 && p.get(ROOT_IDX).state() == node_state::EXPANDED => p,
             _ => {
@@ -1529,6 +1550,8 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                     root_item.moves.len(),
                     "evaluator は moves と同数の priors を返すこと"
                 );
+                // 探索の選択には使わないが，playout 0 のときの報告用に残す
+                root_value = Some(f64::from(root_result.value));
                 let edges: Box<[Edge]> = root_item
                     .moves
                     .iter()
@@ -1567,6 +1590,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             pool,
             root_board: root_board.clone(),
             root_entry: HistoryEntry::from_board(root_board),
+            root_value,
             game_history,
             evaluator: self.evaluator,
             opts,
@@ -1790,12 +1814,23 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             .lock()
             .expect("dfpn mate lock は poison しない")
             .clone();
+        // best が未訪問 = playout が 1 回も回らなかった (予算が 1 バッチに
+        // 満たない等)．`best.q` の 0.0 は「敗勢確定」ではなく「データなし」
+        // なので，そのまま報告すると評価値が飽和値 (-16578) になり誤解を招く．
+        // root の NN value (探索抜きの評価 = `maou evaluate` と同じ値) を返す
+        let unsearched_winrate = || shared.root_value.unwrap_or(best.q);
         let (best_move, winrate, pv, stop) = if let Some(mate) = dfpn_mate {
             (Some(mate[0]), 1.0, mate, StopCause::RootProven)
         } else {
             (
                 Some(best.mv),
-                root_proven.unwrap_or(best.q),
+                root_proven.unwrap_or_else(|| {
+                    if best.visits == 0 {
+                        unsearched_winrate()
+                    } else {
+                        best.q
+                    }
+                }),
                 pv,
                 StopCause::from_u8(shared.stop_cause.load(Ordering::Acquire))
                     .unwrap_or(StopCause::PlayoutLimit),
@@ -2558,6 +2593,49 @@ mod tests {
             }
             self.inner.evaluate_batch(items)
         }
+    }
+
+    /// **playout 0 のとき評価値が飽和値にならない**ことの回帰テスト．
+    ///
+    /// 未訪問の子の `q` は 0.0 だが，これは「敗勢確定」ではなく「データなし」．
+    /// そのまま報告すると `winrate_to_eval(0.0) = -16578` という，勝率 0 を
+    /// 確信したかのような評価値になる．USI では `resign_value` を有効にして
+    /// いる場合に投了判定まで誤らせるため，表示だけの問題ではない．
+    ///
+    /// root の NN value (探索抜きの評価) を返すのが正しい．
+    #[test]
+    fn test_zero_playout_reports_root_value_not_saturated_loss() {
+        // 予算を初回推論で使い切らせて playout 0 を作る
+        let ev = SlowFirstCallEvaluator::new(Duration::from_millis(600));
+        let limits = SearchLimits {
+            time_ms: Some(300),
+            ..SearchLimits::default()
+        };
+        let mut board = Board::empty();
+        board.set_sfen(STARTPOS).expect("startpos");
+        let result = Searcher::new(
+            &ev,
+            SearchOptions {
+                threads: 1,
+                batch_size: 4,
+                node_capacity: 1 << 12,
+                ..pure_mcts_opts()
+            },
+        )
+        .search(&board, &limits);
+
+        assert_eq!(result.stats.playouts, 0, "この前提が崩れたらテストが無意味");
+        assert!(
+            result.winrate > 0.0,
+            "未訪問の q=0.0 をそのまま返してはいけない: winrate={}",
+            result.winrate
+        );
+        // MockEvaluator の value は [0, 1) の擬似乱数 — 飽和端でないことを確認
+        assert!(
+            (0.0..1.0).contains(&result.winrate),
+            "root の NN value がそのまま返る: winrate={}",
+            result.winrate
+        );
     }
 
     /// **warmup を予算の外で前払いすると探索できる**ことの回帰テスト．
