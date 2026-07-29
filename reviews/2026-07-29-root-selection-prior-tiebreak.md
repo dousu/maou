@@ -1,7 +1,8 @@
 ---
 title: playout 0 のときの最終手選択と勝率報告を評価に基づくものにする
 date: 2026-07-29
-status: pending
+status: applied
+applied_in: 7855624
 target:
   - docs/design/position-search/index.md
 risk: low
