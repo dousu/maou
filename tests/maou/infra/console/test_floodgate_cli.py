@@ -178,3 +178,10 @@ def test_floodgate_generates_trip_when_password_omitted() -> (
         captured[0],
     )
     assert match is not None, captured[0]
+    # 生成した trip は stdout に出す — 失うと同じ識別子に戻れない唯一の出力
+    # なので，捨てられがちな通信ログ (stderr) に混ぜてはならない
+    assert (
+        f"Generated trip for 'maou_test': {match.group(1)}"
+        in result.stdout
+    )
+    assert "--password" in result.stdout

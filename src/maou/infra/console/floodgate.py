@@ -356,12 +356,13 @@ def floodgate(
     """
     trip = password if password else generate_trip()
     if not password:
-        # 再開には同じ trip が要る (ログイン名 + trip で同一ユーザと見なされる)
+        # 再開には同じ trip が要る (ログイン名 + trip で同一ユーザと見なされる)．
+        # 通信ログ側 (stderr) ではなく stdout に出す — 生成した trip は失うと
+        # 同じ識別子に戻れない唯一の出力で，ログを捨てる運用で消えてはならない
         click.echo(
             f"Generated trip for '{login_name}': {trip}\n"
             f"Reuse it to keep the same identity:\n"
-            f"  maou floodgate --login-name {login_name} --password {trip}",
-            err=True,
+            f"  maou floodgate --login-name {login_name} --password {trip}"
         )
     result = floodgate_interface.floodgate(
         login_name=login_name,

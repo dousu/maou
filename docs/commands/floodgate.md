@@ -45,8 +45,13 @@ LOGIN <login-name> <game-name>,<trip>
 `--login-name` and `--password` (the trip) map onto that; `--game-name`
 supplies the room and defaults to `floodgate-300-10F`.
 
-- **Omitting `--password` generates a random trip and prints it to stderr.**
-  Record it — passing that same value later resumes the same identity.
+- **Omitting `--password` generates a random trip and prints it on stdout.**
+  Record it — passing that same value later resumes the same identity. It is
+  written to stdout rather than the stderr protocol log precisely because it
+  is the one output that cannot be recovered once lost.
+- The server identifies a client as `<login-name>+<md5 of the trip>`; that
+  string is what appears in the published game record's `'rating:` line, so
+  it can be used to confirm that two sessions played under one identity.
 - Passing `--password` reuses an existing identity, which is the normal way
   to keep accumulating rating for one engine version.
 - For CSA servers that do not use the room-name convention, pass
