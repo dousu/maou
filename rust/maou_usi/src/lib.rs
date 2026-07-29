@@ -16,6 +16,7 @@
 pub mod ab;
 pub mod agent;
 pub mod backend;
+pub mod csa;
 pub mod protocol;
 pub mod selfplay;
 pub mod stdio;

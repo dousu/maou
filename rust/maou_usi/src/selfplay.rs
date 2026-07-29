@@ -196,7 +196,7 @@ pub struct GameOutcome {
 /// 呼び出し側の設定値と driver のポーリング粒度 ([`crate::backend::POLL_INTERVAL`])
 /// の大きい方を採る — 探索の停止要求はポーリングでしか届かないため，最悪
 /// 1 周期分は予算を超えて走る．
-fn clock_margin_ms(configured_ms: u64) -> u64 {
+pub(crate) fn clock_margin_ms(configured_ms: u64) -> u64 {
     configured_ms.max(crate::backend::POLL_INTERVAL.as_millis() as u64)
 }
 

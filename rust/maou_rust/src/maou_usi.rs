@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use maou_usi::ab::{build_ab, summarize, AbMode, AbOptions, RunSummary, SummaryOptions};
+use maou_usi::csa::{run_csa as rust_run_csa, CsaConfig, CsaGameResult};
 use maou_usi::selfplay::{ClockSetting, GameOutcome, SelfplayConfig};
 use maou_usi::{EngineConfig, TimeStrategyConfig};
 
@@ -514,10 +515,139 @@ fn run_selfplay(
     Ok(result.unbind())
 }
 
+/// [`CsaGameResult`] → Python dict．
+fn csa_result_to_dict<'py>(py: Python<'py>, r: &CsaGameResult) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("game_id", &r.game_id)?;
+    d.set_item("opponent", &r.opponent)?;
+    d.set_item("my_color", &r.my_color)?;
+    d.set_item("moves", r.moves)?;
+    d.set_item("result", &r.result)?;
+    d.set_item("reason", &r.reason)?;
+    d.set_item("elapsed_ms", r.elapsed_ms)?;
+    Ok(d)
+}
+
+/// CSA サーバプロトコルで対局する (floodgate 等)．
+///
+/// `games` 局が終わるまで戻らない．floodgate は 1 局ごとにログアウト状態へ
+/// 戻るため，対局ごとに接続し直す．評価器はプロセス内 1 個を全対局で共有する
+/// (モデルロードと warmup は 1 回だけ)．
+///
+/// # 引数
+///
+/// - `host` / `port`: 接続先 (floodgate は wdoor.c.u-tokyo.ac.jp:4081)．
+/// - `login_name`: ログイン名 (レーティングの単位となる識別子)．
+/// - `password`: パスワード欄．floodgate では `<ゲーム名>,<trip>` 形式．
+/// - `games`: 対局数 (0 = 無制限)．
+/// - その他の引数は `run_usi` と同じ (評価器・探索・戦略の設定)．
+///
+/// # 戻り値
+///
+/// `{"games": [{"game_id", "opponent", "my_color", "moves", "result",
+/// "reason", "elapsed_ms"}, ...]}`
+///
+/// # エラー
+///
+/// ログイン拒否・モデルロード失敗など復帰できないものは `RuntimeError`．
+#[pyfunction]
+#[pyo3(signature = (*, host, port, login_name, password, games=None, keep_alive_sec=None, connect_timeout_sec=None, game_wait_sec=None, reconnect_wait_sec=None, verbose=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, network_delay_ms=None, min_think_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+#[allow(clippy::too_many_arguments)]
+fn run_csa(
+    py: Python<'_>,
+    host: String,
+    port: u16,
+    login_name: String,
+    password: String,
+    games: Option<u32>,
+    keep_alive_sec: Option<u64>,
+    connect_timeout_sec: Option<u64>,
+    game_wait_sec: Option<u64>,
+    reconnect_wait_sec: Option<u64>,
+    verbose: Option<bool>,
+    model_path: Option<String>,
+    threads: Option<usize>,
+    batch_size: Option<usize>,
+    node_capacity: Option<u32>,
+    use_cuda: Option<bool>,
+    use_tensorrt: Option<bool>,
+    trt_engine_cache_dir: Option<String>,
+    pad_buckets: Option<bool>,
+    network_delay_ms: Option<u64>,
+    min_think_ms: Option<u64>,
+    draw_value_black: Option<u32>,
+    draw_value_white: Option<u32>,
+    resign_value: Option<u32>,
+    resign_consecutive: Option<u32>,
+    opening_script: Option<String>,
+    root_dfpn: Option<bool>,
+    root_dfpn_nodes: Option<u64>,
+    root_dfpn_depth: Option<u32>,
+    leaf_mate: Option<bool>,
+    leaf_mate_nodes: Option<u64>,
+    leaf_mate_threads: Option<usize>,
+) -> PyResult<Py<PyDict>> {
+    let mut engine = EngineConfig::default();
+    let time_defaults = TimeStrategyConfig::default();
+    engine.time = TimeStrategyConfig {
+        network_delay_ms: network_delay_ms.unwrap_or(time_defaults.network_delay_ms),
+        min_think_ms: min_think_ms.unwrap_or(time_defaults.min_think_ms),
+        horizon_moves: time_defaults.horizon_moves,
+    };
+    apply_common_engine_args(
+        &mut engine,
+        model_path,
+        threads,
+        batch_size,
+        node_capacity,
+        use_cuda,
+        use_tensorrt,
+        trt_engine_cache_dir,
+        pad_buckets,
+        draw_value_black,
+        draw_value_white,
+        resign_value,
+        resign_consecutive,
+        opening_script,
+        root_dfpn,
+        root_dfpn_nodes,
+        root_dfpn_depth,
+        leaf_mate,
+        leaf_mate_nodes,
+        leaf_mate_threads,
+    );
+    let defaults = CsaConfig::default();
+    let config = CsaConfig {
+        engine,
+        host,
+        port,
+        login_name,
+        password,
+        games: games.unwrap_or(defaults.games),
+        keep_alive_sec: keep_alive_sec.unwrap_or(defaults.keep_alive_sec),
+        connect_timeout_sec: connect_timeout_sec.unwrap_or(defaults.connect_timeout_sec),
+        game_wait_sec: game_wait_sec.unwrap_or(defaults.game_wait_sec),
+        reconnect_wait_sec: reconnect_wait_sec.unwrap_or(defaults.reconnect_wait_sec),
+        verbose: verbose.unwrap_or(defaults.verbose),
+    };
+    // 対局中は GIL を解放する (探索と通信は Rust 側で完結する)
+    let session = py
+        .detach(move || rust_run_csa(config))
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    let games = PyList::empty(py);
+    for result in &session.games {
+        games.append(csa_result_to_dict(py, result)?)?;
+    }
+    let out = PyDict::new(py);
+    out.set_item("games", games)?;
+    Ok(out.unbind())
+}
+
 /// Create maou_usi submodule
 pub fn create_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     let m = PyModule::new(py, "maou_usi")?;
     m.add_function(wrap_pyfunction!(run_usi, &m)?)?;
     m.add_function(wrap_pyfunction!(run_selfplay, &m)?)?;
+    m.add_function(wrap_pyfunction!(run_csa, &m)?)?;
     Ok(m)
 }
