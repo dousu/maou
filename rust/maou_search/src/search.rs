@@ -340,12 +340,22 @@ pub struct RootChildStat {
 }
 
 /// 最終手選択 (robust child): 負け確定 (`proven == Some(0.0)`) の手を除外して
-/// 訪問回数最大 → 同数なら Q 最大 → 同率なら合法手生成順で先頭．全手が負け
-/// 確定なら除外なしで同基準 (どれを指しても負けが確定しており同値)．
+/// 訪問回数最大 → 同数なら Q 最大 → 同率なら policy 事前確率最大 → なお同率
+/// なら合法手生成順で先頭．全手が負け確定なら除外なしで同基準 (どれを指しても
+/// 負けが確定しており同値)．
 ///
 /// 生の max-Q (訪問数を見ずに Q 最大) は低訪問子のノイズ Q を拾うため
 /// 採用しない．LCB (secure child) への置換は自己対局検証後の再検討事項
 /// (docs/design/position-search/index.md §6)．
+///
+/// **prior を最終タイブレークに使う理由**: 予算が 1 バッチにも満たない等で
+/// playout が 1 回も回らないと全子が `visits = 0` / `q = 0.0` になり，
+/// 生成順の先頭という**評価に基づかない手**が返っていた (実測: TensorRT の
+/// エンジンビルドが予算を食い切り，prior 0.061 の手が prior 0.414 の手より
+/// 優先された)．prior は探索が無くても NN から得られている唯一の情報なので，
+/// 訪問数と Q で差が付かないときはこれに従う．主要エンジンの順序とも一致する
+/// — lc0 は `terminal rank → N → Q → P`，dlshogi は
+/// `proven → move_count → nnrate` (同 §6)．
 fn select_best_root_index(children: &[RootChildStat]) -> usize {
     let mut best_i = 0usize;
     for (i, c) in children.iter().enumerate().skip(1) {
@@ -355,7 +365,8 @@ fn select_best_root_index(children: &[RootChildStat]) -> usize {
         let better = if c_losing != b_losing {
             b_losing
         } else {
-            c.visits > b.visits || (c.visits == b.visits && c.q > b.q)
+            c.visits > b.visits
+                || (c.visits == b.visits && (c.q > b.q || (c.q == b.q && c.prior > b.prior)))
         };
         if better {
             best_i = i;
@@ -2145,11 +2156,16 @@ mod tests {
 
     /// [`select_best_root_index`] 用のダミー子統計 (mv は選択基準に関与しない)．
     fn stat(visits: u64, q: f64, proven: Option<f64>) -> RootChildStat {
+        stat_p(visits, q, 0.1, proven)
+    }
+
+    /// prior を明示する版 ([`select_best_root_index`] の最終タイブレーク検証用)．
+    fn stat_p(visits: u64, q: f64, prior: f32, proven: Option<f64>) -> RootChildStat {
         RootChildStat {
             mv: Move::from_usi("7g7f").expect("正当な USI"),
             visits,
             q,
-            prior: 0.1,
+            prior,
             proven,
         }
     }
@@ -2166,9 +2182,54 @@ mod tests {
         // 同数なら Q 最大
         let c = [stat(100, 0.4, None), stat(100, 0.6, None)];
         assert_eq!(select_best_root_index(&c), 1);
-        // 同数同率なら生成順で先頭
+        // 同数同率かつ prior も同じなら生成順で先頭
         let c = [stat(100, 0.5, None), stat(100, 0.5, None)];
         assert_eq!(select_best_root_index(&c), 0);
+    }
+
+    /// **playout 0 でも評価に基づく手を返す**ことの回帰テスト．
+    ///
+    /// 予算が 1 バッチにも満たないと全子が `visits = 0` / `q = 0.0` になる．
+    /// prior をタイブレークに使わないと生成順の先頭 (= 評価に無関係な手) が
+    /// 返っていた — 実測で prior 0.061 の手が prior 0.414 の手より優先された．
+    #[test]
+    fn test_select_best_root_index_falls_back_to_prior_when_unvisited() {
+        // 実測局面の再現: 生成順の先頭が低 prior，本命が後ろにいる
+        let c = [
+            stat_p(0, 0.0, 0.0610, None), // 1g1f
+            stat_p(0, 0.0, 0.0014, None), // 1i1h
+            stat_p(0, 0.0, 0.4135, None), // 2g2f (policy 最大)
+            stat_p(0, 0.0, 0.0021, None), // 2h1h
+        ];
+        assert_eq!(
+            select_best_root_index(&c),
+            2,
+            "全子未訪問なら policy 最大手を返す"
+        );
+    }
+
+    #[test]
+    fn test_prior_is_only_the_last_tiebreak() {
+        // 訪問回数が prior に優先する (低 prior でも訪問数が多い方が勝つ)
+        let c = [stat_p(500, 0.5, 0.01, None), stat_p(100, 0.5, 0.99, None)];
+        assert_eq!(select_best_root_index(&c), 0, "visits が prior に優先する");
+        // Q が prior に優先する (同訪問数)
+        let c = [stat_p(100, 0.7, 0.01, None), stat_p(100, 0.3, 0.99, None)];
+        assert_eq!(select_best_root_index(&c), 0, "Q が prior に優先する");
+        // visits も Q も同じときだけ prior で決まる
+        let c = [stat_p(100, 0.5, 0.01, None), stat_p(100, 0.5, 0.99, None)];
+        assert_eq!(select_best_root_index(&c), 1);
+    }
+
+    #[test]
+    fn test_prior_does_not_override_losing_exclusion() {
+        // policy 最大でも負け確定なら選ばない (健全性規則が最優先)
+        let c = [stat_p(0, 0.0, 0.99, Some(0.0)), stat_p(0, 0.0, 0.01, None)];
+        assert_eq!(
+            select_best_root_index(&c),
+            1,
+            "負け確定の除外は prior より優先する"
+        );
     }
 
     #[test]
