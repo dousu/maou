@@ -1,7 +1,8 @@
 ---
 title: warmup を予算の外で前払いする位置づけを設計 doc に明記する
 date: 2026-07-29
-status: approved
+status: applied
+applied_in: 613f5c6
 target:
   - docs/design/position-search/index.md
 risk: low
