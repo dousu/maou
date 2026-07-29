@@ -348,7 +348,6 @@ class GradioVisualizationServer:
         self,
         file_paths: list[Path],
         array_type: str,
-        model_path: Path | None = None,
         use_mock_data: bool = False,
     ) -> None:
         """サーバーを初期化．
@@ -356,14 +355,12 @@ class GradioVisualizationServer:
         Args:
             file_paths: データファイルのパスリスト
             array_type: データ型（hcpe, preprocessing, stage1, stage2）
-            model_path: オプショナルなモデルファイルパス
             use_mock_data: Trueの場合はモックデータを使用
         """
         self.file_paths = file_paths
         self.array_type = (
             array_type  # This can now be changed dynamically
         )
-        self.model_path = model_path
         self.use_mock_data = use_mock_data
         self.renderer = SVGBoardRenderer()
 
@@ -3829,7 +3826,6 @@ def launch_server(
     port: int | None,
     share: bool,
     server_name: str,
-    model_path: Path | None,
     debug: bool,
     use_mock_data: bool = False,
 ) -> None:
@@ -3845,7 +3841,6 @@ def launch_server(
         port: サーバーポート
         share: 公開リンク作成フラグ
         server_name: サーバーバインドアドレス
-        model_path: モデルファイルパス
         debug: デバッグモード
         use_mock_data: Trueの場合はモックデータを使用
     """
@@ -3871,7 +3866,6 @@ def launch_server(
     server = GradioVisualizationServer(
         file_paths=file_paths,
         array_type=array_type,
-        model_path=model_path,
         use_mock_data=use_mock_data,
     )
 
