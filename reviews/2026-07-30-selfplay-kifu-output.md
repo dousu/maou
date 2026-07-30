@@ -1,7 +1,8 @@
 ---
 title: 自己対局の棋譜を CSA で残し analyze-game に繋ぐ
 date: 2026-07-30
-status: pending
+status: applied
+applied_in: ef77ee8
 target:
   - docs/commands/selfplay.md
   - docs/commands/analyze_game.md
