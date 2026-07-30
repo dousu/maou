@@ -70,6 +70,7 @@
 | `--cuda/--no-cuda` | default off | Enable CUDA Execution Provider (requires `--model-path`). |
 | `--tensorrt/--no-tensorrt` | default off | Enable TensorRT Execution Provider (requires `--model-path`). |
 | `--trt-cache-dir PATH` | | TensorRT engine cache directory. |
+| `--tensorrt/--no-tensorrt` (exit behaviour) | | With TensorRT enabled the command exits **without running destructors** once the server stops, for the same reason as [`analyze_game.md`](analyze_game.md). |
 | `--port INT` | | Gradio server port. Auto-selected by Gradio when omitted. |
 | `--share` | flag | Create a public Gradio link (auto-enabled on Google Colab). |
 | `--server-name HOST` | default `127.0.0.1` | Server bind address. |

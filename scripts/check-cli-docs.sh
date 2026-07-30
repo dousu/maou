@@ -18,6 +18,8 @@ declare -A CLI_DOC_MAP=(
   ["floodgate.py"]="floodgate.md"
   ["usi.py"]="usi.md"
   ["selfplay.py"]="selfplay.md"
+  ["analyze_game.py"]="analyze_game.md"
+  ["analyze_gui.py"]="analyze_gui.md"
   # screenshot.py is a subcommand of utility group; mapped via UTILITY_DOCS
 )
 
