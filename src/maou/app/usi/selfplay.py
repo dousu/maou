@@ -93,6 +93,8 @@ class SelfplayRunner:
                 permille (None = 1000 = 現行と同配分)．
                 ``ab_mode="timecurve"`` では A/B の両者に同じ値が入り，
                 差は on/off だけになる．
+            record_kifu: 各対局の CSA 棋譜を ``records[i]["csa"]`` に
+                含めるか (既定 False)．
             alternate_colors: 対局ごとに先後を入れ替え，ペア (2n, 2n+1) で
                 同じ開局系列を共有するか (None = ab_mode 指定時 True)．
             clock_ms: 持ち時間モードの初期持ち時間ミリ秒 (0/None = 無効)．
@@ -142,6 +144,7 @@ class SelfplayRunner:
         time_curve_peak_permille: int | None = None
         time_curve_opening_floor_permille: int | None = None
         time_curve_endgame_floor_permille: int | None = None
+        record_kifu: bool = False
         alternate_colors: bool | None = None
         clock_ms: int | None = None
         byoyomi_ms: int | None = None
@@ -242,6 +245,7 @@ class SelfplayRunner:
             time_curve_endgame_floor_permille=(
                 option.time_curve_endgame_floor_permille
             ),
+            record_kifu=option.record_kifu,
             alternate_colors=option.alternate_colors,
             clock_ms=option.clock_ms,
             byoyomi_ms=option.byoyomi_ms,

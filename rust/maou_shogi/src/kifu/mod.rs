@@ -12,7 +12,9 @@ pub mod hcpe;
 pub mod kif;
 pub mod record;
 
-pub use csa::{parse_csa_multi, parse_csa_str};
+pub use csa::{
+    move_to_csa, parse_csa_multi, parse_csa_str, piece_type_to_csa, write_csa_game, CsaWriteMeta,
+};
 pub use hcpe::{game_to_hcpe_rows, HcpeError, HcpeRow};
 pub use kif::parse_kif_str;
 pub use record::{GameRecord, KifuParseError, WIN_BLACK, WIN_DRAW, WIN_WHITE};

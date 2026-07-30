@@ -150,6 +150,27 @@ impl GameEndReason {
             GameEndReason::Timeout => "timeout",
         }
     }
+
+    /// CSA 棋譜の終局行．
+    ///
+    /// パーサ ([`maou_shogi::kifu::parse_csa_str`]) は `%TORYO` / `%TIME_UP` /
+    /// `%ILLEGAL_MOVE` を「手番側の負け」，`%KACHI` を「手番側の勝ち」と読む．
+    /// **勝敗が読み戻しても一致する**ように選んでいる (driver 側の winner は
+    /// いずれも「手番側が負ける」形で決まる)．引き分けは既知でない `%` 行が
+    /// 引き分け扱いになる仕様に乗る．
+    pub fn csa_endgame(&self) -> &'static str {
+        match self {
+            // 詰み・投了とも「手番側が負け」— CSA では同じ行になる
+            GameEndReason::Checkmate | GameEndReason::Resign => "%TORYO",
+            GameEndReason::Declaration => "%KACHI",
+            GameEndReason::Repetition => "%SENNICHITE",
+            // 連続王手の千日手は王手をかけ続けた側 (= 手番側) の負け
+            GameEndReason::PerpetualCheck | GameEndReason::IllegalMove => "%ILLEGAL_MOVE",
+            // driver が課す上限であって持将棋ではないので中断として書く
+            GameEndReason::MaxMoves => "%CHUDAN",
+            GameEndReason::Timeout => "%TIME_UP",
+        }
+    }
 }
 
 /// 1 対局の結果 (棋譜 = 基準 SFEN + USI 指し手列 + 勝敗)．
@@ -161,6 +182,17 @@ pub struct GameOutcome {
     pub sfen: String,
     /// USI 指し手列 (基準局面から)．
     pub moves: Vec<String>,
+    /// 1 手ごとの消費壁時計 (ミリ秒)．`moves` と同長．
+    ///
+    /// 序盤ランダム手 (driver 直指し) は 0．**`parallel > 1` では同時対局の
+    /// CPU 競合で歪む**ので，時間配分の分析は `parallel = 1` で採ること．
+    pub move_times_ms: Vec<u64>,
+    /// 1 手ごとの playout 数 (`info nodes`)．`moves` と同長．探索していない
+    /// 手 (序盤ランダム手) は 0．
+    pub move_playouts: Vec<u64>,
+    /// 1 手ごとの評価値 (手番側視点の cp．詰みは ±30000 に丸める)．
+    /// `moves` と同長．評価値を伴わない手は 0．
+    pub move_scores: Vec<i32>,
     /// 先手 (基準局面の手番側) をプレイヤー A が持ったか (A/B 対戦の色交代
     /// 記録．純粋自己対局では常に true)．
     pub black_is_a: bool,
@@ -190,6 +222,9 @@ pub struct GameOutcome {
     /// 0 付近に張り付いていれば攻めすぎ (設計 §12 未決 1)．
     pub remaining_ms: Option<[u64; 2]>,
 }
+
+/// 詰み申告を cp に丸めるときの絶対値 (棋譜の評価値欄・分析側の都合)．
+const MATE_SCORE_CP: i32 = 30_000;
 
 /// 持ち時間モードで確保する最低マージン (ミリ秒)．
 ///
@@ -389,6 +424,9 @@ fn play_game(
     let mut rng = SplitMix64(seed ^ SplitMix64(rng_index as u64 + 1).next());
 
     let mut moves: Vec<String> = Vec::new();
+    let mut move_times_ms: Vec<u64> = Vec::new();
+    let mut move_playouts: Vec<u64> = Vec::new();
+    let mut move_scores: Vec<i32> = Vec::new();
     let mut playouts: u64 = 0;
     let mut terminal_backprops: u64 = 0;
     let mut reused_moves: u32 = 0;
@@ -405,6 +443,11 @@ fn play_game(
             break (None, GameEndReason::MaxMoves);
         }
         let side = board.turn();
+        // この手の計測値 (moves.push と同時に確定させる — 途中 break した手は
+        // 棋譜に残らないので配列長が moves とずれないようにする)
+        let mut this_time_ms: u64 = 0;
+        let mut this_playouts: u64 = 0;
+        let mut this_score: i32 = 0;
         let usi = if (moves.len() as u32) < opening_random_plies {
             // 序盤ランダム手 (driver 直指し — 対局多様化)
             let legal = generate_legal_moves(&mut board.clone());
@@ -448,10 +491,13 @@ fn play_game(
             let out = agent
                 .handle(GuiCommand::Go(go))
                 .map_err(|e| format!("game {game_index}: go 失敗: {e}"))?;
+            // 1 手の消費壁時計 (持ち時間モード以外でも記録する — 時間配分の
+            // 分析は固定予算モードでも要る)
+            let spent = move_started.elapsed().as_millis() as u64;
+            this_time_ms = spent;
             // 時計の更新 (消費 → 秒読み/加算)．使い切ったら時間切れ負け
             if let (Some(c), Some(rem)) = (clock, remaining.as_mut()) {
                 let idx = usize::from(side == Color::White);
-                let spent = move_started.elapsed().as_millis() as u64;
                 if spent <= rem[idx] {
                     rem[idx] -= spent;
                 } else if spent <= rem[idx] + c.byoyomi_ms {
@@ -463,7 +509,7 @@ fn play_game(
                 rem[idx] += c.inc_ms;
             }
             // 探索サマリ info (最後の nodes 付き info) から playout を集計する
-            playouts += out
+            this_playouts = out
                 .iter()
                 .rev()
                 .find_map(|c| match c {
@@ -471,6 +517,25 @@ fn play_game(
                     _ => None,
                 })
                 .unwrap_or(0);
+            playouts += this_playouts;
+            // 評価値 (手番側視点)．詰みは分析側で扱いやすいよう cp に丸める
+            this_score = out
+                .iter()
+                .rev()
+                .find_map(|c| match c {
+                    EngineCommand::Info(info) => info.score,
+                    _ => None,
+                })
+                .map_or(0, |s| match s {
+                    crate::protocol::Score::Cp(v) => v,
+                    crate::protocol::Score::Mate(n) => {
+                        if n >= 0 {
+                            MATE_SCORE_CP
+                        } else {
+                            -MATE_SCORE_CP
+                        }
+                    }
+                });
             // 空回り (終端到達だけで折り返した backprop) の集計
             terminal_backprops += agent.last_terminal_backprops();
             // subtree 再利用の実効量 (前回木から引き継いだ訪問数．0 = fresh)
@@ -517,6 +582,9 @@ fn play_game(
         };
         board.do_move(mv);
         moves.push(usi);
+        move_times_ms.push(this_time_ms);
+        move_playouts.push(this_playouts);
+        move_scores.push(this_score);
         entries.push(HistoryEntry::from_board(&board));
         // 千日手: 実ルールの同一局面 4 回で終局し，探索と同じ分類器
         // (find_repetition) で通常/連続王手を判定する (意味論一致)
@@ -544,6 +612,9 @@ fn play_game(
         game_index,
         sfen: sfen.to_string(),
         moves,
+        move_times_ms,
+        move_playouts,
+        move_scores,
         black_is_a,
         winner,
         reason,
@@ -598,6 +669,48 @@ mod tests {
         assert!(o.playouts > 0, "探索した手があるはず");
         if o.reason == GameEndReason::MaxMoves || o.reason == GameEndReason::Repetition {
             assert!(o.winner.is_none() || o.reason != GameEndReason::MaxMoves);
+        }
+    }
+
+    #[test]
+    fn test_selfplay_per_move_records_align_with_moves() {
+        // 棋譜書き出しが手数でインデックスするので，長さがずれると
+        // 時間・評価値が 1 手ずれて載る (静かに間違った分析になる)
+        let outcomes = run_selfplay(
+            &SelfplayConfig {
+                opening_random_plies: 4,
+                seed: 7,
+                ..config(1, 16, 24)
+            },
+            None,
+        )
+        .expect("mock 自己対局は成功する");
+        let o = &outcomes[0];
+        assert_eq!(o.move_times_ms.len(), o.moves.len());
+        assert_eq!(o.move_playouts.len(), o.moves.len());
+        assert_eq!(o.move_scores.len(), o.moves.len());
+        // 序盤ランダム手は探索していないので playout 0
+        assert!(o.move_playouts[..4].iter().all(|p| *p == 0));
+        assert!(
+            o.move_playouts[4..].iter().any(|p| *p > 0),
+            "探索した手があるはず"
+        );
+    }
+
+    #[test]
+    fn test_csa_endgame_covers_every_reason() {
+        // 終局理由を増やしたら CSA 行も決めること (勝敗の読み戻しに効く)
+        for reason in [
+            GameEndReason::Checkmate,
+            GameEndReason::Resign,
+            GameEndReason::Declaration,
+            GameEndReason::Repetition,
+            GameEndReason::PerpetualCheck,
+            GameEndReason::MaxMoves,
+            GameEndReason::IllegalMove,
+            GameEndReason::Timeout,
+        ] {
+            assert!(reason.csa_endgame().starts_with('%'), "{reason:?}");
         }
     }
 

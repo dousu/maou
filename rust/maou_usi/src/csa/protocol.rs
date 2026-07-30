@@ -18,56 +18,13 @@ use maou_shogi::board::Board;
 use maou_shogi::kifu::parse_csa_str;
 use maou_shogi::movegen::generate_legal_moves;
 use maou_shogi::moves::Move;
-use maou_shogi::types::{Color, PieceType};
+use maou_shogi::types::Color;
 
-/// 駒種の CSA 2 文字コード．
-pub fn piece_type_csa(pt: PieceType) -> &'static str {
-    match pt {
-        PieceType::Pawn => "FU",
-        PieceType::Lance => "KY",
-        PieceType::Knight => "KE",
-        PieceType::Silver => "GI",
-        PieceType::Bishop => "KA",
-        PieceType::Rook => "HI",
-        PieceType::Gold => "KI",
-        PieceType::King => "OU",
-        PieceType::ProPawn => "TO",
-        PieceType::ProLance => "NY",
-        PieceType::ProKnight => "NK",
-        PieceType::ProSilver => "NG",
-        PieceType::Horse => "UM",
-        PieceType::Dragon => "RY",
-    }
-}
-
-/// 指し手を CSA 表記へ変換する．
+/// 駒種の CSA 2 文字コード / 指し手の CSA 表記．
 ///
-/// `color` は指す側 (符号)．成りは移動後の駒種で表記する規約に従う．
-pub fn move_to_csa(color: Color, mv: Move) -> String {
-    let sign = match color {
-        Color::Black => '+',
-        Color::White => '-',
-    };
-    let to = mv.to_sq();
-    let (tf, tr) = (to.col() + 1, to.row() + 1);
-    if mv.is_drop() {
-        // 駒打ちは移動元を "00" とする
-        let pt = mv.drop_piece_type().expect("drop move has a piece type");
-        format!("{sign}00{tf}{tr}{}", piece_type_csa(pt))
-    } else {
-        let from = mv.from_sq();
-        let (ff, fr) = (from.col() + 1, from.row() + 1);
-        let base = PieceType::from_u8(mv.moving_piece_type_raw())
-            .expect("generated move carries its moving piece type");
-        // CSA は「移動後の駒種」を書く: 成る手は成駒コードになる
-        let pt = if mv.is_promotion() {
-            base.promoted().unwrap_or(base)
-        } else {
-            base
-        };
-        format!("{sign}{ff}{fr}{tf}{tr}{}", piece_type_csa(pt))
-    }
-}
+/// 実装は棋譜パーサと同じ [`maou_shogi::kifu`] にあり，ここでは再輸出する
+/// だけにする (パーサと writer と transport で 3 つ目の表記実装を持たない)．
+pub use maou_shogi::kifu::{move_to_csa, piece_type_to_csa as piece_type_csa};
 
 /// CSA 表記の指し手を合法手の中から解決する．
 ///

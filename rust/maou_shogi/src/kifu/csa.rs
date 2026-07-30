@@ -16,6 +16,7 @@
 //! - 認識できない行はエラー (CSA は strict)
 
 use crate::board::Board;
+use crate::movegen::generate_legal_moves;
 use crate::moves::Move;
 use crate::sfen;
 use crate::types::{Color, Piece, PieceType, Square, HAND_KINDS};
@@ -483,6 +484,282 @@ pub fn parse_csa_str(content: &str) -> Result<GameRecord, KifuParseError> {
 /// cshogi (Python 層) 互換で `"\n/\n"` を区切りとして分割する．
 pub fn parse_csa_multi(content: &str) -> Result<Vec<GameRecord>, KifuParseError> {
     content.split("\n/\n").map(parse_csa_str).collect()
+}
+
+/// 駒種 → CSA 駒コード ([`piece_type_from_csa`] の逆)．
+pub fn piece_type_to_csa(pt: PieceType) -> &'static str {
+    match pt {
+        PieceType::Pawn => "FU",
+        PieceType::Lance => "KY",
+        PieceType::Knight => "KE",
+        PieceType::Silver => "GI",
+        PieceType::Bishop => "KA",
+        PieceType::Rook => "HI",
+        PieceType::Gold => "KI",
+        PieceType::King => "OU",
+        PieceType::ProPawn => "TO",
+        PieceType::ProLance => "NY",
+        PieceType::ProKnight => "NK",
+        PieceType::ProSilver => "NG",
+        PieceType::Horse => "UM",
+        PieceType::Dragon => "RY",
+    }
+}
+
+/// 指し手を CSA 表記へ変換する．
+///
+/// `color` は指す側 (符号)．**成りは移動後の駒種で表記する**規約に従う
+/// (パーサ側 [`parse_csa_move`] と対になる単一実装)．
+pub fn move_to_csa(color: Color, mv: Move) -> String {
+    let sign = match color {
+        Color::Black => '+',
+        Color::White => '-',
+    };
+    let to = mv.to_sq();
+    let (tf, tr) = (to.col() + 1, to.row() + 1);
+    if mv.is_drop() {
+        // 駒打ちは移動元を "00" とする
+        let pt = mv.drop_piece_type().expect("drop move has a piece type");
+        format!("{sign}00{tf}{tr}{}", piece_type_to_csa(pt))
+    } else {
+        let from = mv.from_sq();
+        let (ff, fr) = (from.col() + 1, from.row() + 1);
+        let base = PieceType::from_u8(mv.moving_piece_type_raw())
+            .expect("generated move carries its moving piece type");
+        let pt = if mv.is_promotion() {
+            base.promoted().unwrap_or(base)
+        } else {
+            base
+        };
+        format!("{sign}{ff}{fr}{tf}{tr}{}", piece_type_to_csa(pt))
+    }
+}
+
+/// 棋譜書き出しのメタ情報 ([`write_csa_game`] の入力)．
+#[derive(Clone, Debug, Default)]
+pub struct CsaWriteMeta {
+    /// 対局者名 [先手, 後手]．空文字列なら `N+`/`N-` 行を省略する．
+    pub names: [String; 2],
+    /// `$KEY:value` 行 (出現順)．
+    pub var_info: Vec<(String, String)>,
+    /// 1 手ごとの消費時間 (秒)．`moves` より短い分は書かない．
+    pub times_s: Vec<i32>,
+    /// 1 手ごとの評価値 (`'** <score>` 行)．`None` の手は書かない．
+    pub scores: Vec<Option<i32>>,
+    /// 終局行 (`"%TORYO"` 等)．空なら書かない．
+    pub endgame: String,
+}
+
+/// 局面 (SFEN) を CSA の `P1..P9` + 持駒行 + 手番行に変換する．
+///
+/// [`parse_position`] の逆写像．持駒は `P+00FU` 形式で駒種ごとに枚数分
+/// 繰り返す (`AL` は使わない — 明示列挙の方が往復で曖昧さがない)．
+fn write_position(sfen: &str) -> Result<Vec<String>, KifuParseError> {
+    let pos = sfen::parse_sfen(sfen)
+        .map_err(|e| KifuParseError::new(0, format!("初期局面 SFEN が不正です: {e}")))?;
+    let mut lines = Vec::with_capacity(12);
+    for rank in 0..9u8 {
+        let mut line = format!("P{}", rank + 1);
+        // 行内は 9筋→1筋 の順 (パーサの col = 8-i と対)
+        for i in 0..9u8 {
+            let sq = Square::new(8 - i, rank);
+            let piece = pos.squares[sq.index()];
+            match (piece.color(), piece.piece_type()) {
+                (Some(c), Some(pt)) => {
+                    let sign = if c == Color::Black { '+' } else { '-' };
+                    line.push(sign);
+                    line.push_str(piece_type_to_csa(pt));
+                }
+                _ => line.push_str(" * "),
+            }
+        }
+        lines.push(line);
+    }
+    for (ci, color) in [Color::Black, Color::White].into_iter().enumerate() {
+        let mut line = String::new();
+        for pt in [
+            PieceType::Pawn,
+            PieceType::Lance,
+            PieceType::Knight,
+            PieceType::Silver,
+            PieceType::Gold,
+            PieceType::Bishop,
+            PieceType::Rook,
+        ] {
+            let hi = pt.hand_index().expect("hand piece type has a hand index");
+            for _ in 0..pos.hand[ci][hi] {
+                line.push_str("00");
+                line.push_str(piece_type_to_csa(pt));
+            }
+        }
+        if !line.is_empty() {
+            let sign = if color == Color::Black { '+' } else { '-' };
+            lines.push(format!("P{sign}{line}"));
+        }
+    }
+    lines.push(
+        match pos.turn {
+            Color::Black => "+",
+            Color::White => "-",
+        }
+        .to_string(),
+    );
+    Ok(lines)
+}
+
+/// 開始局面 (SFEN) と USI 指し手列から CSA 棋譜 (V2.2) を組み立てる．
+///
+/// 指し手は**合法手列挙 + USI 表記照合**で解決する (USI 対局・CSA transport
+/// と同じ規約)．非合法手が混じっていればその手数でエラーにする．
+///
+/// 出力は [`parse_csa_str`] で読み戻せる (往復はテストで固定)．
+/// `analyze-game` / `analyze-gui` / `hcpe_convert` がそのまま食える形式．
+pub fn write_csa_game(
+    start_sfen: &str,
+    usi_moves: &[String],
+    meta: &CsaWriteMeta,
+) -> Result<String, KifuParseError> {
+    let mut out = String::from("V2.2\n");
+    for (i, name) in meta.names.iter().enumerate() {
+        if !name.is_empty() {
+            let sign = if i == 0 { '+' } else { '-' };
+            out.push_str(&format!("N{sign}{name}\n"));
+        }
+    }
+    for (k, v) in &meta.var_info {
+        out.push_str(&format!("${k}:{v}\n"));
+    }
+    for line in write_position(start_sfen)? {
+        out.push_str(&line);
+        out.push('\n');
+    }
+
+    let mut board = Board::new();
+    board
+        .set_sfen(start_sfen)
+        .map_err(|e| KifuParseError::new(0, format!("初期局面 SFEN が不正です: {e}")))?;
+    for (i, usi) in usi_moves.iter().enumerate() {
+        let turn = board.turn();
+        let mv = generate_legal_moves(&mut board.clone())
+            .into_iter()
+            .find(|m| m.to_usi() == *usi)
+            .ok_or_else(|| {
+                KifuParseError::new(i + 1, format!("{}手目が非合法です: {usi}", i + 1))
+            })?;
+        out.push_str(&move_to_csa(turn, mv));
+        out.push('\n');
+        if let Some(sec) = meta.times_s.get(i) {
+            out.push_str(&format!("T{sec}\n"));
+        }
+        // '** <score> は「直前の指し手」に付く (パーサの cshogi 互換 quirk)
+        if let Some(Some(score)) = meta.scores.get(i) {
+            out.push_str(&format!("'** {score}\n"));
+        }
+        board.do_move(mv);
+    }
+    if !meta.endgame.is_empty() {
+        out.push_str(&meta.endgame);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use super::*;
+
+    /// 開始局面から `usi` の手順を進め，(USI 列, 各手の Move) を返す．
+    fn play(start_sfen: &str, usi: &[&str]) -> (Vec<String>, Vec<Move>) {
+        let mut board = Board::new();
+        board.set_sfen(start_sfen).unwrap();
+        let mut moves = Vec::new();
+        for token in usi {
+            let mv = generate_legal_moves(&mut board.clone())
+                .into_iter()
+                .find(|m| m.to_usi() == *token)
+                .unwrap_or_else(|| panic!("非合法手をテストが要求している: {token}"));
+            board.do_move(mv);
+            moves.push(mv);
+        }
+        (usi.iter().map(|s| s.to_string()).collect(), moves)
+    }
+
+    /// パース結果の 32-bit 手から移動先/移動元の raw を取り出す
+    /// (`encode_move` / `encode_drop` のビット配置と対)．
+    fn to_from_raw(encoded: u32) -> (u32, u32) {
+        (encoded & 0x7f, (encoded >> 7) & 0x7f)
+    }
+
+    #[test]
+    fn test_write_csa_round_trips_through_the_parser() {
+        let (usi, mvs) = play(
+            sfen::HIRATE_SFEN,
+            &["7g7f", "3c3d", "8h2b+", "3a2b", "B*4e"],
+        );
+        let meta = CsaWriteMeta {
+            names: ["engine_a".to_string(), "engine_b".to_string()],
+            var_info: vec![("EVENT".to_string(), "selfplay".to_string())],
+            times_s: vec![3, 4, 5, 6, 7],
+            scores: vec![Some(120), Some(-80), None, Some(0), Some(999)],
+            endgame: "%TORYO".to_string(),
+        };
+        let text = write_csa_game(sfen::HIRATE_SFEN, &usi, &meta).unwrap();
+
+        // 書いたものを独立実装 (パーサ) で読み戻す
+        let rec = parse_csa_str(&text).unwrap();
+        assert_eq!(rec.sfen, sfen::HIRATE_SFEN);
+        assert_eq!(rec.moves.len(), usi.len());
+        assert_eq!(rec.times, vec![3, 4, 5, 6, 7]);
+        assert_eq!(rec.endgame.as_deref(), Some("%TORYO"));
+        assert_eq!(rec.names[0].as_deref(), Some("engine_a"));
+        assert_eq!(rec.names[1].as_deref(), Some("engine_b"));
+        // score を書かなかった手は 0 のまま
+        assert_eq!(rec.scores, vec![120, -80, 0, 0, 999]);
+        // 手の同一性: 移動先/移動元が元の Move と一致する
+        // (成り・駒打ちを含む手順で確認している)
+        for (i, mv) in mvs.iter().enumerate() {
+            let (to, from) = to_from_raw(rec.moves[i]);
+            assert_eq!(to, u32::from(mv.to_sq().raw_u8()), "{i} 手目の移動先");
+            if mv.is_drop() {
+                assert!(from >= 81, "{i} 手目は駒打ちのはず");
+            } else {
+                assert_eq!(from, u32::from(mv.from_sq().raw_u8()), "{i} 手目の移動元");
+            }
+        }
+    }
+
+    #[test]
+    fn test_write_csa_round_trips_arbitrary_position_with_hands() {
+        // 任意局面 (持駒あり・後手番) — KIF では表現できず CSA だけが往復できる
+        let start = "l2+P5/2k4+L1/2n1p2B1/p1pp1spN1/4Ps3/PlPP2P2/1P1Sb4/1KG2+p3/LN7 w R2GPrgsn4p 1";
+        let (usi, _) = play(start, &[]);
+        let text = write_csa_game(start, &usi, &CsaWriteMeta::default()).unwrap();
+        let rec = parse_csa_str(&text).unwrap();
+        assert_eq!(rec.sfen, start, "任意局面が往復しない");
+    }
+
+    #[test]
+    fn test_write_csa_rejects_an_illegal_move() {
+        let err = write_csa_game(
+            sfen::HIRATE_SFEN,
+            &["7g7f".to_string(), "7g7f".to_string()],
+            &CsaWriteMeta::default(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("非合法"), "{err}");
+    }
+
+    #[test]
+    fn test_write_csa_omits_optional_fields() {
+        // 名前・メタ・時間・評価値・終局が無くても読み戻せる
+        let (usi, _) = play(sfen::HIRATE_SFEN, &["7g7f"]);
+        let text = write_csa_game(sfen::HIRATE_SFEN, &usi, &CsaWriteMeta::default()).unwrap();
+        assert!(!text.contains("N+"), "{text}");
+        assert!(!text.contains('T'), "{text}");
+        let rec = parse_csa_str(&text).unwrap();
+        assert_eq!(rec.moves.len(), 1);
+        assert!(rec.endgame.is_none());
+    }
 }
 
 #[cfg(test)]
