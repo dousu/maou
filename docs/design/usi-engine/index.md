@@ -315,6 +315,32 @@ off) / 68.1s (on) を使い残す．終盤側の底を 1.0 より上げれば同
 - 成果物は driver + 棋譜出力 + smoke まで．HCPE 生成接続は次 campaign
   (user 承認 2026-07-17)
 
+### 9.1 棋譜出力 (`--kifu-dir`) — 実装済み
+
+A/B は「どちらが勝ったか」しか返さない．**どこで差がついたか**を見るには
+1 手ごとの記録が要る (手数カーブの A/B が −117 Elo で負けた際，時間切れは
+0 件だったため「終盤の探索が薄い」のか「中盤の追加探索が無駄」なのかを
+区別できなかったのが動機)．
+
+- **形式は CSA**．KIF パーサは初期局面を `手合割：` でしか読めず BOD 非対応
+  なので，`--sfen` で始めた対局が**往復できない**．CSA は `P1..P9` +
+  持駒行で任意局面を表現でき，`analyze-game` / `analyze-gui` /
+  `hcpe_convert` の 3 つともが既に読める
+- **1 局 1 ファイル** (`analyze-game` が複数局 CSA を拒否する)
+- **writer はパーサと同じ場所** (`maou_shogi::kifu::csa`)．`parse_csa_str`
+  が独立実装として往復テストの相手になる
+- **指し手 → CSA 表記は単一実装**．floodgate transport が持っていた
+  `move_to_csa` を `maou_shogi` へ移し，transport は再輸出にした
+  (パーサ・writer・transport で 3 つ目の表記実装を持たない)
+- **終局行は勝敗が読み戻しても一致する対応で選ぶ**．パーサは `%TORYO` /
+  `%TIME_UP` / `%ILLEGAL_MOVE` を「手番側の負け」，`%KACHI` を「手番側の
+  勝ち」と読み，driver の winner はいずれも「手番側が負ける」形で決まる
+- **計測は棋譜と JSONL で分ける**．CSA には `T<n>` (秒) と `'** <score>`，
+  正確なミリ秒と手ごとの playout は JSONL (`move_times_ms` /
+  `move_playouts` / `move_scores`)．棋譜を標準形式に保ったまま分解能を
+  失わないための分担．**`parallel > 1` では壁時計が CPU 競合で歪む**ので
+  時間配分の分析は `parallel = 1` に限る
+
 ## 10. CLI と USI オプション (設計方針)
 
 - `maou usi` (click) + `maou-usi` (引数なし console script)．CLI フラグは

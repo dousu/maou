@@ -51,6 +51,7 @@ def selfplay(
     time_curve_peak_permille: int | None = None,
     time_curve_opening_floor_permille: int | None = None,
     time_curve_endgame_floor_permille: int | None = None,
+    record_kifu: bool = False,
     alternate_colors: bool | None = None,
     clock_ms: int | None = None,
     byoyomi_ms: int | None = None,
@@ -107,6 +108,7 @@ def selfplay(
             (permille．既定 1000 = 現行と同配分)．
             いずれも ab_mode="timecurve" の**両者に同じ値**が入り，
             A/B の差は on/off だけになる．
+        record_kifu: 各対局の CSA 棋譜をレコードに含めるか (既定 False)．
         alternate_colors: 先後交代 + ペア開局 (None = ab_mode 指定時 True)．
         clock_ms: 持ち時間モードの初期持ち時間ミリ秒 (0/None = 無効)．
         byoyomi_ms: 秒読みミリ秒．
@@ -197,6 +199,7 @@ def selfplay(
         time_curve_peak_permille=time_curve_peak_permille,
         time_curve_opening_floor_permille=time_curve_opening_floor_permille,
         time_curve_endgame_floor_permille=time_curve_endgame_floor_permille,
+        record_kifu=record_kifu,
         alternate_colors=alternate_colors,
         clock_ms=clock_ms,
         byoyomi_ms=byoyomi_ms,

@@ -98,6 +98,18 @@ logger: logging.Logger = logging.getLogger(__name__)
     required=False,
 )
 @click.option(
+    "--kifu-dir",
+    help="Write one CSA game record per game into this directory (created "
+    "if missing). The files feed `maou analyze-game` / `analyze-gui` / "
+    "`maou hcpe-convert` directly. One game per file, because analyze-game "
+    "rejects multi-game CSA. Each move carries its consumed seconds (T) and "
+    "the engine's own evaluation ('** score); exact milliseconds and "
+    "per-move playouts stay in the --output JSONL.",
+    type=click.Path(path_type=Path, file_okay=False),
+    default=None,
+    required=False,
+)
+@click.option(
     "--threads",
     help="Number of search threads per move.",
     type=int,
@@ -442,6 +454,7 @@ def selfplay(
     opening_random_plies: int,
     seed: int,
     output: Path | None,
+    kifu_dir: Path | None,
     threads: int,
     batch_size: int,
     node_capacity: int | None,
@@ -507,6 +520,7 @@ def selfplay(
         opening_random_plies: Random opening plies per game.
         seed: Random seed for the opening randomization.
         output: JSON Lines output path for per-game records.
+        kifu_dir: Directory for one CSA game record per game.
         threads: Number of search threads per move.
         batch_size: Evaluation batch size.
         node_capacity: Node pool capacity per agent.
@@ -587,10 +601,29 @@ def selfplay(
         time_curve_opening_floor_permille=time_curve_opening_floor_permille,
         time_curve_endgame_floor_permille=time_curve_endgame_floor_permille,
         alternate_colors=alternate_colors,
+        record_kifu=kifu_dir is not None,
         clock_ms=clock_ms,
         byoyomi_ms=byoyomi_ms,
         inc_ms=inc_ms,
     )
+
+    if kifu_dir is not None:
+        kifu_dir.mkdir(parents=True, exist_ok=True)
+        written = 0
+        for record in result.records:
+            # JSONL 側には残さない (棋譜本文を二重に持たない)
+            csa = record.pop("csa", None)
+            if csa is None:
+                continue
+            path = (
+                kifu_dir
+                / f"game_{record['game_index']:04d}.csa"
+            )
+            path.write_text(csa, encoding="utf-8")
+            written += 1
+        logger.info(
+            "Wrote %d kifu file(s) to %s", written, kifu_dir
+        )
 
     if output is not None:
         with output.open("w", encoding="utf-8") as f:

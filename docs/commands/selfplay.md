@@ -19,8 +19,13 @@
   still wins), resignation (mate and threshold resign recorded
   separately), and illegal moves (a bug indicator; the offender loses).
 - Per-game records (`sfen`, USI move list, winner, reason, playouts,
-  elapsed time) can be written as **JSON Lines** with `--output`. A results
-  summary is printed to stdout; per-game progress lines go to stderr.
+  per-move times / playouts / scores, elapsed time) can be written as
+  **JSON Lines** with `--output`. A results summary is printed to stdout;
+  per-game progress lines go to stderr.
+- `--kifu-dir` additionally writes **one CSA game record per game**, which
+  `maou analyze-game`, `maou analyze-gui` and `maou hcpe-convert` read
+  directly — so an A/B match can be taken apart move by move to see *where*
+  the difference came from, not just who won.
 - Parallelism is "games at a time" (`--parallel`); each game additionally
   uses `--threads` search threads per move. Node pools are pre-allocated
   per agent (two per game), so keep `--node-capacity` modest when running
@@ -94,6 +99,7 @@
 | `--pad-buckets/--no-pad-buckets` | default off | Round the TensorRT padding up to a power-of-two bucket instead of always padding to `--batch-size`. Fixed padding makes a 1-item root evaluation cost a full batch; bucketing removes that waste but adds one TensorRT engine build per shape and can change numeric results, so it is a measurement toggle until verified on GPU (see [eval-batching.md](../design/position-search/eval-batching.md)). |
 | `--tensorrt/--no-tensorrt` (終了時の挙動) | | With TensorRT enabled the command flushes its output and then exits **without running destructors**: the TensorRT EP teardown corrupts the glibc heap and aborts (deterministic; see [verification.md §8.5](../design/usi-engine/verification.md)). Results are already written when this happens, and the exit code stays 0. Runs without TensorRT use the normal exit path. |
 | `--quiet` | default off | Suppress per-game progress lines on stderr. |
+| `--kifu-dir DIR` | | Write one CSA game record per game into this directory (created if missing). Feeds `analyze-game` / `analyze-gui` / `hcpe-convert` directly. One game per file. Exact milliseconds and per-move playouts stay in the `--output` JSONL — the CSA time field is whole seconds. |
 
 ## Output
 
@@ -115,6 +121,21 @@
   (`black_player` records color alternation in A/B matches; plain
   self-play always reports `"a"`. `remaining_ms` is `[black, white]` time
   left at the end and is only filled in real-clock mode.)
+- `move_times_ms`, `move_playouts` and `move_scores` are per-move arrays,
+  all the same length as `moves`. Moves the driver played itself
+  (`--opening-random-plies`) carry `0`. `move_scores` is the engine's own
+  evaluation in centipawns from the side to move (mate is clamped to
+  ±30000). **`move_times_ms` is the authoritative time record** — the CSA
+  file rounds it to whole seconds. Under `--parallel > 1` the wall clock is
+  distorted by CPU contention between concurrent games, so take timing
+  analysis from `--parallel 1` runs only.
+- `--kifu-dir` writes `game_NNNN.csa` (V2.2) per game: `N+`/`N-` name the
+  A/B sides, each move carries `T<seconds>` and the engine evaluation as
+  `'** <score>`, and the game ends with `%TORYO` / `%KACHI` /
+  `%SENNICHITE` / `%ILLEGAL_MOVE` / `%CHUDAN` / `%TIME_UP` chosen so that
+  **re-reading the file reproduces the same winner**. One game per file,
+  because `analyze-game` rejects multi-game CSA. When `--kifu-dir` is
+  given, the record body is not duplicated into the `--output` JSONL.
 - stdout prints a summary: game count, black/white/draw results, a reason
   histogram, totals for plies / playouts / summed game time, a
   `terminal spin:` line, wall-clock `throughput:` in playouts per second
@@ -157,6 +178,14 @@ maou selfplay --model-path model.onnx --games 40 --ab-mode subtree \
 maou selfplay --model-path model.onnx --games 40 --ab-mode horizon \
   --clock-ms 32000 --inc-ms 500 --horizon 40 --horizon-b 20 \
   --resign-value 0 --opening-random-plies 8 --seed 1 --max-moves 256
+
+# A/B that can be taken apart afterwards: keep the records and the kifu,
+# then analyse the game where A lost to see *where* it went wrong
+maou selfplay --model-path model.onnx --games 40 --ab-mode timecurve \
+  --clock-ms 300000 --inc-ms 10000 --opening-random-plies 8 --seed 1 \
+  --output ab.jsonl --kifu-dir kifu/
+maou analyze-game --input-path kifu/game_0003.csa \
+  --model-path model.onnx --playouts 800 --output report.json
 ```
 
 The same harness is available without building the Python extension as

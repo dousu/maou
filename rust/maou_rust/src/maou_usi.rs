@@ -3,6 +3,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+use maou_shogi::kifu::{write_csa_game, CsaWriteMeta};
 use maou_usi::ab::{build_ab, summarize, AbMode, AbOptions, RunSummary, SummaryOptions};
 use maou_usi::csa::{run_csa as rust_run_csa, CsaConfig, CsaGameResult};
 use maou_usi::selfplay::{ClockSetting, GameOutcome, SelfplayConfig};
@@ -244,11 +245,55 @@ fn run_usi(
 }
 
 /// [`GameOutcome`] → Python dict．
-fn outcome_to_dict<'py>(py: Python<'py>, o: &GameOutcome) -> PyResult<Bound<'py, PyDict>> {
+/// 対局結果から CSA 棋譜 (V2.2) を組み立てる．
+///
+/// `analyze-game` / `analyze-gui` / `hcpe_convert` がそのまま読める形式．
+/// 対局者名は A/B のどちらが先手かを表す (`black_player` と同じ情報を棋譜
+/// 単体でも辿れるようにする)．
+fn outcome_to_csa(o: &GameOutcome) -> Result<String, String> {
+    let (black, white) = if o.black_is_a { ("A", "B") } else { ("B", "A") };
+    let meta = CsaWriteMeta {
+        names: [black.to_string(), white.to_string()],
+        var_info: vec![
+            ("EVENT".to_string(), "maou-selfplay".to_string()),
+            ("GAME_INDEX".to_string(), o.game_index.to_string()),
+        ],
+        // CSA の消費時間は秒 (正確な値は JSONL の move_times_ms が持つ)
+        times_s: o
+            .move_times_ms
+            .iter()
+            .map(|ms| ((*ms + 500) / 1000) as i32)
+            .collect(),
+        // 探索していない手 (序盤ランダム手) には評価値を書かない
+        scores: o
+            .move_scores
+            .iter()
+            .zip(o.move_playouts.iter())
+            .map(|(s, p)| (*p > 0).then_some(*s))
+            .collect(),
+        endgame: o.reason.csa_endgame().to_string(),
+    };
+    write_csa_game(&o.sfen, &o.moves, &meta).map_err(|e| e.to_string())
+}
+
+fn outcome_to_dict<'py>(
+    py: Python<'py>,
+    o: &GameOutcome,
+    kifu: bool,
+) -> PyResult<Bound<'py, PyDict>> {
     let d = PyDict::new(py);
     d.set_item("game_index", o.game_index)?;
     d.set_item("sfen", &o.sfen)?;
     d.set_item("moves", PyList::new(py, &o.moves)?)?;
+    d.set_item("move_times_ms", PyList::new(py, &o.move_times_ms)?)?;
+    d.set_item("move_playouts", PyList::new(py, &o.move_playouts)?)?;
+    d.set_item("move_scores", PyList::new(py, &o.move_scores)?)?;
+    if kifu {
+        d.set_item(
+            "csa",
+            outcome_to_csa(o).map_err(pyo3::exceptions::PyRuntimeError::new_err)?,
+        )?;
+    }
     d.set_item(
         "winner",
         o.winner.map(|c| match c {
@@ -375,7 +420,7 @@ fn summary_to_dict<'py>(py: Python<'py>, s: &RunSummary) -> PyResult<Bound<'py, 
 /// 設定不正・モデルロード失敗・対局中の内部エラーは `RuntimeError`，
 /// 未知の `ab_mode` は `ValueError`．
 #[pyfunction]
-#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, spin_budget_relief=None, skip_proven_children=None, min_think_ms=None, time_curve_peak_ply=None, time_curve_half_width_ply=None, time_curve_peak_permille=None, time_curve_opening_floor_permille=None, time_curve_endgame_floor_permille=None, ab_mode=None, playouts_b=None, batch_size_b=None, horizon_moves=None, horizon_moves_b=None, alternate_colors=None, clock_ms=None, byoyomi_ms=None, inc_ms=None))]
+#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, spin_budget_relief=None, skip_proven_children=None, record_kifu=None, min_think_ms=None, time_curve_peak_ply=None, time_curve_half_width_ply=None, time_curve_peak_permille=None, time_curve_opening_floor_permille=None, time_curve_endgame_floor_permille=None, ab_mode=None, playouts_b=None, batch_size_b=None, horizon_moves=None, horizon_moves_b=None, alternate_colors=None, clock_ms=None, byoyomi_ms=None, inc_ms=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_selfplay(
     py: Python<'_>,
@@ -409,6 +454,7 @@ fn run_selfplay(
     leaf_mate_threads: Option<usize>,
     spin_budget_relief: Option<bool>,
     skip_proven_children: Option<bool>,
+    record_kifu: Option<bool>,
     min_think_ms: Option<u64>,
     time_curve_peak_ply: Option<u64>,
     time_curve_half_width_ply: Option<u64>,
@@ -578,7 +624,7 @@ fn run_selfplay(
 
     let list = PyList::empty(py);
     for o in &outcomes {
-        list.append(outcome_to_dict(py, o)?)?;
+        list.append(outcome_to_dict(py, o, record_kifu.unwrap_or(false))?)?;
     }
     let summary = summarize(
         &outcomes,

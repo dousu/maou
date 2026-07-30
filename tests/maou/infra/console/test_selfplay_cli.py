@@ -196,6 +196,78 @@ def test_selfplay_rejects_horizon_without_clock() -> None:
     assert result.exit_code != 0
 
 
+def test_selfplay_writes_one_csa_per_game(
+    tmp_path: Path,
+) -> None:
+    """--kifu-dir が 1 局 1 ファイルの CSA を書き，読み戻せる．
+
+    analyze-game は複数局 CSA を拒否するので 1 局 1 ファイルが要件．
+    読み戻しは analyze-game / analyze-gui と同じパース経路を通す．
+    """
+    from maou.app.analysis.game_analyzer import (
+        parse_single_game_record,
+    )
+
+    kifu = tmp_path / "kifu"
+    out = tmp_path / "records.jsonl"
+    result = CliRunner().invoke(
+        selfplay,
+        [
+            "--games",
+            "2",
+            "--kifu-dir",
+            str(kifu),
+            "--output",
+            str(out),
+            *_FAST,
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    files = sorted(kifu.glob("*.csa"))
+    assert [f.name for f in files] == [
+        "game_0000.csa",
+        "game_0001.csa",
+    ]
+
+    records = [
+        json.loads(line)
+        for line in out.read_text().splitlines()
+    ]
+    for path, record in zip(files, records, strict=True):
+        parsed = parse_single_game_record(
+            path.read_text(encoding="utf-8"), "csa"
+        )
+        # 棋譜が対局と同じ手数・同じ終局で読み戻る
+        assert len(parsed.moves) == record["plies"]
+        assert parsed.endgame is not None
+        # 棋譜本文は JSONL 側に二重で持たない
+        assert "csa" not in record
+        # 手ごとの計測は JSONL 側にある (棋譜は秒単位に丸まる)
+        for key in (
+            "move_times_ms",
+            "move_playouts",
+            "move_scores",
+        ):
+            assert len(record[key]) == record["plies"], key
+
+
+def test_selfplay_kifu_records_winner_and_names(
+    tmp_path: Path,
+) -> None:
+    """棋譜単体で A/B のどちらが先手かを辿れる．"""
+    kifu = tmp_path / "kifu"
+    result = CliRunner().invoke(
+        selfplay,
+        ["--games", "1", "--kifu-dir", str(kifu), *_FAST],
+    )
+    assert result.exit_code == 0, result.output
+    text = (kifu / "game_0000.csa").read_text(encoding="utf-8")
+    assert "N+A" in text
+    assert "N-B" in text
+    assert text.startswith("V2.2\n")
+
+
 def test_selfplay_rejects_timecurve_without_clock() -> None:
     """--ab-mode timecurve も配分のレバーなので持ち時間モードが必須．"""
     result = CliRunner().invoke(

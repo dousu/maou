@@ -22,6 +22,14 @@
   is rejected with an error (split it into one game per file, e.g. the output
   of `maou fetch-floodgate`). File encoding is auto-detected (strict UTF-8
   first, then cp932).
+- `maou selfplay --kifu-dir DIR` writes exactly this shape (one CSA per
+  game), so an A/B match can be re-analysed move by move. For those files
+  `record_time_s` and `record_score` hold what the **playing** engine spent
+  and thought at the time, while the report's own `win_rate` / `best_move`
+  come from **this** analysis — comparing the two is how you find the ply
+  where a lever started costing points. Take exact per-move timings from
+  the self-play JSONL (`move_times_ms`): the CSA time field is whole
+  seconds.
 
 ## CLI options
 
