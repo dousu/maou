@@ -1,5 +1,6 @@
 ---
-status: pending
+status: applied
+applied_in: 0444d0f
 title: 手数カーブを変換期重み付けに変えて既定 on にする
 date: 2026-07-31
 target:

@@ -1,5 +1,6 @@
 ---
-status: approved
+status: applied
+applied_in: d4b3e78
 title: analyze-game / analyze-gui に TensorRT teardown 回避を入れる
 date: 2026-07-30
 target:
