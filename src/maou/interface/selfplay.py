@@ -99,13 +99,13 @@ def selfplay(
         batch_size_b: ab_mode="batch" の B 側評価バッチサイズ (None = A の 4 倍)．
         horizon_moves: ab_mode="horizon" の A 側想定残り手数．
         horizon_moves_b: 同 B 側想定残り手数．
-        time_curve_peak_ply: 手数カーブの頂点手数 (既定 55)．
-        time_curve_half_width_ply: 頂点から底までの手数 (既定 35)．
-        time_curve_peak_permille: 頂点の乗数 (permille．既定 1800)．
+        time_curve_peak_ply: 手数カーブの頂点手数 (既定 100)．
+        time_curve_half_width_ply: 頂点から底までの手数 (既定 55)．
+        time_curve_peak_permille: 頂点の乗数 (permille．既定 2500)．
         time_curve_opening_floor_permille: 序盤側の底の乗数
-            (permille．既定 700)．
+            (permille．既定 300)．
         time_curve_endgame_floor_permille: 終盤側の底の乗数
-            (permille．既定 1000 = 現行と同配分)．
+            (permille．既定 1200 = 一律配分より厚い)．
             いずれも ab_mode="timecurve" の**両者に同じ値**が入り，
             A/B の差は on/off だけになる．
         record_kifu: 各対局の CSA 棋譜をレコードに含めるか (既定 False)．

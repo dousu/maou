@@ -122,12 +122,12 @@ from maou.infra.console.common import (
     "--time-curve/--no-time-curve",
     type=bool,
     is_flag=True,
-    help="Weight the per-move budget towards the midgame. The multiplier "
-    "scales only the discretionary share (remaining time / horizon), never "
-    "byoyomi or the Fischer increment, so floodgate's 10s increment still "
-    "carries the endgame. Off by default until a self-play A/B says it is "
-    "stronger.",
-    default=False,
+    help="Weight the per-move budget towards the conversion phase. The "
+    "multiplier scales only the discretionary share (remaining time / "
+    "horizon), so on `floodgate-300-10F` the 10-second Fischer increment "
+    "stays intact while the 300-second bank moves to where it matters. On by "
+    "default (self-play A/B: 65% over 20 games, +108 Elo).",
+    default=True,
     show_default=True,
     required=False,
 )
@@ -135,7 +135,7 @@ from maou.infra.console.common import (
     "--time-curve-peak-ply",
     help="Ply where the time curve peaks (--time-curve).",
     type=int,
-    default=55,
+    default=100,
     show_default=True,
     required=False,
 )
@@ -143,7 +143,7 @@ from maou.infra.console.common import (
     "--time-curve-half-width-ply",
     help="Plies from the peak down to the floor weight (--time-curve).",
     type=int,
-    default=35,
+    default=55,
     show_default=True,
     required=False,
 )
@@ -151,7 +151,7 @@ from maou.infra.console.common import (
     "--time-curve-peak-permille",
     help="Multiplier at the peak, per mille (--time-curve).",
     type=int,
-    default=1800,
+    default=2500,
     show_default=True,
     required=False,
 )
@@ -160,17 +160,17 @@ from maou.infra.console.common import (
     help="Multiplier before the peak, per mille (--time-curve). The opening "
     "is book-like, so search time buys little there.",
     type=int,
-    default=700,
+    default=300,
     show_default=True,
     required=False,
 )
 @click.option(
     "--time-curve-endgame-floor-permille",
-    help="Multiplier after the peak, per mille (--time-curve). Defaults to "
-    "1000 = the flat allocation; raise it above 1000 to spend the leftover "
-    "bank late instead of carrying it to the end of the game.",
+    help="Multiplier after the peak, per mille (--time-curve). Above 1000 on "
+    "purpose: the conversion phase is where a small time shortage costs whole "
+    "games, so it gets more than the flat allocation, not less.",
     type=int,
-    default=1000,
+    default=1200,
     show_default=True,
     required=False,
 )

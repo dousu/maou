@@ -84,13 +84,13 @@ class SelfplayRunner:
             horizon_moves: ``ab_mode="horizon"`` の A 側想定残り手数
                 (None = エンジン既定)．
             horizon_moves_b: 同 B 側想定残り手数 (None = 25)．
-            time_curve_peak_ply: 手数カーブの頂点手数 (None = 55)．
-            time_curve_half_width_ply: 頂点から底までの手数 (None = 35)．
-            time_curve_peak_permille: 頂点の乗数 permille (None = 1800)．
+            time_curve_peak_ply: 手数カーブの頂点手数 (None = 100)．
+            time_curve_half_width_ply: 頂点から底までの手数 (None = 55)．
+            time_curve_peak_permille: 頂点の乗数 permille (None = 2500)．
             time_curve_opening_floor_permille: 序盤側の底の乗数
-                permille (None = 700)．
+                permille (None = 300)．
             time_curve_endgame_floor_permille: 終盤側の底の乗数
-                permille (None = 1000 = 現行と同配分)．
+                permille (None = 1200 = 一律配分より厚い)．
                 ``ab_mode="timecurve"`` では A/B の両者に同じ値が入り，
                 差は on/off だけになる．
             record_kifu: 各対局の CSA 棋譜を ``records[i]["csa"]`` に

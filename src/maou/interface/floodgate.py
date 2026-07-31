@@ -34,12 +34,12 @@ def floodgate(
     node_capacity: int | None = None,
     network_delay_ms: int = 1000,
     min_think_ms: int = 100,
-    time_curve: bool = False,
-    time_curve_peak_ply: int = 55,
-    time_curve_half_width_ply: int = 35,
-    time_curve_peak_permille: int = 1800,
-    time_curve_opening_floor_permille: int = 700,
-    time_curve_endgame_floor_permille: int = 1000,
+    time_curve: bool = True,
+    time_curve_peak_ply: int = 100,
+    time_curve_half_width_ply: int = 55,
+    time_curve_peak_permille: int = 2500,
+    time_curve_opening_floor_permille: int = 300,
+    time_curve_endgame_floor_permille: int = 1200,
     draw_value_black: int = 500,
     draw_value_white: int = 500,
     resign_value: int = 0,
@@ -79,7 +79,7 @@ def floodgate(
         node_capacity: ノードプール容量 (None で既定)．
         network_delay_ms: 通信マージン (ミリ秒)．
         min_think_ms: 最低思考時間 (ミリ秒)．
-        time_curve: 手数カーブ (中盤重み付け) を有効にする (既定 False)．
+        time_curve: 手数カーブ (変換期重み付け) を有効にする (既定 True)．
         time_curve_peak_ply: カーブの頂点手数．
         time_curve_half_width_ply: 頂点から底までの手数．
         time_curve_peak_permille: 頂点の乗数 (permille)．
