@@ -1,7 +1,8 @@
 ---
 title: 詰み判定を攻守対称にする — 防御側 dfpn と確定値伝播の設計見直し
 date: 2026-07-31
-status: approved
+status: applied
+applied_in: 68c4c68
 target:
   - docs/design/position-search/index.md
   - docs/design/tsume-solver/search-architecture.md
