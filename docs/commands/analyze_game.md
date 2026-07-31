@@ -54,6 +54,7 @@
 | `--cuda/--no-cuda` | default `--no-cuda` | Enable the CUDA Execution Provider. Requires `--model-path` and a wheel built with `onnx-cuda`. |
 | `--tensorrt/--no-tensorrt` | default `--no-tensorrt` | Enable the TensorRT Execution Provider. Requires `--model-path` and a wheel built with `onnx-tensorrt`. |
 | `--trt-cache-dir PATH` | | TensorRT engine cache directory. |
+| `--tensorrt/--no-tensorrt` (exit behaviour) | | With TensorRT enabled the command writes its report and then exits **without running destructors**: the TensorRT EP teardown corrupts the glibc heap and aborts (deterministic; see [verification.md §8.5](../design/usi-engine/verification.md)). The report is already on disk when this happens, and the exit code stays 0. Runs without TensorRT use the normal exit path. |
 
 ## Outputs
 

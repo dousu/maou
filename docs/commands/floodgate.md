@@ -73,12 +73,12 @@ supplies the room and defaults to `floodgate-300-10F`.
 | `--node-capacity INT` | | Node pool capacity (default 2^20 nodes). |
 | `--network-delay-ms INT` | default `1000` | Communication margin. The server measures the consumed time, so the round trip and the driver's own lag are kept outside the search budget. |
 | `--min-think-ms INT` | default `100` | Minimum thinking time. |
-| `--time-curve/--no-time-curve` | **default off** | Weight the per-move budget towards the midgame. The multiplier scales **only the discretionary share** (`remaining / horizon`), so on `floodgate-300-10F` the 10-second Fischer increment stays intact as the endgame floor while the 300-second bank moves to the midgame. Off until a self-play A/B says it is stronger — see [verification.md §4.4.1](../design/usi-engine/verification.md). |
-| `--time-curve-peak-ply INT` | default `55` | Ply where the curve peaks. |
-| `--time-curve-half-width-ply INT` | default `35` | Plies from the peak down to the floor weight. |
-| `--time-curve-peak-permille INT` | default `1800` | Multiplier at the peak, per mille. |
-| `--time-curve-opening-floor-permille INT` | default `700` | Multiplier before the peak, per mille. |
-| `--time-curve-endgame-floor-permille INT` | default `1000` | Multiplier after the peak, per mille (`1000` = the flat allocation). |
+| `--time-curve/--no-time-curve` | **default on** | Weight the per-move budget towards the **conversion phase**. The multiplier scales **only the discretionary share** (`remaining / horizon`), so on `floodgate-300-10F` the 10-second Fischer increment stays intact while the 300-second bank moves to where it matters. Enabled after a self-play A/B scored 65% over 20 games (+108 Elo); the interval still includes zero, so treat it as provisional — see [verification.md §4.4.1](../design/usi-engine/verification.md). |
+| `--time-curve-peak-ply INT` | default `100` | Ply where the curve peaks. |
+| `--time-curve-half-width-ply INT` | default `55` | Plies from the peak down to the floor weight. |
+| `--time-curve-peak-permille INT` | default `2500` | Multiplier at the peak, per mille. |
+| `--time-curve-opening-floor-permille INT` | default `300` | Multiplier before the peak, per mille. |
+| `--time-curve-endgame-floor-permille INT` | default `1200` | Multiplier after the peak, per mille (above the flat 1000 on purpose). |
 | `--keep-alive-sec INT` | default `60` | Keep-alive interval while waiting. The protocol forbids sending one more often than every 30 seconds, so smaller values are raised to that floor. |
 | `--connect-timeout-sec INT` | default `30` | Timeout for connecting and for the login response. |
 | `--game-wait-sec INT` | default `2400` | How long to wait for a game to be arranged (0 = forever). |

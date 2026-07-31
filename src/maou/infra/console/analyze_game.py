@@ -2,7 +2,10 @@ from pathlib import Path
 
 import click
 
-from maou.infra.console.common import handle_exception
+from maou.infra.console.common import (
+    exit_skipping_teardown,
+    handle_exception,
+)
 from maou.interface import analyzer as analyzer_interface
 
 
@@ -254,3 +257,8 @@ def analyze_game(
         click.echo(f"JSON report: {output}")
     else:
         click.echo(json_str)
+    # レポート出力が終わってから．TensorRT EP の teardown が glibc heap を
+    # 壊して abort するため destructor を経由せず終える (他の推論コマンドと
+    # 同じ対処．抜けていると解析完了後に "corrupted double-linked list" で
+    # 落ちる — 結果は書き終わっているので気付きにくい)
+    exit_skipping_teardown(tensorrt=tensorrt)

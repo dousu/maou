@@ -12,7 +12,7 @@ use maou_usi::{EngineConfig, TimeStrategyConfig};
 /// 手数カーブ (中盤重み付け) の引数を [`TimeStrategyConfig`] へ反映する
 /// (USI / 自己対局 / CSA の 3 経路で共有する単一実装)．
 ///
-/// 指定がなければ既定値 (カーブ off + [`maou_usi::TimeCurve::MIDGAME`]) のまま．
+/// 指定がなければ既定値 ([`maou_usi::TimeCurve::DEFAULT`]・カーブ on) のまま．
 /// パラメータは `time_curve` の指定と独立に反映されるので，カーブ off の
 /// まま値だけ渡しておき，あとから有効化しても効く．
 fn apply_time_curve_args(
@@ -122,11 +122,11 @@ fn apply_common_engine_args(
 /// - `trt_engine_cache_dir` (str, optional): TensorRT エンジンキャッシュ保存先．
 /// - `network_delay_ms` (int, optional): 通信マージン (デフォルト 1000)．
 /// - `min_think_ms` (int, optional): 最低思考時間 (デフォルト 100)．
-/// - `time_curve` (bool, optional): 手数カーブ (中盤重み付け) を有効にする
-///   (デフォルト False)．`time_curve_peak_ply` / `time_curve_half_width_ply` /
+/// - `time_curve` (bool, optional): 手数カーブを有効にする
+///   (デフォルト True)．`time_curve_peak_ply` / `time_curve_half_width_ply` /
 ///   `time_curve_peak_permille` / `time_curve_opening_floor_permille` /
 ///   `time_curve_endgame_floor_permille` (int, optional) で山の位置・幅・振幅と
-///   両側の底を指定する (デフォルト 55 / 35 / 1800 / 700 / 1000)．
+///   両側の底を指定する (デフォルト 100 / 55 / 2500 / 300 / 1200)．
 ///   乗数は裁量枠 (残時間 ÷ horizon) にのみ掛かり，秒読み・加算には掛からない．
 /// - `draw_value_black` / `draw_value_white` (int, optional): 先手/後手の引き分け
 ///   価値 (千分率，デフォルト 500．電竜戦 0.4/0.6 勝 = 400/600)．
@@ -386,8 +386,9 @@ fn summary_to_dict<'py>(py: Python<'py>, s: &RunSummary) -> PyResult<Bound<'py, 
 /// - `time_curve_peak_ply` / `time_curve_half_width_ply` /
 ///   `time_curve_peak_permille` / `time_curve_opening_floor_permille` /
 ///   `time_curve_endgame_floor_permille` (int, optional):
-///   手数カーブのパラメータ．A/B の**両者に同じ値**が入り，`ab_mode="timecurve"`
-///   が on/off だけを割り振る (有効化フラグ自体は引数で渡さない)．
+///   手数カーブのパラメータ (デフォルト 100 / 55 / 2500 / 300 / 1200)．
+///   A/B の**両者に同じ値**が入り，`ab_mode="timecurve"` が on/off だけを
+///   割り振る (有効化フラグ自体は引数で渡さない)．
 /// - 残りは `run_usi` と同名の評価器・探索・戦略引数
 ///   (`opening_script` は両側エージェントに適用される)．
 ///

@@ -1398,8 +1398,9 @@ mod tests {
         let (sfen, moves, budget) = &recorded[0];
         assert_eq!(sfen, STARTPOS_SFEN);
         assert_eq!(moves.len(), 2);
-        // 60s/40 + 10s − 1s = 10.5s (soft)．hard は延長上限 (soft×2)
-        assert_eq!(budget.time.unwrap().soft_ms, 10_500);
+        // 3 手目 (序盤 = 手数カーブの底 ×0.3): 60s/40×0.3 + 10s − 1s = 9.45s
+        // (カーブ既定 on．一律配分なら 10.5s)．hard は延長上限 (soft×2)
+        assert_eq!(budget.time.unwrap().soft_ms, 9_450);
     }
 
     #[test]
@@ -1425,8 +1426,9 @@ mod tests {
             }))
             .unwrap();
         let recorded = calls.borrow();
-        // 80s/40 + 2s − 1s = 3s (wtime 基準)．btime 基準なら 11s になるはず
-        assert_eq!(recorded[0].2.time.unwrap().soft_ms, 3_000);
+        // wtime 基準 + 序盤の底 (×0.3): 80s/40×0.3 + 2s − 1s = 1.6s．
+        // btime 基準なら 400s/40×0.3 + 2s − 1s = 4s になるはず
+        assert_eq!(recorded[0].2.time.unwrap().soft_ms, 1_600);
     }
 
     #[test]

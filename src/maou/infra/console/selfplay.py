@@ -245,7 +245,7 @@ logger: logging.Logger = logging.getLogger(__name__)
     "'subtree' = subtree reuse, 'maxmoves' = in-search draw terminal, "
     "'budget' = same config with a smaller budget for B (harness sanity "
     "check), 'horizon' = time-strategy horizon (needs --clock-ms), "
-    "'timecurve' = midgame-weighted time curve on vs flat allocation "
+    "'timecurve' = time curve on (the default) vs flat allocation "
     "(needs --clock-ms), "
     "'spin' = exclude terminal spin from the playout budget (fixed "
     "--playouts only; the clock mode is bounded by time, not playouts), "
@@ -302,9 +302,9 @@ logger: logging.Logger = logging.getLogger(__name__)
 )
 @click.option(
     "--time-curve-peak-ply",
-    help="Ply where the midgame time curve peaks (--ab-mode timecurve; "
-    "default 55). Both players get the same curve parameters; only the "
-    "on/off split differs.",
+    help="Ply where the time curve peaks (--ab-mode timecurve; default "
+    "100). Both players get the same curve parameters; only the on/off "
+    "split differs.",
     type=int,
     default=None,
     required=False,
@@ -312,7 +312,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 @click.option(
     "--time-curve-half-width-ply",
     help="Plies from the peak down to the floor weight (--ab-mode "
-    "timecurve; default 35).",
+    "timecurve; default 55).",
     type=int,
     default=None,
     required=False,
@@ -320,7 +320,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 @click.option(
     "--time-curve-peak-permille",
     help="Multiplier at the peak, per mille (--ab-mode timecurve; default "
-    "1800 = 1.8x). It scales only the discretionary share "
+    "2500 = 2.5x). It scales only the discretionary share "
     "(remaining / horizon), never byoyomi or the Fischer increment.",
     type=int,
     default=None,
@@ -329,7 +329,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 @click.option(
     "--time-curve-opening-floor-permille",
     help="Multiplier before the peak, per mille (--ab-mode timecurve; "
-    "default 700 = 0.7x).",
+    "default 300 = 0.3x).",
     type=int,
     default=None,
     required=False,
@@ -337,7 +337,7 @@ logger: logging.Logger = logging.getLogger(__name__)
 @click.option(
     "--time-curve-endgame-floor-permille",
     help="Multiplier after the peak, per mille (--ab-mode timecurve; "
-    "default 1000 = the flat allocation).",
+    "default 1200 = above the flat allocation on purpose).",
     type=int,
     default=None,
     required=False,
@@ -540,7 +540,7 @@ def selfplay(
         batch_size_b: Player B evaluation batch size (``--ab-mode batch``).
         horizon: Player A assumed remaining moves (``--ab-mode horizon``).
         horizon_b: Player B assumed remaining moves.
-        time_curve_peak_ply: Ply where the midgame time curve peaks.
+        time_curve_peak_ply: Ply where the time curve peaks.
         time_curve_half_width_ply: Plies from the peak down to the floor.
         time_curve_peak_permille: Peak multiplier, per mille.
         time_curve_opening_floor_permille: Pre-peak multiplier, per mille.

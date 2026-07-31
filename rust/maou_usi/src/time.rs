@@ -38,15 +38,15 @@ pub struct TimeBudget {
 /// 重み 1.0 を表す permille 値 (整数演算のスケール)．
 const FLAT_PERMILLE: u64 = 1000;
 
-/// 手数に応じて**裁量枠**に掛ける乗数を決めるカーブ (中盤重み付け)．
+/// 手数に応じて**裁量枠**に掛ける乗数を決めるカーブ．
 ///
 /// 山型の折れ線で，`peak_ply` を頂点に `half_width_ply` かけて底まで線形に
 /// 落ちる．頂点から `half_width_ply` 以上離れた手数は一律その側の底．
 ///
-/// **底は序盤側と終盤側で別**にする．序盤は定跡化された分岐で探索時間の
-/// 限界効用が低い (強く削ってよい) のに対し，終盤は dfpn の詰み判定が効く
-/// ぶん「少し短くても足りる場合がある」という弱い主張しか立たない．同じ底を
-/// 使うと，切れ負け (毎手戻ってくる時間が無い) で終盤が必要以上に痩せる．
+/// **底は序盤側と終盤側で別**にする．自己対局 + 中立な再解析で，序盤の
+/// 探索時間はほぼ無価値 (winrate loss 0.0004) だが，**変換期 (優勢を勝ちに
+/// 変える帯) の時間は中盤より価値が高い**ことが測れた．同じ底を使うと，
+/// 切れ負け (毎手戻ってくる時間が無い) で終盤が必要以上に痩せる．
 ///
 /// **裁量枠 (`残時間 / horizon`) にのみ掛かり，毎手戻ってくる時間
 /// (秒読み・フィッシャー加算) には掛からない** ([`allocate`])．これにより
@@ -74,17 +74,25 @@ pub struct TimeCurve {
 }
 
 impl TimeCurve {
-    /// 中盤重み付けの既定プリセット．
+    /// 既定プリセット — 山を**変換期** (優勢を勝ちに変える局面帯) に置く．
     ///
-    /// 山を中盤 (ply 55 前後) に置き，序盤の底を深く (0.7 倍)，終盤の底を
-    /// 現行配分と同じ (1.0 倍) に取る．値は A/B の出発点であって決着値では
-    /// ない．
-    pub const MIDGAME: TimeCurve = TimeCurve {
-        peak_ply: 55,
-        half_width_ply: 35,
-        peak_permille: 1800,
-        opening_floor_permille: 700,
-        endgame_floor_permille: 1000,
+    /// 自己対局 A/B で決めた形 (経緯は
+    /// `docs/design/usi-engine/verification.md` §4.4.1)．要点は 2 つ:
+    ///
+    /// - **序盤の探索時間はほぼ無価値**．中立な再解析で ply 9-30 の平均
+    ///   winrate loss は 0.0004 (相手 0.0013) と両者ほぼ完璧だった．
+    ///   だから序盤の底を 0.3 倍まで下げて原資にできる．
+    /// - **変換期の時間は中盤より価値が高い**．中盤 +12% が loss を
+    ///   Δ0.0022 しか改善しないのに対し，変換期 −10% は Δ0.0077 悪化させた．
+    ///
+    /// 山を中盤 (ply 55) に置いた最初の形は **50 局で 34% (−117 Elo)** と
+    /// 明確に負けた．変換期へ移して **20 局で 65% (+108 Elo)** へ反転した．
+    pub const DEFAULT: TimeCurve = TimeCurve {
+        peak_ply: 100,
+        half_width_ply: 55,
+        peak_permille: 2500,
+        opening_floor_permille: 300,
+        endgame_floor_permille: 1200,
     };
 
     /// 手数に対する乗数 (permille)．
@@ -115,10 +123,12 @@ pub struct TimeStrategyConfig {
     pub min_think_ms: u64,
     /// 持ち時間を配分する想定残り手数．
     pub horizon_moves: u64,
-    /// 手数カーブを有効にするか．
+    /// 手数カーブを有効にするか (**既定 on**)．
     ///
-    /// 棋力に効くレバーなので**既定は off** とし，自己対局 A/B で「より強い」を
-    /// 確認してから既定化する．
+    /// 自己対局 A/B で一律配分より強い側に振れたため既定化した
+    /// (20 局 65% / +108 Elo)．**t = +1.15・CI [−47, +262] で有意水準には
+    /// 達していない** — 追試で覆り得ることを前提に扱うこと
+    /// (経緯: `docs/design/usi-engine/verification.md` §4.4.1)．
     pub curve_enabled: bool,
     /// 手数カーブのパラメータ．`curve_enabled` と独立に**常に保持**する．
     ///
@@ -141,8 +151,8 @@ impl Default for TimeStrategyConfig {
             network_delay_ms: 1000,
             min_think_ms: 100,
             horizon_moves: 40,
-            curve_enabled: false,
-            curve_params: TimeCurve::MIDGAME,
+            curve_enabled: true,
+            curve_params: TimeCurve::DEFAULT,
         }
     }
 }
@@ -254,7 +264,7 @@ mod tests {
             min_think_ms: 100,
             horizon_moves: 40,
             curve_enabled: false,
-            curve_params: TimeCurve::MIDGAME,
+            curve_params: TimeCurve::DEFAULT,
         }
     }
 
@@ -421,36 +431,44 @@ mod tests {
 
     #[test]
     fn test_curve_weight_shape() {
-        let c = TimeCurve::MIDGAME;
+        let c = TimeCurve::DEFAULT;
         // 頂点で peak，頂点から half_width 以上離れればその側の底
-        assert_eq!(c.weight_permille(55), 1800);
-        assert_eq!(c.weight_permille(20), 700);
-        assert_eq!(c.weight_permille(1), 700);
-        assert_eq!(c.weight_permille(90), 1000);
-        assert_eq!(c.weight_permille(200), 1000);
+        assert_eq!(c.weight_permille(100), 2500);
+        assert_eq!(c.weight_permille(45), 300);
+        assert_eq!(c.weight_permille(1), 300);
+        assert_eq!(c.weight_permille(155), 1200);
+        assert_eq!(c.weight_permille(400), 1200);
         // 中間は線形 (頂点から半分の距離なら振幅の半分)
-        assert_eq!(c.weight_permille(55 - 35 / 2), 700 + 1100 * 18 / 35);
-        assert_eq!(c.weight_permille(55 + 35 / 2), 1000 + 800 * 18 / 35);
+        assert_eq!(c.weight_permille(100 - 55 / 2), 300 + 2200 * 28 / 55);
+        assert_eq!(c.weight_permille(100 + 55 / 2), 1200 + 1300 * 28 / 55);
         // 底が非対称なので山も非対称 — 終盤側が必ず厚い
-        for d in 1..40 {
+        for d in 1..60 {
             assert!(
-                c.weight_permille(55 + d) > c.weight_permille(55 - d),
-                "ply 55±{d} で終盤側が序盤側を上回らない"
+                c.weight_permille(100 + d) > c.weight_permille(100 - d),
+                "ply 100±{d} で終盤側が序盤側を上回らない"
             );
         }
     }
 
     #[test]
-    fn test_curve_endgame_floor_is_not_below_flat() {
-        // 終盤側の底は現行配分 (1.0 倍) と同じ — dfpn 頼みで削りすぎない
-        assert_eq!(TimeCurve::MIDGAME.endgame_floor_permille, FLAT_PERMILLE);
-        const { assert!(TimeCurve::MIDGAME.opening_floor_permille < FLAT_PERMILLE) };
+    fn test_curve_default_shape_matches_the_measured_conclusion() {
+        // A/B の結論をコードに固定する: 序盤は削ってよい / 変換期は厚くする．
+        // 逆向き (序盤 ≥ 1.0 や 終盤 ≤ 1.0) に倒すと 50 局 34% の側へ戻る
+        let c = TimeCurve::DEFAULT;
+        const { assert!(TimeCurve::DEFAULT.opening_floor_permille < FLAT_PERMILLE) };
+        const { assert!(TimeCurve::DEFAULT.endgame_floor_permille > FLAT_PERMILLE) };
+        // 山は変換期 (優勢を勝ちに変える帯) にある
+        assert!((90..=115).contains(&c.peak_ply), "peak_ply={}", c.peak_ply);
     }
 
     #[test]
-    fn test_curve_is_off_by_default() {
-        // 既定はレバー off — カーブ導入前と同じ配分でなければならない
-        assert!(TimeStrategyConfig::default().curve().is_none());
+    fn test_curve_is_on_by_default() {
+        // 既定 on (A/B で一律配分より強い側に振れたため)．
+        // 明示的に切ればカーブ導入前と同じ配分に戻ることも固定する
+        let d = TimeStrategyConfig::default();
+        assert!(d.curve().is_some());
+        assert_eq!(d.curve_params, TimeCurve::DEFAULT);
+
         let clock = ClockParams {
             btime: Some(400_000),
             wtime: Some(400_000),
@@ -459,24 +477,24 @@ mod tests {
         };
         for ply in [1, 30, 55, 80, 150] {
             let b = allocate(&cfg(), &clock, Color::Black, ply);
-            assert_eq!(b.soft_ms, 19_000, "ply {ply} で配分が変わってはならない");
+            assert_eq!(b.soft_ms, 19_000, "off にすれば ply {ply} で一律配分");
         }
     }
 
     #[test]
     fn test_curve_weights_only_discretionary_part() {
         // 秒読み 10s + 残 400s．裁量枠 400s/40 = 10s にのみ乗数が掛かる．
-        // 頂点 (×1.8): 10s×1.8 + 10s − 1s = 27s
-        // 底   (×0.7): 10s×0.7 +  10s − 1s = 16s
+        // 頂点 (×2.5): 10s×2.5 + 10s − 1s = 34s
+        // 序盤の底 (×0.3): 10s×0.3 + 10s − 1s = 12s
         let clock = ClockParams {
             btime: Some(400_000),
             wtime: Some(400_000),
             byoyomi: Some(10_000),
             ..ClockParams::default()
         };
-        let cfg = cfg_curved(TimeCurve::MIDGAME);
-        assert_eq!(allocate(&cfg, &clock, Color::Black, 55).soft_ms, 27_000);
-        assert_eq!(allocate(&cfg, &clock, Color::Black, 1).soft_ms, 16_000);
+        let cfg = cfg_curved(TimeCurve::DEFAULT);
+        assert_eq!(allocate(&cfg, &clock, Color::Black, 100).soft_ms, 34_000);
+        assert_eq!(allocate(&cfg, &clock, Color::Black, 1).soft_ms, 12_000);
     }
 
     #[test]
@@ -489,7 +507,7 @@ mod tests {
             byoyomi: Some(10_000),
             ..ClockParams::default()
         };
-        let cfg = cfg_curved(TimeCurve::MIDGAME);
+        let cfg = cfg_curved(TimeCurve::DEFAULT);
         for ply in [1, 55, 120, 300] {
             let b = allocate(&cfg, &clock, Color::Black, ply);
             assert_eq!(b.soft_ms, 9_000, "ply {ply} で秒読みの床が削られた");
@@ -498,8 +516,8 @@ mod tests {
 
     #[test]
     fn test_curve_endgame_keeps_fischer_increment() {
-        // フィッシャー 10s 加算．終盤 (底 1.0 倍) でも加算分は丸ごと残る:
-        // 200s/40 × 1.0 + 10s − 1s = 14s
+        // フィッシャー 10s 加算．終盤の底 (×1.2) でも加算分は丸ごと残る:
+        // 200s/40 × 1.2 + 10s − 1s = 15s
         let clock = ClockParams {
             btime: Some(200_000),
             wtime: Some(200_000),
@@ -507,22 +525,27 @@ mod tests {
             winc: Some(10_000),
             ..ClockParams::default()
         };
-        let b = allocate(&cfg_curved(TimeCurve::MIDGAME), &clock, Color::Black, 120);
-        assert_eq!(b.soft_ms, 14_000);
+        let b = allocate(&cfg_curved(TimeCurve::DEFAULT), &clock, Color::Black, 160);
+        assert_eq!(b.soft_ms, 15_000);
     }
 
     #[test]
-    fn test_curve_sudden_death_endgame_matches_flat() {
-        // 切れ負け (毎手戻ってくる時間なし) の終盤は，カーブ on/off で
-        // 同じ配分になる — 守ってくれる床が無い regime で削らない
+    fn test_curve_gives_the_endgame_more_than_flat() {
+        // 終盤の底は 1.0 を上回る (>flat)．中盤へ寄せてバンクを削った前の形は
+        // ここが痩せて 50 局 34% になった — その逆を固定する
         let clock = ClockParams {
             btime: Some(120_000),
             wtime: Some(120_000),
             ..ClockParams::default()
         };
-        let flat = allocate(&cfg(), &clock, Color::Black, 120);
-        let curved = allocate(&cfg_curved(TimeCurve::MIDGAME), &clock, Color::Black, 120);
-        assert_eq!(curved.soft_ms, flat.soft_ms);
+        let flat = allocate(&cfg(), &clock, Color::Black, 160);
+        let curved = allocate(&cfg_curved(TimeCurve::DEFAULT), &clock, Color::Black, 160);
+        assert!(
+            curved.soft_ms > flat.soft_ms,
+            "終盤 curved {} <= flat {}",
+            curved.soft_ms,
+            flat.soft_ms
+        );
     }
 
     #[test]
@@ -535,7 +558,7 @@ mod tests {
             winc: Some(5_000),
             ..ClockParams::default()
         };
-        let b = allocate(&cfg_curved(TimeCurve::MIDGAME), &clock, Color::Black, 55);
+        let b = allocate(&cfg_curved(TimeCurve::DEFAULT), &clock, Color::Black, 100);
         assert_eq!(b.soft_ms, 1_000);
 
         let broke = ClockParams {
@@ -543,7 +566,8 @@ mod tests {
             wtime: Some(40_000),
             ..ClockParams::default()
         };
-        let b = allocate(&cfg_curved(TimeCurve::MIDGAME), &broke, Color::Black, 120);
+        // 序盤の底 (×0.3) では 40s/40×0.3 − 1s が負 → 最低思考時間まで切り上げ
+        let b = allocate(&cfg_curved(TimeCurve::DEFAULT), &broke, Color::Black, 1);
         assert_eq!(b.soft_ms, 100);
     }
 
@@ -576,23 +600,28 @@ mod tests {
     }
 
     #[test]
-    fn test_curve_moves_the_peak_into_the_midgame() {
+    fn test_curve_moves_the_peak_into_the_conversion_phase() {
         // この機能の存在理由そのもの: 一律配分は `残時間 / horizon` の等比
-        // 減衰なので**初手が最も厚い**．カーブはその山を中盤へ移す．
-        // (300s 切れ負け / 180s + 5s フィッシャー，100 手で決着)
+        // 減衰なので**初手が最も厚い**．カーブはその山を変換期へ移す．
+        // (300s 切れ負け / 180s + 5s フィッシャー，130 手で決着)
         for (main_ms, inc_ms) in [(300_000, 0), (180_000, 5_000)] {
-            let flat = simulate_soft(&cfg(), main_ms, inc_ms, 100);
-            let curved = simulate_soft(&cfg_curved(TimeCurve::MIDGAME), main_ms, inc_ms, 100);
+            let flat = simulate_soft(&cfg(), main_ms, inc_ms, 130);
+            let curved = simulate_soft(&cfg_curved(TimeCurve::DEFAULT), main_ms, inc_ms, 130);
 
             assert_eq!(
                 flat.iter().max_by_key(|(_, ms)| *ms).unwrap().0,
                 1,
                 "一律配分の最厚手が初手でない (前提が変わった)"
             );
+            // **実効ピークは `peak_ply` より手前に来る**: 重みが上がる一方で
+            // 掛ける先の残り時間が減るので，積が先に頂点を迎える．GPU 実測でも
+            // 配分比の最大は ply 61-90 帯だった (peak_ply = 100 に対して)．
+            // ここを `peak_ply` ちょうどで固定すると，パラメータを動かすたびに
+            // 落ちる脆いテストになる
             let peak_ply = curved.iter().max_by_key(|(_, ms)| *ms).unwrap().0;
             assert!(
-                (30..=70).contains(&peak_ply),
-                "カーブの山が中盤に無い: ply {peak_ply}"
+                (70..=115).contains(&peak_ply),
+                "カーブの山が変換期に無い: ply {peak_ply}"
             );
             // 中盤へ寄せるのであって節約ではない — 総思考は減らない
             let total = |v: &[(u64, u64)]| v.iter().map(|(_, ms)| ms).sum::<u64>();
@@ -637,10 +666,10 @@ mod tests {
         // half_width 0 は 1 として扱う (0 除算なし)
         let c = TimeCurve {
             half_width_ply: 0,
-            ..TimeCurve::MIDGAME
+            ..TimeCurve::DEFAULT
         };
-        assert_eq!(c.weight_permille(55), 1800);
-        assert_eq!(c.weight_permille(54), 700);
-        assert_eq!(c.weight_permille(56), 1000);
+        assert_eq!(c.weight_permille(100), 2500);
+        assert_eq!(c.weight_permille(99), 300);
+        assert_eq!(c.weight_permille(101), 1200);
     }
 }

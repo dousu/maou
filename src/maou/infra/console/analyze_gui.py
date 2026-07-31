@@ -11,6 +11,7 @@ import click
 
 from maou.infra.app_logging import app_logger
 from maou.infra.console.common import (
+    exit_skipping_teardown,
     handle_exception,
     is_google_colab,
 )
@@ -316,3 +317,6 @@ def analyze_gui(
         raise click.ClickException(
             f"Server launch failed: {e}"
         ) from e
+    # サーバ停止後の終了も TensorRT EP の teardown を踏む (analyze-game と
+    # 同じ対処)
+    exit_skipping_teardown(tensorrt=tensorrt)

@@ -67,12 +67,13 @@ from maou.infra.console.common import (
     "--time-curve/--no-time-curve",
     type=bool,
     is_flag=True,
-    help="Weight the per-move budget towards the midgame. The multiplier "
-    "scales only the discretionary share (remaining time / horizon), never "
-    "byoyomi or the Fischer increment, so the guaranteed floor survives. "
-    "Off by default until a self-play A/B says it is stronger. "
-    "Also `setoption name TimeCurve`.",
-    default=False,
+    help="Weight the per-move budget towards the conversion phase (the plies "
+    "where a won position has to be turned into a win). The multiplier scales "
+    "only the discretionary share (remaining time / horizon), never byoyomi or "
+    "the Fischer increment, so the guaranteed floor survives. On by default: a "
+    "self-play A/B scored 65% over 20 games (+108 Elo), though the interval "
+    "still includes zero. Also `setoption name TimeCurve`.",
+    default=True,
     show_default=True,
     required=False,
 )
@@ -80,7 +81,7 @@ from maou.infra.console.common import (
     "--time-curve-peak-ply",
     help="Ply where the time curve peaks (--time-curve).",
     type=int,
-    default=55,
+    default=100,
     show_default=True,
     required=False,
 )
@@ -88,7 +89,7 @@ from maou.infra.console.common import (
     "--time-curve-half-width-ply",
     help="Plies from the peak down to the floor weight (--time-curve).",
     type=int,
-    default=35,
+    default=55,
     show_default=True,
     required=False,
 )
@@ -96,7 +97,7 @@ from maou.infra.console.common import (
     "--time-curve-peak-permille",
     help="Multiplier at the peak, per mille (--time-curve).",
     type=int,
-    default=1800,
+    default=2500,
     show_default=True,
     required=False,
 )
@@ -105,17 +106,17 @@ from maou.infra.console.common import (
     help="Multiplier before the peak, per mille (--time-curve). The opening "
     "is book-like, so search time buys little there.",
     type=int,
-    default=700,
+    default=300,
     show_default=True,
     required=False,
 )
 @click.option(
     "--time-curve-endgame-floor-permille",
-    help="Multiplier after the peak, per mille (--time-curve). Defaults to "
-    "1000 = the flat allocation: df-pn covers mate detection, but with no "
-    "byoyomi or increment there is no floor left to protect the endgame.",
+    help="Multiplier after the peak, per mille (--time-curve). Above 1000 on "
+    "purpose: the conversion phase is where a small time shortage costs whole "
+    "games, so it gets more than the flat allocation, not less.",
     type=int,
-    default=1000,
+    default=1200,
     show_default=True,
     required=False,
 )
