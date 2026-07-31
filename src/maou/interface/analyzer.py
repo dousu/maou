@@ -119,6 +119,8 @@ def analyze_game(
     leaf_mate: bool = True,
     leaf_mate_nodes: int = 50,
     leaf_mate_threads: int = 1,
+    defensive_mate: bool = True,
+    defensive_mate_threads: int = 1,
     cuda: bool = False,
     tensorrt: bool = False,
     trt_engine_cache_dir: Path | None = None,
@@ -141,6 +143,8 @@ def analyze_game(
         leaf_mate: MCTS の葉の短手詰み探索 (専用スレッド) を行うか．
         leaf_mate_nodes: leaf-mate 1 回あたりのノード予算．
         leaf_mate_threads: leaf-mate 専用スレッド数．
+        defensive_mate: 受け方向の詰み探索 (被詰み検出) を行うか．
+        defensive_mate_threads: root 敗着フィルタの並列度 (CPU が空く環境で上げる)．
         cuda: CUDA Execution Provider を使うか．
         tensorrt: TensorRT Execution Provider を使うか．
         trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
@@ -169,6 +173,8 @@ def analyze_game(
         leaf_mate=leaf_mate,
         leaf_mate_nodes=leaf_mate_nodes,
         leaf_mate_threads=leaf_mate_threads,
+        defensive_mate=defensive_mate,
+        defensive_mate_threads=defensive_mate_threads,
         cuda=cuda,
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_engine_cache_dir,

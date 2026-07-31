@@ -53,7 +53,7 @@
 //! 停止フラグ (`DfPnSolver::set_stop_flag`) で打ち切る．
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -100,12 +100,15 @@ const MATE_QUEUE_CAP: usize = 4096;
 struct MateRequest {
     /// 詰みを判定する葉ノードの index．
     idx: u32,
-    /// 葉局面 (手番側が攻め方)．df-pn はこの clone に対して解く．
+    /// 葉局面．df-pn はこの clone に対して解く．
     board: Board,
     /// root からこの葉までの経路 (proof の AND-OR 伝播に使う)．
     path: Vec<u32>,
     /// 依頼時の GC 世代 ([`Shared::generation`])．
     generation: u64,
+    /// 受け方向 (手番側が**詰まされる**か) を解く依頼かどうか．
+    /// false = 従来の攻め方向 (手番側が詰ませられるか)．
+    defensive: bool,
 }
 
 /// mate スレッドが証明した詰み (専用 mate スレッド → 探索スレッド)．
@@ -122,6 +125,9 @@ struct MateResult {
     path: Vec<u32>,
     /// 依頼時の GC 世代．
     generation: u64,
+    /// 葉に付ける確定値 — 攻め方向の証明なら [`proven::WIN`]，
+    /// 受け方向 (手番側が詰まされる) の証明なら [`proven::LOSS`]．
+    proven: u8,
 }
 
 /// 探索の設定．
@@ -208,6 +214,53 @@ pub struct SearchOptions {
     /// GPU 律速で余る CPU スレッド数に合わせて増やすと詰み探索スループットが
     /// 上がる (探索スレッドとは別スレッドなので NPS には影響しない)．
     pub leaf_mate_threads: usize,
+    /// 受け方向の詰み探索 (**手番側が詰まされるか**) を行うか (既定 true)．
+    ///
+    /// 攻め方向の詰み探索だけでは「相手の手番では詰みが見えるのに，自分の手番に
+    /// なると互角を示す」非対称が残る (攻め方向 root dfpn は「自分が詰ませるか」
+    /// しか解かないため)．有効時は
+    ///
+    /// - root: 受け方向 dfpn を並行スレッドで回し，被詰みが証明されたら
+    ///   **最長抵抗の応手**を bestmove に，勝率 0.0 を報告する
+    /// - 葉: **王手されている**葉に限り受け方向 df-pn を回し，証明できたら
+    ///   [`proven::LOSS`] にして親へ伝播する
+    pub defensive_mate: bool,
+    /// root 受け方向 dfpn のノード予算 ([`SearchOptions::defensive_mate`] 有効時)．
+    ///
+    /// 実測 (自己対局の被詰み局面): 受け方向 AND-root の証明コストは攻め方向
+    /// OR-root とほぼ同じで，本命以外の応手は数〜十ノードで反証される
+    /// (mate-39 の実例で ~315K ノード)．攻め方向 (2M) より小さく取るのは，
+    /// 詰まされている局面では**攻め方向の探索が数ノードで反証終了して予算が
+    /// 空く**ため両方向の合計コストが和にならないことによる．
+    pub root_defensive_mate_nodes: u64,
+    /// 葉の受け方向 df-pn 1 回あたりのノード予算．
+    ///
+    /// 攻め方向 (既定 50) より大きいのは，被詰みの証明が「全ての応手について
+    /// 詰みを示す」ぶん最小コストが高いため．王手されている葉に限定するので
+    /// 発火頻度自体は低い．
+    pub leaf_defensive_mate_nodes: u64,
+    /// root 候補手の敗着フィルタを走らせる合法手数の上限 (既定 16)．
+    ///
+    /// 「指すと相手に詰まされる手」を root で除外する ([`root_child_mate_filter`])．
+    /// 総コストは子の数に比例するので上限で抑える．16 に置くのは，実測した敗着
+    /// 局面の合法手が 3〜10 (王手中や逃げ場の少ない局面) だったことによる．
+    /// 分岐の広い局面は MCTS + leaf-mate に任せる．
+    pub root_child_filter_max_moves: usize,
+    /// 敗着フィルタの 1 手あたりノード予算 (既定 500,000)．
+    ///
+    /// 実測: 敗着局面の子は mate-1 が数ノード，最長の mate-41 が ~320K ノードで
+    /// 証明された (4 手の判定が合計 ~2 秒 / release)．
+    pub root_child_filter_nodes: u64,
+    /// root 敗着フィルタの並列度 (既定 1)．
+    ///
+    /// 子ごとの判定は独立なので，CPU が空く環境 (GPU 律速の対局・解析) では
+    /// 上げるほど**同じ壁時計でより大きな予算まで到達できる**．探索スレッドとは
+    /// 別スレッドなので NPS には影響しない．
+    ///
+    /// 上げる際の注意: df-pn は `solve` ごとに置換表を確保するため，メモリは
+    /// **並列度に比例**する (`root_child_filter_nodes` 500,000 で 1 スレッド
+    /// あたり約 88MB)．
+    pub defensive_mate_threads: usize,
 }
 
 impl Default for SearchOptions {
@@ -238,6 +291,12 @@ impl Default for SearchOptions {
             leaf_mate: true,
             leaf_mate_nodes: 50,
             leaf_mate_threads: 1,
+            defensive_mate: true,
+            root_defensive_mate_nodes: 500_000,
+            leaf_defensive_mate_nodes: 2_000,
+            root_child_filter_max_moves: 16,
+            root_child_filter_nodes: 500_000,
+            defensive_mate_threads: 1,
         }
     }
 }
@@ -676,6 +735,19 @@ struct Shared<'a, E: Evaluator> {
     dfpn_found: Arc<AtomicBool>,
     /// ルート並行 dfpn の詰み手順 (証明時に dfpn スレッドが書く)．
     dfpn_mate: Arc<Mutex<Option<Vec<Move>>>>,
+    /// ルート並行の**受け方向** dfpn が被詰みを証明したときの手順
+    /// (初手 = 受け方 = root 手番側の最長抵抗手)．
+    ///
+    /// 攻め方向 (`dfpn_found`) と違い **MCTS を停止させない** — 詰まされている
+    /// ことが分かっても指し手は必要で，早期停止に得が無い一方，証明が誤って
+    /// いた場合の被害を広げるため．結果は [`Searcher::collect_result`] で
+    /// 報告値を差し替えるためだけに使う．
+    dfpn_mated: Arc<Mutex<Option<Vec<Move>>>>,
+    /// 受け方向 dfpn が「指すと相手に詰まされる」と証明した root 候補手．
+    ///
+    /// root がまだ詰んでいない局面での**敗着回避**に使う．最終手選択で
+    /// `proven = Some(0.0)` として畳み込まれ，既存の負け確定除外に合流する．
+    dfpn_losing_moves: Arc<Mutex<Vec<Move>>>,
     /// leaf-mate 依頼キュー (探索スレッドが try-push, mate スレッドが pop)．
     /// mate スレッドは `shared` に触れないため Arc で共有する．
     mate_queue: Arc<Mutex<VecDeque<MateRequest>>>,
@@ -699,7 +771,7 @@ impl<E: Evaluator> Shared<'_, E> {
     /// 探索スレッドをブロックしないため `try_lock` で試み，ロックが取れないか
     /// キューが満杯なら依頼を捨てる (詰み探索を諦めるだけで探索は継続)．
     /// これにより探索スレッドの NPS は leaf-mate によって低下しない．
-    fn enqueue_mate_request(&self, idx: u32, board: &Board, path: &[u32]) {
+    fn enqueue_mate_request(&self, idx: u32, board: &Board, path: &[u32], defensive: bool) {
         if let Ok(mut q) = self.mate_queue.try_lock() {
             if q.len() < MATE_QUEUE_CAP {
                 q.push_back(MateRequest {
@@ -707,6 +779,7 @@ impl<E: Evaluator> Shared<'_, E> {
                     board: board.clone(),
                     path: path.to_vec(),
                     generation: self.generation.load(Ordering::Acquire),
+                    defensive,
                 });
             }
         }
@@ -730,7 +803,7 @@ impl<E: Evaluator> Shared<'_, E> {
             if res.generation != self.generation.load(Ordering::Acquire) {
                 continue; // compact 済み — index 無効化，破棄 (偽証明防止)
             }
-            if self.pool.get(res.idx).try_mark_proven(proven::WIN) {
+            if self.pool.get(res.idx).try_mark_proven(res.proven) {
                 self.leaf_mates.fetch_add(1, Ordering::Relaxed);
             }
             propagate_proven_from(self, &res.path);
@@ -1224,7 +1297,20 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
                         && idx != ROOT_IDX
                         && board.does_have_mate_possibility(board.turn())
                     {
-                        shared.enqueue_mate_request(idx, &board, &path);
+                        shared.enqueue_mate_request(idx, &board, &path, false);
+                    }
+                    // 受け方向 leaf-mate (非同期): **手番側が王手されている**葉に限り
+                    // 「手番側が詰まされるか」を解く．王手中は合法手が数手しかないため
+                    // (実測: 盲点局面で 3〜10 手) AND-root の証明コストは攻め方向 1 回分に
+                    // 収まる．証明できたら葉を [`proven::LOSS`] にする — 親から見ると
+                    // 子の確定値 0.0 なので **OR ルールで即座に親が勝ち確定**になり，
+                    // 「その手を指すと詰まされる」が 1 手で伝播する．
+                    // 非王手の葉は分岐が大きく，詰めろプローブ (別レバー) が要るため除外．
+                    if shared.opts.defensive_mate
+                        && idx != ROOT_IDX
+                        && board.is_in_check(board.turn())
+                    {
+                        shared.enqueue_mate_request(idx, &board, &path, true);
                     }
                     return Selection::Leaf {
                         path,
@@ -1383,8 +1469,14 @@ fn mate_worker(
     outq: &Mutex<VecDeque<MateResult>>,
     stop: &AtomicBool,
     nodes: u64,
+    def_nodes: u64,
 ) {
     let mut solver = DfPnSolver::new_leaf_mate(nodes, LEAF_MATE_TIMEOUT_SECS);
+    // 受け方向は別ソルバにする — 予算 (と TT サイズ) が攻め方向と異なるため．
+    // 受けの証明は分岐の小さい王手局面に限定するが，攻め方向の 50 ノードでは
+    // 短手の被詰みしか拾えないので予算を分けて持つ．
+    let mut def_solver = DfPnSolver::new_leaf_mate(def_nodes, LEAF_MATE_TIMEOUT_SECS);
+    def_solver.set_defensive(true);
     while !stop.load(Ordering::Acquire) {
         let req = inq
             .lock()
@@ -1400,8 +1492,13 @@ fn mate_worker(
         };
         // solve は clone 局面に対して行う (pool 非参照)
         let mut board = req.board;
+        let s = if req.defensive {
+            &mut def_solver
+        } else {
+            &mut solver
+        };
         if matches!(
-            solver.solve(&mut board),
+            s.solve(&mut board),
             TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }
         ) {
             outq.lock()
@@ -1410,8 +1507,103 @@ fn mate_worker(
                     idx: req.idx,
                     path: req.path,
                     generation: req.generation,
+                    proven: if req.defensive {
+                        proven::LOSS
+                    } else {
+                        proven::WIN
+                    },
                 });
         }
+    }
+}
+
+/// root の各合法手について「指した後に相手が詰ませられるか」を攻め方向 df-pn で
+/// 判定し，詰まされる手 (敗着) を `out` へ publish する．
+///
+/// **「まだ詰まされていないが，指し方を間違えると詰まされる」局面**を担当する．
+/// root 受け方向 dfpn は既に詰んでいるときしか発火せず，木の proven 伝播は
+/// 葉の小予算では長手数の詰みを拾えないため，この帯がどちらにも掛からない．
+///
+/// 判定は子局面 (相手手番) に対する**通常の攻め方向探索**なので追加の仕組みは
+/// 要らない．`find_shortest=false` が必須 — 既定 (true) は最小性を確定できないと
+/// `Unknown` を返すので，長手数の詰みが「不明」に化けて敗着を見逃す．
+///
+/// 停止フラグ (MCTS 終了) で途中打ち切りされる．そこまでに証明できた分だけが
+/// 使われる — 部分結果でも「その手が負けであること」は正しいので健全．
+fn root_child_mate_filter(
+    board: &mut Board,
+    out: &Mutex<Vec<Move>>,
+    stop: &Arc<AtomicBool>,
+    max_moves: usize,
+    nodes_per_child: u64,
+    timeout_secs: u64,
+    threads: usize,
+) {
+    let legal = generate_legal_moves(board);
+    if legal.is_empty() || legal.len() > max_moves {
+        return;
+    }
+    // **予算は段階的に配る**．1 手ずつフル予算で潰すと，重い手に予算を吸われて
+    // 後ろの手が未検査のまま停止フラグで打ち切られる — 打ち切られた手は「安全」
+    // ではなく「未知」なので，そこに敗着が紛れていても素通りする．
+    // 全手を安い予算で 1 巡してから深くすれば，mate-1 級の即死は必ず先に落ちる
+    // (実測: 敗着局面の子は mate-1 が数ノード，最長 mate-41 が ~320K ノード)．
+    let stages = [
+        (nodes_per_child / 50).max(1_000),
+        (nodes_per_child / 5).max(10_000),
+        nodes_per_child,
+    ];
+    let mut unresolved: Vec<Move> = legal.into_iter().collect();
+    for budget in stages {
+        if unresolved.is_empty() || stop.load(Ordering::Acquire) {
+            return;
+        }
+        // 子ごとの判定は完全に独立なので並列化できる．CPU が空く環境
+        // (GPU 律速の対局・解析) では並列度を上げるほど，同じ壁時計で
+        // より大きな予算まで到達できる．
+        // work-stealing (共有カーソル) にするのは，子ごとのコストが
+        // 数ノード〜数十万ノードと桁で違い，静的分割では偏るため．
+        let cursor = AtomicUsize::new(0);
+        let next: Mutex<Vec<Move>> = Mutex::new(Vec::with_capacity(unresolved.len()));
+        let items: &[Move] = &unresolved;
+        std::thread::scope(|s| {
+            for _ in 0..threads.max(1) {
+                let cursor = &cursor;
+                let next = &next;
+                let mut b = board.clone();
+                s.spawn(move || {
+                    let mut solver = DfPnSolver::with_timeout(31, budget, timeout_secs);
+                    solver.set_find_shortest(false);
+                    solver.set_stop_flag(Arc::clone(stop));
+                    loop {
+                        if stop.load(Ordering::Acquire) {
+                            return;
+                        }
+                        let i = cursor.fetch_add(1, Ordering::Relaxed);
+                        let Some(&m) = items.get(i) else { return };
+                        let cap = b.do_move(m);
+                        let verdict = solver.solve(&mut b);
+                        b.undo_move(m, cap);
+                        match verdict {
+                            // 相手に詰みがある = この手は敗着．
+                            TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. } => {
+                                out.lock()
+                                    .expect("dfpn losing lock は poison しない")
+                                    .push(m);
+                            }
+                            // 詰みが無いと**証明できた** — 以降の段で見直す必要はない．
+                            TsumeResult::NoCheckmate { .. } => {}
+                            // 予算切れ = 情報なし．次の段でより大きな予算を与える．
+                            TsumeResult::Unknown { .. } => next
+                                .lock()
+                                .expect("dfpn filter next lock は poison しない")
+                                .push(m),
+                        }
+                    }
+                });
+            }
+        });
+        unresolved = next.into_inner().expect("lock は poison しない");
     }
 }
 
@@ -1620,6 +1812,8 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             max_depth: AtomicU16::new(0),
             dfpn_found: Arc::new(AtomicBool::new(false)),
             dfpn_mate: Arc::new(Mutex::new(None)),
+            dfpn_mated: Arc::new(Mutex::new(None)),
+            dfpn_losing_moves: Arc::new(Mutex::new(Vec::new())),
             mate_queue: Arc::new(Mutex::new(VecDeque::new())),
             mate_results: Arc::new(Mutex::new(VecDeque::new())),
             generation: AtomicU64::new(0),
@@ -1662,17 +1856,67 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                     }
                 });
             }
+            // ルート並行の受け方向 dfpn: 「root の手番側が詰まされるか」を解く．
+            // 攻め方向と同じ探索器を攻め方だけ入れ替えて回す (`set_defensive`)．
+            // 攻め方向とは別スレッドにする — 詰まされている局面では攻め方向が
+            // 数ノードで反証終了するため，2 本走らせても実コストは和にならない．
+            if opts.defensive_mate {
+                let stop = Arc::clone(&dfpn_stop);
+                let mated_out = Arc::clone(&shared.dfpn_mated);
+                let losing_out = Arc::clone(&shared.dfpn_losing_moves);
+                let mut dfpn_board = root_board.clone();
+                let timeout_secs = limits.time_ms.map_or(3600, |ms| ms / 1000 + 1);
+                let depth = opts.root_dfpn_depth;
+                let nodes = opts.root_defensive_mate_nodes;
+                let filter_max_moves = opts.root_child_filter_max_moves;
+                let filter_nodes = opts.root_child_filter_nodes;
+                let filter_threads = opts.defensive_mate_threads;
+                outer.spawn(move || {
+                    let mut solver = DfPnSolver::with_timeout(depth, nodes, timeout_secs);
+                    solver.set_defensive(true);
+                    // 被詰みの検出に最小性は不要 (最小性確定は純粋な追加コスト)
+                    solver.set_find_shortest(false);
+                    solver.set_stop_flag(Arc::clone(&stop));
+                    if let TsumeResult::Checkmate { moves, .. } = solver.solve(&mut dfpn_board) {
+                        // 初手 = 受け方の最長抵抗手．手順が無い場合は指し手を
+                        // 提示できないので使わない (攻め方向と同じ扱い)．
+                        if !moves.is_empty() {
+                            *mated_out.lock().expect("dfpn mated lock は poison しない") =
+                                Some(moves);
+                        }
+                        // 既に詰んでいるなら候補手の選別に意味は無い．
+                        return;
+                    }
+                    // 敗着フィルタ: 各合法手を指した後の局面を**攻め方向**で解く
+                    // (= 相手が詰ませられるか)．手数が絞られている局面に限定する —
+                    // 分岐が広い局面まで回すと総コストが子の数に比例して膨らむ一方，
+                    // 「指した瞬間に詰まされる」型の敗着は王手中や逃げ場の少ない
+                    // 局面に集中するため (実測: 敗着局面の合法手は 3〜10)．
+                    root_child_mate_filter(
+                        &mut dfpn_board,
+                        &losing_out,
+                        &stop,
+                        filter_max_moves,
+                        filter_nodes,
+                        timeout_secs,
+                        filter_threads,
+                    );
+                });
+            }
             // leaf-mate 専用スレッド: 探索スレッドが投入する詰み依頼を余剰 CPU で
             // 処理する (探索スレッドは solve しないため NPS を落とさない)．
             // root-dfpn と同様 shared には触れず Arc 共有キューだけで通信する
             // (compact が &mut NodePool を取るため)．
-            if opts.leaf_mate {
+            // 攻め方向と受け方向のどちらかが有効なら worker を立てる (同じキューを
+            // 共有し，依頼ごとに向きを切り替える)．
+            if opts.leaf_mate || opts.defensive_mate {
                 for _ in 0..opts.leaf_mate_threads.max(1) {
                     let stop = Arc::clone(&dfpn_stop);
                     let inq = Arc::clone(&shared.mate_queue);
                     let outq = Arc::clone(&shared.mate_results);
                     let nodes = opts.leaf_mate_nodes;
-                    outer.spawn(move || mate_worker(&inq, &outq, &stop, nodes));
+                    let def_nodes = opts.leaf_defensive_mate_nodes;
+                    outer.spawn(move || mate_worker(&inq, &outq, &stop, nodes, def_nodes));
                 }
             }
             loop {
@@ -1764,7 +2008,28 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
     ) -> SearchResult {
         let pool = &shared.pool;
         let root_node = pool.get(ROOT_IDX);
-        let root_children = root_children_of(pool);
+        let mut root_children = root_children_of(pool);
+
+        // 受け方向 dfpn が「この手を指すと相手に詰まされる」と証明した root 候補手を
+        // 負け確定として畳み込む．**まだ詰まされていない局面での敗着回避**がここの
+        // 主眼 — 木の proven 伝播 (leaf-mate 経由) は葉の小予算では長手数の詰みを
+        // 拾えず，root 受け方向 dfpn は「既に詰んでいる」ときしか発火しないため，
+        // 「あと 1 手で詰まされる」局面はどちらにも掛からない．
+        // 反映先を `proven = Some(0.0)` にすることで，既存の負け確定除外
+        // (`select_best_root_index`) がそのまま効く．
+        {
+            let losing = shared
+                .dfpn_losing_moves
+                .lock()
+                .expect("dfpn losing lock は poison しない");
+            if !losing.is_empty() {
+                for c in root_children.iter_mut() {
+                    if c.proven.is_none() && losing.contains(&c.mv) {
+                        c.proven = Some(0.0);
+                    }
+                }
+            }
+        }
 
         // 負け確定除外の robust child + root 確定手の優先 (build_snapshot と共有)
         let root_proven = root_node.proven_value();
@@ -1819,8 +2084,23 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         // なので，そのまま報告すると評価値が飽和値 (-16578) になり誤解を招く．
         // root の NN value (探索抜きの評価 = `maou evaluate` と同じ値) を返す
         let unsearched_winrate = || shared.root_value.unwrap_or(best.q);
+        // 受け方向 dfpn が被詰みを証明していれば，最長抵抗の手順と勝率 0.0 を
+        // 報告する．MCTS の値は「相手の詰みが見えない」局面で互角〜優勢を示す
+        // ことがあり (実測: 詰まされる 11 手前で +1170)，その報告は対局上致命的．
+        // 攻め方向の証明が同時に立つことは (両者が同時に詰ませ合うことは) ない
+        // が，万一のときは攻め方向を優先する — 自分が先に詰ませられるなら
+        // それが実現するため．
+        let dfpn_mated = shared
+            .dfpn_mated
+            .lock()
+            .expect("dfpn mated lock は poison しない")
+            .clone();
         let (best_move, winrate, pv, stop) = if let Some(mate) = dfpn_mate {
             (Some(mate[0]), 1.0, mate, StopCause::RootProven)
+        } else if let Some(defense) = dfpn_mated {
+            let stop = StopCause::from_u8(shared.stop_cause.load(Ordering::Acquire))
+                .unwrap_or(StopCause::PlayoutLimit);
+            (Some(defense[0]), 0.0, defense, stop)
         } else {
             (
                 Some(best.mv),
@@ -1867,6 +2147,7 @@ mod tests {
         SearchOptions {
             root_dfpn: false,
             leaf_mate: false,
+            defensive_mate: false,
             ..SearchOptions::default()
         }
     }
@@ -2919,9 +3200,10 @@ mod tests {
             board,
             path: vec![ROOT_IDX, 7],
             generation: 0,
+            defensive: false,
         });
         std::thread::scope(|s| {
-            s.spawn(|| mate_worker(&inq, &outq, &stop, 1000));
+            s.spawn(|| mate_worker(&inq, &outq, &stop, 1000, 1000));
             let mut got = None;
             for _ in 0..2000 {
                 if let Some(r) = outq.lock().expect("lock").pop_front() {
@@ -2967,6 +3249,176 @@ mod tests {
             "偽の詰み検出がない: {:?}",
             result.stats
         );
+    }
+
+    /// 手番側が詰まされている局面．後手玉 1一，先手飛車 9二 が 2 段目を制圧し，
+    /// 先手持ち駒に金．後手番で唯一の合法手 K1a-2a のあと G*2b で詰む．
+    const BEING_MATED: &str = "8k/R8/9/9/9/9/9/9/9 w G 1";
+
+    #[test]
+    fn test_root_defensive_mate_reports_loss() {
+        // 攻め方向の詰み探索だけでは「自分は詰ませられない」としか分からず，
+        // 評価は MockEvaluator の値 (互角付近) のままになる．受け方向を有効に
+        // すると被詰みが証明され，勝率 0.0 と最長抵抗の手が報告される．
+        let result = run(
+            BEING_MATED,
+            SearchOptions {
+                defensive_mate: true,
+                root_defensive_mate_nodes: 100_000,
+                ..pure_mcts_opts()
+            },
+            SearchLimits {
+                max_playouts: Some(2000),
+                ..SearchLimits::default()
+            },
+            5,
+        );
+        assert_eq!(result.winrate, 0.0, "被詰みは勝率 0.0 で報告する");
+        assert!(result.best_move.is_some(), "詰まされていても指し手は返す");
+        assert!(
+            !result.pv.is_empty() && result.pv.len().is_multiple_of(2),
+            "受け方向 PV は受け方の手から始まり偶数手: {:?}",
+            result.pv
+        );
+    }
+
+    #[test]
+    fn test_defensive_mate_no_false_positive_on_startpos() {
+        // 初期局面で被詰みを報告しない (偽証明ゼロ)．
+        let result = run(
+            STARTPOS,
+            SearchOptions {
+                defensive_mate: true,
+                ..pure_mcts_opts()
+            },
+            SearchLimits {
+                max_playouts: Some(2000),
+                ..SearchLimits::default()
+            },
+            11,
+        );
+        assert_ne!(result.winrate, 0.0, "初期局面を被詰みと誤判定した");
+    }
+
+    #[test]
+    fn test_root_child_mate_filter_marks_losing_move() {
+        // 唯一の合法手 K1a-2a のあと G*2b で詰む = その手は敗着．
+        let mut board = Board::empty();
+        board.set_sfen(BEING_MATED).expect("正当な SFEN");
+        let out: Mutex<Vec<Move>> = Mutex::new(Vec::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        root_child_mate_filter(&mut board, &out, &stop, 16, 100_000, 10, 1);
+        let losing = out.lock().expect("lock");
+        assert_eq!(
+            losing.len(),
+            1,
+            "唯一の合法手が敗着として挙がる: {losing:?}"
+        );
+    }
+
+    #[test]
+    fn test_root_child_mate_filter_quiet_position_is_clean() {
+        // 初期局面では敗着はゼロ (偽陽性なし)．合法手 30 > max_moves=16 なので
+        // そもそも走らないことも兼ねて確認する．
+        let mut board = Board::empty();
+        board.set_sfen(STARTPOS).expect("正当な SFEN");
+        let out: Mutex<Vec<Move>> = Mutex::new(Vec::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        root_child_mate_filter(&mut board, &out, &stop, 16, 10_000, 5, 1);
+        assert!(out.lock().expect("lock").is_empty());
+    }
+
+    /// **[SLOW]** 自己対局で実際に踏んだ敗着局面 (game_0006 ply117)．
+    /// 合法手 4 手のうち 3 手が詰まされる手 (mate-41 / mate-29 / mate-1) で，
+    /// 安全なのは 5h6i のみ．対局では敗着 4f4g を選んで 11 手後に詰まされた．
+    #[test]
+    #[ignore]
+    fn test_root_child_mate_filter_real_losing_position() {
+        const PLY117: &str =
+            "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1NR3/1G1PPg3/1S2K1+b2/LN7 b BSgsnl8p 117";
+        let mut board = Board::empty();
+        board.set_sfen(PLY117).expect("正当な SFEN");
+        let out: Mutex<Vec<Move>> = Mutex::new(Vec::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        root_child_mate_filter(&mut board, &out, &stop, 16, 500_000, 120, 2);
+        let losing: Vec<String> = out
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|m| m.to_usi())
+            .collect();
+        assert_eq!(losing.len(), 3, "敗着 3 手が挙がる: {losing:?}");
+        assert!(
+            !losing.contains(&"5h6i".to_string()),
+            "唯一の受かる手を敗着にしてはいけない: {losing:?}"
+        );
+    }
+
+    /// **[SLOW]** 敗着フィルタの並列度による所要時間 (診断)．
+    ///
+    /// 子ごとの判定コストは mate-1 の数ノードから mate-41 の ~320K ノードまで
+    /// 桁で違う．並列化すると壁時計は「最も重い 1 子」に近づくので，同じ時間で
+    /// より大きな予算まで到達できる．
+    #[test]
+    #[ignore]
+    fn test_root_child_filter_thread_scaling() {
+        const PLY117: &str =
+            "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1NR3/1G1PPg3/1S2K1+b2/LN7 b BSgsnl8p 117";
+        // ply125 は合法手 10 手で全てが負け = 全子が詰み証明を要する重い側の例．
+        const PLY125: &str =
+            "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1N4/1G1PP4/1S2K2r1/LN7 b 2BGSgsnl8p 125";
+        for (label, sfen, threads) in [
+            ("ply117/4子", PLY117, 1usize),
+            ("ply117/4子", PLY117, 2),
+            ("ply117/4子", PLY117, 4),
+            ("ply125/10子", PLY125, 1),
+            ("ply125/10子", PLY125, 2),
+            ("ply125/10子", PLY125, 4),
+        ] {
+            let mut board = Board::empty();
+            board.set_sfen(sfen).expect("正当な SFEN");
+            let out: Mutex<Vec<Move>> = Mutex::new(Vec::new());
+            let stop = Arc::new(AtomicBool::new(false));
+            let t = Instant::now();
+            root_child_mate_filter(&mut board, &out, &stop, 16, 500_000, 120, threads);
+            let ms = t.elapsed().as_millis();
+            let n = out.lock().expect("lock").len();
+            eprintln!("[filter] {label} threads={threads} losing={n} elapsed={ms}ms");
+        }
+    }
+
+    #[test]
+    fn test_mate_worker_defensive_returns_loss() {
+        // 受け方向の依頼に対して mate スレッドが proven::LOSS を返すこと．
+        // 葉が LOSS になると，親から見た子の確定値は 0.0 なので OR ルールで
+        // 親がその場で勝ち確定になる (= 「その手を指すと詰まされる」が伝播する)．
+        let inq: Mutex<VecDeque<MateRequest>> = Mutex::new(VecDeque::new());
+        let outq: Mutex<VecDeque<MateResult>> = Mutex::new(VecDeque::new());
+        let stop = AtomicBool::new(false);
+        let mut board = Board::empty();
+        board.set_sfen(BEING_MATED).expect("正当な SFEN");
+        inq.lock().expect("lock").push_back(MateRequest {
+            idx: 3,
+            board,
+            path: vec![ROOT_IDX, 3],
+            generation: 0,
+            defensive: true,
+        });
+        std::thread::scope(|s| {
+            s.spawn(|| mate_worker(&inq, &outq, &stop, 50, 100_000));
+            let mut got = None;
+            for _ in 0..2000 {
+                if let Some(r) = outq.lock().expect("lock").pop_front() {
+                    got = Some(r);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            stop.store(true, Ordering::Release);
+            let r = got.expect("mate スレッドが被詰みを検出して結果を返す");
+            assert_eq!(r.idx, 3);
+            assert_eq!(r.proven, proven::LOSS, "受け方向の証明は LOSS で入る");
+        });
     }
 
     #[test]

@@ -149,6 +149,15 @@ pub struct DfPnSolver {
     pub(super) stop_flag: Option<Arc<AtomicBool>>,
     /// 攻め方の手番色(solve 時に設定)．
     pub(super) attacker: Color,
+    /// 受け方向探索 (root を AND ノードにする) かどうか(デフォルト: false)．
+    ///
+    /// - false (既定): 攻め方 = root の手番．「手番側が詰ませられるか」を解く．
+    /// - true: 攻め方 = root の手番の相手．**「手番側が詰まされるか」**を解く．
+    ///   root が AND ノード (受け方の手番) になり，詰み手数は偶数になる．
+    ///
+    /// 探索本体は `board.turn == self.attacker` の相対判定に統一されているため，
+    /// この 1 フラグで攻守どちらの向きも同じ探索器で解ける．
+    pub(super) defensive: bool,
     /// 最短手数探索を行うかどうか(デフォルト: true)．
     ///
     /// - true: 最初の詰み発見後に mate-length パラメータ化再探索 (`len = d-2` の反復) で
@@ -273,6 +282,7 @@ impl DfPnSolver {
             timed_out: false,
             stop_flag: None,
             attacker: Color::Black,
+            defensive: false,
             collect_progress: false,
             progress: Vec::new(),
         }
@@ -284,6 +294,20 @@ impl DfPnSolver {
     /// (最短保証なしのノード数削減)．デフォルトは true．
     pub fn set_find_shortest(&mut self, v: bool) -> &mut Self {
         self.find_shortest = v;
+        self
+    }
+
+    /// 受け方向探索 (root を AND ノードにする) の有無を設定する．
+    ///
+    /// `true` にすると **「root の手番側が詰まされるか」** を解く (攻め方 = 手番の相手)．
+    /// 用途は MCTS の被詰み検出 — 攻め方向の `solve` が「自分は詰ませられない」と
+    /// 返すだけでは，自分が詰まされていることは分からないため．
+    ///
+    /// 詰み手数は偶数になり，PV の初手は **受け方の最善応手 (最長抵抗)** になる．
+    /// `find_shortest` は既定の true のままだと最小性確定に余分な反復を要するので，
+    /// 被詰み検出用途では `set_find_shortest(false)` と併用すること．
+    pub fn set_defensive(&mut self, v: bool) -> &mut Self {
+        self.defensive = v;
         self
     }
 

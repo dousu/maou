@@ -523,7 +523,14 @@ impl DfPnSolver {
 
     /// 詰将棋を解き，結果 + 診断メタデータ ([`SearchReport`]) を構築して返す (探索本体)．
     pub(super) fn solve_report_impl(&mut self, board: &mut Board) -> SearchReport {
-        self.attacker = board.turn;
+        // 攻め方の決定．`defensive` のときだけ root を AND ノード (受け方の手番) にする．
+        // 以降の探索・TT・proof_hand は全て `board.turn == self.attacker` の相対判定なので
+        // この 1 箇所で攻守どちらの向きにも切り替わる．
+        self.attacker = if self.defensive {
+            board.turn.opponent()
+        } else {
+            board.turn
+        };
         self.nodes = 0;
         self.path_depths.clear();
         self.expansion_stack.clear();
@@ -599,8 +606,11 @@ impl DfPnSolver {
                     break; // budget/timeout: 最小性未確定 (shortest_confirmed=false)．
                 }
                 let d = last.len().len();
-                if d <= 1 {
-                    shortest_confirmed = true; // 1 手詰より短い詰みは無い (自明に最短)．
+                // 最短の下限: 攻め方向 root (OR) は奇数手ゆえ 1，受け方向 root (AND) は
+                // 偶数手ゆえ 2．これ以上短い詰みは無いので自明に最短．
+                let floor = if self.defensive { 2 } else { 1 };
+                if d <= floor {
+                    shortest_confirmed = true;
                     break;
                 }
                 let nodes_before = self.nodes;

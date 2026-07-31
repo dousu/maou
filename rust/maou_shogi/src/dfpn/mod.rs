@@ -30,7 +30,9 @@ mod solver;
 mod tests;
 mod tt;
 
-pub use api::{solve_tsume, solve_tsume_report_with_timeout, solve_tsume_with_timeout};
+pub use api::{
+    solve_tsume, solve_tsume_defense, solve_tsume_report_with_timeout, solve_tsume_with_timeout,
+};
 pub use solver::{DfPnSolver, ProgressSample, SearchReport, StopReason, TsumeResult};
 
 // sibling module から `super::<name>` で参照するための再エクスポート．

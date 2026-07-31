@@ -130,6 +130,59 @@ pub fn solve_tsume_report_with_timeout(
     Ok(solver.solve_report(&mut board))
 }
 
+/// **手番側が詰まされるか** を解く (受け方向 = root が AND ノード)．
+///
+/// 通常の [`solve_tsume`] は「手番側が詰ませられるか」しか解かないため，
+/// 「詰まされない」ことも「詰まされる」ことも分からない．本関数は攻め方を
+/// 手番の相手に固定して同じ探索器を回し，被詰みを直接証明する．
+///
+/// MCTS の評価が「相手の手番では詰みが見えるのに自分の手番では互角を示す」
+/// 非対称を消すための一次 API．
+///
+/// # 戻り値
+///
+/// - [`TsumeResult::Checkmate`] — **手番側が詰まされている**．`moves` の初手は
+///   受け方 (手番側) の最善応手 = 最長抵抗の手．手数は偶数．
+/// - [`TsumeResult::NoCheckmate`] — 詰まされないことが証明された．
+/// - [`TsumeResult::Unknown`] — 予算内で判定できず (**情報なし**として扱うこと)．
+///
+/// `find_shortest` は常に false で回す — 被詰みの検出に最小性は不要で，
+/// 最小性確定の反復は純粋な追加コストになるため．
+///
+/// # 例
+///
+/// ```
+/// use maou_shogi::dfpn::{solve_tsume_defense, TsumeResult};
+///
+/// // 後手玉 1一．先手飛車 9二 が 2 段目を制圧し，先手持ち駒に金．
+/// // 後手番だが唯一の合法手 K1a-2a のあと G*2b で詰む = 後手は詰まされている．
+/// let report = solve_tsume_defense("8k/R8/9/9/9/9/9/9/9 w G 1", Some(100_000), Some(5)).unwrap();
+/// match report.result {
+///     TsumeResult::Checkmate { moves, .. } => assert_eq!(moves.len() % 2, 0),
+///     other => panic!("expected Checkmate, got {other:?}"),
+/// }
+///
+/// // 初期局面は当然詰まされていない．
+/// let start = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
+/// let report = solve_tsume_defense(start, Some(100_000), Some(5)).unwrap();
+/// assert!(matches!(report.result, TsumeResult::NoCheckmate { .. }));
+/// ```
+pub fn solve_tsume_defense(
+    sfen: &str,
+    nodes: Option<u64>,
+    timeout_secs: Option<u64>,
+) -> Result<SearchReport, crate::board::SfenError> {
+    let mut board = Board::empty();
+    board.set_sfen(sfen)?;
+
+    let mut solver =
+        DfPnSolver::with_timeout(31, nodes.unwrap_or(1_048_576), timeout_secs.unwrap_or(300));
+    solver.set_defensive(true);
+    solver.set_find_shortest(false);
+
+    Ok(solver.solve_report(&mut board))
+}
+
 #[cfg(test)]
 mod report_tests {
     use super::*;

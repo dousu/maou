@@ -188,6 +188,11 @@ impl DfPnSolver {
             // (A)/(B) いずれにも当たらない合駒は **net で base を超えて伸びる有効中合い** (例: S*6i→…→6h6i+
             // でチェッカーを取り返す筋) なので手数に数える．無駄合いを除いても base が max-resistance を
             // 担保するため **除外は sound** (偽詰みを生まない)．確信が持てない場合は数える保守側に倒す．
+            // 無駄合い判定は「王手されている AND node ゆえ drop は必ず合駒」を前提にする．
+            // 受け方向 root (`defensive`) の AND node は王手中とは限らず，そこでの駒打ちは
+            // 合駒ではないので前提が崩れる．**非王手なら無駄合い除外を適用しない**
+            // (全防御が無駄合い扱いされると best_move=None → maxd=0 = 偽の「受けなし」になる)．
+            let in_check = board.is_in_check(board.turn);
             let legal: Vec<Move> = self
                 .generate_defense_moves_inner(board, false)
                 .as_slice()
@@ -266,7 +271,9 @@ impl DfPnSolver {
                     for &(m, d, is_drop, recapture_transparent) in &infos {
                         let contrib = d + 1;
                         // 無駄合い: (A) 取り返し透過，または (B) 非伸長 (base を超えない合駒)．
-                        let mudaai = is_drop && (recapture_transparent || contrib <= base);
+                        // 非王手 AND node (受け方向 root) では drop が合駒でないため適用しない．
+                        let mudaai =
+                            in_check && is_drop && (recapture_transparent || contrib <= base);
                         if mudaai {
                             continue;
                         }

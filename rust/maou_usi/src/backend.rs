@@ -105,6 +105,18 @@ pub(crate) fn search_options(config: &EngineConfig) -> SearchOptions {
     if let Some(v) = config.leaf_mate_threads {
         options.leaf_mate_threads = v;
     }
+    if let Some(v) = config.defensive_mate {
+        options.defensive_mate = v;
+    }
+    if let Some(v) = config.root_defensive_mate_nodes {
+        options.root_defensive_mate_nodes = v;
+    }
+    if let Some(v) = config.leaf_defensive_mate_nodes {
+        options.leaf_defensive_mate_nodes = v;
+    }
+    if let Some(v) = config.defensive_mate_threads {
+        options.defensive_mate_threads = v;
+    }
     options.spin_budget_relief = config.spin_budget_relief;
     options.skip_proven_children = config.skip_proven_children;
     options

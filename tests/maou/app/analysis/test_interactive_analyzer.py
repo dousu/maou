@@ -77,6 +77,8 @@ class TestEngineSettings:
             "leaf_mate",
             "leaf_mate_nodes",
             "leaf_mate_threads",
+            "defensive_mate",
+            "defensive_mate_threads",
         }
         assert meta["model_path"] is None
         assert meta["root_dfpn"] is False
