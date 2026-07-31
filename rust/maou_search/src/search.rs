@@ -1548,13 +1548,18 @@ fn root_child_mate_filter(
     // ではなく「未知」なので，そこに敗着が紛れていても素通りする．
     // 全手を安い予算で 1 巡してから深くすれば，mate-1 級の即死は必ず先に落ちる
     // (実測: 敗着局面の子は mate-1 が数ノード，最長 mate-41 が ~320K ノード)．
+    // 浅い段は **小さい置換表**で回す (`new_leaf_mate` 相当)．df-pn の TT は
+    // `solve` ごとにローカル確保され**段をまたいで引き継がれない**ので，浅い段が
+    // production 既定の TT 下限 (2^18 = 16MB) を確保・ゼロ初期化すると，探索より
+    // 確保コストの方が高くつく．即死級 (mate-1 は 2 ノード / mate-3 は 10 ノード)
+    // を落とすのに大きな TT は要らない．
     let stages = [
-        (nodes_per_child / 50).max(1_000),
-        (nodes_per_child / 5).max(10_000),
-        nodes_per_child,
+        (1_000, true),
+        ((nodes_per_child / 10).max(10_000), true),
+        (nodes_per_child, false),
     ];
     let mut unresolved: Vec<Move> = legal.into_iter().collect();
-    for budget in stages {
+    for (budget, small_tt) in stages {
         if unresolved.is_empty() || stop.load(Ordering::Acquire) {
             return;
         }
@@ -1572,7 +1577,11 @@ fn root_child_mate_filter(
                 let next = &next;
                 let mut b = board.clone();
                 s.spawn(move || {
-                    let mut solver = DfPnSolver::with_timeout(31, budget, timeout_secs);
+                    let mut solver = if small_tt {
+                        DfPnSolver::new_leaf_mate(budget, timeout_secs)
+                    } else {
+                        DfPnSolver::with_timeout(31, budget, timeout_secs)
+                    };
                     solver.set_find_shortest(false);
                     solver.set_stop_flag(Arc::clone(stop));
                     loop {
@@ -3385,6 +3394,54 @@ mod tests {
             let n = out.lock().expect("lock").len();
             eprintln!("[filter] {label} threads={threads} losing={n} elapsed={ms}ms");
         }
+    }
+
+    /// **[SLOW]** 段階予算の再探索コスト (診断)．
+    ///
+    /// df-pn の置換表は `solve` ごとにローカルで確保されるため **段をまたいで
+    /// 引き継がれない**．よって段階予算は「浅い段で使ったノードを捨てて，深い段
+    /// で最初から探索し直す」形になる．その実コストを単発フル予算と比べる．
+    #[test]
+    #[ignore]
+    fn test_staged_budget_overhead() {
+        const PLY117: &str =
+            "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1NR3/1G1PPg3/1S2K1+b2/LN7 b BSgsnl8p 117";
+        // (a) 段階予算 (production の経路)
+        let mut board = Board::empty();
+        board.set_sfen(PLY117).expect("正当な SFEN");
+        let out: Mutex<Vec<Move>> = Mutex::new(Vec::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let t = Instant::now();
+        root_child_mate_filter(&mut board, &out, &stop, 16, 500_000, 120, 1);
+        let staged_ms = t.elapsed().as_millis();
+        let staged_n = out.lock().expect("lock").len();
+
+        // (b) 単発フル予算 (段なし) — 同じ判定を 1 巡で出す
+        let mut board = Board::empty();
+        board.set_sfen(PLY117).expect("正当な SFEN");
+        let legal = generate_legal_moves(&mut board);
+        let mut solver = DfPnSolver::with_timeout(31, 500_000, 120);
+        solver.set_find_shortest(false);
+        let t = Instant::now();
+        let mut single_n = 0usize;
+        for m in legal {
+            let cap = board.do_move(m);
+            let v = solver.solve(&mut board);
+            board.undo_move(m, cap);
+            if matches!(
+                v,
+                TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }
+            ) {
+                single_n += 1;
+            }
+        }
+        let single_ms = t.elapsed().as_millis();
+        eprintln!(
+            "[staged] staged={staged_ms}ms (losing={staged_n}) single={single_ms}ms (losing={single_n}) \
+overhead={:.1}%",
+            (staged_ms as f64 / single_ms.max(1) as f64 - 1.0) * 100.0
+        );
+        assert_eq!(staged_n, single_n, "判定結果は段の有無で変わらない");
     }
 
     #[test]
