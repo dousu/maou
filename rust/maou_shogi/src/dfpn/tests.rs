@@ -2244,3 +2244,33 @@ fn test_losing_move_discrimination_before_mate() {
         }
     }
 }
+
+/// 受け方向の**偽証明**の回帰 (game_0000 ply131)．
+///
+/// GPU 対局でこの局面の手番側 (先手) が「詰まされ確定 (-30000)」を報告したが，
+/// 実際には 6i7i で受かる (攻め方向探索が 6,670 ノードで不詰を**証明**する)．
+/// 千日手は絡まない (対局中に同一局面の再出現なし)．
+/// 小予算・小 TT (leaf 用) でも詰みを申告してはならない．
+#[test]
+fn test_defensive_no_false_proof_ply131() {
+    const PLY131: &str = "l2kb1p+R1/5s3/3g5/p1ppp2p1/1N3L3/1pn6/3PPPN2/SPG1sG1+r1/LN1KGs+l2 b b7p 131";
+    // (a) 通常予算
+    let rep = solve_tsume_defense(PLY131, Some(500_000), Some(60)).expect("正当な SFEN");
+    assert!(
+        !matches!(rep.result, TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }),
+        "偽の被詰み (通常予算): {:?}",
+        rep.result
+    );
+    // (b) leaf 用の小予算・小 TT (production の leaf_defensive_mate_nodes 相当)
+    for nodes in [50u64, 500, 2_000, 20_000] {
+        let mut board = Board::empty();
+        board.set_sfen(PLY131).expect("正当な SFEN");
+        let mut solver = DfPnSolver::new_leaf_mate(nodes, 30);
+        solver.set_defensive(true);
+        let r = solver.solve(&mut board);
+        assert!(
+            !matches!(r, TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }),
+            "偽の被詰み (leaf 予算 {nodes}): {r:?}"
+        );
+    }
+}
