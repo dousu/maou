@@ -526,14 +526,24 @@ def check(label, cond, detail):
 ok = True
 
 # A-1 敗着局面 (まだ受かる / 合法手 4)．
-r = run_search(BLUNDER); rb = run_search(BLUNDER, defensive=False)
-n_loss = sum(1 for c in r["cands"] if c[2])
-ok &= check("A-1 bestmove", r["best"] == "5h6i", f"{r['best']} (対照 {rb['best']})")
+r1 = run_search(BLUNDER); rb = run_search(BLUNDER, defensive=False)
+n_loss = sum(1 for c in r1["cands"] if c[2])
+best_v = int([c[1] for c in r1["cands"] if c[0] == r1["best"]][0])
+loss_v = sum(int(c[1]) for c in r1["cands"] if c[2])
+ok &= check("A-1 bestmove", r1["best"] == "5h6i", f"{r1['best']} (対照 {rb['best']})")
 ok &= check("A-1 除外手数", n_loss == 3, f"proven=loss が {n_loss} 手")
-ok &= check("A-1 発火", int(r["stats"]["filtered_root_moves"]) >= 1,
-            f"filtered_root_moves={r['stats']['filtered_root_moves']} "
-            f"defensive_mates={r['stats']['defensive_mates']}")
-for mv, v, pv in r["cands"]:
+# 発火は「どの機構が除外したか」を問わない — 敗着フィルタと木の proven 伝播
+# (受け方向 leaf-mate) のどちらが先でもよく，`filtered_root_moves` は
+# 後者が先に確定させると 0 になる (フィルタは上書きしないため)．
+ok &= check("A-1 発火",
+            int(r1["stats"]["defensive_mates"])
+            + int(r1["stats"]["filtered_root_moves"]) >= 1,
+            f"defensive_mates={r1['stats']['defensive_mates']} "
+            f"filtered_root_moves={r1['stats']['filtered_root_moves']}")
+# playout が生きている手に集中しているか (確定済みの手へ降りるのは全部無駄)．
+ok &= check("A-1 playout 集中", best_v > loss_v,
+            f"選ばれた手 {best_v:,} vs 敗着計 {loss_v:,}")
+for mv, v, pv in r1["cands"]:
     print(f"      {mv:6s} visits={int(v):>8,} {pv or ''}")
 
 # A-2 被詰み局面 (もう詰んでいる)．
@@ -557,12 +567,16 @@ print("\nStage A:", "PASS" if ok else "FAIL — 下の判定表を参照")
 |---|---|---|
 | A-1 bestmove = `5h6i` | 唯一の受かる手 | 対照と同じ手なら未発火か gate 外れ |
 | A-1 `proven=loss` が 3 手 | 4f4g(mate-41) / 5h5i(mate-1) / 5h6h(mate-29) | 予算不足なら `--time-ms` を上げる |
-| A-2 `WinRate = 0.0` | 被詰みの正直な報告 | 対照は 0.49 前後の互角 |
+| A-1 playout 集中 | 選ばれた手 > 敗着計 | 逆なら確定値が木へ反映されていない |
+| A-2 `WinRate = 0.0` | 被詰みの正直な報告 | 対照は 0.38-0.49 の互角 |
 | A-3 両カウンタ 0 | 偽陽性ゼロ | **0 でなければ即調査** (偽の被詰みは自滅につながる) |
 
-**`filtered_root_moves` が 3 未満でも異常ではない** — 木の proven 伝播
-(leaf-mate 経由) が先に確定させた手はフィルタが上書きしないため内訳は動く．
-**見るべきは「除外が 3 手」と「bestmove = 5h6i」**．
+**`filtered_root_moves` 単独で発火を判定してはいけない**．敗着を除外するのは
+(a) root 敗着フィルタ と (b) 木の proven 伝播 (受け方向 leaf-mate 経由) の
+2 経路があり，**(b) が先に確定させると (a) は上書きしないので 0 になる**
+(`collect_result` は `c.proven.is_none()` のときだけ畳み込む)．
+判定は `defensive_mates + filtered_root_moves >= 1` で行い，
+**結果として「除外が 3 手」「bestmove = 5h6i」「playout が集中」**を見る．
 
 DevContainer / mock 評価器での実測 (参考値．GPU では内訳が動く):
 
@@ -734,6 +748,28 @@ subtree 再利用で積み上がった木の証明由来であり，**探索線�
 40 局で高々 2 件 (上界) であり，1 局あたり 0.05 手．事前見積り 0.23 手は
 別条件の 30 局から採ったもので**過大だった**．n=40 が検出できる ~150 Elo
 級には遠く及ばない．
+
+#### 修正後の Stage A 再測定 (2026-08-02)
+
+`fix(search): 敗着と証明した手への playout 流入を探索中に止める` の適用後:
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| 5h6i (選ばれる手) | 24 (0.02%) | **94,976 (73.4%)** |
+| 4f4g (敗着) | 123,306 (99.4%) | 34,054 |
+| 5h6h / 5h5i | 793 / 1 | 402 / 1 |
+
+**playout の集中は成功**．残る 34,054 は mate-41 の証明が終わるまでに流れた分で
+不可避 (ローカル release の 20.3% と同程度)．bestmove は `5h6i`，対照
+(受け方向 off) は `4f4g` のままで，A-2 (`WinRate 0.0` / 対照 0.3834) と
+A-3 (偽陽性ゼロ) も維持されている．
+
+このとき **`filtered_root_moves=0` / `defensive_mates=259`** だった．
+敗着を除外したのは木の proven 伝播 (受け方向 leaf-mate) であり，
+フィルタは上書きする対象が残っていなかった (`collect_result` は
+`c.proven.is_none()` のときだけ畳み込む)．**`filtered_root_moves` 単独で
+発火を判定してはいけない** — セル 2 の判定を
+`defensive_mates + filtered_root_moves >= 1` に直した．
 
 #### 再測定の手順
 
