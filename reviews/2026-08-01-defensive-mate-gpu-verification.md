@@ -2,7 +2,7 @@
 title: 受け方向詰み探索の GPU 検証手順を verification.md に追加する
 date: 2026-08-01
 status: applied
-applied_in: PENDING
+applied_in: 62d47b7
 target:
   - docs/design/usi-engine/verification.md
 risk: low
