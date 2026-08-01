@@ -69,7 +69,10 @@ impl SearchRootChild {
 ///   `warmup_ms` (ルート評価/エンジンビルドの所要; 計測
 ///   区間外) / `elapsed_ms` / `nps` / `max_depth` / `repetitions`
 ///   (千日手検出数) / `proven_nodes` (AND-OR 確定ノード数) / `leaf_mates`
-///   (leaf-mate が葉で詰みを証明した回数) / `nodes_used` / `collisions` /
+///   (leaf-mate が葉で詰みを証明した回数) / `defensive_mates` (受け方向が
+///   「手番側が詰まされる」と証明した回数 — **0 なら機構が未発火**) /
+///   `filtered_root_moves` (敗着として除外した root 候補手数 — **0 なら
+///   着手選択に影響していない**) / `nodes_used` / `collisions` /
 ///   `eval_batches` / `avg_batch` / `gc_runs`．
 #[pyclass(frozen, name = "SearchResult")]
 struct PySearchResult {
@@ -101,6 +104,10 @@ struct PySearchResult {
     proven_nodes: u64,
     #[pyo3(get)]
     leaf_mates: u64,
+    #[pyo3(get)]
+    defensive_mates: u64,
+    #[pyo3(get)]
+    filtered_root_moves: u64,
     #[pyo3(get)]
     nodes_used: u32,
     #[pyo3(get)]
@@ -162,6 +169,8 @@ fn to_py_result(r: SearchResult) -> PySearchResult {
         repetitions: r.stats.repetitions,
         proven_nodes: r.stats.proven_nodes,
         leaf_mates: r.stats.leaf_mates,
+        defensive_mates: r.stats.defensive_mates,
+        filtered_root_moves: r.stats.filtered_root_moves,
         nodes_used: r.stats.nodes_used,
         collisions: r.stats.collisions,
         eval_batches: r.stats.eval_batches,

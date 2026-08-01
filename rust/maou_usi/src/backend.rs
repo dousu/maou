@@ -338,6 +338,8 @@ fn to_outcome(r: &SearchResult) -> SearchOutcome {
     let carried_visits = root_visits.saturating_sub(r.stats.playouts + r.stats.terminal_backprops);
     SearchOutcome {
         carried_visits,
+        defensive_mates: r.stats.defensive_mates,
+        filtered_root_moves: r.stats.filtered_root_moves,
         best_usi: r.best_move.map(|m| m.to_usi()),
         winrate: r.winrate,
         pv: r.pv.iter().map(|m| m.to_usi()).collect(),

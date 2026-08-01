@@ -285,6 +285,13 @@ pub struct SearchOutcome {
     /// 「機構が実対局で何回発火し，どれだけ得したか」の計測に使う (設計 §12
     /// 未決 6)．統計目的のみで対局判断には使わない．
     pub carried_visits: u64,
+    /// 受け方向の詰み探索が「手番側が詰まされる」と証明した回数
+    /// (root + 王手中の葉)．**0 なら機構が発火していない** — レバーの効果を
+    /// 論じる前にこれを数える (計測規律)．
+    pub defensive_mates: u64,
+    /// 敗着フィルタが「指すと相手に詰まされる」として除外した root 候補手の数．
+    /// **0 なら着手選択に影響していない**．
+    pub filtered_root_moves: u64,
 }
 
 /// 探索バックエンド (実装: [`MaouSearchBackend`]，テスト: fake)．
@@ -1355,6 +1362,8 @@ mod tests {
 
     fn default_outcome() -> SearchOutcome {
         SearchOutcome {
+            defensive_mates: 0,
+            filtered_root_moves: 0,
             best_usi: Some("7g7f".to_string()),
             winrate: 0.6,
             pv: vec!["7g7f".to_string(), "3c3d".to_string()],
