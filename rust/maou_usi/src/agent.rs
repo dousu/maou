@@ -129,6 +129,14 @@ pub struct EngineConfig {
     pub leaf_mate_nodes: Option<u64>,
     /// leaf-mate スレッド数．
     pub leaf_mate_threads: Option<usize>,
+    /// 受け方向の詰み探索 = 被詰み検出 (None = maou_search 既定)．
+    pub defensive_mate: Option<bool>,
+    /// root 受け方向 dfpn のノード予算．
+    pub root_defensive_mate_nodes: Option<u64>,
+    /// 葉の受け方向 df-pn ノード予算．
+    pub leaf_defensive_mate_nodes: Option<u64>,
+    /// root 敗着フィルタの並列度．
+    pub defensive_mate_threads: Option<usize>,
 }
 
 impl Default for EngineConfig {
@@ -163,6 +171,10 @@ impl Default for EngineConfig {
             leaf_mate: None,
             leaf_mate_nodes: None,
             leaf_mate_threads: None,
+            defensive_mate: None,
+            root_defensive_mate_nodes: None,
+            leaf_defensive_mate_nodes: None,
+            defensive_mate_threads: None,
         }
     }
 }
@@ -639,6 +651,20 @@ where
                 },
             },
             OptionDecl {
+                name: "DefensiveMate",
+                kind: OptionKind::Check {
+                    default: c.defensive_mate.unwrap_or(true),
+                },
+            },
+            OptionDecl {
+                name: "DefensiveMateThreads",
+                kind: OptionKind::Spin {
+                    default: c.defensive_mate_threads.unwrap_or(1) as i64,
+                    min: 1,
+                    max: 64,
+                },
+            },
+            OptionDecl {
                 name: "DrawValueBlack",
                 kind: OptionKind::Spin {
                     default: i64::from(c.draw_value_black),
@@ -760,6 +786,12 @@ where
             }
             "RootDfpn" => self.config.root_dfpn = Some(parse_bool()),
             "LeafMate" => self.config.leaf_mate = Some(parse_bool()),
+            "DefensiveMate" => self.config.defensive_mate = Some(parse_bool()),
+            "DefensiveMateThreads" => {
+                if let Ok(n) = v.parse::<usize>() {
+                    self.config.defensive_mate_threads = Some(n.max(1));
+                }
+            }
             "NetworkDelay" => {
                 if let Ok(n) = v.parse() {
                     self.config.time.network_delay_ms = n;

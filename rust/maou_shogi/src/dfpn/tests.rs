@@ -1973,3 +1973,274 @@ fn test_false_proof_hunt() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// 受け方向 (root = AND ノード) の詰み探索．
+//
+// 攻め方向の探索だけでは「相手の手番では詰みが見えるのに，自分の手番になると
+// 見えない」非対称が残る．以下は自己対局で実際に踏んだ盲点局面を回帰として
+// 固定する (attacker が 2 秒で詰みを証明していた一方，詰まされる側は全予算を
+// 使って互角〜優勢を報告していた局面)．
+// ---------------------------------------------------------------------------
+
+/// 自己対局 game_0006 の ply119．先手 (手番側) が王手されており，合法手は 3 手．
+/// 3 手のうち 2 手は数〜十ノードで詰みが確定し，残る 1 手が長い詰みに繋がる．
+const BLIND_PLY119: &str =
+    "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1N4/1G1PPR3/1S2K1+b2/LN1s5 b BGSgnl8p 119";
+/// 同 ply123．合法手 3 手．対局中の探索は **+1170 (優勢)** と報告していた．
+const BLIND_PLY123: &str =
+    "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1N4/1G1PP4/1S2+b4/LN1K5 b BGSrgsnl8p 123";
+
+/// 攻め方向の探索は被詰みについて何も言えない (非対称の実証)．
+#[test]
+fn test_offensive_search_is_blind_to_being_mated() {
+    // 手番側 (先手) は詰まされているが，攻め方向の探索は「自分は詰ませられない」
+    // としか言わない — これが対局中に互角評価が出ていた理由．
+    let r = solve_tsume(BLIND_PLY119, Some(31), Some(200_000)).expect("正当な SFEN");
+    assert!(
+        matches!(r, TsumeResult::NoCheckmate { .. }),
+        "攻め方向は不詰を返すはず: {r:?}"
+    );
+}
+
+/// 受け方向の探索は同じ局面で被詰みを証明する．
+///
+/// **[SLOW]** mate-39 級の証明を含むため release ビルド推奨．
+#[test]
+#[ignore]
+fn test_defensive_search_detects_being_mated() {
+    // 予算は maou_search の `root_defensive_mate_nodes` 既定と同じ 500K で回す
+    // (production の実効予算で捕捉できることが要件)．
+    for (sfen, label) in [(BLIND_PLY119, "ply119"), (BLIND_PLY123, "ply123")] {
+        let rep = solve_tsume_defense(sfen, Some(500_000), Some(120)).expect("正当な SFEN");
+        match &rep.result {
+            TsumeResult::Checkmate {
+                moves,
+                nodes_searched,
+            } => {
+                assert_eq!(
+                    moves.len() % 2,
+                    0,
+                    "{label}: 受け方向の詰み手数は偶数 (受け方の手から始まる): {}",
+                    moves.len()
+                );
+                eprintln!(
+                    "[defensive] {label}: mated in {} plies, best defense {}, nodes={nodes_searched}, elapsed={}ms",
+                    moves.len(),
+                    moves[0].to_usi(),
+                    rep.elapsed_ms,
+                );
+            }
+            other => panic!("{label}: 被詰みを証明できなかった: {other:?}"),
+        }
+    }
+}
+
+/// 受け方向の偽陽性がないこと — 初期局面は当然詰まされていない．
+#[test]
+fn test_defensive_search_no_false_positive_on_startpos() {
+    let start = "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1";
+    let rep = solve_tsume_defense(start, Some(200_000), Some(30)).expect("正当な SFEN");
+    assert!(
+        matches!(rep.result, TsumeResult::NoCheckmate { .. }),
+        "初期局面で被詰みを報告した (偽証明): {:?}",
+        rep.result
+    );
+}
+
+/// **非王手**の受け方向 root で無駄合いフィルタが誤発火しないこと．
+///
+/// 無駄合い判定は「AND ノード = 王手中ゆえ drop は合駒」を前提にしている．
+/// 受け方向 root は王手中とは限らず，全防御が無駄合い扱いされると
+/// 「受けなし = 詰み」という偽証明になる．駒打ちで受けられる局面で
+/// 偽陽性が出ないことを確認する．
+#[test]
+fn test_defensive_root_not_in_check_no_false_mate() {
+    // 後手玉 5一，先手飛車 5九 (5 筋で睨む)．後手は歩を打って受けられる．
+    // 後手番・非王手であり，詰まされてはいない．
+    let sfen = "4k4/9/9/9/9/9/9/9/4R4 w P 1";
+    let rep = solve_tsume_defense(sfen, Some(200_000), Some(30)).expect("正当な SFEN");
+    assert!(
+        !matches!(rep.result, TsumeResult::Checkmate { .. }),
+        "非王手 root で偽の被詰みを報告した: {:?}",
+        rep.result
+    );
+}
+
+/// 合法手が 64 手を超える受け方向 root で shift overflow しないこと (回帰)．
+///
+/// `BitSet64` は δ の sum/max 集約を子 index の bit で持つ．攻め方向 root は
+/// 王手手のみ，通常の AND ノードは王手中ゆえ合法手が少なく 64 を超えにくいが，
+/// **受け方向 root は非王手で全合法手を生成する**ため 100 手を超える．
+/// 以前は `1u64 << i` が i >= 64 で panic していた．
+#[test]
+fn test_defensive_root_over_64_legal_moves() {
+    // 初期局面 = 合法手 30 手では踏まないので，手が広い中盤局面を使う．
+    let sfen = "l6nl/5+P1gk/2np1S3/p1p4Pp/3P2Sp1/1PPb2P1P/P5GS1/R8/LN4bKL w RGgsn5p 1";
+    let mut board = Board::empty();
+    board.set_sfen(sfen).expect("正当な SFEN");
+    let n = movegen::generate_legal_moves(&mut board).len();
+    assert!(n > 64, "この局面は 64 手超であること (実際 {n} 手)");
+    // panic しないこと自体が回帰の主眼 (結果は不詰でよい)．
+    let rep = solve_tsume_defense(sfen, Some(50_000), Some(30)).expect("正当な SFEN");
+    assert!(
+        !matches!(rep.result, TsumeResult::Checkmate { .. }),
+        "偽の被詰み: {:?}",
+        rep.result
+    );
+}
+
+/// 被詰みが**いつ**証明可能になるかの走査 (診断)．
+///
+/// **[SLOW]** 自己対局 game_0006 の先手番を ply103 から順に受け方向で解き，
+/// 「詰まされ確定」に変わる境目を出す．境目より前の局面では**まだ受かる**ので，
+/// 応手の選定が意味を持つ (境目以降はどの手を選んでも負け)．
+#[test]
+#[ignore]
+fn test_defensive_onset_scan() {
+    let positions: [(&str, u32, usize, &str); 12] = [
+        (
+            "l3s4/3k1s3/2nppp1+L1/4+b2p1/p1p3+R2/P1P1N3b/1G1PP4/1S1KG1S2/LN3R3 b Ggnl8p 103",
+            103,
+            115,
+            "2c3b",
+        ),
+        (
+            "l3s4/3k1s+L2/2nppp3/1l2+b2p1/p1p3+R2/P1P1N3b/1G1PP4/1S1KG1S2/LN3R3 b Ggn8p 105",
+            105,
+            112,
+            "3b4b",
+        ),
+        (
+            "l8/3k1s3/2nppp3/1l2+b2p1/p1p3+R2/P1P1N3b/1G1PP4/1S1KG1S2/LN3R3 b GSgnl8p 107",
+            107,
+            164,
+            "4i4f",
+        ),
+        (
+            "l8/3k1s3/2nppp3/1l2+b2p1/p1p3+R2/P1P1NR3/1G1PP4/1S1KG1+b2/LN7 b GSgsnl8p 109",
+            109,
+            159,
+            "S*5e",
+        ),
+        (
+            "l8/3k1s3/2nppp3/1l5p1/p1p1+b1+R2/P1P1NR3/1G1PP4/1S1KG1+b2/LN7 b Gg2snl8p 111",
+            111,
+            101,
+            "3e5e",
+        ),
+        (
+            "l8/3k1s3/2nppp3/1l5p1/p1p1+R4/P1P1NR3/1G1PP4/1S1KG1+b2/LN3s3 b BGgsnl8p 113",
+            113,
+            154,
+            "G*7d",
+        ),
+        (
+            "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1NR3/1G1PP4/1S1K+s1+b2/LN7 b B2gsnl8p 115",
+            115,
+            4,
+            "6h5h",
+        ),
+        (
+            "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1NR3/1G1PPg3/1S2K1+b2/LN7 b BSgsnl8p 117",
+            117,
+            4,
+            "4f4g",
+        ),
+        (
+            "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1N4/1G1PPR3/1S2K1+b2/LN1s5 b BGSgnl8p 119",
+            119,
+            3,
+            "5h6i",
+        ),
+        (
+            "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1N4/1G1PP+b3/1S7/LN1K5 b BG2Srgnl8p 121",
+            121,
+            7,
+            "S*5h",
+        ),
+        (
+            "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1N4/1G1PP4/1S2+b4/LN1K5 b BGSrgsnl8p 123",
+            123,
+            3,
+            "6i5h",
+        ),
+        (
+            "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1N4/1G1PP4/1S2K2r1/LN7 b 2BGSgsnl8p 125",
+            125,
+            10,
+            "S*4h",
+        ),
+    ];
+    for (sfen, ply, nlegal, played) in positions {
+        let rep = solve_tsume_defense(sfen, Some(500_000), Some(120)).expect("正当な SFEN");
+        let verdict = match &rep.result {
+            TsumeResult::Checkmate { moves, .. } => {
+                format!(
+                    "MATED in {} (best defense {})",
+                    moves.len(),
+                    moves[0].to_usi()
+                )
+            }
+            TsumeResult::CheckmateNoPv { .. } => "MATED (no pv)".to_string(),
+            TsumeResult::NoCheckmate { .. } => "safe (disproven)".to_string(),
+            TsumeResult::Unknown { .. } => "unknown (budget)".to_string(),
+        };
+        eprintln!(
+            "[onset] ply{ply:3} legal={nlegal:3} played={played:6} -> {verdict} ({}ms)",
+            rep.elapsed_ms
+        );
+    }
+}
+
+/// 「詰みの前の局面」で応手ごとに被詰みが分かれるかの検証 (診断)．
+///
+/// **[SLOW]** game_0006 ply115 / ply117 は受け方向で「まだ受かる」と出る一方，
+/// ply119 は詰み確定になる．つまり境目の局面には**受かる手と負ける手が混在**
+/// している．各合法手を指した後の局面を**攻め方向**で解き (= 相手が詰ませ
+/// られるか)，どの手が敗着かを列挙する．
+#[test]
+#[ignore]
+fn test_losing_move_discrimination_before_mate() {
+    let cases: [(&str, u32); 2] = [
+        (
+            "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1NR3/1G1PP4/1S1K+s1+b2/LN7 b B2gsnl8p 115",
+            115,
+        ),
+        (
+            "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1NR3/1G1PPg3/1S2K1+b2/LN7 b BSgsnl8p 117",
+            117,
+        ),
+    ];
+    for (sfen, ply) in cases {
+        let mut board = Board::empty();
+        board.set_sfen(sfen).expect("正当な SFEN");
+        let legal = movegen::generate_legal_moves(&mut board);
+        eprintln!("[discriminate] ply{ply} legal={}", legal.len());
+        for m in legal {
+            let cap = board.do_move(m);
+            let child = board.sfen();
+            board.undo_move(m, cap);
+            // 子局面は相手手番 → 通常の (攻め方向) 探索が「相手が詰ませるか」を解く．
+            // find_shortest=false 必須 — 既定 (true) は最小性を確定できないと
+            // Unknown を返すため，長手数の詰みが「不明」に化ける．
+            let r = solve_tsume_with_timeout(
+                &child,
+                Some(2047),
+                Some(500_000),
+                Some(60),
+                Some(false),
+                None,
+                None,
+            )
+            .expect("正当な SFEN");
+            let verdict = match &r {
+                TsumeResult::Checkmate { moves, .. } => format!("LOSES (mate-{})", moves.len()),
+                TsumeResult::CheckmateNoPv { .. } => "LOSES (no pv)".to_string(),
+                TsumeResult::NoCheckmate { .. } => "safe".to_string(),
+                TsumeResult::Unknown { .. } => "unknown".to_string(),
+            };
+            eprintln!("    {:6} -> {verdict}", m.to_usi());
+        }
+    }
+}

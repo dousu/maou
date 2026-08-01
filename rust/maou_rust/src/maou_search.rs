@@ -271,7 +271,7 @@ fn validate_root_dfpn_depth(root_dfpn_depth: Option<u32>) -> PyResult<()> {
 /// - 探索中は GIL を解放するが Python シグナルは処理しない — Ctrl-C は探索が
 ///   返るまで効かない．中断制御は `max_playouts` / `time_ms` で行うこと．
 #[pyfunction]
-#[pyo3(signature = (sfen, *, moves=None, model_path=None, threads=None, batch_size=None, max_playouts=None, time_ms=None, node_capacity=None, c_puct=None, fpu=None, max_ply=None, gc_keep_ratio=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_to=None, pad_buckets=None, intra_threads=None))]
+#[pyo3(signature = (sfen, *, moves=None, model_path=None, threads=None, batch_size=None, max_playouts=None, time_ms=None, node_capacity=None, c_puct=None, fpu=None, max_ply=None, gc_keep_ratio=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, defensive_mate=None, root_defensive_mate_nodes=None, leaf_defensive_mate_nodes=None, defensive_mate_threads=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_to=None, pad_buckets=None, intra_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn search(
     py: Python<'_>,
@@ -293,6 +293,10 @@ fn search(
     leaf_mate: Option<bool>,
     leaf_mate_nodes: Option<u64>,
     leaf_mate_threads: Option<usize>,
+    defensive_mate: Option<bool>,
+    root_defensive_mate_nodes: Option<u64>,
+    leaf_defensive_mate_nodes: Option<u64>,
+    defensive_mate_threads: Option<usize>,
     use_cuda: Option<bool>,
     use_tensorrt: Option<bool>,
     trt_engine_cache_dir: Option<String>,
@@ -344,6 +348,18 @@ fn search(
     }
     if let Some(v) = leaf_mate_threads {
         options.leaf_mate_threads = v;
+    }
+    if let Some(v) = defensive_mate {
+        options.defensive_mate = v;
+    }
+    if let Some(v) = root_defensive_mate_nodes {
+        options.root_defensive_mate_nodes = v;
+    }
+    if let Some(v) = leaf_defensive_mate_nodes {
+        options.leaf_defensive_mate_nodes = v;
+    }
+    if let Some(v) = defensive_mate_threads {
+        options.defensive_mate_threads = v;
     }
     let limits = SearchLimits {
         max_playouts,
@@ -541,7 +557,7 @@ impl SearchEngine {
     ///
     /// 引数・返り値の意味は関数 [`search`] と同じ (評価器系オプションは
     /// コンストラクタで固定済みのため受け取らない)．探索中は GIL を解放する．
-    #[pyo3(signature = (sfen, *, moves=None, max_playouts=None, time_ms=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+    #[pyo3(signature = (sfen, *, moves=None, max_playouts=None, time_ms=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, defensive_mate=None, root_defensive_mate_nodes=None, leaf_defensive_mate_nodes=None, defensive_mate_threads=None))]
     #[allow(clippy::too_many_arguments)]
     fn search(
         &self,
@@ -556,6 +572,10 @@ impl SearchEngine {
         leaf_mate: Option<bool>,
         leaf_mate_nodes: Option<u64>,
         leaf_mate_threads: Option<usize>,
+        defensive_mate: Option<bool>,
+        root_defensive_mate_nodes: Option<u64>,
+        leaf_defensive_mate_nodes: Option<u64>,
+        defensive_mate_threads: Option<usize>,
     ) -> PyResult<PySearchResult> {
         let (board, history) = build_board_and_history(sfen, moves.as_deref())?;
         validate_root_dfpn_depth(root_dfpn_depth)?;
@@ -582,6 +602,18 @@ impl SearchEngine {
         }
         if let Some(v) = leaf_mate_threads {
             options.leaf_mate_threads = v;
+        }
+        if let Some(v) = defensive_mate {
+            options.defensive_mate = v;
+        }
+        if let Some(v) = root_defensive_mate_nodes {
+            options.root_defensive_mate_nodes = v;
+        }
+        if let Some(v) = leaf_defensive_mate_nodes {
+            options.leaf_defensive_mate_nodes = v;
+        }
+        if let Some(v) = defensive_mate_threads {
+            options.defensive_mate_threads = v;
         }
         let limits = SearchLimits {
             max_playouts,

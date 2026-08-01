@@ -68,6 +68,10 @@ fn apply_common_engine_args(
     leaf_mate: Option<bool>,
     leaf_mate_nodes: Option<u64>,
     leaf_mate_threads: Option<usize>,
+    defensive_mate: Option<bool>,
+    root_defensive_mate_nodes: Option<u64>,
+    leaf_defensive_mate_nodes: Option<u64>,
+    defensive_mate_threads: Option<usize>,
 ) {
     config.model_path = model_path.filter(|p| !p.is_empty());
     if let Some(v) = threads {
@@ -100,6 +104,10 @@ fn apply_common_engine_args(
     config.leaf_mate = leaf_mate;
     config.leaf_mate_nodes = leaf_mate_nodes;
     config.leaf_mate_threads = leaf_mate_threads;
+    config.defensive_mate = defensive_mate;
+    config.root_defensive_mate_nodes = root_defensive_mate_nodes;
+    config.leaf_defensive_mate_nodes = leaf_defensive_mate_nodes;
+    config.defensive_mate_threads = defensive_mate_threads;
 }
 
 /// USI エンジンを標準入出力で実行する (`quit`/EOF まで戻らない)．
@@ -149,7 +157,7 @@ fn apply_common_engine_args(
 ///
 /// モデルロード失敗・不正局面などの致命的エラーは `RuntimeError`．
 #[pyfunction]
-#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, network_delay_ms=None, min_think_ms=None, time_curve=None, time_curve_peak_ply=None, time_curve_half_width_ply=None, time_curve_peak_permille=None, time_curve_opening_floor_permille=None, time_curve_endgame_floor_permille=None, keep_alive_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, max_moves_to_draw=None, usi_ponder=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+#[pyo3(signature = (*, engine_name=None, engine_author=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, network_delay_ms=None, min_think_ms=None, time_curve=None, time_curve_peak_ply=None, time_curve_half_width_ply=None, time_curve_peak_permille=None, time_curve_opening_floor_permille=None, time_curve_endgame_floor_permille=None, keep_alive_ms=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, max_moves_to_draw=None, usi_ponder=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, defensive_mate=None, root_defensive_mate_nodes=None, leaf_defensive_mate_nodes=None, defensive_mate_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_usi(
     py: Python<'_>,
@@ -185,6 +193,10 @@ fn run_usi(
     leaf_mate: Option<bool>,
     leaf_mate_nodes: Option<u64>,
     leaf_mate_threads: Option<usize>,
+    defensive_mate: Option<bool>,
+    root_defensive_mate_nodes: Option<u64>,
+    leaf_defensive_mate_nodes: Option<u64>,
+    defensive_mate_threads: Option<usize>,
 ) -> PyResult<()> {
     let mut config = EngineConfig::default();
     if let Some(v) = engine_name {
@@ -238,6 +250,10 @@ fn run_usi(
         leaf_mate,
         leaf_mate_nodes,
         leaf_mate_threads,
+        defensive_mate,
+        root_defensive_mate_nodes,
+        leaf_defensive_mate_nodes,
+        defensive_mate_threads,
     );
 
     py.detach(move || maou_usi::run_stdio(config))
@@ -421,7 +437,7 @@ fn summary_to_dict<'py>(py: Python<'py>, s: &RunSummary) -> PyResult<Bound<'py, 
 /// 設定不正・モデルロード失敗・対局中の内部エラーは `RuntimeError`，
 /// 未知の `ab_mode` は `ValueError`．
 #[pyfunction]
-#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, spin_budget_relief=None, skip_proven_children=None, record_kifu=None, min_think_ms=None, time_curve_peak_ply=None, time_curve_half_width_ply=None, time_curve_peak_permille=None, time_curve_opening_floor_permille=None, time_curve_endgame_floor_permille=None, ab_mode=None, playouts_b=None, batch_size_b=None, horizon_moves=None, horizon_moves_b=None, alternate_colors=None, clock_ms=None, byoyomi_ms=None, inc_ms=None))]
+#[pyo3(signature = (*, model_path=None, games=None, parallel=None, playouts=None, movetime_ms=None, max_moves=None, sfen=None, opening_random_plies=None, seed=None, verbose=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, defensive_mate=None, root_defensive_mate_nodes=None, leaf_defensive_mate_nodes=None, defensive_mate_threads=None, spin_budget_relief=None, skip_proven_children=None, record_kifu=None, min_think_ms=None, time_curve_peak_ply=None, time_curve_half_width_ply=None, time_curve_peak_permille=None, time_curve_opening_floor_permille=None, time_curve_endgame_floor_permille=None, ab_mode=None, playouts_b=None, batch_size_b=None, horizon_moves=None, horizon_moves_b=None, alternate_colors=None, clock_ms=None, byoyomi_ms=None, inc_ms=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_selfplay(
     py: Python<'_>,
@@ -453,6 +469,10 @@ fn run_selfplay(
     leaf_mate: Option<bool>,
     leaf_mate_nodes: Option<u64>,
     leaf_mate_threads: Option<usize>,
+    defensive_mate: Option<bool>,
+    root_defensive_mate_nodes: Option<u64>,
+    leaf_defensive_mate_nodes: Option<u64>,
+    defensive_mate_threads: Option<usize>,
     spin_budget_relief: Option<bool>,
     skip_proven_children: Option<bool>,
     record_kifu: Option<bool>,
@@ -494,6 +514,10 @@ fn run_selfplay(
         leaf_mate,
         leaf_mate_nodes,
         leaf_mate_threads,
+        defensive_mate,
+        root_defensive_mate_nodes,
+        leaf_defensive_mate_nodes,
+        defensive_mate_threads,
     );
     if let Some(v) = spin_budget_relief {
         engine.spin_budget_relief = v;
@@ -679,7 +703,7 @@ fn csa_result_to_dict<'py>(py: Python<'py>, r: &CsaGameResult) -> PyResult<Bound
 ///
 /// ログイン拒否・モデルロード失敗など復帰できないものは `RuntimeError`．
 #[pyfunction]
-#[pyo3(signature = (*, host, port, login_name, password, games=None, keep_alive_sec=None, connect_timeout_sec=None, game_wait_sec=None, reconnect_wait_sec=None, verbose=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, network_delay_ms=None, min_think_ms=None, time_curve=None, time_curve_peak_ply=None, time_curve_half_width_ply=None, time_curve_peak_permille=None, time_curve_opening_floor_permille=None, time_curve_endgame_floor_permille=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None))]
+#[pyo3(signature = (*, host, port, login_name, password, games=None, keep_alive_sec=None, connect_timeout_sec=None, game_wait_sec=None, reconnect_wait_sec=None, verbose=None, model_path=None, threads=None, batch_size=None, node_capacity=None, use_cuda=None, use_tensorrt=None, trt_engine_cache_dir=None, pad_buckets=None, network_delay_ms=None, min_think_ms=None, time_curve=None, time_curve_peak_ply=None, time_curve_half_width_ply=None, time_curve_peak_permille=None, time_curve_opening_floor_permille=None, time_curve_endgame_floor_permille=None, draw_value_black=None, draw_value_white=None, resign_value=None, resign_consecutive=None, opening_script=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, defensive_mate=None, root_defensive_mate_nodes=None, leaf_defensive_mate_nodes=None, defensive_mate_threads=None))]
 #[allow(clippy::too_many_arguments)]
 fn run_csa(
     py: Python<'_>,
@@ -720,6 +744,10 @@ fn run_csa(
     leaf_mate: Option<bool>,
     leaf_mate_nodes: Option<u64>,
     leaf_mate_threads: Option<usize>,
+    defensive_mate: Option<bool>,
+    root_defensive_mate_nodes: Option<u64>,
+    leaf_defensive_mate_nodes: Option<u64>,
+    defensive_mate_threads: Option<usize>,
 ) -> PyResult<Py<PyDict>> {
     let mut engine = EngineConfig::default();
     let time_defaults = TimeStrategyConfig::default();
@@ -758,6 +786,10 @@ fn run_csa(
         leaf_mate,
         leaf_mate_nodes,
         leaf_mate_threads,
+        defensive_mate,
+        root_defensive_mate_nodes,
+        leaf_defensive_mate_nodes,
+        defensive_mate_threads,
     );
     let defaults = CsaConfig::default();
     let config = CsaConfig {

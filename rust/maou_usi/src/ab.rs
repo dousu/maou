@@ -56,6 +56,12 @@ pub enum AbMode {
     /// 増えるほど virtual loss が PUCT を歪める．**持ち時間モードで測ること**
     /// — 固定 playout 予算では速度差が棋力差にならない．
     Batch,
+    /// A = 受け方向の詰み探索 (被詰み検出) on / B = off (攻め方向のみ)．
+    ///
+    /// 攻め方向の詰み探索だけでは「相手の手番では詰みが見えるのに，自分の
+    /// 手番では互角を示す」非対称が残る．A 側は root と王手中の葉で
+    /// 「手番側が詰まされるか」を解き，被詰みを評価と着手に反映する．
+    DefMate,
 }
 
 impl AbMode {
@@ -70,6 +76,7 @@ impl AbMode {
             "spin" => Some(AbMode::Spin),
             "proven" => Some(AbMode::Proven),
             "batch" => Some(AbMode::Batch),
+            "defmate" => Some(AbMode::DefMate),
             _ => None,
         }
     }
@@ -85,6 +92,7 @@ impl AbMode {
             AbMode::Spin => "spin",
             AbMode::Proven => "proven",
             AbMode::Batch => "batch",
+            AbMode::DefMate => "defmate",
         }
     }
 
@@ -176,6 +184,10 @@ pub fn build_ab(base: &EngineConfig, opts: &AbOptions, playouts: Option<u64>) ->
             engine_b.batch_size = opts
                 .batch_size_b
                 .unwrap_or_else(|| engine_a.batch_size.saturating_mul(4).max(1));
+        }
+        AbMode::DefMate => {
+            engine_a.defensive_mate = Some(true);
+            engine_b.defensive_mate = Some(false);
         }
     }
     AbSetup {

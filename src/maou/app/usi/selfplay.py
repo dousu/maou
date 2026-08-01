@@ -21,6 +21,7 @@ AB_MODES: tuple[str, ...] = (
     "spin",
     "proven",
     "batch",
+    "defmate",
 )
 """A/B 対戦で比較できるレバー (Rust maou_usi::ab::AbMode と対応)."""
 
@@ -66,6 +67,8 @@ class SelfplayRunner:
             leaf_mate: MCTS の葉の短手詰み探索を行うか．
             leaf_mate_nodes: leaf-mate 1 回あたりのノード予算．
             leaf_mate_threads: leaf-mate 専用スレッド数．
+            defensive_mate: 受け方向の詰み探索 (被詰み検出) を行うか．
+            defensive_mate_threads: root 敗着フィルタの並列度 (CPU が空く環境で上げる)．
             spin_budget_relief: 空回りを playout 予算から外すか．
             skip_proven_children: 確定済みの子を PUCT 候補から外すか．
             cuda: CUDA Execution Provider を使うか．
@@ -127,6 +130,8 @@ class SelfplayRunner:
         leaf_mate: bool = True
         leaf_mate_nodes: int = 50
         leaf_mate_threads: int = 1
+        defensive_mate: bool = True
+        defensive_mate_threads: int = 1
         spin_budget_relief: bool = False
         skip_proven_children: bool = False
         cuda: bool = False
@@ -228,6 +233,8 @@ class SelfplayRunner:
             leaf_mate=option.leaf_mate,
             leaf_mate_nodes=option.leaf_mate_nodes,
             leaf_mate_threads=option.leaf_mate_threads,
+            defensive_mate=option.defensive_mate,
+            defensive_mate_threads=option.defensive_mate_threads,
             spin_budget_relief=option.spin_budget_relief,
             skip_proven_children=option.skip_proven_children,
             min_think_ms=option.min_think_ms,

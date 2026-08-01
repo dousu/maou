@@ -51,6 +51,8 @@
 | `--leaf-mate/--no-leaf-mate` | **default on** | Enable short mate search at MCTS leaves (async, dedicated threads). |
 | `--leaf-mate-nodes INT` | default `50` | Node budget per leaf-mate df-pn call. |
 | `--leaf-mate-threads INT` | default `1` | Number of dedicated leaf-mate threads. |
+| `--defensive-mate/--no-defensive-mate` | **default on** | Prove whether the side to move is *being* mated (root + leaves that are in check), and drop root moves that let the opponent force mate. Without it the engine only asks whether it can mate, so a forced mate against it stays invisible until the last ply. |
+| `--defensive-mate-threads INT` | default `1` | Parallelism of the defensive filter that screens root moves. Each root move is judged independently, so raising this uses spare CPU to reach a larger budget within the same wall clock (memory scales with it, ~88MB/thread). |
 | `--cuda/--no-cuda` | default `--no-cuda` | Enable the CUDA Execution Provider. Requires `--model-path` and a wheel built with `onnx-cuda`. |
 | `--tensorrt/--no-tensorrt` | default `--no-tensorrt` | Enable the TensorRT Execution Provider. Requires `--model-path` and a wheel built with `onnx-tensorrt`. |
 | `--trt-cache-dir PATH` | | TensorRT engine cache directory. |

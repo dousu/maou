@@ -39,15 +39,25 @@ impl BitSet64 {
     pub(super) const fn full() -> Self {
         BitSet64(u64::MAX)
     }
-    /// `i` bit が立っているか．
+    /// `i` bit が立っているか (= δ を和で計上する子か)．
+    ///
+    /// **子が 64 を超える場合，64 番目以降は常に `true` (sum 集計) を返す**．
+    /// bit を落とす操作 (二重カウント除去) は δ を sum から max へ緩めるだけの
+    /// 最適化なので，落とせない = sum のまま = **δ を過大に見積もる保守側**で
+    /// 健全性を損なわない (過小評価は偽証明を生むが，過大評価は探索が増えるだけ)．
+    ///
+    /// 受け方向 root (AND ノードだが王手中とは限らない) は合法手が 100 手を
+    /// 超えるため，この境界を実際に踏む (以前は shift overflow で panic した)．
     #[inline]
     pub(super) const fn test(self, i: usize) -> bool {
-        (self.0 >> i) & 1 == 1
+        i >= 64 || (self.0 >> i) & 1 == 1
     }
-    /// `i` bit を落とす．
+    /// `i` bit を落とす (64 以上は保持できないので no-op — [`Self::test`] 参照)．
     #[inline]
     pub(super) fn reset(&mut self, i: usize) {
-        self.0 &= !(1u64 << i);
+        if i < 64 {
+            self.0 &= !(1u64 << i);
+        }
     }
 }
 

@@ -252,7 +252,8 @@ logger: logging.Logger = logging.getLogger(__name__)
     "'proven' = exclude proven children from PUCT selection, "
     "'batch' = evaluation batch size (--batch-size vs --batch-size-b; run it "
     "under the clock, since a fixed playout budget turns speed into no "
-    "strength difference).",
+    "strength difference), "
+    "'defmate' = defensive mate search (detect being mated) on vs off.",
     type=click.Choice(
         [
             "subtree",
@@ -263,6 +264,7 @@ logger: logging.Logger = logging.getLogger(__name__)
             "spin",
             "proven",
             "batch",
+            "defmate",
         ]
     ),
     default=None,
@@ -378,6 +380,28 @@ logger: logging.Logger = logging.getLogger(__name__)
     required=False,
 )
 @click.option(
+    "--defensive-mate/--no-defensive-mate",
+    type=bool,
+    is_flag=True,
+    help="Enable defensive mate search: prove whether the side to move is "
+    "being mated (root + leaves that are in check), and drop root moves that "
+    "let the opponent force mate (default on). Without it the engine only asks "
+    "whether it can mate, so a forced mate against it stays invisible until "
+    "the last ply.",
+    default=True,
+    required=False,
+)
+@click.option(
+    "--defensive-mate-threads",
+    type=int,
+    help="Parallelism for the defensive mate filter that screens root moves "
+    "(default 1). Each root move is judged independently, so raising this "
+    "uses spare CPU to reach a larger budget within the same wall clock. "
+    "Memory scales with it (about 88MB per thread).",
+    default=1,
+    required=False,
+)
+@click.option(
     "--leaf-mate/--no-leaf-mate",
     type=bool,
     is_flag=True,
@@ -486,6 +510,8 @@ def selfplay(
     leaf_mate: bool,
     leaf_mate_nodes: int,
     leaf_mate_threads: int,
+    defensive_mate: bool,
+    defensive_mate_threads: int,
     cuda: bool,
     tensorrt: bool,
     trt_cache_dir: Path | None,
@@ -552,6 +578,8 @@ def selfplay(
         leaf_mate: Enable short mate search at MCTS leaves (async).
         leaf_mate_nodes: Node budget per leaf-mate df-pn call.
         leaf_mate_threads: Number of dedicated leaf-mate threads.
+        defensive_mate: Detect being mated (defensive dfpn).
+        defensive_mate_threads: Parallelism of the root move filter.
         cuda: Enable CUDA Execution Provider.
         tensorrt: Enable TensorRT Execution Provider.
         trt_cache_dir: TensorRT engine cache directory.
@@ -583,6 +611,8 @@ def selfplay(
         leaf_mate=leaf_mate,
         leaf_mate_nodes=leaf_mate_nodes,
         leaf_mate_threads=leaf_mate_threads,
+        defensive_mate=defensive_mate,
+        defensive_mate_threads=defensive_mate_threads,
         cuda=cuda,
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_cache_dir,
