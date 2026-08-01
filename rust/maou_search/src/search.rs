@@ -794,6 +794,47 @@ impl<E: Evaluator> Shared<'_, E> {
         }
     }
 
+    /// 敗着フィルタが証明した「指すと相手に詰まされる」root 候補手を，
+    /// **探索中に**木へ反映する (探索スレッドがバッチ毎に呼ぶ)．
+    ///
+    /// これをやらないとフィルタは最終手選択の時点でしか効かず，探索中は
+    /// playout が敗着へ流れ続ける (実測: root 訪問の 99.4% が証明済みの敗着へ)．
+    /// 子ノードを [`proven::WIN`] (子の手番 = 相手が勝つ) にすると，
+    /// `select_leaf` の root PUCT がその子を候補から外し，残りの playout が
+    /// 生きている手に集中する．
+    ///
+    /// 子がまだ生成されていない (`NULL_NODE`) 場合は次のバッチで再試行する．
+    /// 適用済みの手は `applied` に記録して二度手間を避ける．
+    fn apply_root_filter(&self, applied: &mut usize) {
+        let losing = self
+            .dfpn_losing_moves
+            .lock()
+            .expect("dfpn losing lock は poison しない");
+        if losing.len() == *applied {
+            return;
+        }
+        let root = self.pool.get(ROOT_IDX);
+        if root.state() != node_state::EXPANDED {
+            return; // まだ展開されていない (edges が無い)
+        }
+        let mut done = 0usize;
+        for e in root.edges() {
+            if !losing.contains(&e.mv) {
+                continue;
+            }
+            match e.child.load(Ordering::Acquire) {
+                NULL_NODE => {} // 未生成 — 次のバッチで再試行
+                c => {
+                    // 子の手番は相手．相手が詰ませられる = 子から見て勝ち確定．
+                    // root 側から見ると 1.0 - 1.0 = 0.0 = この手を指すと負け．
+                    self.pool.get(c).try_mark_proven(proven::WIN);
+                    done += 1;
+                }
+            }
+        }
+        *applied = done;
+    }
+
     /// mate スレッドが証明した詰みを木へ反映する (探索スレッドから呼ぶ)．
     ///
     /// 探索スレッドは inner scope 内でのみ pool にアクセスし，GC compact は
@@ -1189,8 +1230,18 @@ fn select_leaf<E: Evaluator>(shared: &Shared<'_, E>) -> Selection {
                         c => {
                             let child = pool.get(c);
                             // 確定済みの子は値が既知 — 降りても no-op backprop
-                            // にしかならないので候補から外す (MCTS-Solver)
-                            if opts.skip_proven_children && child.proven_value().is_some() {
+                            // にしかならないので候補から外す (MCTS-Solver)．
+                            //
+                            // **root では受け方向の詰み探索が有効なら常に外す**．
+                            // 「指すと相手に詰まされる」と証明した手は絶対に選ばない
+                            // のだから，そこへ降りる playout は 1 回残らず無駄になる．
+                            // 実測 (GPU): 除外しないと root 訪問の 99.4% が証明済みの
+                            // 敗着へ流れ，実際に選ばれた手は 24 visits しか探索されて
+                            // いなかった (123,306 vs 24)．
+                            if (opts.skip_proven_children
+                                || (idx == ROOT_IDX && opts.defensive_mate))
+                                && child.proven_value().is_some()
+                            {
                                 continue;
                             }
                             let v = child.visits();
@@ -1371,6 +1422,8 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
     let batch_size = shared.opts.batch_size.max(1);
     let mut paths: Vec<Vec<u32>> = Vec::with_capacity(batch_size);
     let mut items: Vec<EvalItem> = Vec::with_capacity(batch_size);
+    // 木へ反映済みの敗着数 (フィルタは証明できた順に publish する)
+    let mut applied_root_filter = 0usize;
 
     while !shared.stopped() {
         shared.check_deadline();
@@ -1382,6 +1435,11 @@ fn worker<E: Evaluator>(shared: &Shared<'_, E>) {
         }
         // leaf-mate スレッドが証明した詰みを木へ反映する (バッチ毎に drain)
         shared.apply_mate_results();
+        // 敗着フィルタの結果も探索中に反映する — 反映しないと playout が
+        // 「指すと詰まされる」と証明済みの手へ流れ続ける
+        if shared.opts.defensive_mate {
+            shared.apply_root_filter(&mut applied_root_filter);
+        }
         paths.clear();
         items.clear();
         let mut had_collision = false;
@@ -3466,6 +3524,64 @@ overhead={:.1}%",
             (staged_ms as f64 / single_ms.max(1) as f64 - 1.0) * 100.0
         );
         assert_eq!(staged_n, single_n, "判定結果は段の有無で変わらない");
+    }
+
+    /// **[SLOW]** 敗着フィルタが探索中に反映され，playout が生きている手へ
+    /// 集中すること (回帰)．
+    ///
+    /// 反映しないとフィルタは最終手選択でしか効かず，探索中の playout は
+    /// 「指すと詰まされる」と証明済みの手へ流れ続ける．GPU 実測ではその状態で
+    /// root 訪問の 99.4% が敗着へ流れ，実際に選ばれた手は 24 visits しか
+    /// 探索されていなかった (123,306 vs 24)．
+    #[test]
+    #[ignore]
+    fn test_root_filter_redirects_playouts() {
+        const PLY117: &str =
+            "l8/3k1s3/2nppp3/1lG4p1/p1p1+R4/P1P1NR3/1G1PPg3/1S2K1+b2/LN7 b BSgsnl8p 117";
+        let result = run(
+            PLY117,
+            SearchOptions {
+                defensive_mate: true,
+                root_dfpn: false,
+                leaf_mate: false,
+                ..SearchOptions::default()
+            },
+            SearchLimits {
+                time_ms: Some(8000),
+                ..SearchLimits::default()
+            },
+            3,
+        );
+        let best = result
+            .root_children
+            .iter()
+            .find(|c| Some(c.mv) == result.best_move)
+            .expect("best は root 候補にある");
+        let losing: u64 = result
+            .root_children
+            .iter()
+            .filter(|c| c.proven == Some(0.0))
+            .map(|c| c.visits)
+            .sum();
+        for c in &result.root_children {
+            eprintln!(
+                "  {:6} visits={:>10} proven={:?}",
+                c.mv.to_usi(),
+                c.visits,
+                c.proven
+            );
+        }
+        eprintln!(
+            "best={} visits={} / 敗着計 {losing}",
+            best.mv.to_usi(),
+            best.visits
+        );
+        assert_eq!(best.mv.to_usi(), "5h6i", "唯一の受かる手が選ばれる");
+        assert!(
+            best.visits > losing,
+            "playout が生きている手に集中していない: best={} 敗着計={losing}",
+            best.visits
+        );
     }
 
     #[test]
