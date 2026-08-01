@@ -187,7 +187,10 @@ class SearchRunner:
                 f"max_depth={result.max_depth} "
                 f"repetitions={result.repetitions} "
                 f"proven_nodes={result.proven_nodes} "
-                f"leaf_mates={result.leaf_mates} stop={result.stop}"
+                f"leaf_mates={result.leaf_mates} "
+                f"defensive_mates={result.defensive_mates} "
+                f"filtered_root_moves={result.filtered_root_moves} "
+                f"stop={result.stop}"
             ),
         }
         if config.board_view:

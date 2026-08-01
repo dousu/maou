@@ -571,9 +571,17 @@ pub struct SearchStats {
     /// AND-OR 伝播で勝敗/引き分けが確定した内部ノード数 (葉の終端マークは
     /// 含まない)．
     pub proven_nodes: u64,
-    /// leaf-mate 探索が葉で詰みを証明して勝ち確定にした回数
-    /// ([`SearchOptions::leaf_mate`] 有効時)．
+    /// leaf-mate 探索が葉で**攻め方向**の詰みを証明して勝ち確定にした回数
+    /// ([`SearchOptions::leaf_mate`] 有効時)．受け方向は
+    /// [`SearchStats::defensive_mates`] に排他で数える．
     pub leaf_mates: u64,
+    /// 受け方向の詰み探索が「手番側が詰まされる」と証明した回数
+    /// (root 1 回 + 王手中の葉ごと)．[`SearchStats::leaf_mates`] とは排他
+    /// (攻め方向はあちら)．**0 なら機構が発火していない**．
+    pub defensive_mates: u64,
+    /// 敗着フィルタが「指すと相手に詰まされる」として除外した root 候補手の数．
+    /// **0 なら選択に影響していない**．
+    pub filtered_root_moves: u64,
     /// 使用したノード数 (GC 実行後はその時点の残存数)．
     pub nodes_used: u32,
     /// 子ノード生成の CAS 競合で捨てられたノード数 (GC で回収される)．
@@ -730,6 +738,7 @@ struct Shared<'a, E: Evaluator> {
     repetitions: AtomicU64,
     proven_nodes: AtomicU64,
     leaf_mates: AtomicU64,
+    defensive_mates: AtomicU64,
     max_depth: AtomicU16,
     /// ルート並行 dfpn が詰みを証明したか (dfpn スレッドが立てる)．
     dfpn_found: Arc<AtomicBool>,
@@ -804,7 +813,12 @@ impl<E: Evaluator> Shared<'_, E> {
                 continue; // compact 済み — index 無効化，破棄 (偽証明防止)
             }
             if self.pool.get(res.idx).try_mark_proven(res.proven) {
-                self.leaf_mates.fetch_add(1, Ordering::Relaxed);
+                // 攻め方向と受け方向は**排他に数える** (足すと二重計上になる)．
+                if res.proven == proven::LOSS {
+                    self.defensive_mates.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    self.leaf_mates.fetch_add(1, Ordering::Relaxed);
+                }
             }
             propagate_proven_from(self, &res.path);
         }
@@ -1718,6 +1732,8 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                     repetitions: 0,
                     proven_nodes: 0,
                     leaf_mates: 0,
+                    defensive_mates: 0,
+                    filtered_root_moves: 0,
                     nodes_used: 0,
                     leaked_nodes: 0,
                     gc_runs: 0,
@@ -1818,6 +1834,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             repetitions: AtomicU64::new(0),
             proven_nodes: AtomicU64::new(0),
             leaf_mates: AtomicU64::new(0),
+            defensive_mates: AtomicU64::new(0),
             max_depth: AtomicU16::new(0),
             dfpn_found: Arc::new(AtomicBool::new(false)),
             dfpn_mate: Arc::new(Mutex::new(None)),
@@ -2026,6 +2043,7 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         // 「あと 1 手で詰まされる」局面はどちらにも掛からない．
         // 反映先を `proven = Some(0.0)` にすることで，既存の負け確定除外
         // (`select_best_root_index`) がそのまま効く．
+        let mut filtered_root_moves = 0usize;
         {
             let losing = shared
                 .dfpn_losing_moves
@@ -2035,10 +2053,18 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
                 for c in root_children.iter_mut() {
                     if c.proven.is_none() && losing.contains(&c.mv) {
                         c.proven = Some(0.0);
+                        filtered_root_moves += 1;
                     }
                 }
             }
         }
+
+        // 受け方向 root dfpn の証明 (被詰み) — 報告値の差し替えと統計の両方で使う
+        let dfpn_mated = shared
+            .dfpn_mated
+            .lock()
+            .expect("dfpn mated lock は poison しない")
+            .clone();
 
         // 負け確定除外の robust child + root 確定手の優先 (build_snapshot と共有)
         let root_proven = root_node.proven_value();
@@ -2075,6 +2101,9 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
             repetitions: shared.repetitions.load(Ordering::Relaxed),
             proven_nodes: shared.proven_nodes.load(Ordering::Relaxed),
             leaf_mates: shared.leaf_mates.load(Ordering::Relaxed),
+            defensive_mates: shared.defensive_mates.load(Ordering::Relaxed)
+                + u64::from(dfpn_mated.is_some()),
+            filtered_root_moves: filtered_root_moves as u64,
             nodes_used: shared.pool.used(),
             leaked_nodes: shared.leaked_nodes.load(Ordering::Relaxed),
             gc_runs,
@@ -2099,11 +2128,6 @@ impl<'e, E: Evaluator> Searcher<'e, E> {
         // 攻め方向の証明が同時に立つことは (両者が同時に詰ませ合うことは) ない
         // が，万一のときは攻め方向を優先する — 自分が先に詰ませられるなら
         // それが実現するため．
-        let dfpn_mated = shared
-            .dfpn_mated
-            .lock()
-            .expect("dfpn mated lock は poison しない")
-            .clone();
         let (best_move, winrate, pv, stop) = if let Some(mate) = dfpn_mate {
             (Some(mate[0]), 1.0, mate, StopCause::RootProven)
         } else if let Some(defense) = dfpn_mated {
