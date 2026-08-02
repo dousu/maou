@@ -2,7 +2,7 @@
 title: 合法手マスキングの doc 訂正とデッド CLI オプションの削除
 date: 2026-08-03
 status: applied
-applied_in: PENDING_SHA
+applied_in: e8868e3
 target:
   - docs/loss-functions.md
   - docs/commands/learn_model.md
