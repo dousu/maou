@@ -71,8 +71,6 @@ def test_learn_model_options_available_in_benchmark_training() -> (
         "stage1-learning-rate",  # Stage 1学習率（不要）
         "stage2-learning-rate",  # Stage 2学習率（不要）
         "stage2-max-epochs",  # Stage 2最大エポック（不要）
-        "resume-reachable-head-from",  # Stage 1ヘッド再開（不要）
-        "resume-legal-moves-head-from",  # Stage 2ヘッド再開（不要）
         "log-dir",  # TensorBoardログディレクトリ（不要）
         "model-dir",  # モデル出力ディレクトリ（不要）
         "tensorboard-histogram-frequency",  # TensorBoard（不要）

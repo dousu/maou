@@ -113,8 +113,9 @@ Ridnik et al., "Asymmetric Loss For Multi-Label Classification", ICCV 2021
 #### ターゲット形式
 
 前処理パイプラインで棋譜から出現率マップ(ソフトターゲット)を計算し，
-float16の確率分布として保存する．`normalize_policy_targets` で
-`legal_move_mask` を適用した上で確率分布に正規化する．
+確率分布として保存する．`normalize_policy_targets` で
+`legal_move_mask` を適用した上で確率分布に正規化する
+(ただし現行のマスクはダミーであり実質的な絞り込みは起きない．後述)．
 
 #### 選択理由
 
@@ -125,24 +126,52 @@ float16の確率分布として保存する．`normalize_policy_targets` で
   損失値の解釈性が向上する
 - **reduction="batchmean"**: バッチ平均で正規化し，バッチサイズに依存しない安定した勾配を得る
 
-#### 合法手マスキング
+#### 合法手マスキング — 機構はあるが**現在は発動していない**
 
 Policy損失の計算時，`legal_move_mask` を用いて非合法手のlogitsを `-inf` に設定した上で
-`log_softmax` を適用する．これにより確率質量が合法手(平均~20手)のみに分配される．
+`log_softmax` を適用する経路が実装されている．
 
 ```python
 masked_logits = outputs_policy.masked_fill(~legal_move_mask.bool(), float("-inf"))
 policy_log_probs = F.log_softmax(masked_logits, dim=1)
 ```
 
-**効果**:
+しかし **Stage 3 に供給される `legal_move_mask` は全要素 1 のダミー**である
+(`dataset.py` / `streaming_dataset.py` の `torch.ones_like`)．前処理出力スキーマに
+合法手の情報が無いためで，結果として:
 
-- **学習効率の向上**: softmaxの有効次元が1496→~20に縮小され，
-  モデルが非合法手の抑制に勾配を費やす必要がなくなる
-- **ターゲットとの整合性**: `normalize_policy_targets` も同じ `legal_move_mask` で
-  正規化しているため，モデル出力とターゲットの確率空間が一致する
-- **テンソル次元は不変**: 出力テンソルは依然として1496次元であり，
-  推論時のインデックス→指し手への復元に影響しない
+- `masked_fill` は恒等変換になり，`log_softmax` は **1496 次元全体**で正規化される
+- `normalize_policy_targets` の `targets * mask` も 1 倍で無変更
+- **`legal_move_mask=None` を渡した場合と勾配まで完全に一致する**
+
+つまりこの節が想定していた「有効次元が1496→~20に縮小される」効果は**得られていない**．
+モデルは非合法手のlogitsを押し下げる学習に勾配を費やしている．
+
+**実害は限定的**である．推論時は Rust 側 (`rust/maou_search/src/onnx.rs`) が
+合法手のラベルに対応するlogitsだけを取り出してsoftmaxを取るため，
+非合法手が指されることはない．学習時マスクの欠如による差は
+「非合法手に割かれる確率質量の分だけ合法手側の勾配が減衰する」ことに留まる．
+
+**実測 (2026-08-03, floodgate 342局面 / ViT-19.8M)**:
+
+| 指標 | 値 |
+|---|---|
+| 非合法手へ漏れている確率質量 (平均) | 0.0158 |
+| 同 p50 / p90 / p99 / max | 0.0063 / 0.0385 / 0.1525 / 0.3293 |
+| argmax が非合法手だった局面 | 0 / 342 |
+| top-5 に非合法手が混入した枠 | 79 / 1710 (4.6%) |
+
+漏れの平均が1.6%であり，マスクを実効化してもsoftmaxの分母は平均1.016倍しか
+変わらない．棋力への影響は検出限界未満と判断し，**前処理出力への合法手列追加は
+見送っている**(2026-08-03, user判断)．
+
+なお `policy_top5_accuracy` / `policy_f1` / `policy_top1_win_rate` は
+raw 1496次元の `topk` / `argmax` で計算しているため，上表のとおり
+**非合法手が混入し得る**(top-5の4.6%)．これらの指標は推論時の確率空間とは
+別の空間を測っている点に注意すること．
+
+**テンソル次元は不変**: 出力テンソルは1496次元であり，
+推論時のインデックス→指し手への復元には影響しない．
 
 ### Value損失: BCEWithLogitsLoss
 
