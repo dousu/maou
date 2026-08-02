@@ -1,7 +1,8 @@
 ---
 title: 勝率フォールバックを勝率値にする修正のドキュメント反映 (1/N → 0.5 / 実勝敗)
 date: 2026-08-03
-status: pending
+status: applied
+applied_in: 3d496ef
 target:
   - docs/commands/pre_process.md
   - docs/adr-005-move-win-rates.md
