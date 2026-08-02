@@ -74,7 +74,7 @@ class TestComputeMoveWinRates:
     def test_compute_move_win_rates_fallback(
         self, tmp_path: Path
     ) -> None:
-        """count < threshold: uniform 1/N distribution."""
+        """count < threshold: neutral 0.5 for every observed move."""
         store = self._create_store(tmp_path, threshold=3)
         try:
             indices_col = [[5, 15, 25]]
@@ -91,16 +91,10 @@ class TestComputeMoveWinRates:
                 )
             )
 
-            expected_rate = 1.0 / 3  # 3 legal moves
-            assert move_win_rates[0][5] == pytest.approx(
-                expected_rate, rel=1e-5
-            )
-            assert move_win_rates[0][15] == pytest.approx(
-                expected_rate, rel=1e-5
-            )
-            assert move_win_rates[0][25] == pytest.approx(
-                expected_rate, rel=1e-5
-            )
+            # 勝率として意味のある中立値．観測手数(1/N)に依存しない
+            assert move_win_rates[0][5] == pytest.approx(0.5)
+            assert move_win_rates[0][15] == pytest.approx(0.5)
+            assert move_win_rates[0][25] == pytest.approx(0.5)
             assert move_win_rates[0][0] == pytest.approx(0.0)
             assert best_move_win_rates[0] == pytest.approx(
                 0.5, rel=1e-5
@@ -143,7 +137,7 @@ class TestComputeMoveWinRates:
                 0.5, rel=1e-5
             )
 
-            # Second position: fallback (1/2 uniform, bestMoveWinRate=0.5)
+            # Second position: fallback (neutral 0.5, bestMoveWinRate=0.5)
             assert move_win_rates[1][5] == pytest.approx(
                 0.5, rel=1e-5
             )
@@ -346,7 +340,7 @@ class TestComputeMoveWinRates:
     def test_beta_prior_does_not_affect_fallback(
         self, tmp_path: Path
     ) -> None:
-        """Fallback positions still use uniform 1/N regardless of prior."""
+        """Fallback positions ignore the Beta prior (neutral 0.5)."""
         prior = 5.0
         store = self._create_store(
             tmp_path, threshold=3, prior_strength=prior
@@ -366,16 +360,9 @@ class TestComputeMoveWinRates:
                 )
             )
 
-            expected_rate = 1.0 / 3
-            assert move_win_rates[0][5] == pytest.approx(
-                expected_rate, rel=1e-5
-            )
-            assert move_win_rates[0][15] == pytest.approx(
-                expected_rate, rel=1e-5
-            )
-            assert move_win_rates[0][25] == pytest.approx(
-                expected_rate, rel=1e-5
-            )
+            assert move_win_rates[0][5] == pytest.approx(0.5)
+            assert move_win_rates[0][15] == pytest.approx(0.5)
+            assert move_win_rates[0][25] == pytest.approx(0.5)
             assert best_move_win_rates[0] == pytest.approx(
                 0.5, rel=1e-5
             )
@@ -689,7 +676,7 @@ class TestBestMoveWinRateFallbackStrategy:
             )
 
             assert fallback_count == 1
-            # moveWinRate array stays uniform (1/N) regardless of strategy
+            # moveWinRate も実勝敗を反映する (勝ち -> 1.0)
             assert move_win_rates[0][5] == pytest.approx(1.0)
             # bestMoveWinRate reflects the actual outcome, not 0.5
             assert best_move_win_rates[0] == pytest.approx(1.0)
@@ -713,7 +700,7 @@ class TestBestMoveWinRateFallbackStrategy:
             ]  # the single game was a loss
             counts = [1]
 
-            _, best_move_win_rates, _ = (
+            move_win_rates, best_move_win_rates, _ = (
                 store._compute_move_win_rates(
                     indices_col,
                     label_values_col,
@@ -722,9 +709,77 @@ class TestBestMoveWinRateFallbackStrategy:
                 )
             )
 
+            assert move_win_rates[0][5] == pytest.approx(0.0)
             assert best_move_win_rates[0] == pytest.approx(0.0)
         finally:
             store.close()
+
+    def test_raw_outcome_draw_is_half(
+        self, tmp_path: Path
+    ) -> None:
+        """raw-outcome: a drawn single game -> 0.5 (not 0.0/1.0)."""
+        store = self._create_store(
+            tmp_path,
+            threshold=3,
+            best_move_win_rate_fallback="raw-outcome",
+        )
+        try:
+            move_win_rates, best_move_win_rates, _ = (
+                store._compute_move_win_rates(
+                    [[5]],
+                    [[1]],
+                    [[0.5]],  # draw (preprocess encodes 0.5)
+                    [1],
+                )
+            )
+
+            assert move_win_rates[0][5] == pytest.approx(0.5)
+            assert best_move_win_rates[0] == pytest.approx(0.5)
+        finally:
+            store.close()
+
+    def test_fallback_value_is_a_win_rate_not_a_distribution(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression: fallback must not write 1/N into moveWinRate.
+
+        ``moveWinRate`` feeds the value target under
+        ``--value-target-mode best-move-win-rate`` (row-wise max at
+        training time). Writing a normalized distribution value such as
+        1/N made the value target 1.0 for every single-occurrence
+        position, i.e. "everything is a win" regardless of the result.
+        """
+        for fallback, observed, expected in (
+            ("uniform", 1, 0.5),
+            ("uniform", 3, 0.5),
+            ("raw-outcome", 1, 0.0),
+        ):
+            case_dir = tmp_path / f"{fallback}-{observed}"
+            case_dir.mkdir()
+            store = self._create_store(
+                case_dir,
+                threshold=3,
+                best_move_win_rate_fallback=fallback,
+            )
+            try:
+                indices = list(range(5, 5 + observed))
+                move_win_rates, _, _ = (
+                    store._compute_move_win_rates(
+                        [indices],
+                        [[1] * observed],
+                        [[0.0] * observed],  # every game lost
+                        [1],
+                    )
+                )
+
+                assert move_win_rates[0].max() == pytest.approx(
+                    expected
+                ), (
+                    f"fallback={fallback} observed={observed}: "
+                    "value target must not become 1.0"
+                )
+            finally:
+                store.close()
 
     def test_raw_outcome_uses_best_of_observed_moves(
         self, tmp_path: Path

@@ -250,8 +250,8 @@ from maou.infra.console.common import (
 @click.option(
     "--position-count-threshold",
     help="Minimum position occurrence count for per-move win rate calculation. "
-    "Positions with count below this threshold use uniform 1/N fallback. "
-    "(default: 2, recommended range: 2-4)",
+    "Positions with count below this threshold use the fallback selected by "
+    "--best-move-win-rate-fallback. (default: 2, recommended range: 2-4)",
     type=int,
     required=False,
     default=2,
@@ -268,11 +268,11 @@ from maou.infra.console.common import (
 )
 @click.option(
     "--best-move-win-rate-fallback",
-    help="How to compute bestMoveWinRate for positions below "
+    help="How to fill moveWinRate/bestMoveWinRate for positions below "
     "--position-count-threshold. 'uniform' records a neutral 0.5 "
     "(default). 'raw-outcome' records the unsmoothed actual win/loss "
-    "outcome instead (can be an extreme 0.0/1.0 for low-count positions). "
-    "Ignored when --drop-below-threshold is set.",
+    "outcome instead (0.0/1.0, or 0.5 for a draw, when the position "
+    "occurred once). Ignored when --drop-below-threshold is set.",
     type=click.Choice(["uniform", "raw-outcome"]),
     required=False,
     default="uniform",

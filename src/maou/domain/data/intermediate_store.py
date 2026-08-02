@@ -163,17 +163,18 @@ class IntermediateDataStore:
                 Google Colab A100 High Memory (83GB RAM) では50,000を推奨．
                 小さい値ではトランザクション回数が増加しI/Oオーバーヘッドが大きくなる．
             position_count_threshold: 指し手別勝率を計算する最小出現回数．
-                出現回数がこの閾値未満の場合，均一分布にフォールバックする．
+                出現回数がこの閾値未満の場合，
+                ``best_move_win_rate_fallback`` に従ってフォールバックする．
             prior_strength: Beta事前分布の強度パラメータ．
                 各手の勝率を ``(wins + prior_strength) / (total + 2 *
                 prior_strength)`` で平滑化し，出現回数が少ない手の勝率を
                 50%方向へ収縮させる．0.0の場合は平滑化なし(従来動作)．
-            best_move_win_rate_fallback: 閾値未満局面での ``bestMoveWinRate``
-                の算出方法．``"uniform"`` (デフォルト) は固定値0.5，
+            best_move_win_rate_fallback: 閾値未満局面での勝率フォールバック
+                の算出方法．``"uniform"`` (デフォルト) は中立値0.5，
                 ``"raw-outcome"`` は平滑化なしの実勝敗(``win_values /
-                label_values``)をそのまま使う．少数サンプルでは0.0/1.0の
-                極端値になり得る．``moveWinRate`` 配列自体は本オプションに
-                関わらず常に均等分布(1/N)のまま(policy側は非対象)．
+                label_values``)をそのまま使い，出現1回なら0.0/1.0
+                (引き分けは0.5)になる．``moveWinRate`` 配列と
+                ``bestMoveWinRate`` の双方に適用される．
             drop_below_threshold: True の場合，出現回数が
                 ``position_count_threshold`` 未満の局面を出力から完全に除外する．
                 フォールバック値そのものを記録したくない場合に使う．
@@ -760,17 +761,25 @@ class IntermediateDataStore:
     ) -> tuple[np.ndarray, list[float], int]:
         """指し手別勝率を計算する(フォールバック・Beta平滑化適用済み)．
 
-        局面の出現回数が ``position_count_threshold`` 未満の場合は
-        ``moveWinRate`` 配列を合法手への均一分布にフォールバックする．
-        それ以外の場合は Beta事前分布による平滑化を適用し，出現回数が
-        少ない手の勝率ノイズを抑制する．
+        局面の出現回数が ``position_count_threshold`` 以上の場合は
+        Beta事前分布による平滑化を適用し，出現回数が少ない手の勝率
+        ノイズを抑制する．
 
-        ``bestMoveWinRate`` のフォールバック値は ``self._best_move_win_rate_fallback``
-        で切り替わる:
-            - ``"uniform"``: 固定値0.5(情報なしを表す中立値)
-            - ``"raw-outcome"``: 平滑化なしの実勝敗(``win_values / label_values``)．
-              サンプル数が少ないほど0.0/1.0寄りの極端な値になり得るが，
-              フォールバックによる情報の消失(全て0.5化)を避けたい場合に使う．
+        閾値未満の場合は ``self._best_move_win_rate_fallback`` に従って
+        ``moveWinRate`` 配列と ``bestMoveWinRate`` の双方をフォールバック
+        値で埋める(``bestMoveWinRate`` は常に配列の最大値):
+            - ``"uniform"``: 観測された各手に0.5(情報なしを表す中立値)．
+            - ``"raw-outcome"``: 平滑化なしの実勝敗
+              (``win_values / label_values``)．出現1回の局面では
+              0.0(負け) / 1.0(勝ち) / 0.5(引き分け)のいずれかになる．
+              フォールバックによる情報の消失(全て中立値化)を避けたい
+              場合に使う．
+
+        注意: フォールバック値は勝率として意味のある値でなければならない．
+        ``moveWinRate`` は ``--value-target-mode best-move-win-rate``
+        において value 教師信号の元になるため(実行時に行ごとの最大値を
+        取る)，分布としての正規化を意図した値(1/N など)を入れると
+        value 教師が壊れる．
 
         メモリ効率のためnumpy 2D配列(float32)を返す．
         Python list[list[float]]を使用した場合と比べて約7倍のメモリ削減．
@@ -813,42 +822,39 @@ class IntermediateDataStore:
         ):
             if count < self._position_count_threshold:
                 fallback_count += 1
-                # Fallback: 1/N uniform distribution over legal moves
-                # (moveWinRate array is always uniform here regardless of
-                # best_move_win_rate_fallback — only the bestMoveWinRate
-                # scalar changes below).
-                n_legal = len(indices)
-                if n_legal > 0:
-                    uniform_rate = 1.0 / n_legal
+                n_observed = len(indices)
+                if n_observed > 0:
                     np_indices = np.array(
                         indices, dtype=np.intp
                     )
-                    move_win_rates[i, np_indices] = uniform_rate
                     if (
                         self._best_move_win_rate_fallback
                         == "raw-outcome"
                     ):
+                        # 平滑化なしの実勝敗をそのまま勝率とする．
+                        # 出現1回なら 0.0 (負け) / 1.0 (勝ち) /
+                        # 0.5 (引き分け) のいずれかになる．
                         np_lv = np.array(
                             label_values, dtype=np.float32
                         )
                         np_wv = np.array(
                             win_values, dtype=np.float32
                         )
-                        mask = np_lv > 0
-                        raw_rates = np.where(
-                            mask, np_wv / np_lv, 0.0
+                        rates = np.where(
+                            np_lv > 0, np_wv / np_lv, 0.0
                         )
-                        np.clip(
-                            raw_rates,
-                            0.0,
-                            1.0,
-                            out=raw_rates,
-                        )
-                        best_move_win_rates.append(
-                            float(raw_rates.max())
-                        )
+                        np.clip(rates, 0.0, 1.0, out=rates)
                     else:
-                        best_move_win_rates.append(0.5)
+                        # uniform: 情報なしを表す中立値
+                        rates = np.full(
+                            n_observed,
+                            0.5,
+                            dtype=np.float32,
+                        )
+                    move_win_rates[i, np_indices] = rates
+                    best_move_win_rates.append(
+                        float(rates.max())
+                    )
                 else:
                     best_move_win_rates.append(0.0)
             else:
