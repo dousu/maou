@@ -945,8 +945,6 @@ def learn_multi_stage(
     learning_rate: float = 0.001,
     model_dir: Path | None = None,
     resume_backbone_from: Path | None = None,
-    resume_reachable_head_from: Path | None = None,
-    resume_legal_moves_head_from: Path | None = None,
     # Stage 3 parameters
     compilation: bool = False,
     detect_anomaly: bool = False,
@@ -1016,8 +1014,6 @@ def learn_multi_stage(
         learning_rate: Learning rate
         model_dir: Model output directory
         resume_backbone_from: Backbone checkpoint to resume from
-        resume_reachable_head_from: Reachable head checkpoint to resume from
-        resume_legal_moves_head_from: Legal moves head checkpoint to resume from
         compilation: Enable PyTorch compilation for Stage 3
         detect_anomaly: Enable anomaly detection for Stage 3
         test_ratio: Test set ratio for Stage 3

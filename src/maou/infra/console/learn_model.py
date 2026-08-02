@@ -572,18 +572,6 @@ def _build_adaptive_batch_config(
     help="Validation split ratio for Stage 2 (0.0 = no split, e.g. 0.1 = 10%% validation).",
 )
 @click.option(
-    "--resume-reachable-head-from",
-    type=click.Path(exists=True, path_type=Path),
-    help="Reachable squares head parameter file to resume training (Stage 1).",
-    required=False,
-)
-@click.option(
-    "--resume-legal-moves-head-from",
-    type=click.Path(exists=True, path_type=Path),
-    help="Legal moves head parameter file to resume training (Stage 2).",
-    required=False,
-)
-@click.option(
     "--no-streaming",
     is_flag=True,
     default=False,
@@ -726,8 +714,6 @@ def learn_model(
     stage2_hidden_dim: int | None,
     stage2_head_dropout: float,
     stage2_test_ratio: float,
-    resume_reachable_head_from: Path | None,
-    resume_legal_moves_head_from: Path | None,
     no_streaming: bool,
     policy_target_mode: str,
     value_target_mode: str,
@@ -960,8 +946,6 @@ def learn_model(
             learning_rate=learning_ratio or 0.001,
             model_dir=model_dir,
             resume_backbone_from=resume_backbone_from,
-            resume_reachable_head_from=resume_reachable_head_from,
-            resume_legal_moves_head_from=resume_legal_moves_head_from,
             compilation=compilation,
             detect_anomaly=detect_anomaly,
             test_ratio=test_ratio,

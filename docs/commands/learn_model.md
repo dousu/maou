@@ -90,8 +90,6 @@ ViTエンコーダのGPU活性化メモリを約93%削減するオプション�
 | `--stage2-test-ratio FLOAT` | `0.0` | Stage 2検証データ分割比率．0.0で分割なし，0.1で10%を検証用に使用．ストリーミングモードでは未対応． |
 | `--freeze-backbone` | `false` | Freeze backbone parameters (embedding, backbone, pool, hand projection).【F:src/maou/infra/console/learn_model.py†L437-L441】 |
 | `--trainable-layers INT` | `None` | Number of trailing backbone layer groups to keep trainable. `0` = freeze all backbone layers. Unset = all layers trainable. **マルチステージ時の層分離**: 設定すると Stage 1/2 では最初の `(total - N)` グループのみを訓練し，Stage 3 では末尾 N グループのみを訓練する．ResNet は投射層 (Pool+Linear) 経由，MLP-Mixer/ViT は LayerNorm+Mean Pooling 経由で出力次元を合わせる．【F:src/maou/infra/console/learn_model.py†L443-L451】 |
-| `--resume-reachable-head-from PATH` | optional | Reachable squares head parameter file to resume training (Stage 1).【F:src/maou/infra/console/learn_model.py†L508-L512】 |
-| `--resume-legal-moves-head-from PATH` | optional | Legal moves head parameter file to resume training (Stage 2).【F:src/maou/infra/console/learn_model.py†L514-L518】 |
 
 ### Loss, optimizer, and scheduler controls
 
