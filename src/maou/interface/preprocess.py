@@ -226,15 +226,17 @@ def transform(
             Google Colab A100 High Memory (83GB RAM) ではデフォルト50,000を推奨．
         position_count_threshold: Minimum position occurrence count for per-move
             win rate calculation. Positions with count below this threshold
-            use uniform 1/N fallback. (default: 2)
+            use the fallback selected by ``best_move_win_rate_fallback``.
+            (default: 2)
         prior_strength: Beta prior strength for win rate smoothing.
             Applies ``(wins + prior) / (total + 2 * prior)`` to shrink
             low-count move win rates toward 50%. 0.0 disables smoothing.
-        best_move_win_rate_fallback: How to compute ``bestMoveWinRate`` for
-            positions below ``position_count_threshold``. ``"uniform"``
-            (default) records a neutral 0.5. ``"raw-outcome"`` records the
-            unsmoothed actual win/loss outcome instead, which can be an
-            extreme 0.0/1.0 for low-count positions. Ignored for positions
+        best_move_win_rate_fallback: How to fill ``moveWinRate`` and
+            ``bestMoveWinRate`` for positions below
+            ``position_count_threshold``. ``"uniform"`` (default) records a
+            neutral 0.5. ``"raw-outcome"`` records the unsmoothed actual
+            win/loss outcome instead, which is 0.0/1.0 (0.5 for a draw)
+            when the position occurred once. Ignored for positions
             excluded via ``drop_below_threshold``.
         drop_below_threshold: If True, positions with occurrence count below
             ``position_count_threshold`` are excluded entirely from the

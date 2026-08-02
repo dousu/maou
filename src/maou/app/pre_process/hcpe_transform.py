@@ -174,14 +174,17 @@ class PreProcess:
             intermediate_cache_dir: Directory for intermediate data cache
             intermediate_batch_size: DuckDBへのフラッシュ前に蓄積するレコード数．
                 Google Colab A100 High Memory (83GB RAM) ではデフォルト50,000を推奨．
-            position_count_threshold: 局面の出現回数に対する閾値．
-                この回数未満の局面はmoveWinRateが合法手への均等分布にフォールバックされる．デフォルトは2．
+            position_count_threshold: 局面の出現回数に対する閾値．この回数未満の
+                局面は ``best_move_win_rate_fallback`` に従ってフォールバック
+                される．デフォルトは2．
             prior_strength: Beta事前分布の強度パラメータ．
                 各手の勝率を ``(wins + prior_strength) / (total + 2 *
                 prior_strength)`` で平滑化する．0.0で平滑化なし．
-            best_move_win_rate_fallback: 閾値未満局面での ``bestMoveWinRate``
-                の算出方法．``"uniform"`` (デフォルト) は固定値0.5，
-                ``"raw-outcome"`` は平滑化なしの実勝敗をそのまま使う．
+            best_move_win_rate_fallback: 閾値未満局面での勝率フォールバック
+                の算出方法．``"uniform"`` (デフォルト) は中立値0.5，
+                ``"raw-outcome"`` は平滑化なしの実勝敗をそのまま使う
+                (出現1回なら0.0/1.0，引き分けは0.5)．``moveWinRate`` 配列と
+                ``bestMoveWinRate`` の双方に適用される．
             drop_below_threshold: True の場合，出現回数が
                 position_count_threshold 未満の局面を出力から完全に除外する．
         """
