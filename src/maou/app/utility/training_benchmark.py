@@ -53,7 +53,6 @@ from maou.app.learning.training_loop import (
     RawLogitsTrainingLoop,
     TrainingLoop,
 )
-from maou.app.learning.value_targets import ValueTargetMode
 
 
 class _EmptyIterableDataset(torch.utils.data.IterableDataset):
@@ -248,7 +247,6 @@ class SingleEpochBenchmark:
         policy_loss_ratio: 方策損失の重み係数
         value_loss_ratio: 価値損失の重み係数
         policy_target_mode: Policy教師信号モード
-        value_target_mode: Value教師信号モード
         enable_resource_monitoring: リソース監視を有効にするか
         training_loop_class: 使用するTrainingLoopクラス（デフォルト: TrainingLoop）
     """
@@ -266,7 +264,6 @@ class SingleEpochBenchmark:
         policy_loss_ratio: float,
         value_loss_ratio: float,
         policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
-        value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
         enable_resource_monitoring: bool = False,
         training_loop_class: type[TrainingLoop] = TrainingLoop,
         gradient_accumulation_steps: int = 1,
@@ -282,7 +279,6 @@ class SingleEpochBenchmark:
         self.policy_loss_ratio = policy_loss_ratio
         self.value_loss_ratio = value_loss_ratio
         self.policy_target_mode = policy_target_mode
-        self.value_target_mode = value_target_mode
         self.enable_resource_monitoring = (
             enable_resource_monitoring
         )
@@ -406,7 +402,6 @@ class SingleEpochBenchmark:
             policy_loss_ratio=self.policy_loss_ratio,
             value_loss_ratio=self.value_loss_ratio,
             policy_target_mode=self.policy_target_mode,
-            value_target_mode=self.value_target_mode,
             gradient_accumulation_steps=self.gradient_accumulation_steps,
             adaptive_batch_config=self.adaptive_batch_config,
             physical_batch_size=self.physical_batch_size,
@@ -559,7 +554,6 @@ class SingleEpochBenchmark:
             policy_loss_ratio=self.policy_loss_ratio,
             value_loss_ratio=self.value_loss_ratio,
             policy_target_mode=self.policy_target_mode,
-            value_target_mode=self.value_target_mode,
             callbacks=callbacks,
             logger=self.logger,
         )
@@ -657,14 +651,10 @@ class TrainingBenchmarkConfig:
     dataloader_workers: int = 4
     pin_memory: bool | None = None
     prefetch_factor: int = 2
-    gce_parameter: float = 0.1
     policy_loss_ratio: float = 1.0
     value_loss_ratio: float = 1.0
     policy_target_mode: PolicyTargetMode = (
         PolicyTargetMode.WIN_RATE
-    )
-    value_target_mode: ValueTargetMode = (
-        ValueTargetMode.BEST_MOVE_WIN_RATE
     )
     learning_ratio: float = 0.01
     momentum: float = 0.9
@@ -821,9 +811,7 @@ class TrainingBenchmarkUseCase:
 
         # Loss functions and optimizer
         loss_fn_policy, loss_fn_value = (
-            LossOptimizerFactory.create_loss_functions(
-                config.gce_parameter
-            )
+            LossOptimizerFactory.create_loss_functions()
         )
         optimizer = LossOptimizerFactory.create_optimizer(
             model,
@@ -1358,7 +1346,6 @@ class TrainingBenchmarkUseCase:
                         dataloader_workers=config.dataloader_workers,
                         pin_memory=config.pin_memory,
                         prefetch_factor=config.prefetch_factor,
-                        gce_parameter=config.gce_parameter,
                         learning_ratio=config.learning_ratio,
                         momentum=config.momentum,
                         optimizer_name=config.optimizer_name,
@@ -1471,7 +1458,6 @@ class TrainingBenchmarkUseCase:
             policy_loss_ratio=config.policy_loss_ratio,
             value_loss_ratio=actual_value_loss_ratio,
             policy_target_mode=config.policy_target_mode,
-            value_target_mode=config.value_target_mode,
             enable_resource_monitoring=config.enable_resource_monitoring,
             training_loop_class=training_loop_class,
             gradient_accumulation_steps=config.gradient_accumulation_steps,

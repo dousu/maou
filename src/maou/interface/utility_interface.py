@@ -13,7 +13,6 @@ from maou.app.learning.policy_targets import PolicyTargetMode
 from maou.app.learning.streaming_dataset import (
     StreamingDataSource,
 )
-from maou.app.learning.value_targets import ValueTargetMode
 from maou.app.utility.dataloader_benchmark import (
     BenchmarkConfig,
     DataLoaderBenchmark,
@@ -164,11 +163,9 @@ def benchmark_training(
     pin_memory: bool | None = None,
     prefetch_factor: int | None = None,
     model_architecture: BackboneArchitecture | None = None,
-    gce_parameter: float | None = None,
     policy_loss_ratio: float | None = None,
     value_loss_ratio: float | None = None,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
-    value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
     learning_ratio: float | None = None,
     momentum: float | None = None,
     lr_scheduler: str | None = None,
@@ -229,7 +226,6 @@ def benchmark_training(
         pin_memory: Enable pinned memory for GPU transfers
         prefetch_factor: Number of batches loaded in advance by each worker
         model_architecture: Backbone architecture ('resnet', 'mlp-mixer', 'vit')
-        gce_parameter: GCE loss hyperparameter
         policy_loss_ratio: Policy loss weight
         value_loss_ratio: Value loss weight
         learning_ratio: Learning rate
@@ -295,13 +291,6 @@ def benchmark_training(
 
     if model_architecture is None:
         model_architecture = "resnet"
-
-    if gce_parameter is None:
-        gce_parameter = 0.7
-    elif not 0.0 < gce_parameter <= 1.0:
-        raise ValueError(
-            f"gce_parameter must be between 0 and 1, got {gce_parameter}"
-        )
 
     if policy_loss_ratio is None:
         policy_loss_ratio = 1.0
@@ -468,11 +457,9 @@ def benchmark_training(
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
-        gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,
         policy_target_mode=policy_target_mode,
-        value_target_mode=value_target_mode,
         learning_ratio=learning_ratio,
         momentum=momentum,
         lr_scheduler_name=lr_scheduler_key,

@@ -163,7 +163,7 @@ class PreProcess:
         intermediate_batch_size: int = 50_000,
         position_count_threshold: int = 2,
         prior_strength: float = 5.0,
-        best_move_win_rate_fallback: str = "uniform",
+        win_rate_fallback: str = "neutral",
         drop_below_threshold: bool = False,
     ):
         """Initialize pre-processor.
@@ -175,13 +175,13 @@ class PreProcess:
             intermediate_batch_size: DuckDBへのフラッシュ前に蓄積するレコード数．
                 Google Colab A100 High Memory (83GB RAM) ではデフォルト50,000を推奨．
             position_count_threshold: 局面の出現回数に対する閾値．この回数未満の
-                局面は ``best_move_win_rate_fallback`` に従ってフォールバック
+                局面は ``win_rate_fallback`` に従ってフォールバック
                 される．デフォルトは2．
             prior_strength: Beta事前分布の強度パラメータ．
                 各手の勝率を ``(wins + prior_strength) / (total + 2 *
                 prior_strength)`` で平滑化する．0.0で平滑化なし．
-            best_move_win_rate_fallback: 閾値未満局面での勝率フォールバック
-                の算出方法．``"uniform"`` (デフォルト) は中立値0.5，
+            win_rate_fallback: 閾値未満局面での勝率フォールバック
+                の算出方法．``"neutral"`` (デフォルト) は中立値0.5，
                 ``"raw-outcome"`` は平滑化なしの実勝敗をそのまま使う
                 (出現1回なら0.0/1.0，引き分けは0.5)．``moveWinRate`` 配列と
                 ``bestMoveWinRate`` の双方に適用される．
@@ -196,9 +196,7 @@ class PreProcess:
             position_count_threshold
         )
         self.__prior_strength = prior_strength
-        self.__best_move_win_rate_fallback = (
-            best_move_win_rate_fallback
-        )
+        self.__win_rate_fallback = win_rate_fallback
         self.__drop_below_threshold = drop_below_threshold
         self.intermediate_store = None
 
@@ -607,7 +605,7 @@ class PreProcess:
             batch_size=self.__intermediate_batch_size,
             position_count_threshold=self.__position_count_threshold,
             prior_strength=self.__prior_strength,
-            best_move_win_rate_fallback=self.__best_move_win_rate_fallback,
+            win_rate_fallback=self.__win_rate_fallback,
             drop_below_threshold=self.__drop_below_threshold,
         )
         self.logger.info(

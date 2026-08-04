@@ -775,7 +775,6 @@ class LossOptimizerFactory:
     @classmethod
     def create_loss_functions(
         cls,
-        gce_parameter: float = 0.1,
     ) -> tuple[torch.nn.Module, torch.nn.Module]:
         """方策・価値用の損失関数ペアを作成．
 
@@ -789,7 +788,6 @@ class LossOptimizerFactory:
         - Mixed precision training（autocast）と互換性がある
         - Value headはlogitsを出力し，損失関数内部でSigmoidが適用される
         """
-        _ = gce_parameter
         loss_fn_policy = torch.nn.KLDivLoss(
             reduction="batchmean"
         )
@@ -1091,7 +1089,6 @@ class TrainingSetup:
         dataloader_workers: int = 4,
         pin_memory: bool | None = None,
         prefetch_factor: int = 2,
-        gce_parameter: float = 0.1,
         learning_ratio: float = 0.01,
         momentum: float = 0.9,
         optimizer_name: str = "adamw",
@@ -1151,9 +1148,7 @@ class TrainingSetup:
 
         # Loss functions and optimizer
         loss_fn_policy, loss_fn_value = (
-            LossOptimizerFactory.create_loss_functions(
-                gce_parameter
-            )
+            LossOptimizerFactory.create_loss_functions()
         )
         optimizer = LossOptimizerFactory.create_optimizer(
             model,  # type: ignore

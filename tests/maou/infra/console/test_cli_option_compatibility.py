@@ -47,9 +47,8 @@ def test_learn_model_options_available_in_benchmark_training() -> (
 
     ただし，以下のオプションはbenchmark-trainingでは不要なため除外する:
     - epoch: benchmarkでは--max-batchesで制御される
-    - resume-from, start-epoch: 学習再開機能（benchmark不要）
+    - resume-from: 学習再開機能（benchmark不要）
     - log-dir, model-dir: 出力ディレクトリ（benchmark不要）
-    - tensorboard-*: TensorBoard関連（benchmark不要）
     - output-gcs, gcs-*, output-s3, s3-*: クラウド出力（benchmark不要）
     """
     learn_options = get_command_options(learn_model.learn_model)
@@ -61,10 +60,7 @@ def test_learn_model_options_available_in_benchmark_training() -> (
     excluded_options = {
         "epoch",  # benchmarkでは--max-batchesで制御
         "resume-from",  # チェックポイント再開（不要）
-        "start-epoch",  # 開始エポック（不要）
         "resume-backbone-from",  # コンポーネント別再開（不要）
-        "resume-policy-head-from",  # コンポーネント別再開（不要）
-        "resume-value-head-from",  # コンポーネント別再開（不要）
         "stage1-threshold",  # Stage 1閾値（不要）
         "stage2-threshold",  # Stage 2閾値（不要）
         "stage1-max-epochs",  # Stage 1最大エポック（不要）
@@ -73,8 +69,6 @@ def test_learn_model_options_available_in_benchmark_training() -> (
         "stage2-max-epochs",  # Stage 2最大エポック（不要）
         "log-dir",  # TensorBoardログディレクトリ（不要）
         "model-dir",  # モデル出力ディレクトリ（不要）
-        "tensorboard-histogram-frequency",  # TensorBoard（不要）
-        "tensorboard-histogram-module",  # TensorBoard（不要）
         "output-gcs",  # GCS出力（不要）
         "gcs-bucket-name",  # GCS（不要）
         "gcs-base-path",  # GCS（不要）
@@ -138,7 +132,6 @@ def test_benchmark_training_has_all_learn_model_training_params() -> (
         "pin-memory",
         "prefetch-factor",
         # 損失関数
-        "gce-parameter",
         "policy-loss-ratio",
         "value-loss-ratio",
         # 最適化
@@ -180,14 +173,9 @@ def test_option_consistency_documentation() -> None:
     excluded_options = {
         "epoch",
         "resume-from",
-        "start-epoch",
         "resume-backbone-from",
-        "resume-policy-head-from",
-        "resume-value-head-from",
         "log-dir",
         "model-dir",
-        "tensorboard-histogram-frequency",
-        "tensorboard-histogram-module",
         "output-gcs",
         "gcs-bucket-name",
         "gcs-base-path",

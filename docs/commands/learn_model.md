@@ -24,7 +24,7 @@
 | `--epoch INT` | interface default `10` | Number of passes over the training loader; must be positive.【F:src/maou/interface/learn.py†L132-L147】 |
 | `--batch-size INT` | interface default `1000` | Minibatch size shared by train/test loaders; must be positive. Training batch size. Recommended by GPU memory: 512 (8GB), 1024 (16GB), 2048 (24GB), 4096 (40-80GB). Use `--gradient-accumulation-steps` to simulate larger batches.【F:src/maou/interface/learn.py†L142-L156】 |
 | `--gradient-accumulation-steps INT` | `1` | Number of gradient accumulation steps. Effective batch size = batch_size × gradient_accumulation_steps. Use when GPU memory is insufficient for the desired effective batch size. Consider scaling learning rate proportionally (linear scaling rule) when using large accumulation steps. Ignored when `--adaptive-batch` is enabled. |
-| `--adaptive-batch` | `false` | Enable adaptive batch size based on Gradient Noise Scale (GNS). Dynamically adjusts gradient accumulation steps during training to maintain optimal effective batch size near the Critical Batch Size (CBS). Stage 3 のみに適用(Stage 1/2 は固定 accumulation steps)．**注意: accumulation steps が変化しても学習率は自動調整されません．線形スケーリング則(Goyal et al. 2017)に従い，学習率を手動で調整することを推奨します．** チェックポイントから再開(--start-epoch)した場合，adaptive state(EMA・accumulation steps)は初期値にリセットされます． |
+| `--adaptive-batch` | `false` | Enable adaptive batch size based on Gradient Noise Scale (GNS). Dynamically adjusts gradient accumulation steps during training to maintain optimal effective batch size near the Critical Batch Size (CBS). Stage 3 のみに適用(Stage 1/2 は固定 accumulation steps)．**注意: accumulation steps が変化しても学習率は自動調整されません．線形スケーリング則(Goyal et al. 2017)に従い，学習率を手動で調整することを推奨します．** チェックポイントから再開した場合，adaptive state(EMA・accumulation steps)は初期値にリセットされます． |
 | `--adaptive-batch-min-steps INT` | `2` | Minimum gradient accumulation steps for adaptive batch. Must be >= 2 for GNS estimation. |
 | `--adaptive-batch-max-steps INT` | `8` | Maximum gradient accumulation steps for adaptive batch. |
 | `--adaptive-batch-interval INT` | `50` | Number of optimizer steps between adaptive batch size adjustments. 学習初期は GNS 推定が不安定なため，ウォームアップ期間として大きめの値(100-200)を設定すると安定します． |
@@ -34,7 +34,6 @@
 | `--pin-memory` | `false` | Toggles pinned host memory for faster GPU transfers.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--prefetch-factor INT` | interface default `4` | Number of batches prefetched per worker; must be positive.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--test-ratio FLOAT` | interface default `0.2` | Portion of the dataset reserved for validation. Must satisfy `0 < ratio < 1`.【F:src/maou/interface/learn.py†L132-L140】 |
-| `--tensorboard-histogram-frequency INT` + `--tensorboard-histogram-module PATTERN` | default `0` | Controls how often histogram dumps occur and which parameter names qualify.【F:src/maou/interface/learn.py†L233-L244】 |
 | `--no-streaming` | `false` | Disable streaming mode for file input; uses map-style dataset instead. Streaming is the default for multi-file inputs.【F:src/maou/infra/console/learn_model.py†L520-L524】 |
 
 ### Model architecture (ViT)
@@ -95,10 +94,8 @@ ViTエンコーダのGPU活性化メモリを約93%削減するオプション�
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--gce-parameter FLOAT` | CLI default `0.1`, interface clamps to `(0,1]` with default `0.7` | Sets the generalized cross-entropy loss parameter.【F:src/maou/interface/learn.py†L179-L204】 |
 | `--policy-loss-ratio FLOAT` / `--value-loss-ratio FLOAT` | default `1.0` | Relative head weights; must be positive.【F:src/maou/interface/learn.py†L179-L204】 |
 | `--policy-target-mode {move-label,win-rate,weighted}` | `win-rate` | Policy教師信号モード．`move-label`=棋譜中の選択頻度(moveLabel)，`win-rate`=指し手別勝率(moveWinRate)を正規化，`weighted`=moveLabel×moveWinRateを正規化．`win-rate`/`weighted`モードにはpreprocessパイプラインで`moveWinRate`カラムが生成されたデータが必要．旧データでは`move-label`のみ使用可能．|
-| `--value-target-mode {result-value,best-move-win-rate}` | `best-move-win-rate` | Value教師信号モード．`result-value`=局面の勝率(resultValue = win_count / count)，`best-move-win-rate`=最善手の勝率(moveWinRateの最大値)．`best-move-win-rate`モードにはpreprocessパイプラインで`moveWinRate`カラムが生成されたデータが必要．|
 | `--learning-ratio FLOAT` | default `0.01` | Base learning rate supplied to the optimizer. Must be positive.【F:src/maou/interface/learn.py†L179-L204】 |
 | `--optimizer {adamw,sgd}` | default `adamw` | Normalized to lowercase and validated against supported names.【F:src/maou/interface/learn.py†L206-L221】 |
 | `--momentum FLOAT` | default `0.9` | Applies to SGD setups and must live inside `[0,1]`.【F:src/maou/interface/learn.py†L206-L221】 |
@@ -112,9 +109,6 @@ ViTエンコーダのGPU活性化メモリを約93%削減するオプション�
 | --- | --- | --- |
 | `--save-split-params` | `false` | Save backbone and head parameters as separate `.pt` files (for mix-and-match loading via `--resume-backbone-from` etc.). |
 | `--resume-backbone-from PATH` | optional | Backbone parameter file to resume training from.【F:src/maou/infra/console/learn_model.py†L418-L422】 |
-| `--resume-policy-head-from PATH` | optional | Policy head parameter file to resume training from.【F:src/maou/infra/console/learn_model.py†L423-L428】 |
-| `--resume-value-head-from PATH` | optional | Value head parameter file to resume training from.【F:src/maou/infra/console/learn_model.py†L429-L434】 |
-| `--start-epoch INT` | default `0` | Lets you offset the epoch counter while still completing `--epoch` total passes. Must be non-negative.【F:src/maou/interface/learn.py†L226-L244】 |
 | `--log-dir PATH` / `--model-dir PATH` | defaults `./logs`, `./models` | Created automatically when missing so TensorBoard and checkpoints always have a target directory.【F:src/maou/interface/learn.py†L249-L266】 |
 | `--output-gcs` + `--gcs-bucket-name` + `--gcs-base-path` | optional | Uploads checkpoints and TensorBoard runs to Google Cloud Storage when the `gcp` extra is installed.【F:src/maou/infra/console/learn_model.py†L416-L520】 |
 | `--output-s3` + `--s3-bucket-name` + `--s3-base-path` | optional | Same behavior for AWS S3, gated behind the `aws` extra.【F:src/maou/infra/console/learn_model.py†L416-L520】 |
@@ -206,7 +200,13 @@ poetry run maou learn-model \
   - `--adaptive-batch-measurement-interval`: GNS 計測間隔(勾配スナップショット頻度)
   - 訓練中に Gradient Noise Scale をオンライン計測し，gradient accumulation steps を動的に調整
   - `benchmark-training --estimate-cbs` の出力に adaptive batch 推奨設定を追加
-- **2026-03-13**: `--value-target-mode` を追加
-  - Value教師信号のモード選択オプション(`result-value` / `best-move-win-rate`)
-  - デフォルトは `best-move-win-rate`(moveWinRateの最大値)
-  - `result-value` は過去の学習再現用
+- **2026-08-04**: `--value-target-mode` / `--gce-parameter` / `--start-epoch` /
+  `--resume-policy-head-from` / `--resume-value-head-from` /
+  `--tensorboard-histogram-frequency` / `--tensorboard-histogram-module` を削除
+  - value 教師は `resultValue` (= `win_count / count`) 固定になった．
+    旧 `best-move-win-rate` は `moveWinRate` の最大値を取るため，
+    複数のノイズ推定の最大値による上方バイアス (winner's curse) を持っていた
+  - 他の 6 個は受け取るだけで一度も参照されないデッドオプションだった
+  - 検証メトリクスに `policy_empty_target_rate` を追加．
+    policy 教師が全ゼロ (= 勾配を生まない) 行の割合を報告する
+- **2026-03-13**: `--value-target-mode` を追加 (2026-08-04 に削除)

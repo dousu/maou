@@ -275,6 +275,7 @@ class ValidationMetrics:
     policy_top1_win_rate: float | None = None
     policy_move_label_ce: float | None = None
     policy_expected_win_rate: float | None = None
+    policy_empty_target_rate: float = 0.0
 
     def format_log_lines(self) -> str:
         """Format metrics as multi-line log output for console."""
@@ -285,6 +286,7 @@ class ValidationMetrics:
             f"  policy_top5_accuracy         = {self.policy_top5_accuracy}",
             f"  value_brier_score            = {self.value_brier_score}",
             f"  value_high_confidence_rate   = {self.value_high_confidence_rate}",
+            f"  policy_empty_target_rate     = {self.policy_empty_target_rate}",
         ]
         if self.policy_move_label_ce is not None:
             lines.append(
@@ -339,6 +341,10 @@ class ValidationCallback(BaseCallback):
         self._policy_f1_fn: torch.Tensor = torch.tensor(
             0, dtype=torch.long
         )
+        # policy 教師が全ゼロ (= 勾配を生まない) 行の件数
+        self._policy_empty_target_count: torch.Tensor = (
+            torch.tensor(0, dtype=torch.long)
+        )
         # move_win_rate metrics
         self._policy_top1_win_rate_sum: torch.Tensor = (
             torch.tensor(0.0)
@@ -376,6 +382,9 @@ class ValidationCallback(BaseCallback):
         self._policy_f1_tp = self._policy_f1_tp.to(device)
         self._policy_f1_fp = self._policy_f1_fp.to(device)
         self._policy_f1_fn = self._policy_f1_fn.to(device)
+        self._policy_empty_target_count = (
+            self._policy_empty_target_count.to(device)
+        )
         self._policy_top1_win_rate_sum = (
             self._policy_top1_win_rate_sum.to(device)
         )
@@ -409,6 +418,9 @@ class ValidationCallback(BaseCallback):
                     context.outputs_policy, policy_targets
                 )
             )
+            self._policy_empty_target_count += (
+                policy_targets.sum(dim=1) <= 0
+            ).sum()
             policy_batch_size = int(policy_targets.size(0))
             value_batch_size = int(context.labels_value.numel())
             self._value_brier_score_sum += (
@@ -554,6 +566,10 @@ class ValidationCallback(BaseCallback):
             self.move_win_rate_sample_count,
         )
 
+        policy_empty_target_rate = float(
+            self._policy_empty_target_count.item()
+        ) / float(max(1, self.policy_sample_count))
+
         return ValidationMetrics(
             policy_cross_entropy=avg_policy_cross_entropy,
             value_brier_score=avg_value_brier,
@@ -563,6 +579,7 @@ class ValidationCallback(BaseCallback):
             policy_top1_win_rate=policy_top1_win_rate,
             policy_move_label_ce=policy_move_label_ce,
             policy_expected_win_rate=policy_expected_win_rate,
+            policy_empty_target_rate=policy_empty_target_rate,
         )
 
     def reset(self) -> None:
@@ -577,6 +594,7 @@ class ValidationCallback(BaseCallback):
             self._policy_f1_tp.zero_()
             self._policy_f1_fp.zero_()
             self._policy_f1_fn.zero_()
+            self._policy_empty_target_count.zero_()
             self._policy_top1_win_rate_sum.zero_()
             self._policy_move_label_ce_sum.zero_()
             self._policy_expected_win_rate_sum.zero_()
@@ -598,6 +616,9 @@ class ValidationCallback(BaseCallback):
                 0, dtype=torch.long
             )
             self._policy_f1_fn = torch.tensor(
+                0, dtype=torch.long
+            )
+            self._policy_empty_target_count = torch.tensor(
                 0, dtype=torch.long
             )
             self._policy_top1_win_rate_sum = torch.tensor(0.0)

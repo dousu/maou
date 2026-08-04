@@ -42,9 +42,6 @@ from maou.app.learning.stage_component_factory import (
 from maou.app.learning.streaming_dataset import (
     StreamingDataSource,
 )
-from maou.app.learning.value_targets import (  # noqa: F401
-    ValueTargetMode as ValueTargetMode,
-)
 
 SUPPORTED_MODEL_ARCHITECTURES = BACKBONE_ARCHITECTURES
 
@@ -210,7 +207,6 @@ def learn(
     dataloader_workers: int | None = None,
     pin_memory: bool | None = None,
     prefetch_factor: int | None = None,
-    gce_parameter: float | None = None,
     policy_loss_ratio: float | None = None,
     value_loss_ratio: float | None = None,
     learning_ratio: float | None = None,
@@ -239,7 +235,6 @@ def learn(
     streaming_val_source: StreamingDataSource | None = None,
     save_split_params: bool = False,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
-    value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
     gradient_accumulation_steps: int = 1,
     adaptive_batch_config: AdaptiveBatchConfig | None = None,
 ) -> str:
@@ -257,7 +252,6 @@ def learn(
         dataloader_workers: Number of data loader workers
         pin_memory: Enable pinned memory for faster GPU transfers
         prefetch_factor: Number of batches loaded in advance by each worker
-        gce_parameter: GCE loss function parameter
         policy_loss_ratio: Policy loss weight
         value_loss_ratio: Value loss weight
         learning_ratio: Learning rate
@@ -349,14 +343,6 @@ def learn(
     elif prefetch_factor <= 0:
         raise ValueError(
             f"prefetch_factor must be positive, got {prefetch_factor}"
-        )
-
-    # 損失関数のパラメータ設定 (デフォルト0.7)
-    if gce_parameter is None:
-        gce_parameter = 0.7
-    elif not 0.0 < gce_parameter <= 1.0:
-        raise ValueError(
-            f"gce_parameter must be between 0 and 1, got {gce_parameter}"
         )
 
     # policy損失関数のパラメータ設定 (デフォルト1)
@@ -488,7 +474,6 @@ def learn(
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
-        gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,
         learning_ratio=learning_ratio,
@@ -516,7 +501,6 @@ def learn(
         streaming_val_source=streaming_val_source,
         save_split_params=save_split_params,
         policy_target_mode=policy_target_mode,
-        value_target_mode=value_target_mode,
         gradient_accumulation_steps=gradient_accumulation_steps,
         adaptive_batch_config=adaptive_batch_config,
     )
@@ -953,7 +937,6 @@ def learn_multi_stage(
     dataloader_workers: int | None = None,
     pin_memory: bool | None = None,
     prefetch_factor: int | None = None,
-    gce_parameter: float | None = None,
     policy_loss_ratio: float | None = None,
     value_loss_ratio: float | None = None,
     lr_scheduler: str | None = None,
@@ -987,7 +970,6 @@ def learn_multi_stage(
     | None = None,
     save_split_params: bool = False,
     policy_target_mode: PolicyTargetMode = PolicyTargetMode.WIN_RATE,
-    value_target_mode: ValueTargetMode = ValueTargetMode.BEST_MOVE_WIN_RATE,
     gradient_accumulation_steps: int = 1,
     adaptive_batch_config: AdaptiveBatchConfig | None = None,
 ) -> str:
@@ -1021,7 +1003,6 @@ def learn_multi_stage(
         dataloader_workers: DataLoader worker count for Stage 3
         pin_memory: Enable pinned memory for Stage 3
         prefetch_factor: Prefetch factor for Stage 3
-        gce_parameter: GCE parameter for Stage 3
         policy_loss_ratio: Policy loss weight for Stage 3
         value_loss_ratio: Value loss weight for Stage 3
         lr_scheduler: LR scheduler for Stage 3
@@ -1334,7 +1315,6 @@ def learn_multi_stage(
             dataloader_workers=dataloader_workers,
             pin_memory=pin_memory,
             prefetch_factor=prefetch_factor,
-            gce_parameter=gce_parameter,
             policy_loss_ratio=policy_loss_ratio,
             value_loss_ratio=value_loss_ratio,
             learning_ratio=learning_rate,
@@ -1357,7 +1337,6 @@ def learn_multi_stage(
             streaming_val_source=stage3_streaming_val_source,
             save_split_params=save_split_params,
             policy_target_mode=policy_target_mode,
-            value_target_mode=value_target_mode,
             gradient_accumulation_steps=gradient_accumulation_steps,
             adaptive_batch_config=adaptive_batch_config,
         )
