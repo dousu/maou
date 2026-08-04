@@ -17,7 +17,7 @@ onnx-tensorrt = ["onnx", "ort/tensorrt"]
 
 [dependencies]
 maou_shogi = { path = "../maou_shogi" }
-ort = { version = "=2.0.0-rc.13", optional = true }
+ort = { version = "=2.0.0-rc.10", optional = true }
 
 [[example]]
 name = "onnx_bench"

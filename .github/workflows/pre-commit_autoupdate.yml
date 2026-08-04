@@ -8,6 +8,9 @@ on:
 jobs:
   create-autoupdate-pr:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -30,15 +33,54 @@ jobs:
           pr_title="${date_str} pre-commit autoupdate"
           echo "branch_name=${branch_name}" >> $GITHUB_OUTPUT
           echo "pr_title=${pr_title}" >> $GITHUB_OUTPUT
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -b ${branch_name}
           uv run pre-commit autoupdate
-          git add -N .
-          git diff --name-only --exit-code
-      - name: Create PR
+          git diff --exit-code -- .pre-commit-config.yaml
+      - name: Create signed commit & PR
         if: steps.git.outcome == 'failure'
+        env:
+          BRANCH: ${{ steps.git.outputs.branch_name }}
+          PR_TITLE: ${{ steps.git.outputs.pr_title }}
         run: |
-          git commit -am "pre-commit autoupdate"
-          git push origin ${{ steps.git.outputs.branch_name }}
-          gh pr create -B main -H ${{ steps.git.outputs.branch_name }} -t "${{ steps.git.outputs.pr_title }}" -b "pre-commit autoupdate"
+          set -euo pipefail
+          base_sha="$(git rev-parse HEAD)"
+
+          # ブランチを用意する (前回の残骸があれば base に戻す)
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/heads/${BRANCH}" -f sha="${base_sha}" >/dev/null 2>&1 \
+            || gh api "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" \
+                 -X PATCH -f sha="${base_sha}" -F force=true >/dev/null
+
+          # commit は runner 上の `git commit` ではなく GraphQL
+          # createCommitOnBranch で作る．こちらは GitHub 側の鍵で署名されるため
+          # "Verified" になり，main ruleset の
+          # "Commits must have verified signatures" を満たす．
+          # (runner の git commit は未署名で，2026-08-04 に PR #429 が
+          #  これに弾かれてマージ不能になった)
+          gh api graphql \
+            -f query='
+              mutation($repo: String!, $branch: String!, $oid: GitObjectID!,
+                       $message: String!, $path: String!, $contents: Base64String!) {
+                createCommitOnBranch(input: {
+                  branch: {
+                    repositoryNameWithOwner: $repo,
+                    branchName: $branch
+                  },
+                  message: { headline: $message },
+                  expectedHeadOid: $oid,
+                  fileChanges: {
+                    additions: [{ path: $path, contents: $contents }]
+                  }
+                }) {
+                  commit { oid }
+                }
+              }' \
+            -f repo="${GITHUB_REPOSITORY}" \
+            -f branch="${BRANCH}" \
+            -f oid="${base_sha}" \
+            -f message="pre-commit autoupdate" \
+            -f path=".pre-commit-config.yaml" \
+            -f contents="$(base64 -w0 .pre-commit-config.yaml)" \
+            --jq '.data.createCommitOnBranch.commit.oid'
+
+          gh pr create -B main -H "${BRANCH}" \
+            -t "${PR_TITLE}" -b "pre-commit autoupdate"
