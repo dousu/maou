@@ -367,7 +367,7 @@ document.addEventListener('click', function(e) {
 
 **原因1**: Plotly未インストール
 
-**解決策**: `poetry add plotly`
+**解決策**: `uv add plotly`
 
 **原因2**: CDN読み込み失敗
 

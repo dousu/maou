@@ -98,7 +98,7 @@
   The CLI counts enabled flags and raises when multiple providers are
   requested.【F:src/maou/infra/console/hcpe_convert.py†L150-L168】
 - When optional extras are missing the CLI logs a warning explaining which
-  `poetry install -E ...` flag to run instead of crashing outright.【F:src/maou/infra/console/hcpe_convert.py†L168-L232】
+  `uv sync --extra ...` flag to run instead of crashing outright.【F:src/maou/infra/console/hcpe_convert.py†L168-L232】
 
 ## Outputs and usage
 

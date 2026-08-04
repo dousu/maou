@@ -22,7 +22,7 @@ to skim, and traceable back to the source code.
 6. **Outputs and usage** – Explain what the command prints or writes, any JSON
    structure, and how to apply the results. Include citations to formatter or
    writer code. Provide a concrete **Example invocation** block that starts with
-   `poetry run maou ...`.
+   `uv run maou ...`.
 7. **Implementation references** – Bullet list linking to the CLI, interface,
    and app modules that power the command.
 

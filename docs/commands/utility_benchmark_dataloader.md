@@ -77,7 +77,7 @@ flags and aborts when multiple cloud inputs are selected.【F:src/maou/infra/con
 ### Example invocation
 
 ```bash
-poetry run maou utility benchmark-dataloader \
+uv run maou utility benchmark-dataloader \
   --stage3-data-path datasets/preprocessed \
   --batch-size 512 \
   --num-batches 200 \

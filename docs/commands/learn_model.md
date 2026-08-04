@@ -164,7 +164,7 @@ missing and continues with local-only writes.【F:src/maou/infra/console/learn_m
 ### Example invocation
 
 ```bash
-poetry run maou learn-model \
+uv run maou learn-model \
   --stage3-data-path datasets/preprocessed \
   --epoch 20 \
   --batch-size 2048 \

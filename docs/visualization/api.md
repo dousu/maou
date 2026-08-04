@@ -23,7 +23,7 @@
 #### シグネチャ
 
 ```bash
-poetry run maou visualize [OPTIONS]
+uv run maou visualize [OPTIONS]
 ```
 
 #### オプション
@@ -42,13 +42,13 @@ poetry run maou visualize [OPTIONS]
 
 ```bash
 # ディレクトリからHCPEデータを可視化
-poetry run maou visualize --input-path ./data/hcpe --array-type hcpe
+uv run maou visualize --input-path ./data/hcpe --array-type hcpe
 
 # 特定ファイルでpreprocessingデータを可視化
-poetry run maou visualize --input-path data1.feather --input-path data2.feather --array-type preprocessing
+uv run maou visualize --input-path data1.feather --input-path data2.feather --array-type preprocessing
 
 # カスタムポートと公開リンク
-poetry run maou visualize --input-path ./data --array-type hcpe --port 8080 --share
+uv run maou visualize --input-path ./data --array-type hcpe --port 8080 --share
 ```
 
 ---

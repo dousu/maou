@@ -26,7 +26,7 @@ Automatic mixed precision (AMP) enabled for CUDA:
 ### Sample Ratio for Large Datasets
 Use `--sample-ratio` for efficient benchmarking:
 ```bash
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-s3 \
   --sample-ratio 0.1 \
   --gpu cuda:0
@@ -57,7 +57,7 @@ training_loop = TrainingLoop(
 
 ### DataLoader Benchmarking
 ```bash
-poetry run maou utility benchmark-dataloader \
+uv run maou utility benchmark-dataloader \
   --input-path /path/to/processed \
   --gpu cuda:0 \
   --batch-size 256
@@ -65,7 +65,7 @@ poetry run maou utility benchmark-dataloader \
 
 ### Training Performance
 ```bash
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-path /path/to/processed \
   --gpu cuda:0 \
   --batch-size 256
@@ -73,7 +73,7 @@ poetry run maou utility benchmark-training \
 
 ### Polars + Rust I/O Performance
 ```bash
-poetry run python -m maou.infra.utility.benchmark_polars_io \
+uv run python -m maou.infra.utility.benchmark_polars_io \
   --num-records 50000 \
   --output-dir /tmp/benchmark
 ```

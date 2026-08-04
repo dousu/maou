@@ -7,12 +7,12 @@
 
 ## 重要な開発ルールと運用フロー
 - 依存関係や型安全性に関する厳密なルールがあります．特に「すべてのコードに型ヒントを付ける」「公開 API には必ず docstring を書く」「レイヤー間の依存を逆流させない」といった原則が必須です．
-- 変更を行う際は Poetry のみを用いて依存管理・タスク実行を行い，`poetry run mypy`，`poetry run ruff format`，`pytest` などの品質チェックをパイプラインとして回すことが求められます．
+- 変更を行う際は uv のみを用いて依存管理・タスク実行を行い (pip や Poetry は使いません)，`uv run mypy`，`uv run ruff format`，`uv run pytest` などの品質チェックをパイプラインとして回すことが求められます．
 - 新機能には網羅的なテスト，バグ修正には再発防止テストを追加することが明文化されています．テスト方針に迷った場合は AGENTS の該当セクションを参照してください．
 
 ## 開発環境セットアップの要点
-- リポジトリは Dev Container を前提としており，`bash scripts/dev-init.sh` と `poetry run bash scripts/pre-commit.sh` を最初に実行して開発環境とフックを整備します．VS Code では `poetry env info --path` で得られる Python をインタプリタに設定します．
-- Python のバージョン更新や Poetry キャッシュ削除，GCP/AWS 認証などの運用タスクも README にまとまっているので，クラウド連携や環境リフレッシュ時に参照するとよいです．
+- リポジトリは Dev Container を前提としており，`bash scripts/dev-init.sh` と `uv run bash scripts/pre-commit.sh` を最初に実行して開発環境とフックを整備します．uv はプロジェクト直下に `.venv` を作るため，VS Code のインタプリタには `.venv/bin/python` を設定します (この設定は `.devcontainer/devcontainer.json` に入っているので，Dev Container を再ビルドすれば自動で適用されます)．
+- Python のバージョン更新や uv キャッシュ削除 (`uv cache clean`)，GCP/AWS 認証などの運用タスクも README にまとまっているので，クラウド連携や環境リフレッシュ時に参照するとよいです．
 
 ## 次に学習・確認しておきたい事項
 1. **アーキテクチャ文書の精読**
@@ -22,4 +22,4 @@
 3. **品質チェック手順の習熟**
    AGENTS で案内されているフォーマッタやリンタ，型チェック，テストのコマンドを実際に実行して，ローカルでの開発サイクルを確立してください．
 4. **開発環境スクリプトの実行体験**
-   README に沿って初期化スクリプトやクラウド認証を試し，Poetry ベースのワークフローに慣れることをおすすめします．
+   README に沿って初期化スクリプトやクラウド認証を試し，uv ベースのワークフローに慣れることをおすすめします．
