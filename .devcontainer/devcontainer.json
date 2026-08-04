@@ -23,6 +23,18 @@
 	"customizations": {
 		"vscode": {
 			"settings": {
+				// uv はプロジェクト直下に .venv を作るため，インタプリタを
+				// python feature 既定のシステム Python ではなく .venv に固定する
+				"python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python",
+				// Python Environments 拡張 (ms-python.vscode-python-envs) の既定マネージャ．
+				// 明示することで poetry / conda 等が既定に選ばれなくなる．
+				// alwaysUseUv により venv の作成・管理は uv 経由で行われる
+				"python-envs.defaultEnvManager": "ms-python.python:venv",
+				"python-envs.alwaysUseUv": true,
+				// cargo のビルド成果物をファイル監視から除外する
+				"files.watcherExclude": {
+					"**/target/**": true
+				},
 				"python.analysis.autoImportCompletions": true,
 				"python.analysis.typeCheckingMode": "basic",
 				"[python]": {
