@@ -2,19 +2,19 @@
 
 ## Run unit tests quickly
 ```bash
-poetry run pytest -q
+uv run pytest -q
 ```
 
 ## Run a single test file / node
 ```bash
-poetry run pytest tests/app/test_converter.py::test_convert_basic -q
+uv run pytest tests/app/test_converter.py::test_convert_basic -q
 ```
 
 ## Full QA before committing
 ```bash
-poetry run ruff format src/
-poetry run ruff check src/ --fix
-poetry run isort src/
-poetry run mypy src/
-poetry run pytest -q
+uv run ruff format src/
+uv run ruff check src/ --fix
+uv run isort src/
+uv run mypy src/
+uv run pytest -q
 ```

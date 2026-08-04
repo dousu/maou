@@ -1,14 +1,14 @@
-# Allowed Commands (with Poetry Prefix)
+# Allowed Commands (with uv Prefix)
 
 - Tests
-  - `poetry run pytest`
-  - `poetry run pytest --cov=src/maou`
+  - `uv run pytest`
+  - `uv run pytest --cov=src/maou`
 - Type-check
-  - `poetry run mypy src/`
+  - `uv run mypy src/`
 - Lint & Format
-  - `poetry run ruff format src/`
-  - `poetry run ruff check src/ --fix`
-  - `poetry run isort src/`
-  - `poetry run flake8 src/`
+  - `uv run ruff format src/`
+  - `uv run ruff check src/ --fix`
+  - `uv run isort src/`
+  - `uv run flake8 src/`
 - Project CLI
-  - `poetry run maou <subcommand> [options]`
+  - `uv run maou <subcommand> [options]`

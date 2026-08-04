@@ -1,14 +1,14 @@
 # Codex Agent Guide (Short & Mandatory)
 
 **🚨 RULE ZERO:** Never run tools directly.
-**Always** prefix commands with `poetry run`.
+**Always** prefix commands with `uv run`.
 
 ✅ Correct:
 ```bash
-poetry run pytest
-poetry run mypy src/
-poetry run ruff check src/
-poetry run maou --help
+uv run pytest
+uv run mypy src/
+uv run ruff check src/
+uv run maou --help
 ```
 
 ❌ Incorrect:
