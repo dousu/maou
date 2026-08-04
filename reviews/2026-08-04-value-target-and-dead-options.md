@@ -2,7 +2,7 @@
 title: value 教師を resultValue 固定にし，デッド CLI オプションを整理する
 date: 2026-08-04
 status: applied
-applied_in: PENDING_SHA
+applied_in: 02306c2
 target:
   - docs/adr-005-move-win-rates.md
   - docs/commands/learn_model.md
