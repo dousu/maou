@@ -22,7 +22,7 @@ dependencies = [
 [project.optional-dependencies]
 # GPU種類ごとのextra
 cpu = [
-    "torch>=2.6.0,<=2.11.0",
+    "torch>=2.6.0,<=2.13.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "onnxruntime",
@@ -30,7 +30,7 @@ cpu = [
     "onnxslim",
 ]
 cuda = [
-    "torch>=2.6.0,<=2.11.0",
+    "torch>=2.6.0,<=2.13.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "nvidia-ml-py>=11.4.1",
@@ -39,7 +39,7 @@ cuda = [
     "onnxslim",
 ]
 mpu = [
-    "torch>=2.6.0,<=2.11.0",
+    "torch>=2.6.0,<=2.13.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "onnxruntime-gpu",
@@ -54,19 +54,19 @@ cpu-infer = [
 #   リンクする．maou search の GPU 実行時に dlopen される provider .so
 #   (libonnxruntime_providers_{shared,cuda,tensorrt}.so) は onnxruntime-gpu
 #   pip パッケージの capi/ から供給できるが，**静的コアと同一版でないと
-#   ABI 不一致でロードに失敗する**ため onnxruntime-gpu==1.22.* に固定する．
+#   ABI 不一致でロードに失敗する**ため onnxruntime-gpu>=1.22,<1.29 に固定する．
 #   これにより配布 wheel (latest) + `maou[tensorrt-infer]` だけで provider が揃い，
 #   provider tarball の別途 wget が不要になる (Colab 手順を簡素化)．
 #   TensorRT ランタイム (libnvinfer.so.10) は onnxruntime 1.22 が要求する
 #   10 系に固定する (pin なしだと 11 系が入り解決不能)．
 onnx-gpu-infer = [
-    "onnxruntime-gpu==1.22.*",
+    "onnxruntime-gpu>=1.22,<1.29",
 ]
 tensorrt-infer = [
-    "onnxruntime-gpu==1.22.*",
-    "tensorrt-cu12==10.*",
-    "tensorrt-lean-cu12==10.*",
-    "tensorrt-dispatch-cu12==10.*",
+    "onnxruntime-gpu>=1.22,<1.29",
+    "tensorrt-cu12>=10,<12",
+    "tensorrt-lean-cu12>=10,<12",
+    "tensorrt-dispatch-cu12>=10,<12",
 ]
 # クラウドプロバイダーごとのextra
 gcp = [
