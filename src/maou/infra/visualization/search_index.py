@@ -401,9 +401,11 @@ class SearchIndex:
 
                 # evalカラムを取得（HCPEの場合のみ）
                 eval_column = None
-                if self.array_type == "hcpe":
-                    if "eval" in df.columns:
-                        eval_column = df["eval"]
+                if (
+                    self.array_type == "hcpe"
+                    and "eval" in df.columns
+                ):
+                    eval_column = df["eval"]
 
                 # IDインデックスの一括構築（ベクトル化）
                 import polars as pl

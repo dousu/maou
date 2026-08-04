@@ -102,13 +102,13 @@ class StageComponentFactory:
         raw_dataset = Stage1Dataset(datasource=train_ds)
         dataset = Stage1DatasetAdapter(raw_dataset)
 
-        dl_kwargs: dict = dict(
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-            collate_fn=pre_stage_collate_fn,
-        )
+        dl_kwargs: dict = {
+            "batch_size": batch_size,
+            "shuffle": True,
+            "num_workers": num_workers,
+            "pin_memory": pin_memory,
+            "collate_fn": pre_stage_collate_fn,
+        }
         if prefetch_factor is not None and num_workers > 0:
             dl_kwargs["prefetch_factor"] = prefetch_factor
         dataloader = DataLoader(dataset, **dl_kwargs)
@@ -199,13 +199,13 @@ class StageComponentFactory:
 
         raw_train = Stage2Dataset(datasource=train_ds)
         train_dataset = Stage2DatasetAdapter(raw_train)
-        dl_kwargs: dict = dict(
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-            collate_fn=pre_stage_collate_fn,
-        )
+        dl_kwargs: dict = {
+            "batch_size": batch_size,
+            "shuffle": True,
+            "num_workers": num_workers,
+            "pin_memory": pin_memory,
+            "collate_fn": pre_stage_collate_fn,
+        }
         if prefetch_factor is not None and num_workers > 0:
             dl_kwargs["prefetch_factor"] = prefetch_factor
         train_dataloader = DataLoader(
@@ -216,13 +216,13 @@ class StageComponentFactory:
         if test_ratio > 0.0 and val_ds is not None:
             raw_val = Stage2Dataset(datasource=val_ds)
             val_dataset = Stage2DatasetAdapter(raw_val)
-            val_dl_kwargs: dict = dict(
-                batch_size=batch_size,
-                shuffle=False,
-                num_workers=num_workers,
-                pin_memory=pin_memory,
-                collate_fn=pre_stage_collate_fn,
-            )
+            val_dl_kwargs: dict = {
+                "batch_size": batch_size,
+                "shuffle": False,
+                "num_workers": num_workers,
+                "pin_memory": pin_memory,
+                "collate_fn": pre_stage_collate_fn,
+            }
             if prefetch_factor is not None and num_workers > 0:
                 val_dl_kwargs["prefetch_factor"] = (
                     prefetch_factor

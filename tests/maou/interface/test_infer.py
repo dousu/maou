@@ -32,7 +32,7 @@ class TestInfer:
             infer(num_moves=-1, sfen=HIRATE)
 
     def test_invalid_sfen_raises(self) -> None:
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match="不正な SFEN"):
             infer(num_moves=5, sfen="not-a-sfen")
 
     def test_eval_matches_winrate_conversion(self) -> None:

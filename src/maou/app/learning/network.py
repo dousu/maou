@@ -410,13 +410,14 @@ class HeadlessNetwork(nn.Module):
 
         if x.dim() == 4:
             _, channels, height, width = x.shape
-            if not tracing:
-                if (height, width) != self._board_size:
-                    msg = (
-                        "Input board dimensions must match the configured board size. "
-                        f"Expected {self._board_size} but received {(height, width)}."
-                    )
-                    raise ValueError(msg)
+            if not tracing and (
+                (height, width) != self._board_size
+            ):
+                msg = (
+                    "Input board dimensions must match the configured board size. "
+                    f"Expected {self._board_size} but received {(height, width)}."
+                )
+                raise ValueError(msg)
             if channels == 1:
                 if not tracing and torch.is_floating_point(x):
                     msg = "Board identifiers must be integral tensors."
@@ -458,9 +459,9 @@ class HeadlessNetwork(nn.Module):
         backbone_state = {
             key: value
             for key, value in clean_dict.items()
-            if key.startswith("backbone.")
-            or key.startswith("embedding.")
-            or key.startswith("_hand_projection.")
+            if key.startswith(
+                ("backbone.", "embedding.", "_hand_projection.")
+            )
         }
         return super().load_state_dict(
             backbone_state, strict=strict, assign=assign

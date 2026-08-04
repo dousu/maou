@@ -118,8 +118,6 @@ MOVE_LABELS_NUM = MoveCategoryStartLabel.HI + 81
 class IllegalMove(ValueError):
     """不正な指し手のラベル変換時に発生する例外．"""
 
-    pass
-
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -563,12 +561,7 @@ def _find_move_from_sq(
             direction == "KEIMA_LEFT"
             and to_sq == legal_move_to_sq
             and direction_tuple == _DIRECTION_KEIMA_LEFT
-        ):
-            if board.get_turn() == shogi.Turn.WHITE:
-                legal_move_to_sq = 80 - legal_move_to_sq
-                legal_move_from_sq = 80 - legal_move_from_sq
-            return legal_move_from_sq, legal_move_to_sq
-        elif (
+        ) or (
             direction == "KEIMA_RIGHT"
             and to_sq == legal_move_to_sq
             and direction_tuple == _DIRECTION_KEIMA_RIGHT

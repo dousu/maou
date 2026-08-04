@@ -10,7 +10,6 @@ import logging
 import random
 import time
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -77,7 +76,7 @@ def benchmark_random_access(
     file_paths: list[Path],
     num_accesses: int = 1000,
     cache_mode: str = "mmap",
-    seed: Optional[int] = 42,
+    seed: int | None = 42,
 ) -> dict[str, float]:
     """ランダムアクセスのパフォーマンスをベンチマークする．
 

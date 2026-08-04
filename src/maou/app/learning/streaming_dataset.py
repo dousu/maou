@@ -295,14 +295,11 @@ class StreamingKifDataset(IterableDataset):
                 total_batches,
                 file_count,
             )
-        except Exception as exc:
-            logger.error(
-                "Worker %d crashed during iteration"
-                " (pid=%d): %s",
+        except Exception:
+            logger.exception(
+                "Worker %d crashed during iteration (pid=%d)",
                 worker_id,
                 os.getpid(),
-                exc,
-                exc_info=True,
             )
             raise
 
@@ -429,14 +426,11 @@ class StreamingStage1Dataset(IterableDataset):
                 total_batches,
                 file_count,
             )
-        except Exception as exc:
-            logger.error(
-                "Worker %d crashed during iteration"
-                " (pid=%d): %s",
+        except Exception:
+            logger.exception(
+                "Worker %d crashed during iteration (pid=%d)",
                 worker_id,
                 os.getpid(),
-                exc,
-                exc_info=True,
             )
             raise
 
@@ -597,14 +591,11 @@ class StreamingStage2Dataset(IterableDataset):
                 file_count,
                 _FILES_PER_CONCAT,
             )
-        except Exception as exc:
-            logger.error(
-                "Worker %d crashed during iteration"
-                " (pid=%d): %s",
+        except Exception:
+            logger.exception(
+                "Worker %d crashed during iteration (pid=%d)",
                 worker_id,
                 os.getpid(),
-                exc,
-                exc_info=True,
             )
             raise
 
@@ -663,9 +654,7 @@ class Stage1StreamingAdapter(IterableDataset):
         dataset: ラップする StreamingStage1Dataset
     """
 
-    def __init__(
-        self, dataset: "StreamingStage1Dataset"
-    ) -> None:
+    def __init__(self, dataset: StreamingStage1Dataset) -> None:
         self._dataset = dataset
 
     def __len__(self) -> int:

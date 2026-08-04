@@ -5,7 +5,7 @@ from collections.abc import Generator
 from datetime import date, timedelta
 from pathlib import Path
 
-import google.cloud.storage as storage
+import google.cloud.storage as storage  # noqa: PLR0402 (namespace package: from-import だと mypy が属性解決できない)
 import google_crc32c
 import numpy as np
 import polars as pl
@@ -17,6 +17,9 @@ from maou.domain.data.schema import (
 )
 from maou.infra.gcs.gcs_data_source import GCSDataSource
 from maou.infra.gcs.gcs_feature_store import GCSFeatureStore
+from maou.infra.object_storage.data_source import (
+    MissingObjectStorageConfig,
+)
 
 logger: logging.Logger = logging.getLogger("TEST")
 
@@ -448,35 +451,35 @@ class TestGCSDataSource:
         self, default_fixture: None, temp_cache_dir: Path
     ) -> None:
         """設定不足の場合のエラーをテストする"""
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             GCSDataSource()
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             GCSDataSource(bucket_name=self.bucket)
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             GCSDataSource(prefix=self.prefix)
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             GCSDataSource(data_name=self.data_name)
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             GCSDataSource(local_cache_dir=str(temp_cache_dir))
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             GCSDataSource(
                 bucket_name=self.bucket,
                 prefix=self.prefix,
             )
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             GCSDataSource(
                 bucket_name=self.bucket,
                 prefix=self.prefix,
                 data_name=self.data_name,
             )
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             GCSDataSource(
                 bucket_name=self.bucket,
                 prefix=self.prefix,

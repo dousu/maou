@@ -35,24 +35,24 @@ if TYPE_CHECKING:
     S3FeatureStore: type[Any] | None
 
 __all__ = [
-    "app_logger",
-    "get_log_level_from_env",
-    "FileDataSource",
-    "FileSystem",
+    "GCS",
+    "HAS_AWS",
     "HAS_BIGQUERY",
     "HAS_GCS",
-    "HAS_AWS",
+    "S3",
     "BigQueryDataSource",
     "BigQueryFeatureStore",
-    "GCS",
+    "FileDataSource",
+    "FileSystem",
     "GCSDataSource",
     "GCSFeatureStore",
-    "S3",
     "S3DataSource",
     "S3FeatureStore",
-    "validate_cloud_provider_exclusivity",
+    "app_logger",
+    "get_log_level_from_env",
     "handle_exception",
     "is_google_colab",
+    "validate_cloud_provider_exclusivity",
 ]
 
 

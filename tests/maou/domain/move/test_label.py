@@ -819,7 +819,6 @@ class TestLabel:
             )
         except ValueError:
             logger.info("✅ Negative label correctly rejected")
-            pass
 
         # Test invalid move value
         try:

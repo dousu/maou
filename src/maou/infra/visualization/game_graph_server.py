@@ -408,7 +408,7 @@ def launch_game_graph_server(
 
     def handle_expand(
         node_id_str: str | list[Any],
-        display_depth: int | float = 3,
+        display_depth: float = 3,
         min_prob: float = 0.01,
     ) -> bool:
         """ノード展開の server_function．

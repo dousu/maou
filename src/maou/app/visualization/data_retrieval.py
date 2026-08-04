@@ -152,8 +152,8 @@ class DataRetriever:
                 file_index, row_number
             )
             return record
-        except Exception as e:
-            logger.exception(f"Failed to load record: {e}")
+        except Exception:
+            logger.exception("Failed to load record")
             return None
 
     def get_by_sfen(self, sfen: str) -> dict[str, Any] | None:

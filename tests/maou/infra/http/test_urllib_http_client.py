@@ -4,6 +4,7 @@ import http.server
 import threading
 from collections.abc import Iterator
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -18,7 +19,7 @@ _BODY = b"hello floodgate"
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
-    seen_user_agents: list[str] = []
+    seen_user_agents: ClassVar[list[str]] = []
     flaky_attempts: int = 0
 
     def do_GET(self) -> None:

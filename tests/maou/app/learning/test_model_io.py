@@ -44,7 +44,7 @@ def test_generate_model_tag() -> None:
 
     # Tag should end with parameter count (format: XXm or XXk)
     param_part = tag.split("-")[1]
-    assert param_part.endswith("m") or param_part.endswith("k")
+    assert param_part.endswith(("m", "k"))
 
 
 def test_generate_model_tag_different_architectures() -> None:
@@ -258,11 +258,12 @@ def _save_state_dict_with_prefix(
     prefixed = {
         f"_orig_mod.{k}": v for k, v in state_dict.items()
     }
-    tmp = tempfile.NamedTemporaryFile(
+    with tempfile.NamedTemporaryFile(
         suffix=".pt", delete=False
-    )
-    torch.save(prefixed, tmp.name)
-    return Path(tmp.name)
+    ) as tmp:
+        path = Path(tmp.name)
+    torch.save(prefixed, path)
+    return path
 
 
 def test_load_policy_head_strips_orig_mod_prefix() -> None:

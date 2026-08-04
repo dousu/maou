@@ -16,10 +16,10 @@ from maou.app.visualization.record_renderer import (
 from maou.app.visualization.search_index_protocol import (
     SearchIndexProtocol,
 )
-from maou.domain.visualization.board_renderer import (  # noqa: F401
+from maou.domain.visualization.board_renderer import (
     BoardPosition as BoardPosition,
 )
-from maou.domain.visualization.board_renderer import (  # noqa: F401
+from maou.domain.visualization.board_renderer import (
     SVGBoardRenderer as SVGBoardRenderer,
 )
 from maou.domain.visualization.move_label_converter import (

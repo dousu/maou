@@ -24,7 +24,6 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Optional
 
 # 先手 5三歩 + 持駒金 / 後手 5一玉 = G*5b の 1 手詰め．dfpn 単独で解けるので
 # モデルが無くても `go mate` を検証できる
@@ -103,9 +102,7 @@ class Engine:
             encoding=locale.getpreferredencoding(False),
             errors="replace",
         )
-        self.stdout_q: queue.Queue[Optional[str]] = (
-            queue.Queue()
-        )
+        self.stdout_q: queue.Queue[str | None] = queue.Queue()
         self.stderr_lines: list[str] = []
         threading.Thread(
             target=self._pump_stdout, daemon=True
@@ -179,7 +176,7 @@ class Engine:
 
 def run_smoke(
     engine_cmd: str,
-    model_path: Optional[str],
+    model_path: str | None,
     keep_alive: int,
     timeout: float,
 ) -> None:
@@ -305,7 +302,7 @@ def main() -> int:
             args.keep_alive,
             args.timeout,
         )
-    except Exception as e:  # noqa: BLE001 — CI で原因を 1 行で出したい
+    except Exception as e:
         print(
             f"smoke FAILED: {type(e).__name__}: {e}",
             file=sys.stderr,

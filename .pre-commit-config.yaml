@@ -13,10 +13,6 @@ repos:
   rev: 0.12.1
   hooks:
   - id: uv-lock
-- repo: https://github.com/pycqa/isort
-  rev: 9.0.0b1
-  hooks:
-  - id: isort
 - repo: https://github.com/pre-commit/pre-commit
   rev: v4.6.1
   hooks:

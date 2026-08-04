@@ -120,8 +120,8 @@ class GameGraphLayoutService:
                     child_primary_prob[c_hash] = prob
 
         # 各親の子リストを確率降順でソート
-        for p_hash in parent_children:
-            parent_children[p_hash].sort(
+        for children in parent_children.values():
+            children.sort(
                 key=lambda item: item[1], reverse=True
             )
 
@@ -219,9 +219,8 @@ class GameGraphLayoutService:
 
         # positions に含まれていないノードの処理
         # (エッジがないか depth_nodes から漏れたノード)
-        for h in node_depths:
+        for h, d in node_depths.items():
             if h not in positions:
-                d = node_depths[h]
                 y = d * rank_spacing
                 # 該当 depth の右端に配置
                 existing_at_d = [

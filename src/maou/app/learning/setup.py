@@ -830,9 +830,10 @@ class LossOptimizerFactory:
                 module_name, model
             )
 
-            if isinstance(parent_module, normalization_modules):
-                no_decay_params.append(param)
-            elif param.ndim <= 1:
+            if (
+                isinstance(parent_module, normalization_modules)
+                or param.ndim <= 1
+            ):
                 no_decay_params.append(param)
             else:
                 decay_params.append(param)

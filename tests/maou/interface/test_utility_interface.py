@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-import maou.interface.utility_interface as utility_interface
+from maou.interface import utility_interface
 
 
 class _DummyDataSource:

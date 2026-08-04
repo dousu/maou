@@ -99,9 +99,11 @@ class TestGameGraphIO:
         """ファイルが存在しない場合のエラー."""
         io = GameGraphIO()
 
-        with tempfile.TemporaryDirectory() as tmp:
-            with pytest.raises(FileNotFoundError):
-                io.load(Path(tmp))
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            pytest.raises(FileNotFoundError),
+        ):
+            io.load(Path(tmp))
 
     def test_creates_output_dir(self) -> None:
         """出力先ディレクトリが存在しない場合は作成する."""

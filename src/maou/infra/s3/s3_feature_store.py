@@ -11,8 +11,6 @@ from maou.infra.object_storage.feature_store import (
 class NotFoundKeyColumns(Exception):
     """キーカラムが対象のスキーマ内に見つからない."""
 
-    pass
-
 
 logger: logging.Logger = logging.getLogger(__name__)
 

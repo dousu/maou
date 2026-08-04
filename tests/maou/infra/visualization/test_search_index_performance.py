@@ -1,7 +1,6 @@
 """検索インデックスのパフォーマンス改善後の正確性テスト．"""
 
 from pathlib import Path
-from typing import List, Tuple
 
 import pytest
 
@@ -96,7 +95,7 @@ class TestSearchIndexOptimized:
         )
 
         # 全件取得して件数比較
-        all_results: List[Tuple[int, int]] = []
+        all_results: list[tuple[int, int]] = []
         offset = 0
         while True:
             batch = hcpe_index.search_by_eval_range(

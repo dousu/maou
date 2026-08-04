@@ -58,7 +58,7 @@ def make_listing_html(csa_names: list[str]) -> bytes:
         f"    <ul>\n    {body}\n    </ul>\n"
         '    <footer><div>top: <a href="/shogi">wdoor'
         "</a></div></footer>\n</body>\n</html>\n"
-    ).encode("utf-8")
+    ).encode()
 
 
 class FakeHttpClient(HttpClient):

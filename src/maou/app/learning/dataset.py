@@ -18,7 +18,6 @@ class DataSource:
         Returns:
             np.ndarray: structured arrayの単一レコード（0次元配列）
         """
-        pass
 
     @abc.abstractmethod
     def __len__(self) -> int:
@@ -87,7 +86,7 @@ class KifDataset(Dataset, Sized):
         )
         result_value_tensor = torch.tensor(
             data["resultValue"].item(), dtype=torch.float32
-        ).reshape((1))
+        ).reshape(1)
 
         legal_move_mask_tensor = torch.ones_like(
             move_label_tensor

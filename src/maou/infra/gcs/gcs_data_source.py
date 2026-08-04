@@ -13,7 +13,7 @@ class GCSDataSource(ObjectStorageDataSource):
         def list_objects(
             bucket_name: str, data_path: str
         ) -> list[tuple[str, int]]:
-            import google.cloud.storage as storage
+            import google.cloud.storage as storage  # noqa: PLR0402 (namespace package: from-import だと mypy が属性解決できない)
 
             client = storage.Client()
             bucket = client.bucket(bucket_name)
@@ -30,7 +30,7 @@ class GCSDataSource(ObjectStorageDataSource):
         def download_files(
             bucket_name: str, object_paths: list[str]
         ) -> list[bytes]:
-            import google.cloud.storage as storage
+            import google.cloud.storage as storage  # noqa: PLR0402 (namespace package: from-import だと mypy が属性解決できない)
 
             client = storage.Client()
             bucket = client.bucket(bucket_name)

@@ -232,7 +232,9 @@ def validate_report(
     """
     positions = report.get("positions")
     if not isinstance(positions, list):
-        raise ValueError(
+        # docstring の Raises 契約どおり ValueError を維持する
+        # (呼び出し側は「不正な JSON を渡した」ユーザエラーとして扱う)
+        raise ValueError(  # noqa: TRY004
             "レポートに positions がありません "
             "(analyze-game の JSON 出力を指定してください)"
         )

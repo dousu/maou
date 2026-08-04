@@ -91,7 +91,7 @@ class TestVisualizationIntegration:
             table_data,
             page_info,
             board_svg,
-            record_details,
+            _record_details,
             cached_records,
         ) = viz_interface.search_by_eval_range(
             min_eval=-1000,

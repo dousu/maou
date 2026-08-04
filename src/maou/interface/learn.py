@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 import torch
 
-from maou.app.learning.adaptive_batch import (  # noqa: F401
+from maou.app.learning.adaptive_batch import (
     AdaptiveBatchConfig as AdaptiveBatchConfig,
 )
 from maou.app.learning.dl import (
@@ -29,7 +29,7 @@ from maou.app.learning.network import (
     BackboneArchitecture,
     HeadlessNetwork,
 )
-from maou.app.learning.policy_targets import (  # noqa: F401
+from maou.app.learning.policy_targets import (
     PolicyTargetMode as PolicyTargetMode,
 )
 from maou.app.learning.setup import (

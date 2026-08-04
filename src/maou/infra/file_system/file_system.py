@@ -1,10 +1,9 @@
 from pathlib import Path
 
-import maou.interface.converter as converter
-import maou.interface.preprocess as preprocess
 from maou.infra.file_system.path_utils import (
     collect_files as _collect_files,
 )
+from maou.interface import converter, preprocess
 
 
 # NOTE: maou.interface.learn の FileSystem ABC は継承しない．

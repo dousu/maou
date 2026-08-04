@@ -78,9 +78,7 @@ class TestBudgetAllocators:
 
 class TestDecodeKifuBytes:
     def test_utf8(self) -> None:
-        assert (
-            decode_kifu_bytes("将棋".encode("utf-8")) == "将棋"
-        )
+        assert decode_kifu_bytes("将棋".encode()) == "将棋"
 
     def test_cp932_fallback(self) -> None:
         text = "先手：将棋太郎"

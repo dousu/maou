@@ -4,7 +4,7 @@
 
 **Pre-commit pipeline**:
 ```bash
-uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/ && uv run mypy src/ && uv run pytest
+uv run ruff format src/ && uv run ruff check src/ --fix && uv run mypy src/ && uv run pytest
 ```
 
 **Commit format**: `feat|fix|docs|refactor|test|perf: message`

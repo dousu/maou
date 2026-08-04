@@ -18,7 +18,7 @@ BASE_URL = "https://example.test/x/"
 CSA_NAME = "wdoor+floodgate-300-10F+A+B+20250105233006.csa"
 LISTING = (
     f'<html><body><a href="{CSA_NAME}">csa</a></body></html>'
-).encode("utf-8")
+).encode()
 
 
 class FakeHttpClient(HttpClient):

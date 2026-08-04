@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -499,7 +500,7 @@ def _make_stage_components(
     board_vocab_size: int = 32,
     hand_dim: int = PIECES_IN_HAND_VECTOR_SIZE,
     max_epochs: int = 1,
-) -> "StageComponents":
+) -> StageComponents:
     """テスト用の StageComponents を生成する．"""
     from maou.app.learning.multi_stage_training import (
         Stage1ModelAdapter,
@@ -1055,11 +1056,10 @@ class TestStage3ModelAdapter:
         adapter = Stage3ModelAdapter(network)
 
         # アダプターをコンパイル (eager fallback でも動作確認可能)
-        try:
+        # CI 環境で torch.compile が使えない場合はスキップ
+        with contextlib.suppress(Exception):
             compiled = torch.compile(adapter)
             _ = compiled  # コンパイル自体がエラーにならないことを確認
-        except Exception:
-            pass  # CI 環境で torch.compile が使えない場合はスキップ
 
         # Network の state_dict にはプレフィックスが付かない
         for key in network.state_dict():

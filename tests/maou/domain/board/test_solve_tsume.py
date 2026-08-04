@@ -248,7 +248,7 @@ class TestSolveTsumeConcurrency:
                     MATE_1TE, depth=3, nodes=100_000
                 )
                 results.append(r.status)
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 errors.append(exc)
 
         threads = [

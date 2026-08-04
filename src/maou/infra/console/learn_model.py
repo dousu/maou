@@ -3,8 +3,8 @@ from typing import TYPE_CHECKING, Any
 
 import click
 
-import maou.infra.console.common as common
-import maou.interface.learn as learn
+from maou.infra.console import common
+from maou.interface import learn
 from maou.interface.learn import (
     AdaptiveBatchConfig,
     PolicyTargetMode,

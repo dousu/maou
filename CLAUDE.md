@@ -163,7 +163,7 @@ SHOULD prefer Serena tools for token efficiency:
 ### Git Workflow
 - SHOULD follow commit format: `feat|fix|docs|refactor|test|perf: message`
 - SHOULD run QA pipeline before commit:
-  `uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/ && uv run mypy src/`
+  `uv run ruff format src/ && uv run ruff check src/ --fix && uv run mypy src/`
 
 ### Agent Teams
 - SHOULD limit team agents to 2 or fewer in 8GB RAM DevContainer environments

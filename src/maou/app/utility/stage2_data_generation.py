@@ -129,7 +129,9 @@ class Stage2DataGenerationUseCase:
                 hash_ids = hcp_hashes(hcps)
 
                 # Insert into DuckDB with dedup (INSERT OR IGNORE)
-                batch_df = pl.DataFrame(  # noqa: F841 (used by DuckDB)
+                # DuckDB は呼び出し元フレームから batch_df を名前解決するため
+                # 未使用に見えるが削除してはならない (下の SELECT * FROM batch_df)
+                batch_df = pl.DataFrame(  # noqa: F841
                     {
                         "hash_id": pl.Series(
                             "hash_id",

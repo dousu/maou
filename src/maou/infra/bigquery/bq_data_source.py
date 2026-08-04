@@ -9,8 +9,7 @@ from typing import Literal
 import polars as pl
 from google.cloud import bigquery
 
-import maou.interface.learn as learn
-import maou.interface.preprocess as preprocess
+from maou.interface import learn, preprocess
 
 
 class MissingBigQueryConfig(Exception):
@@ -83,12 +82,7 @@ class BigQueryDataSource(
             self,
             data: list,
             test_ratio: float = 0.25,
-            seed: int
-            | float
-            | str
-            | bytes
-            | bytearray
-            | None = None,
+            seed: float | str | bytes | bytearray | None = None,
         ) -> tuple:
             if seed is not None:
                 random.seed(seed)
@@ -383,16 +377,14 @@ class BigQueryDataSource(
                     ]
                     # クラスタ値でフィルタしたクエリを実行
                     # クラスタ値が文字列の場合はシングルクォートで囲む
-                    if isinstance(cluster_value, str):
-                        filter = f"{self.clustering_key} = '{cluster_value}'"
-                    elif isinstance(
-                        cluster_value, datetime.date
+                    if isinstance(
+                        cluster_value, (str, datetime.date)
                     ):
                         filter = f"{self.clustering_key} = '{cluster_value}'"
                     else:
                         filter = f"{self.clustering_key} = {cluster_value}"
                 else:
-                    raise Exception("Not found pruning key")
+                    raise ValueError("Not found pruning key")
 
                 # サンプリング句を追加
                 tablesample_clause = ""
@@ -681,8 +673,7 @@ class BigQueryDataSource(
         self,
     ) -> Generator[tuple[str, pl.DataFrame], None, None]:
         # indiciesを使ったランダムアクセスは無視して全体を効率よくアクセスする
-        for name, batch in self.__page_manager.iter_batches():
-            yield name, batch
+        yield from self.__page_manager.iter_batches()
 
     def total_pages(self) -> int:
         return self.__page_manager.total_pages

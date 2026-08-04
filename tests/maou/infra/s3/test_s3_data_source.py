@@ -15,6 +15,9 @@ from maou.domain.data.schema import (
     create_empty_hcpe_array,
     get_hcpe_polars_schema,
 )
+from maou.infra.object_storage.data_source import (
+    MissingObjectStorageConfig,
+)
 from maou.infra.s3.s3_data_source import S3DataSource
 from maou.infra.s3.s3_feature_store import S3FeatureStore
 
@@ -460,35 +463,35 @@ class TestS3DataSource:
         self, default_fixture: None, temp_cache_dir: Path
     ) -> None:
         """設定不足の場合のエラーをテストする"""
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             S3DataSource()
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             S3DataSource(bucket_name=self.bucket)
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             S3DataSource(prefix=self.prefix)
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             S3DataSource(data_name=self.data_name)
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             S3DataSource(local_cache_dir=str(temp_cache_dir))
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             S3DataSource(
                 bucket_name=self.bucket,
                 prefix=self.prefix,
             )
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             S3DataSource(
                 bucket_name=self.bucket,
                 prefix=self.prefix,
                 data_name=self.data_name,
             )
 
-        with pytest.raises(Exception):
+        with pytest.raises(MissingObjectStorageConfig):
             S3DataSource(
                 bucket_name=self.bucket,
                 prefix=self.prefix,

@@ -135,7 +135,7 @@ class TestGetSubtree:
         """min_probabilityでエッジをフィルタする."""
         nodes, edges = _build_simple_tree()
         query = GameGraphQuery(nodes, edges)
-        sub_nodes, sub_edges = query.get_subgraph(
+        _sub_nodes, sub_edges = query.get_subgraph(
             100, max_depth=2, min_probability=0.5
         )
         # probability >= 0.5 のエッジのみ: ROOT->A (0.6)
@@ -146,7 +146,7 @@ class TestGetSubtree:
         """存在しないハッシュからは空の結果を返す."""
         nodes, edges = _build_simple_tree()
         query = GameGraphQuery(nodes, edges)
-        sub_nodes, sub_edges = query.get_subgraph(
+        _sub_nodes, sub_edges = query.get_subgraph(
             999, max_depth=3
         )
         # 存在しないノードでも visited に含まれる

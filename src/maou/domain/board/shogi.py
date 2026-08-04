@@ -503,8 +503,7 @@ class Board:
         Yields:
             合法手のmove整数値(32-bit)
         """
-        for move in self.board.legal_moves():
-            yield move
+        yield from self.board.legal_moves()
 
     def get_move_from_move16(self, move16: int) -> int:
         """move16形式(16-bit)からフル move(32-bit)に変換する．

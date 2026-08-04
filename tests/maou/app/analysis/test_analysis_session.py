@@ -103,9 +103,7 @@ class TestLoadGame:
 
     def test_empty_moves_raises(self) -> None:
         """指し手ゼロの棋譜はエラー．"""
-        content = (
-            "V2\nN+black\nN-white\nPI\n+\n%TORYO\n"
-        ).encode("utf-8")
+        content = b"V2\nN+black\nN-white\nPI\n+\n%TORYO\n"
         with pytest.raises(ValueError, match="指し手"):
             load_game(content, "csa")
 

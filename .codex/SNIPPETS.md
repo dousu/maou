@@ -14,7 +14,6 @@ uv run pytest tests/app/test_converter.py::test_convert_basic -q
 ```bash
 uv run ruff format src/
 uv run ruff check src/ --fix
-uv run isort src/
 uv run mypy src/
 uv run pytest -q
 ```

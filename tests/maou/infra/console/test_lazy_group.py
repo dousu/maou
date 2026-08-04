@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from importlib.machinery import ModuleSpec
-from typing import Callable
 from unittest.mock import MagicMock, patch
 
 import click

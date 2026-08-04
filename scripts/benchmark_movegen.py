@@ -84,7 +84,7 @@ def bench_do_undo_move() -> None:
         cb = cshogi.Board(sfen)
 
         first_maou = mb.legal_moves()[0]
-        first_cshogi = list(cb.legal_moves)[0]
+        first_cshogi = next(iter(cb.legal_moves))
 
         # warmup
         for _ in range(1000):

@@ -20,7 +20,7 @@ def main():
     )
 
     # Create loss functions
-    loss_fn_policy, loss_fn_value = (
+    _loss_fn_policy, loss_fn_value = (
         LossOptimizerFactory.create_loss_functions(
             gce_parameter=0.7
         )
@@ -50,7 +50,7 @@ def main():
     # Forward pass
     model.eval()
     with torch.no_grad():
-        policy_logits, value_pred = model(inputs)
+        _policy_logits, value_pred = model(inputs)
 
     print("\nValue predictions:")
     print(
@@ -81,7 +81,7 @@ def main():
 
     for step in range(10):
         optimizer.zero_grad()
-        policy_logits, value_pred = model(inputs)
+        _policy_logits, value_pred = model(inputs)
         loss = loss_fn_value(value_pred, labels_value)
         loss.backward()
         optimizer.step()

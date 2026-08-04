@@ -195,7 +195,7 @@ class ColumnarBatch:
 
 
 def convert_preprocessing_df_to_columnar(
-    df: "pl.DataFrame",
+    df: pl.DataFrame,
 ) -> ColumnarBatch:
     """Polars preprocessing DataFrame → ColumnarBatch 変換．
 
@@ -255,7 +255,7 @@ def convert_preprocessing_df_to_columnar(
 
 
 def convert_stage1_df_to_columnar(
-    df: "pl.DataFrame",
+    df: pl.DataFrame,
 ) -> ColumnarBatch:
     """Stage 1 Polars DataFrame → ColumnarBatch 変換．
 
@@ -297,7 +297,7 @@ def convert_stage1_df_to_columnar(
 
 
 def convert_stage2_df_to_columnar(
-    df: "pl.DataFrame",
+    df: pl.DataFrame,
 ) -> ColumnarBatch:
     """Stage 2 Polars DataFrame → ColumnarBatch 変換．
 

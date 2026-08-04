@@ -83,7 +83,7 @@ class FakePreprocessingSource:
     ) -> Generator[ColumnarBatch, None, None]:
         rng = np.random.default_rng(123)
         all_paths = self._file_paths
-        target_set = set(str(fp) for fp in file_paths)
+        target_set = {str(fp) for fp in file_paths}
         for fp in all_paths:
             batch = self._make_batch(rng)
             if str(fp) in target_set:
@@ -148,7 +148,7 @@ class FakePreprocessingSourceWithWinRate:
     ) -> Generator[ColumnarBatch, None, None]:
         rng = np.random.default_rng(321)
         all_paths = self._file_paths
-        target_set = set(str(fp) for fp in file_paths)
+        target_set = {str(fp) for fp in file_paths}
         for fp in all_paths:
             batch = self._make_batch(rng)
             if str(fp) in target_set:
@@ -209,7 +209,7 @@ class FakeStage1Source:
     ) -> Generator[ColumnarBatch, None, None]:
         rng = np.random.default_rng(456)
         all_paths = self._file_paths
-        target_set = set(str(fp) for fp in file_paths)
+        target_set = {str(fp) for fp in file_paths}
         for fp in all_paths:
             batch = self._make_batch(rng)
             if str(fp) in target_set:
@@ -273,7 +273,7 @@ class FakeStage2Source:
     ) -> Generator[ColumnarBatch, None, None]:
         rng = np.random.default_rng(789)
         all_paths = self._file_paths
-        target_set = set(str(fp) for fp in file_paths)
+        target_set = {str(fp) for fp in file_paths}
         for fp in all_paths:
             batch = self._make_batch(rng)
             if str(fp) in target_set:
@@ -326,7 +326,7 @@ class TestStreamingKifDataset:
 
         features, targets = batches[0]
         board, pieces = features
-        move_label, result_value, legal_mask, move_win_rate = (
+        move_label, result_value, legal_mask, _move_win_rate = (
             targets
         )
 
@@ -402,8 +402,8 @@ class TestStreamingKifDataset:
             seed=42,
         )
 
-        shuffled_batch = list(ds_shuffled)[0]
-        unshuffled_batch = list(ds_unshuffled)[0]
+        shuffled_batch = next(iter(ds_shuffled))
+        unshuffled_batch = next(iter(ds_unshuffled))
 
         # Board tensors should differ in order
         assert not torch.equal(
@@ -423,10 +423,10 @@ class TestStreamingKifDataset:
         )
 
         dataset.set_epoch(0)
-        epoch0_batch = list(dataset)[0]
+        epoch0_batch = next(iter(dataset))
 
         dataset.set_epoch(1)
-        epoch1_batch = list(dataset)[0]
+        epoch1_batch = next(iter(dataset))
 
         assert not torch.equal(
             epoch0_batch[0][0], epoch1_batch[0][0]
@@ -444,7 +444,7 @@ class TestStreamingKifDataset:
             seed=42,
         )
 
-        _, targets = list(dataset)[0]
+        _, targets = next(iter(dataset))
         assert targets[1].shape == (5, 1)
         assert targets[1].dtype == torch.float32
 
@@ -460,7 +460,7 @@ class TestStreamingKifDataset:
             seed=42,
         )
 
-        _, targets = list(dataset)[0]
+        _, targets = next(iter(dataset))
         assert torch.all(targets[2] == 1.0)
 
 
@@ -481,9 +481,12 @@ class TestStreamingKifDatasetMoveWinRate:
 
         batches = list(dataset)
         _, targets = batches[0]
-        move_label, result_value, legal_mask, move_win_rate = (
-            targets
-        )
+        (
+            _move_label,
+            _result_value,
+            _legal_mask,
+            move_win_rate,
+        ) = targets
 
         assert move_win_rate is not None
         assert move_win_rate.shape == (6, MOVE_LABELS_NUM)
@@ -590,10 +593,10 @@ class TestStreamingStage1Dataset:
         )
 
         dataset.set_epoch(0)
-        epoch0 = list(dataset)[0]
+        epoch0 = next(iter(dataset))
 
         dataset.set_epoch(1)
-        epoch1 = list(dataset)[0]
+        epoch1 = next(iter(dataset))
 
         assert not torch.equal(epoch0[0][0], epoch1[0][0])
 
@@ -665,10 +668,10 @@ class TestStreamingStage2Dataset:
         )
 
         dataset.set_epoch(0)
-        epoch0 = list(dataset)[0]
+        epoch0 = next(iter(dataset))
 
         dataset.set_epoch(1)
-        epoch1 = list(dataset)[0]
+        epoch1 = next(iter(dataset))
 
         assert not torch.equal(epoch0[0][0], epoch1[0][0])
 
@@ -702,7 +705,7 @@ class TestDataLoaderIntegration:
         batches = list(loader)
         assert len(batches) == 3
 
-        features, targets = batches[0]
+        features, _targets = batches[0]
         assert features[0].shape == (4, 9, 9)
 
     def test_total_records_through_dataloader(
@@ -746,7 +749,7 @@ class TestDataLoaderIntegration:
 
         batches = list(loader)
         assert len(batches) == 2
-        features, target = batches[0]
+        _features, target = batches[0]
         assert target.shape == (4, 81)
 
     def test_stage2_dataloader(self) -> None:
@@ -767,7 +770,7 @@ class TestDataLoaderIntegration:
 
         batches = list(loader)
         assert len(batches) == 2
-        features, target = batches[0]
+        _features, target = batches[0]
         assert target.shape == (3, MOVE_LABELS_NUM)
 
 
@@ -857,9 +860,9 @@ class TestResolveWorkerFiles:
         shuffled = _resolve_worker_files(
             source, shuffle=True, epoch_seed=42
         )
-        assert set(str(f) for f in shuffled) == set(
+        assert {str(f) for f in shuffled} == {
             str(f) for f in original
-        )
+        }
 
     def test_no_shuffle_preserves_order(self) -> None:
         """Without shuffle, file order is preserved."""
@@ -1170,11 +1173,13 @@ def test_streaming_kif_dataset_exception_logged_and_reraised() -> (
     )
 
     target_logger = logging.getLogger(_STREAMING_LOGGER)
-    with patch.object(target_logger, "error") as mock_error:
-        with pytest.raises(
+    with (
+        patch.object(target_logger, "error") as mock_error,
+        pytest.raises(
             RuntimeError, match="Simulated file read error"
-        ):
-            list(dataset)
+        ),
+    ):
+        list(dataset)
 
     mock_error.assert_called_once()
     assert (
@@ -1194,11 +1199,13 @@ def test_streaming_stage1_dataset_exception_logged_and_reraised() -> (
     )
 
     target_logger = logging.getLogger(_STREAMING_LOGGER)
-    with patch.object(target_logger, "error") as mock_error:
-        with pytest.raises(
+    with (
+        patch.object(target_logger, "error") as mock_error,
+        pytest.raises(
             RuntimeError, match="Simulated file read error"
-        ):
-            list(dataset)
+        ),
+    ):
+        list(dataset)
 
     mock_error.assert_called_once()
     assert (
@@ -1218,11 +1225,13 @@ def test_streaming_stage2_dataset_exception_logged_and_reraised() -> (
     )
 
     target_logger = logging.getLogger(_STREAMING_LOGGER)
-    with patch.object(target_logger, "error") as mock_error:
-        with pytest.raises(
+    with (
+        patch.object(target_logger, "error") as mock_error,
+        pytest.raises(
             RuntimeError, match="Simulated file read error"
-        ):
-            list(dataset)
+        ),
+    ):
+        list(dataset)
 
     mock_error.assert_called_once()
     assert (

@@ -75,7 +75,7 @@ class BoardDisplayService:
             return svg
 
         except Exception as e:
-            logger.exception(f"Failed to render board: {e}")
+            logger.exception("Failed to render board")
             return self._render_error_board(str(e))
 
     def _render_default_board(self) -> str:

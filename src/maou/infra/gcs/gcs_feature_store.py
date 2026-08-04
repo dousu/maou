@@ -3,7 +3,7 @@ import logging
 import multiprocessing as mp
 from queue import Empty as QueueEmpty
 
-import google.cloud.storage as storage
+import google.cloud.storage as storage  # noqa: PLR0402 (namespace package: from-import だと mypy が属性解決できない)
 
 from maou.infra.object_storage.feature_store import (
     ObjectStorageFeatureStore,
@@ -12,8 +12,6 @@ from maou.infra.object_storage.feature_store import (
 
 class NotFoundKeyColumns(Exception):
     """キーカラムが対象のスキーマ内に見つからない."""
-
-    pass
 
 
 logger: logging.Logger = logging.getLogger(__name__)

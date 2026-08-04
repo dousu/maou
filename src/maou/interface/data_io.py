@@ -11,16 +11,16 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from maou.domain.data.columnar_batch import (  # noqa: F401
+from maou.domain.data.columnar_batch import (
     ColumnarBatch as ColumnarBatch,
 )
-from maou.domain.data.columnar_batch import (  # noqa: F401
+from maou.domain.data.columnar_batch import (
     convert_preprocessing_df_to_columnar as convert_preprocessing_df_to_columnar,
 )
-from maou.domain.data.columnar_batch import (  # noqa: F401
+from maou.domain.data.columnar_batch import (
     convert_stage1_df_to_columnar as convert_stage1_df_to_columnar,
 )
-from maou.domain.data.columnar_batch import (  # noqa: F401
+from maou.domain.data.columnar_batch import (
     convert_stage2_df_to_columnar as convert_stage2_df_to_columnar,
 )
 
@@ -33,44 +33,42 @@ logger: logging.Logger = logging.getLogger(__name__)
 # --- rust_io re-exports (lazy: Rust backend may not be built) ---
 
 
-def load_hcpe_df(path: Path) -> "pl.DataFrame":
+def load_hcpe_df(path: Path) -> pl.DataFrame:
     """Load HCPE DataFrame from Arrow IPC file."""
     import maou.domain.data.rust_io as _rust_io
 
     return _rust_io.load_hcpe_df(path)
 
 
-def load_preprocessing_df(path: Path) -> "pl.DataFrame":
+def load_preprocessing_df(path: Path) -> pl.DataFrame:
     """Load preprocessing DataFrame from Arrow IPC file."""
     import maou.domain.data.rust_io as _rust_io
 
     return _rust_io.load_preprocessing_df(path)
 
 
-def load_stage1_df(path: Path) -> "pl.DataFrame":
+def load_stage1_df(path: Path) -> pl.DataFrame:
     """Load stage1 DataFrame from Arrow IPC file."""
     import maou.domain.data.rust_io as _rust_io
 
     return _rust_io.load_stage1_df(path)
 
 
-def load_stage2_df(path: Path) -> "pl.DataFrame":
+def load_stage2_df(path: Path) -> pl.DataFrame:
     """Load stage2 DataFrame from Arrow IPC file."""
     import maou.domain.data.rust_io as _rust_io
 
     return _rust_io.load_stage2_df(path)
 
 
-def save_hcpe_df(df: "pl.DataFrame", path: Path) -> None:
+def save_hcpe_df(df: pl.DataFrame, path: Path) -> None:
     """Save HCPE DataFrame to Arrow IPC file."""
     import maou.domain.data.rust_io as _rust_io
 
     _rust_io.save_hcpe_df(df, path)
 
 
-def save_preprocessing_df(
-    df: "pl.DataFrame", path: Path
-) -> None:
+def save_preprocessing_df(df: pl.DataFrame, path: Path) -> None:
     """Save preprocessing DataFrame to Arrow IPC file."""
     import maou.domain.data.rust_io as _rust_io
 
@@ -80,14 +78,14 @@ def save_preprocessing_df(
 # --- dataframe_io re-exports (lazy: depends on optional polars) ---
 
 
-def save_hcpe_df_to_bytes(df: "pl.DataFrame") -> bytes:
+def save_hcpe_df_to_bytes(df: pl.DataFrame) -> bytes:
     """Save HCPE DataFrame to bytes (Arrow IPC format)."""
     import maou.domain.data.dataframe_io as _dataframe_io
 
     return _dataframe_io.save_hcpe_df_to_bytes(df)
 
 
-def save_preprocessing_df_to_bytes(df: "pl.DataFrame") -> bytes:
+def save_preprocessing_df_to_bytes(df: pl.DataFrame) -> bytes:
     """Save preprocessing DataFrame to bytes (Arrow IPC format)."""
     import maou.domain.data.dataframe_io as _dataframe_io
 
@@ -100,7 +98,7 @@ def load_df_from_bytes(
     array_type: Literal[
         "hcpe", "preprocessing", "stage1", "stage2"
     ],
-) -> "pl.DataFrame":
+) -> pl.DataFrame:
     """Load Polars DataFrame from bytes (Arrow IPC format)．
 
     Args:
@@ -125,7 +123,7 @@ def load_df_from_bytes(
 
 
 def save_df_to_bytes(
-    df: "pl.DataFrame",
+    df: pl.DataFrame,
     *,
     array_type: Literal[
         "hcpe", "preprocessing", "stage1", "stage2"

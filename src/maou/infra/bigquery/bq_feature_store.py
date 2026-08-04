@@ -8,26 +8,19 @@ import numpy as np
 import polars as pl
 from google.cloud import bigquery
 
-import maou.interface.converter as converter
-import maou.interface.preprocess as preprocess
+from maou.interface import converter, preprocess
 
 
 class SchemaConflictError(Exception):
     """スキーマの不一致により正常な動作ができない."""
 
-    pass
-
 
 class NotFoundKeyColumns(Exception):
     """キーカラムが対象のスキーマ内に見つからない."""
 
-    pass
-
 
 class BigQueryJobError(Exception):
     """BigQueryに発行したジョブでエラーが発生した."""
-
-    pass
 
 
 class BigQueryFeatureStore(
@@ -257,15 +250,12 @@ class BigQueryFeatureStore(
                 "drop tableの対象の指定がされていません"
             )
 
-        try:
-            self.client.delete_table(
-                table=table_ref, not_found_ok=True
-            )
-            self.logger.debug(
-                f"Deleted table. table_id: {table_id}"
-            )
-        except Exception:
-            raise
+        self.client.delete_table(
+            table=table_ref, not_found_ok=True
+        )
+        self.logger.debug(
+            f"Deleted table. table_id: {table_id}"
+        )
 
     def load_from_dataframe(
         self,
@@ -337,14 +327,11 @@ class BigQueryFeatureStore(
         table_id = (
             f"{self.client.project}.{dataset_id}.{table_name}"
         )
-        try:
-            table = self.client.get_table(table_id)
-            self.logger.debug(f"Table '{table_id}' exists.")
-            # list_rows自体はページングするので
-            # この時点ではテーブルをすべてダウンロードしない
-            rows = self.client.list_rows(table)
-        except Exception:
-            raise
+        table = self.client.get_table(table_id)
+        self.logger.debug(f"Table '{table_id}' exists.")
+        # list_rows自体はページングするので
+        # この時点ではテーブルをすべてダウンロードしない
+        rows = self.client.list_rows(table)
         return rows.to_dataframe().to_records(index=False)
 
     # context managerを使って特徴量ストア用の動作のflushを管理する
@@ -352,8 +339,6 @@ class BigQueryFeatureStore(
     def feature_store(self) -> Generator[None, None, None]:
         try:
             yield
-        except Exception:
-            raise
         finally:
             self.__cleanup()
 
@@ -509,135 +494,130 @@ class BigQueryFeatureStore(
             f"Temp table: {temp_table.full_table_id}"
         )
 
-        try:
-            temp_table = self.load_from_dataframe(
-                dataset_id=temp_table.dataset_id,
-                table_name=temp_table.table_id,
-                dataframe=combined_df,
-            )
-            temp_table_bytes = temp_table.num_bytes
-            self.logger.debug(
-                "Inserted rows to temporary table."
-                f" table_id: {temp_table.full_table_id}"
-                f" num_bytes: {temp_table_bytes}"
-            )
+        temp_table = self.load_from_dataframe(
+            dataset_id=temp_table.dataset_id,
+            table_name=temp_table.table_id,
+            dataframe=combined_df,
+        )
+        temp_table_bytes = temp_table.num_bytes
+        self.logger.debug(
+            "Inserted rows to temporary table."
+            f" table_id: {temp_table.full_table_id}"
+            f" num_bytes: {temp_table_bytes}"
+        )
 
-            # delete/insertクエリ
-            # クラスタリングキーはなるべく明示的に指定するようにしている
-            if clustering_key is None or not bool(
-                self.clustering_keys
-            ):
-                clustering_key_condition = []
-            else:
-                clustering_key_condition = [
-                    f"target.{clustering_key} in "
-                    "("
-                    + ", ".join(
-                        [
-                            f"'{value}'"
-                            for value in self.clustering_keys
-                        ]
-                    )
-                    + ")"
-                ]
-            # パーティショニングキーはなるべく明示的に指定するようにしている
-            if partitioning_key_date is None or not bool(
-                self.partitioning_date_keys
-            ):
-                partitioning_key_condition = []
-            else:
-                dates = ", ".join(
+        # delete/insertクエリ
+        # クラスタリングキーはなるべく明示的に指定するようにしている
+        if clustering_key is None or not bool(
+            self.clustering_keys
+        ):
+            clustering_key_condition = []
+        else:
+            clustering_key_condition = [
+                f"target.{clustering_key} in "
+                "("
+                + ", ".join(
                     [
-                        f"DATE '{value}'"
-                        for value in self.partitioning_date_keys
+                        f"'{value}'"
+                        for value in self.clustering_keys
                     ]
                 )
-                partitioning_key_condition = [
-                    f"target.{partitioning_key_date} in ({dates})"
-                ]
-                # パーティションキーを取り出したらリセットしておく
-                # これを忘れるとほぼtargetテーブルの全スキャンになってしまう
-                self.partitioning_date_keys.clear()
-            on_conditions = " AND ".join(
+                + ")"
+            ]
+        # パーティショニングキーはなるべく明示的に指定するようにしている
+        if partitioning_key_date is None or not bool(
+            self.partitioning_date_keys
+        ):
+            partitioning_key_condition = []
+        else:
+            dates = ", ".join(
                 [
-                    f"target.{col} = source.{col}"
-                    for col in key_columns
-                ]
-                + clustering_key_condition
-                + partitioning_key_condition
-            )
-            all_columns = [field.name for field in schema]
-            update_set_clause = ", ".join(
-                [
-                    f"target.{col} = source.{col}"
-                    for col in all_columns
+                    f"DATE '{value}'"
+                    for value in self.partitioning_date_keys
                 ]
             )
-            insert_columns = ", ".join(all_columns)
-            insert_values = ", ".join(
-                [f"source.{col}" for col in all_columns]
+            partitioning_key_condition = [
+                f"target.{partitioning_key_date} in ({dates})"
+            ]
+            # パーティションキーを取り出したらリセットしておく
+            # これを忘れるとほぼtargetテーブルの全スキャンになってしまう
+            self.partitioning_date_keys.clear()
+        on_conditions = " AND ".join(
+            [
+                f"target.{col} = source.{col}"
+                for col in key_columns
+            ]
+            + clustering_key_condition
+            + partitioning_key_condition
+        )
+        all_columns = [field.name for field in schema]
+        update_set_clause = ", ".join(
+            [
+                f"target.{col} = source.{col}"
+                for col in all_columns
+            ]
+        )
+        insert_columns = ", ".join(all_columns)
+        insert_values = ", ".join(
+            [f"source.{col}" for col in all_columns]
+        )
+        if bool(clustering_key_condition):
+            when_matched_clustering_condition = (
+                "AND " + " AND ".join(clustering_key_condition)
             )
-            if bool(clustering_key_condition):
-                when_matched_clustering_condition = (
-                    "AND "
-                    + " AND ".join(clustering_key_condition)
-                )
-            else:
-                when_matched_clustering_condition = ""
-            if bool(partitioning_key_condition):
-                when_matched_partitioning_condition = (
-                    "AND "
-                    + " AND ".join(partitioning_key_condition)
-                )
-            else:
-                when_matched_partitioning_condition = ""
-            query = f"""
-            MERGE
-              `{str(table.full_table_id).replace(":", ".")}`
-              AS target
-            USING
-              `{str(temp_table.full_table_id).replace(":", ".")}`
-              AS source
-            ON {on_conditions}
-            WHEN MATCHED
-              {when_matched_clustering_condition}
-              {when_matched_partitioning_condition}
-              THEN
-                UPDATE SET {update_set_clause}
-            WHEN NOT MATCHED BY TARGET THEN
-              INSERT ({insert_columns})
-              VALUES ({insert_values})
-            """
-            self.logger.debug(f"Storing feature query: {query}")
-            query_job = self.client.query(
-                query=query, location=self.location
+        else:
+            when_matched_clustering_condition = ""
+        if bool(partitioning_key_condition):
+            when_matched_partitioning_condition = (
+                "AND "
+                + " AND ".join(partitioning_key_condition)
             )
-            query_job.result()
-            if query_job.errors:
-                self.logger.error(
-                    f"Failed to insert rows: {query_job.errors}"
-                )
-                raise BigQueryJobError(
-                    f"Failed to insert rows: {query_job.errors}"
-                )
+        else:
+            when_matched_partitioning_condition = ""
+        query = f"""
+        MERGE
+          `{str(table.full_table_id).replace(":", ".")}`
+          AS target
+        USING
+          `{str(temp_table.full_table_id).replace(":", ".")}`
+          AS source
+        ON {on_conditions}
+        WHEN MATCHED
+          {when_matched_clustering_condition}
+          {when_matched_partitioning_condition}
+          THEN
+            UPDATE SET {update_set_clause}
+        WHEN NOT MATCHED BY TARGET THEN
+          INSERT ({insert_columns})
+          VALUES ({insert_values})
+        """
+        self.logger.debug(f"Storing feature query: {query}")
+        query_job = self.client.query(
+            query=query, location=self.location
+        )
+        query_job.result()
+        if query_job.errors:
+            self.logger.error(
+                f"Failed to insert rows: {query_job.errors}"
+            )
+            raise BigQueryJobError(
+                f"Failed to insert rows: {query_job.errors}"
+            )
 
-            # ガードレールとしてパーティショニングフィルターが働いていなければ止める
-            # 一旦仮の閾値として3倍以上のデータを処理していたら強制終了する
-            if temp_table_bytes is None or (
-                temp_table_bytes is not None
-                and query_job.total_bytes_processed
-                > temp_table_bytes * 3
-            ):
-                self.logger.error(
-                    f"Too much processed bytes: {query_job.total_bytes_processed}"
-                    f", temp_table bytes: {temp_table.num_bytes}"
-                )
-                raise BigQueryJobError(
-                    f"Too much processed bytes: {query_job.total_bytes_processed}"
-                )
-
-        except Exception:
-            raise
+        # ガードレールとしてパーティショニングフィルターが働いていなければ止める
+        # 一旦仮の閾値として3倍以上のデータを処理していたら強制終了する
+        if temp_table_bytes is None or (
+            temp_table_bytes is not None
+            and query_job.total_bytes_processed
+            > temp_table_bytes * 3
+        ):
+            self.logger.error(
+                f"Too much processed bytes: {query_job.total_bytes_processed}"
+                f", temp_table bytes: {temp_table.num_bytes}"
+            )
+            raise BigQueryJobError(
+                f"Too much processed bytes: {query_job.total_bytes_processed}"
+            )
 
     def __cleanup(self) -> None:
         """store_features用のデストラクタ処理"""

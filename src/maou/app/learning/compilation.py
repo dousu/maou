@@ -27,8 +27,6 @@ else:  # pragma: no cover - optional import for CUDA builds only
         class InductorErrorType(RuntimeError):
             """Fallback when torch._inductor is unavailable."""
 
-            pass
-
 
 InductorError = InductorErrorType
 

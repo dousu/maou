@@ -183,7 +183,7 @@ class TestGameGraphBuilder:
         )
 
         builder = GameGraphBuilder()
-        nodes, edges = builder.build(
+        _nodes, edges = builder.build(
             df, max_depth=1, min_probability=0.01
         )
 
@@ -311,7 +311,7 @@ class TestGameGraphBuilder:
         df = _build_preprocess_df([row_a, row_b])
 
         builder = GameGraphBuilder()
-        nodes, edges = builder.build(df, max_depth=1)
+        nodes, _edges = builder.build(df, max_depth=1)
 
         assert len(nodes) == 1
         # dict内包表記のlookupは後勝ちなので最後の行(0.3)が使われる
@@ -381,7 +381,7 @@ class TestGameGraphBuilder:
         df = _build_preprocess_df(rows)
 
         builder = GameGraphBuilder()
-        nodes, edges = builder.build(
+        nodes, _edges = builder.build(
             df, max_depth=5, min_probability=0.01
         )
 

@@ -3,7 +3,7 @@ import os
 import re
 import uuid
 from collections.abc import Generator
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -201,7 +201,7 @@ class TestIntegrationHcpeConverter:
                 endgameStatus,
                 moves,
                 partitioningKey,
-            ) in zip(  # noqa: E501
+            ) in zip(
                 [str(uuid.uuid4()) for _ in range(num_rows)],
                 [
                     np.zeros(32, dtype=np.uint8)
@@ -331,7 +331,7 @@ class TestIntegrationHcpeConverter:
 
         self.insert_partitioning_test_data()
 
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
 
         feature_store = BigQueryFeatureStore(
             dataset_id=self.dataset_id,

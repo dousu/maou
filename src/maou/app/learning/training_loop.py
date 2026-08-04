@@ -541,9 +541,7 @@ class TrainingLoop:
         # accumulation カウンタ更新
         # 非有限損失で backward がスキップされた場合は
         # 勾配がクリアされているためサイクルを最初からやり直す
-        if skipped:
-            self._accumulation_counter = 0
-        elif not is_accumulation_step:
+        if skipped or not is_accumulation_step:
             self._accumulation_counter = 0
         else:
             self._accumulation_counter += 1
@@ -737,7 +735,7 @@ class TrainingLoop:
                 ]
             return value
 
-        moved = move(inputs, tuple())
+        moved = move(inputs, ())
         return cast(ModelInputs, moved)
 
     @staticmethod
