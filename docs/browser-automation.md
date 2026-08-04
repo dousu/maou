@@ -18,7 +18,7 @@ The project uses Python Playwright with Chromium for headless browser automation
 When using GitHub Codespaces or DevContainer，Playwright is automatically installed via `postCreateCommand`:
 
 ```bash
-poetry install --extras visualize && poetry run playwright install --with-deps chromium
+uv sync --extra visualize && uv run playwright install --with-deps chromium
 ```
 
 ### Manual Installation
@@ -27,16 +27,16 @@ If you need to install manually:
 
 ```bash
 # Install visualization dependencies including Playwright
-poetry install --extras visualize
+uv sync --extra visualize
 
 # Install Chromium browser
-poetry run playwright install --with-deps chromium
+uv run playwright install --with-deps chromium
 ```
 
 ### Verify Installation
 
 ```bash
-poetry run playwright --version
+uv run playwright --version
 ```
 
 Expected output: `Version 1.40.x` or higher
@@ -49,17 +49,17 @@ The screenshot functionality is available via the `maou utility screenshot` CLI 
 
 ```bash
 # Basic screenshot
-poetry run maou utility screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/screenshot.png
 
 # Base64 output for Claude Vision API
-poetry run maou utility screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --base64
 
 # Capture specific element
-poetry run maou utility screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --selector "#search-results"
 ```
@@ -99,11 +99,11 @@ The Maou visualization UI exposes these common selectors:
 
 ```bash
 # 1. Start Gradio server
-poetry run maou visualize --use-mock-data &
+uv run maou visualize --use-mock-data &
 sleep 10
 
 # 2. Capture screenshot
-poetry run maou utility screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/gradio-screenshot.png
 
@@ -118,18 +118,18 @@ lsof -ti :7860 | xargs kill -9 2>/dev/null || true
 
 ```bash
 # Main view
-poetry run maou utility screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --output /tmp/main-view.png
 
 # Mode badge only
-poetry run maou utility screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --selector "#mode-badge" \
   --output /tmp/mode-badge.png
 
 # Full page with scroll
-poetry run maou utility screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --full-page \
   --output /tmp/full-page.png
@@ -155,7 +155,7 @@ Gradio is a Single Page Application (SPA) that loads content dynamically and kee
 For slow-loading pages，increase timeout:
 
 ```bash
-poetry run maou utility screenshot \
+uv run maou utility screenshot \
   --url http://localhost:7860 \
   --timeout 60000
 ```
@@ -165,8 +165,8 @@ poetry run maou utility screenshot \
 ### Playwright Not Found
 
 ```bash
-poetry install --extras visualize
-poetry run playwright install --with-deps chromium
+uv sync --extra visualize
+uv run playwright install --with-deps chromium
 ```
 
 ### Browser Launch Failure
@@ -181,7 +181,7 @@ sudo apt-get install -y libnss3 libnspr4 libasound2
 Or reinstall with dependencies:
 
 ```bash
-poetry run playwright install --with-deps chromium
+uv run playwright install --with-deps chromium
 ```
 
 ### Timeout Errors
@@ -202,7 +202,7 @@ Chromium can be memory-intensive. If encountering OOM:
 
 ```bash
 # Run with reduced memory
-poetry run playwright install chromium  # Skip --with-deps if low memory
+uv run playwright install chromium  # Skip --with-deps if low memory
 ```
 
 ## Architecture
@@ -215,7 +215,7 @@ src/maou/infra/console/screenshot.py  # CLI command implementation
 
 **Design decisions:**
 
-1. **Python Playwright**: Single dependency management via Poetry
+1. **Python Playwright**: Single dependency management via uv
 2. **Chromium only**: Minimal footprint (~150MB)
 3. **Gradio-optimized**: Default wait for `.gradio-container`
 4. **Claude Vision ready**: Base64 output option
@@ -224,7 +224,7 @@ src/maou/infra/console/screenshot.py  # CLI command implementation
 
 The Python Playwright implementation provides security improvements over the previous npm-based approach:
 
-- **Single dependency manager**: All dependencies managed via Poetry (`pyproject.toml` / `poetry.lock`)
+- **Single dependency manager**: All dependencies managed via uv (`pyproject.toml` / `uv.lock`)
 - **No npm ecosystem**: Eliminates npm supply chain attack risks
 - **Official browser binaries**: Chromium installed via `playwright install` from official sources
 

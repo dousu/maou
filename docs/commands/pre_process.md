@@ -98,7 +98,7 @@ exclusion and warns when extras are missing.【F:src/maou/infra/console/pre_proc
 ### Example invocation
 
 ```bash
-poetry run maou pre-process \
+uv run maou pre-process \
   --input-gcs \
   --input-bucket-name maou-hcpe \
   --input-prefix prod/shards \

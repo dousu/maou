@@ -31,7 +31,7 @@ Google ColabおよびVSCode環境で，大規模な将棋学習データ（1000�
 
 5. **CLI統合**
    - 既存のmaou CLIコマンドに統合
-   - オプショナル依存関係（`poetry install -E visualize`）
+   - オプショナル依存関係（`uv sync --extra visualize`）
 
 ### 非機能要件
 
@@ -247,7 +247,7 @@ SearchIndex               SVGBoardRenderer
 
 ### 6. オプショナル依存関係管理
 
-**戦略**: Poetry extra `visualize`
+**戦略**: extra `visualize` (`[project.optional-dependencies]`)
 
 **pyproject.toml設定**:
 ```toml
@@ -336,7 +336,7 @@ visualize = [
 - Gradio UIスケルトン
 - CLIコマンド登録
 
-**検証**: `poetry run maou visualize --help`
+**検証**: `uv run maou visualize --help`
 
 ### Phase 2: Rust検索インデックス ✅完了
 

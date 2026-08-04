@@ -1,7 +1,7 @@
 version: 1
 policies:
   shell:
-    run_prefix: "poetry run"
+    run_prefix: "uv run"
     enforce_tools:
       - pytest
       - mypy
@@ -18,10 +18,10 @@ policies:
 defaults:
   branch_naming: "feature/{ticket_or_topic}"
   commit_convention: "conventional"
-  test_command: "poetry run pytest -q"
+  test_command: "uv run pytest -q"
   qa_pipeline:
-    - "poetry run ruff format src/"
-    - "poetry run ruff check src/ --fix"
-    - "poetry run isort src/"
-    - "poetry run mypy src/"
-    - "poetry run pytest -q"
+    - "uv run ruff format src/"
+    - "uv run ruff check src/ --fix"
+    - "uv run isort src/"
+    - "uv run mypy src/"
+    - "uv run pytest -q"

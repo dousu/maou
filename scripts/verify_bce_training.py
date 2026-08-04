@@ -213,7 +213,7 @@ def main():
     print("Recommended Training Command")
     print("=" * 80)
     print("""
-poetry run maou learn-model \\
+uv run maou learn-model \\
   --input-format preprocess \\
   --input-dir preprocess/floodgate/2020 \\
   --input-file-packed \\

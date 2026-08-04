@@ -19,18 +19,18 @@
 
 ```bash
 # 可視化ツール込みでインストール
-poetry install -E visualize
+uv sync --extra visualize
 
 # 他のエクストラと組み合わせ
-poetry install -E cpu -E visualize  # CPU学習 + 可視化
-poetry install -E cuda -E visualize  # CUDA学習 + 可視化
+uv sync --extra cpu --extra visualize  # CPU学習 + 可視化
+uv sync --extra cuda --extra visualize  # CUDA学習 + 可視化
 ```
 
 ### インストール確認
 
 ```bash
 # ヘルプ表示
-poetry run maou visualize --help
+uv run maou visualize --help
 
 # 期待される出力:
 # Usage: maou visualize [OPTIONS]
@@ -45,12 +45,12 @@ poetry run maou visualize --help
 
 ```bash
 # HCPEデータを可視化
-poetry run maou visualize \
+uv run maou visualize \
   --input-path ./data/hcpe \
   --array-type hcpe
 
 # Preprocessingデータを可視化
-poetry run maou visualize \
+uv run maou visualize \
   --input-path ./data/preprocessing \
   --array-type preprocessing
 ```
@@ -59,7 +59,7 @@ poetry run maou visualize \
 
 ```bash
 # 複数ファイルを指定
-poetry run maou visualize \
+uv run maou visualize \
   --input-path data1.feather --input-path data2.feather --input-path data3.feather \
   --array-type hcpe
 ```
@@ -68,7 +68,7 @@ poetry run maou visualize \
 
 ```bash
 # ポート8080で起動
-poetry run maou visualize \
+uv run maou visualize \
   --input-path ./data/hcpe \
   --array-type hcpe \
   --port 8080
@@ -85,7 +85,7 @@ VSCodeのポートフォワーディング機能を使用して，ブラウザ�
 VSCodeターミナルで以下を実行：
 
 ```bash
-poetry run maou visualize \
+uv run maou visualize \
   --input-path ./data/hcpe \
   --array-type hcpe
 ```
@@ -105,7 +105,7 @@ poetry run maou visualize \
 詳細ログを確認する場合：
 
 ```bash
-poetry run maou visualize \
+uv run maou visualize \
   --input-path ./data/hcpe \
   --array-type hcpe \
   --debug-mode
@@ -227,7 +227,7 @@ This share link expires in 72 hours.
 
 ```bash
 # 1. Preprocessingデータを可視化
-poetry run maou visualize \
+uv run maou visualize \
   --input-path ./data/preprocessing \
   --array-type preprocessing
 ```
@@ -243,7 +243,7 @@ poetry run maou visualize \
 
 ```bash
 # epoch10のデータを可視化
-poetry run maou visualize \
+uv run maou visualize \
   --input-path ./output/preprocessing/epoch10 \
   --array-type preprocessing
 ```
@@ -259,7 +259,7 @@ poetry run maou visualize \
 
 ```bash
 # デバッグモードで起動
-poetry run maou visualize \
+uv run maou visualize \
   --input-path ./data/hcpe \
   --array-type hcpe \
   --debug-mode
@@ -279,7 +279,7 @@ poetry run maou visualize \
 外部からアクセスする場合：
 
 ```bash
-poetry run maou visualize \
+uv run maou visualize \
   --input-path ./data/hcpe \
   --array-type hcpe \
   --server-name 0.0.0.0 \
@@ -292,7 +292,7 @@ poetry run maou visualize \
 
 ```bash
 # ONNXモデルを指定（現在は未実装）
-poetry run maou visualize \
+uv run maou visualize \
   --input-path ./data/hcpe \
   --array-type hcpe \
   --model-path ./models/model_epoch10.onnx
@@ -313,7 +313,7 @@ poetry run maou visualize \
 **解決策**:
 
 ```bash
-poetry install -E visualize
+uv sync --extra visualize
 ```
 
 ### 問題2: ポートがすでに使用されている
@@ -326,7 +326,7 @@ OSError: [Errno 48] Address already in use
 **解決策1**: 別のポートを指定
 
 ```bash
-poetry run maou visualize \
+uv run maou visualize \
   --input-path ./data/hcpe \
   --array-type hcpe \
   --port 8080
@@ -376,7 +376,7 @@ ls -la ./data/hcpe/
 
 ```bash
 # デバッグモードで起動
-poetry run maou visualize \
+uv run maou visualize \
   --input-path ./data/hcpe \
   --array-type hcpe \
   --debug-mode
@@ -410,7 +410,7 @@ poetry run maou visualize \
 1. **ファイル数を減らす**:
    ```bash
    # 一部のファイルのみ指定
-   poetry run maou visualize \
+   uv run maou visualize \
      --input-path data1.feather --input-path data2.feather \
      --array-type hcpe
    ```
@@ -418,7 +418,7 @@ poetry run maou visualize \
 2. **環境変数でログレベルを下げる**:
    ```bash
    export MAOU_LOG_LEVEL=WARNING
-   poetry run maou visualize --input-path ./data/hcpe --array-type hcpe
+   uv run maou visualize --input-path ./data/hcpe --array-type hcpe
    ```
 
 ---

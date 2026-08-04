@@ -4,7 +4,7 @@
 
 **Pre-commit pipeline**:
 ```bash
-poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run isort src/ && poetry run mypy src/ && poetry run pytest
+uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/ && uv run mypy src/ && uv run pytest
 ```
 
 **Commit format**: `feat|fix|docs|refactor|test|perf: message`

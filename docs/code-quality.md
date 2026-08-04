@@ -6,24 +6,24 @@
 
 ```bash
 # Type checking (required before commits)
-poetry run mypy src/
+uv run mypy src/
 
 # Code formatting
-poetry run ruff format src/
-poetry run ruff check src/ --fix
-poetry run isort src/
+uv run ruff format src/
+uv run ruff check src/ --fix
+uv run isort src/
 
 # Linting
-poetry run flake8 src/
+uv run flake8 src/
 
 # Complete quality pipeline (run before commits)
-poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run isort src/ && poetry run mypy src/
+uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/ && uv run mypy src/
 ```
 
 ### Pre-commit Hooks
 ```bash
-poetry run bash scripts/pre-commit.sh    # Install hooks
-poetry run pre-commit run --all-files    # Run manually
+uv run bash scripts/pre-commit.sh    # Install hooks
+uv run pre-commit run --all-files    # Run manually
 ```
 
 ## Code Quality Standards
@@ -43,7 +43,7 @@ poetry run pre-commit run --all-files    # Run manually
 
 When encountering CI failures, resolve issues in this order:
 
-1. **Code Formatting**: `poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run isort src/`
-2. **Type Errors**: `poetry run mypy src/`
-3. **Linting Issues**: `poetry run flake8 src/`
-4. **Test Failures**: `poetry run pytest --tb=short`
+1. **Code Formatting**: `uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/`
+2. **Type Errors**: `uv run mypy src/`
+3. **Linting Issues**: `uv run flake8 src/`
+4. **Test Failures**: `uv run pytest --tb=short`

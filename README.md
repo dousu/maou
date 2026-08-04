@@ -43,7 +43,7 @@ Serenaはpyright（Python）とrust-analyzer（Rust）を使用してシンボ�
 ### Rustバックエンドのビルド
 
 **重要**: このプロジェクトはPython拡張モジュールとしてRustコードを使用しています．
-`poetry sync`または`poetry install`を実行した後，Rust拡張モジュールを明示的にビルドする必要があります．
+`uv sync`を実行した後，Rust拡張モジュールを明示的にビルドする必要があります．
 
 #### 通常の環境（開発マシン・devcontainer）
 
@@ -53,10 +53,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 
 # Rust拡張モジュールのビルド（必須）
-poetry run maturin develop
+uv run maturin develop
 
 # ビルド確認
-poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+uv run python -c "from maou._rust.maou_io import hello; print(hello())"
 # 期待される出力: "Maou I/O Rust backend initialized"
 ```
 
@@ -73,7 +73,7 @@ Google ColabやJupyter Notebookなどの非対話的環境では，`-y`フラグ
 # Rustインストール + ビルドを1つのセルで実行
 !curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
   source "$HOME/.cargo/env" && \
-  poetry run maturin develop
+  uv run maturin develop
 ```
 
 ##### 方法2: 各コマンドでPATHを明示的に設定
@@ -83,10 +83,10 @@ Google ColabやJupyter Notebookなどの非対話的環境では，`-y`フラグ
 !curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 # セル2: PATHを設定してビルド（source不要）
-!export PATH="$HOME/.cargo/bin:$PATH" && poetry run maturin develop
+!export PATH="$HOME/.cargo/bin:$PATH" && uv run maturin develop
 
 # セル3: ビルド確認
-!export PATH="$HOME/.cargo/bin:$PATH" && poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+!export PATH="$HOME/.cargo/bin:$PATH" && uv run python -c "from maou._rust.maou_io import hello; print(hello())"
 ```
 
 ##### 方法3: 環境変数を永続的に設定
@@ -100,17 +100,17 @@ import os
 os.environ['PATH'] = f"{os.path.expanduser('~')}/.cargo/bin:{os.environ['PATH']}"
 
 # セル3: ビルド実行
-!poetry run maturin develop
+!uv run maturin develop
 
 # セル4: ビルド確認
-!poetry run python -c "from maou._rust.maou_io import hello; print(hello())"
+!uv run python -c "from maou._rust.maou_io import hello; print(hello())"
 ```
 
-**注意**: `poetry sync -E cpu -E gcp`などを実行した場合でも，
-上記の`poetry run maturin develop`を実行しないとRust拡張モジュールが利用できず，
+**注意**: `uv sync --extra cpu --extra gcp`などを実行した場合でも，
+上記の`uv run maturin develop`を実行しないとRust拡張モジュールが利用できず，
 `maou hcpe-convert`などのコマンドが動作しません．
 
-依存関係を更新した後も，必ず`poetry run maturin develop`を実行してください．
+依存関係を更新した後も，必ず`uv run maturin develop`を実行してください．
 
 ### Pythonアップデート方法
 
@@ -123,8 +123,8 @@ bash scripts/dev-init.sh
 
 # 注意: dev-init.shはRust拡張モジュールのビルドも実行します
 # 手動で依存関係をインストールする場合は以下のように実行してください
-# poetry sync -E cpu -E gcp --without dev
-# poetry run maturin develop
+# uv sync --extra cpu --extra gcp --no-dev
+# uv run maturin develop
 ```
 
 ### uvキャッシュ削除
@@ -150,7 +150,7 @@ gcloud auth application-default set-quota-project "your-project-id"
 なお，GCPを使ったテストをするときは以下のように行う．
 
 ```bash
-TEST_GCP=true poetry run pytest
+TEST_GCP=true uv run pytest
 ```
 
 ### AWSを使う場合
@@ -164,7 +164,7 @@ aws configure sso --use-device-code --profile default
 なお，AWSを使ったテストをするときは以下のように行う．
 
 ```bash
-TEST_AWS=true poetry run pytest
+TEST_AWS=true uv run pytest
 ```
 
 
@@ -177,9 +177,9 @@ TEST_AWS=true poetry run pytest
 例えば以下のように実行する．
 
 ```bash
-poetry run maou learn-model --detect-anomaly [...他の引数]
+uv run maou learn-model --detect-anomaly [...他の引数]
 
-poetry run maou utility benchmark-training --detect-anomaly [...他の引数]
+uv run maou utility benchmark-training --detect-anomaly [...他の引数]
 ```
 
 ## TensorBoardヒストグラムの制御
@@ -194,7 +194,7 @@ poetry run maou utility benchmark-training --detect-anomaly [...他の引数]
 指定してグロブパターン（例: `backbone.*`, `head.value*`）を登録してください。
 
 ```bash
-poetry run maou learn-model \
+uv run maou learn-model \
   --tensorboard-histogram-frequency 5 \
   --tensorboard-histogram-module "backbone.*" \
   --tensorboard-histogram-module "head.*" \

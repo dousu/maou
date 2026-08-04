@@ -3,7 +3,7 @@
 This file provides guidance to OpenAI Codex agents when working with code in this repository. Refer to it alongside `CLAUDE.md`, which remains available for Claude Code agents.
 
 > **For Codex agents:** Follow `.codex/config.yaml`, `.codex/AGENT_GUIDE.md`, and `.codex/COMMANDS.md`.
-> All shell commands **must** use `poetry run`.
+> All shell commands **must** use `uv run`.
 
 ## Development Guidelines
 
@@ -32,22 +32,27 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 
 ### Package Management
 
-**ONLY use Poetry. NEVER use pip directly.**
+**ONLY use uv. NEVER use pip or Poetry directly.**
 
 ```bash
 # Install dependencies
-poetry install
+uv sync
 
 # Environment-specific installations
-poetry install -E cpu -E gcp      # CPU + GCP
-poetry install -E cuda -E aws     # CUDA + AWS
-poetry install -E tpu -E gcp      # TPU + GCP
+uv sync --extra cpu --extra gcp      # CPU + GCP
+uv sync --extra cuda --extra aws     # CUDA + AWS
+uv sync --extra mpu --extra gcp      # MPU + GCP
+uv sync --no-dev                     # Runtime only (skip the dev group)
 
 # Add/remove dependencies
-poetry add package-name
-poetry add --group dev package-name
-poetry remove package-name
+uv add package-name
+uv add --group dev package-name
+uv remove package-name
 ```
+
+Available extras (`[project.optional-dependencies]` in `pyproject.toml`):
+`cpu` / `cuda` / `mpu` (mutually exclusive), `cpu-infer`, `onnx-gpu-infer`,
+`tensorrt-infer`, `gcp`, `aws`, `visualize`, `fetch`.
 
 ### Code Quality Standards
 
@@ -66,13 +71,13 @@ poetry remove package-name
 
 ### Testing Requirements
 
-**Framework**: Use `poetry run pytest`
+**Framework**: Use `uv run pytest`
 
 ```bash
-poetry run pytest                           # Run all tests
-poetry run pytest --cov=src/maou            # Run with coverage
-TEST_GCP=true poetry run pytest             # Test GCP features
-TEST_AWS=true poetry run pytest             # Test AWS features
+uv run pytest                           # Run all tests
+uv run pytest --cov=src/maou            # Run with coverage
+TEST_GCP=true uv run pytest             # Test GCP features
+TEST_AWS=true uv run pytest             # Test AWS features
 ```
 
 #### Test Requirements
@@ -87,24 +92,24 @@ TEST_AWS=true poetry run pytest             # Test AWS features
 
 ```bash
 # Type checking (required before commits)
-poetry run mypy src/
+uv run mypy src/
 
 # Code formatting
-poetry run ruff format src/
-poetry run ruff check src/ --fix
-poetry run isort src/
+uv run ruff format src/
+uv run ruff check src/ --fix
+uv run isort src/
 
 # Linting
-poetry run flake8 src/
+uv run flake8 src/
 
 # Complete quality pipeline (run before commits)
-poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run isort src/ && poetry run mypy src/
+uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/ && uv run mypy src/
 ```
 
 ### Pre-commit Hooks
 ```bash
-poetry run bash scripts/pre-commit.sh    # Install hooks
-poetry run pre-commit run --all-files    # Run manually
+uv run bash scripts/pre-commit.sh    # Install hooks
+uv run pre-commit run --all-files    # Run manually
 ```
 
 ## Environment Setup
@@ -112,8 +117,8 @@ poetry run pre-commit run --all-files    # Run manually
 ### Initial Setup
 ```bash
 bash scripts/dev-init.sh                 # Initialize environment
-poetry env info --path                   # Get environment path
-poetry run bash scripts/pre-commit.sh    # Setup hooks
+uv python find                           # Get interpreter path (uv creates ./.venv)
+uv run bash scripts/pre-commit.sh        # Setup hooks
 ```
 
 ### Cloud Authentication
@@ -183,7 +188,7 @@ Automatic mixed precision (AMP) enabled for CUDA:
 ### Sample Ratio for Large Datasets
 Use `--sample-ratio` for efficient benchmarking:
 ```bash
-poetry run maou utility benchmark-training \
+uv run maou utility benchmark-training \
   --input-s3 \
   --sample-ratio 0.1 \
   --gpu cuda:0
@@ -198,28 +203,28 @@ export MAOU_LOG_LEVEL=INFO     # Default
 export MAOU_LOG_LEVEL=WARNING  # Minimal
 
 # Or use CLI flag
-poetry run maou --debug-mode hcpe-convert ...
+uv run maou --debug-mode hcpe-convert ...
 ```
 
 
 ## Error Resolution
 
 ### CI Failure Resolution Order
-1. **Code Formatting**: `poetry run ruff format src/ && poetry run ruff check src/ --fix && poetry run isort src/`
-2. **Type Errors**: `poetry run mypy src/`
-3. **Linting Issues**: `poetry run flake8 src/`
-4. **Test Failures**: `poetry run pytest --tb=short`
+1. **Code Formatting**: `uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/`
+2. **Type Errors**: `uv run mypy src/`
+3. **Linting Issues**: `uv run flake8 src/`
+4. **Test Failures**: `uv run pytest --tb=short`
 
 ## Commit Guidelines
 
 ### Quality Checks Before Commits
 ```bash
 # Complete pre-commit pipeline
-poetry run ruff format src/
-poetry run ruff check src/ --fix
-poetry run isort src/
-poetry run mypy src/
-poetry run pytest
+uv run ruff format src/
+uv run ruff check src/ --fix
+uv run isort src/
+uv run mypy src/
+uv run pytest
 ```
 
 ### Commit Message Format
@@ -288,4 +293,4 @@ def process_shogi_game(game_data: str) -> ProcessingResult:
     """
 ```
 
-Run `poetry run maou --help` for detailed CLI options and examples.
+Run `uv run maou --help` for detailed CLI options and examples.

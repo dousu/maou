@@ -1,5 +1,13 @@
 # ADR-002: ディスクベース前処理とSQLite技術選定
 
+> **注記 (2026-08-04): 本ADRは 2025-10-13 時点の決定記録である．**
+> 本文中のコマンド例は当時の CLI をそのまま残しており，**現在は動作しない**．
+> 当時このプロジェクトは Poetry 管理だったが，現在は uv 管理であり，
+> `poetry run` は `uv run` に読み替える必要がある．
+> 決定の経緯の記録として価値があるため本文は書き換えていない．
+> 現行の依存管理は [dependency_management.md](dependency_management.md) を，
+> 現行のオプションは [commands/pre_process.md](commands/pre_process.md) を参照．
+
 ## ステータス
 
 ✅ **Accepted** - 2025-10-13実装完了

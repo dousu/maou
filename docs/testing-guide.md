@@ -2,13 +2,13 @@
 
 ## Testing Requirements
 
-**Framework**: Use `poetry run pytest`
+**Framework**: Use `uv run pytest`
 
 ```bash
-poetry run pytest                           # Run all tests
-poetry run pytest --cov=src/maou            # Run with coverage
-TEST_GCP=true poetry run pytest             # Test GCP features
-TEST_AWS=true poetry run pytest             # Test AWS features
+uv run pytest                           # Run all tests
+uv run pytest --cov=src/maou            # Run with coverage
+TEST_GCP=true uv run pytest             # Test GCP features
+TEST_AWS=true uv run pytest             # Test AWS features
 ```
 
 ### Test Requirements
@@ -121,20 +121,20 @@ class TestFeatureClass:
 
 ```bash
 # All tests
-poetry run pytest
+uv run pytest
 
 # Specific layer
-poetry run pytest tests/maou/domain/
-poetry run pytest tests/maou/app/
-poetry run pytest tests/maou/infra/
+uv run pytest tests/maou/domain/
+uv run pytest tests/maou/app/
+uv run pytest tests/maou/infra/
 
 # Specific module
-poetry run pytest tests/maou/app/learning/
-poetry run pytest tests/maou/domain/board/
+uv run pytest tests/maou/app/learning/
+uv run pytest tests/maou/domain/board/
 
 # Integration tests only
-poetry run pytest tests/maou/integrations/
+uv run pytest tests/maou/integrations/
 
 # With coverage
-poetry run pytest --cov=src/maou --cov-report=html
+uv run pytest --cov=src/maou --cov-report=html
 ```
