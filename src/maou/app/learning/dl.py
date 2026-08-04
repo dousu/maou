@@ -56,7 +56,6 @@ from maou.app.learning.streaming_dataset import (
     StreamingKifDataset,
 )
 from maou.app.learning.training_loop import TrainingLoop
-from maou.app.learning.value_targets import ValueTargetMode
 from maou.domain.cloud_storage import CloudStorage
 
 try:
@@ -105,7 +104,6 @@ class Learning:
         dataloader_workers: int
         pin_memory: bool
         prefetch_factor: int
-        gce_parameter: float
         policy_loss_ratio: float
         value_loss_ratio: float
         learning_ratio: float
@@ -137,9 +135,6 @@ class Learning:
         save_split_params: bool = False
         policy_target_mode: PolicyTargetMode = (
             PolicyTargetMode.WIN_RATE
-        )
-        value_target_mode: ValueTargetMode = (
-            ValueTargetMode.BEST_MOVE_WIN_RATE
         )
         gradient_accumulation_steps: int = 1
         adaptive_batch_config: AdaptiveBatchConfig | None = None
@@ -195,7 +190,6 @@ class Learning:
                     dataloader_workers=config.dataloader_workers,
                     pin_memory=config.pin_memory,
                     prefetch_factor=config.prefetch_factor,
-                    gce_parameter=config.gce_parameter,
                     learning_ratio=config.learning_ratio,
                     momentum=config.momentum,
                     optimizer_name=config.optimizer_name,
@@ -424,9 +418,7 @@ class Learning:
 
         # Loss functions and optimizer
         loss_fn_policy, loss_fn_value = (
-            LossOptimizerFactory.create_loss_functions(
-                config.gce_parameter
-            )
+            LossOptimizerFactory.create_loss_functions()
         )
         optimizer = LossOptimizerFactory.create_optimizer(
             model,
@@ -519,7 +511,6 @@ class Learning:
             callbacks=callbacks,
             logger=self.logger,
             policy_target_mode=self.config.policy_target_mode,
-            value_target_mode=self.config.value_target_mode,
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
             adaptive_batch_config=adaptive_batch_config,
             physical_batch_size=physical_batch_size,
@@ -658,7 +649,6 @@ class Learning:
                 ],
                 logger=self.logger,
                 policy_target_mode=self.config.policy_target_mode,
-                value_target_mode=self.config.value_target_mode,
             )
 
             # Run validation epoch
@@ -881,11 +871,9 @@ class Learning:
             "gradient_accumulation_steps": config.gradient_accumulation_steps,
             "epoch": config.epoch,
             # Loss
-            "gce_parameter": config.gce_parameter,
             "policy_loss_ratio": config.policy_loss_ratio,
             "value_loss_ratio": config.value_loss_ratio,
             "policy_target_mode": config.policy_target_mode.value,
-            "value_target_mode": config.value_target_mode.value,
         }
 
         # Adaptive batch パラメータ
@@ -984,11 +972,11 @@ class Learning:
             f"{batch_desc}, "
             f"Epoch: {config.epoch}, "
             f"Workers: {config.dataloader_workers}",
-            f"Loss: GCE(q={config.gce_parameter}), "
+            f"Loss: KLDiv+BCE, "
             f"policy_ratio={config.policy_loss_ratio}, "
             f"value_ratio={config.value_loss_ratio}",
             f"Targets: policy={config.policy_target_mode.value}, "
-            f"value={config.value_target_mode.value}",
+            "value=result-value",
             f"Data: preprocessing, "
             f"cache={config.input_cache_mode}",
             "==============================",

@@ -23,7 +23,6 @@ from maou.infra.console.learn_model import (
 )
 from maou.interface.learn import (
     PolicyTargetMode,
-    ValueTargetMode,
 )
 
 
@@ -790,13 +789,6 @@ def benchmark_dataloader(
     default=2,
 )
 @click.option(
-    "--gce-parameter",
-    type=float,
-    help="GCE loss hyperparameter (default: 0.1).",
-    required=False,
-    default=0.1,
-)
-@click.option(
     "--policy-loss-ratio",
     type=float,
     help="Policy loss weight (default: 1.0).",
@@ -820,20 +812,6 @@ def benchmark_dataloader(
     help=(
         "Policy教師信号モード．move-label=棋譜頻度，"
         "win-rate=勝率正規化，weighted=頻度×勝率．"
-    ),
-    required=False,
-)
-@click.option(
-    "--value-target-mode",
-    type=click.Choice(
-        [m.value for m in ValueTargetMode],
-        case_sensitive=False,
-    ),
-    default=ValueTargetMode.BEST_MOVE_WIN_RATE.value,
-    show_default=True,
-    help=(
-        "Value教師信号モード．result-value=局面勝率，"
-        "best-move-win-rate=最善手勝率．"
     ),
     required=False,
 )
@@ -1116,11 +1094,9 @@ def benchmark_training(
     dataloader_workers: int,
     pin_memory: bool | None,
     prefetch_factor: int,
-    gce_parameter: float,
     policy_loss_ratio: float,
     value_loss_ratio: float,
     policy_target_mode: str,
-    value_target_mode: str,
     learning_ratio: float,
     momentum: float,
     lr_scheduler: str,
@@ -1483,11 +1459,9 @@ def benchmark_training(
         prefetch_factor=prefetch_factor,
         model_architecture=model_architecture,
         architecture_config=architecture_config,
-        gce_parameter=gce_parameter,
         policy_loss_ratio=policy_loss_ratio,
         value_loss_ratio=value_loss_ratio,
         policy_target_mode=PolicyTargetMode(policy_target_mode),
-        value_target_mode=ValueTargetMode(value_target_mode),
         learning_ratio=learning_ratio,
         momentum=momentum,
         lr_scheduler=lr_scheduler,

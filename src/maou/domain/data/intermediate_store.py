@@ -151,7 +151,7 @@ class IntermediateDataStore:
         batch_size: int = 50_000,
         position_count_threshold: int = 2,
         prior_strength: float = 5.0,
-        best_move_win_rate_fallback: str = "uniform",
+        win_rate_fallback: str = "neutral",
         drop_below_threshold: bool = False,
         enable_vacuum: bool = False,  # Kept for API compatibility, unused in DuckDB
     ):
@@ -164,13 +164,13 @@ class IntermediateDataStore:
                 小さい値ではトランザクション回数が増加しI/Oオーバーヘッドが大きくなる．
             position_count_threshold: 指し手別勝率を計算する最小出現回数．
                 出現回数がこの閾値未満の場合，
-                ``best_move_win_rate_fallback`` に従ってフォールバックする．
+                ``win_rate_fallback`` に従ってフォールバックする．
             prior_strength: Beta事前分布の強度パラメータ．
                 各手の勝率を ``(wins + prior_strength) / (total + 2 *
                 prior_strength)`` で平滑化し，出現回数が少ない手の勝率を
                 50%方向へ収縮させる．0.0の場合は平滑化なし(従来動作)．
-            best_move_win_rate_fallback: 閾値未満局面での勝率フォールバック
-                の算出方法．``"uniform"`` (デフォルト) は中立値0.5，
+            win_rate_fallback: 閾値未満局面での勝率フォールバック
+                の算出方法．``"neutral"`` (デフォルト) は中立値0.5，
                 ``"raw-outcome"`` は平滑化なしの実勝敗(``win_values /
                 label_values``)をそのまま使い，出現1回なら0.0/1.0
                 (引き分けは0.5)になる．``moveWinRate`` 配列と
@@ -178,20 +178,20 @@ class IntermediateDataStore:
             drop_below_threshold: True の場合，出現回数が
                 ``position_count_threshold`` 未満の局面を出力から完全に除外する．
                 フォールバック値そのものを記録したくない場合に使う．
-                ``best_move_win_rate_fallback`` より優先される．
+                ``win_rate_fallback`` より優先される．
             enable_vacuum: Unused (kept for API compatibility with SQLite version)
         """
         if prior_strength < 0.0:
             raise ValueError(
                 f"prior_strength must be >= 0.0, got {prior_strength}"
             )
-        if best_move_win_rate_fallback not in (
-            "uniform",
+        if win_rate_fallback not in (
+            "neutral",
             "raw-outcome",
         ):
             raise ValueError(
-                "best_move_win_rate_fallback must be 'uniform' or "
-                f"'raw-outcome', got {best_move_win_rate_fallback!r}"
+                "win_rate_fallback must be 'neutral' or "
+                f"'raw-outcome', got {win_rate_fallback!r}"
             )
         self.db_path = db_path
         self.batch_size = batch_size
@@ -202,9 +202,7 @@ class IntermediateDataStore:
             position_count_threshold
         )
         self._prior_strength = prior_strength
-        self._best_move_win_rate_fallback = (
-            best_move_win_rate_fallback
-        )
+        self._win_rate_fallback = win_rate_fallback
         self._drop_below_threshold = drop_below_threshold
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._buffer: list[pl.DataFrame] = []
@@ -765,10 +763,10 @@ class IntermediateDataStore:
         Beta事前分布による平滑化を適用し，出現回数が少ない手の勝率
         ノイズを抑制する．
 
-        閾値未満の場合は ``self._best_move_win_rate_fallback`` に従って
+        閾値未満の場合は ``self._win_rate_fallback`` に従って
         ``moveWinRate`` 配列と ``bestMoveWinRate`` の双方をフォールバック
         値で埋める(``bestMoveWinRate`` は常に配列の最大値):
-            - ``"uniform"``: 観測された各手に0.5(情報なしを表す中立値)．
+            - ``"neutral"``: 観測された各手に0.5(情報なしを表す中立値)．
             - ``"raw-outcome"``: 平滑化なしの実勝敗
               (``win_values / label_values``)．出現1回の局面では
               0.0(負け) / 1.0(勝ち) / 0.5(引き分け)のいずれかになる．
@@ -827,10 +825,7 @@ class IntermediateDataStore:
                     np_indices = np.array(
                         indices, dtype=np.intp
                     )
-                    if (
-                        self._best_move_win_rate_fallback
-                        == "raw-outcome"
-                    ):
+                    if self._win_rate_fallback == "raw-outcome":
                         # 平滑化なしの実勝敗をそのまま勝率とする．
                         # 出現1回なら 0.0 (負け) / 1.0 (勝ち) /
                         # 0.5 (引き分け) のいずれかになる．

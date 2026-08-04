@@ -211,7 +211,7 @@ def transform(
     intermediate_batch_size: int = 50_000,
     position_count_threshold: int = 2,
     prior_strength: float = 5.0,
-    best_move_win_rate_fallback: str = "uniform",
+    win_rate_fallback: str = "neutral",
     drop_below_threshold: bool = False,
 ) -> str:
     """Transform HCPE data into neural network training features.
@@ -226,14 +226,14 @@ def transform(
             Google Colab A100 High Memory (83GB RAM) ではデフォルト50,000を推奨．
         position_count_threshold: Minimum position occurrence count for per-move
             win rate calculation. Positions with count below this threshold
-            use the fallback selected by ``best_move_win_rate_fallback``.
+            use the fallback selected by ``win_rate_fallback``.
             (default: 2)
         prior_strength: Beta prior strength for win rate smoothing.
             Applies ``(wins + prior) / (total + 2 * prior)`` to shrink
             low-count move win rates toward 50%. 0.0 disables smoothing.
-        best_move_win_rate_fallback: How to fill ``moveWinRate`` and
+        win_rate_fallback: How to fill ``moveWinRate`` and
             ``bestMoveWinRate`` for positions below
-            ``position_count_threshold``. ``"uniform"`` (default) records a
+            ``position_count_threshold``. ``"neutral"`` (default) records a
             neutral 0.5. ``"raw-outcome"`` records the unsmoothed actual
             win/loss outcome instead, which is 0.0/1.0 (0.5 for a draw)
             when the position occurred once. Ignored for positions
@@ -256,6 +256,20 @@ def transform(
             f"max_workers must be non-negative, got {max_workers}"
         )
 
+    if (
+        win_rate_fallback == "raw-outcome"
+        and not drop_below_threshold
+    ):
+        logger.warning(
+            "win_rate_fallback='raw-outcome' writes 0.0 into moveWinRate "
+            "for every move of a position whose side to move lost. "
+            "Such rows normalize to an all-zero policy target and "
+            "produce no policy gradient under "
+            "--policy-target-mode win-rate/weighted. "
+            "Watch policy_empty_target_rate during training, or use "
+            "'neutral' if the policy head must learn from those positions."
+        )
+
     option = PreProcess.PreProcessOption(
         output_dir=output_dir,
         max_workers=max_workers,
@@ -267,7 +281,7 @@ def transform(
         intermediate_batch_size=intermediate_batch_size,
         position_count_threshold=position_count_threshold,
         prior_strength=prior_strength,
-        best_move_win_rate_fallback=best_move_win_rate_fallback,
+        win_rate_fallback=win_rate_fallback,
         drop_below_threshold=drop_below_threshold,
     ).transform(option)
 

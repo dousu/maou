@@ -20,7 +20,6 @@ from maou.app.learning.gradient_noise_scale import (
 from maou.app.learning.network import Network
 from maou.app.learning.policy_targets import PolicyTargetMode
 from maou.app.learning.training_loop import TrainingLoop
-from maou.app.learning.value_targets import ValueTargetMode
 
 
 def test_resolve_batch_size_supports_list_inputs() -> None:
@@ -428,7 +427,6 @@ class TestAdaptiveBatchIntegration:
             physical_batch_size=batch_size,
             adaptive_batch_callback=adaptive_cb,
             policy_target_mode=PolicyTargetMode.MOVE_LABEL,
-            value_target_mode=ValueTargetMode.RESULT_VALUE,
         )
 
         # adaptive batch が有効化され初期値が min_accumulation_steps
@@ -488,7 +486,6 @@ class TestAdaptiveBatchIntegration:
             physical_batch_size=batch_size,
             adaptive_batch_callback=adaptive_cb,
             policy_target_mode=PolicyTargetMode.MOVE_LABEL,
-            value_target_mode=ValueTargetMode.RESULT_VALUE,
         )
 
         dataset = _SimpleBatchDatasetForAdaptive(
@@ -559,7 +556,6 @@ class TestAdaptiveBatchIntegration:
             adaptive_controller=controller,
             gns_estimator=estimator,
             policy_target_mode=PolicyTargetMode.MOVE_LABEL,
-            value_target_mode=ValueTargetMode.RESULT_VALUE,
         )
 
         assert loop.gradient_accumulation_steps == 2

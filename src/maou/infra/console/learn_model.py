@@ -9,7 +9,6 @@ from maou.interface.learn import (
     AdaptiveBatchConfig,
     PolicyTargetMode,
     StageDataConfig,
-    ValueTargetMode,
 )
 
 if TYPE_CHECKING:
@@ -242,31 +241,6 @@ def _build_adaptive_batch_config(
     required=False,
 )
 @click.option(
-    "--tensorboard-histogram-frequency",
-    type=int,
-    help="Log parameter histograms every N epochs (default: disabled).",
-    default=0,
-    show_default=True,
-    required=False,
-)
-@click.option(
-    "--tensorboard-histogram-module",
-    "tensorboard_histogram_modules",
-    multiple=True,
-    type=str,
-    help=(
-        "Only log histograms for parameter names matching this glob pattern."
-        " Provide multiple times to add more filters."
-    ),
-)
-@click.option(
-    "--gce-parameter",
-    type=float,
-    help="GCE loss hyperparameter (default: 0.1).",
-    required=False,
-    default=0.1,
-)
-@click.option(
     "--policy-loss-ratio",
     type=float,
     help="Policy loss weight.",
@@ -339,30 +313,9 @@ def _build_adaptive_batch_config(
     show_default=True,
 )
 @click.option(
-    "--start-epoch",
-    type=int,
-    help=(
-        "Starting epoch number (0-indexed, default: 0). "
-        "If set to 1, training starts from epoch 2."
-    ),
-    required=False,
-)
-@click.option(
     "--resume-backbone-from",
     type=click.Path(exists=True, path_type=Path),
     help="Backbone parameter file to resume training.",
-    required=False,
-)
-@click.option(
-    "--resume-policy-head-from",
-    type=click.Path(exists=True, path_type=Path),
-    help="Policy head parameter file to resume training.",
-    required=False,
-)
-@click.option(
-    "--resume-value-head-from",
-    type=click.Path(exists=True, path_type=Path),
-    help="Value head parameter file to resume training.",
     required=False,
 )
 @click.option(
@@ -588,16 +541,6 @@ def _build_adaptive_batch_config(
     help="Policy教師信号モード．move-label=棋譜頻度，win-rate=勝率正規化，weighted=頻度×勝率．",
 )
 @click.option(
-    "--value-target-mode",
-    type=click.Choice(
-        [m.value for m in ValueTargetMode],
-        case_sensitive=False,
-    ),
-    default=ValueTargetMode.BEST_MOVE_WIN_RATE.value,
-    show_default=True,
-    help="Value教師信号モード．result-value=局面勝率，best-move-win-rate=最善手勝率．",
-)
-@click.option(
     "--log-dir",
     type=click.Path(path_type=Path),
     help="Log directory for SummaryWriter.",
@@ -672,9 +615,6 @@ def learn_model(
     dataloader_workers: int | None,
     pin_memory: bool | None,
     prefetch_factor: int | None,
-    tensorboard_histogram_frequency: int,
-    tensorboard_histogram_modules: tuple[str, ...],
-    gce_parameter: float | None,
     policy_loss_ratio: float | None,
     value_loss_ratio: float | None,
     learning_ratio: float | None,
@@ -684,10 +624,7 @@ def learn_model(
     optimizer_beta1: float,
     optimizer_beta2: float,
     optimizer_eps: float,
-    start_epoch: int | None,
     resume_backbone_from: Path | None,
-    resume_policy_head_from: Path | None,
-    resume_value_head_from: Path | None,
     save_split_params: bool,
     freeze_backbone: bool,
     trainable_layers: int | None,
@@ -716,7 +653,6 @@ def learn_model(
     stage2_test_ratio: float,
     no_streaming: bool,
     policy_target_mode: str,
-    value_target_mode: str,
     log_dir: Path | None,
     model_dir: Path | None,
     output_gcs: bool | None,
@@ -953,7 +889,6 @@ def learn_model(
             dataloader_workers=dataloader_workers,
             pin_memory=pin_memory,
             prefetch_factor=prefetch_factor,
-            gce_parameter=gce_parameter,
             policy_loss_ratio=policy_loss_ratio,
             value_loss_ratio=value_loss_ratio,
             lr_scheduler=lr_scheduler,
@@ -975,9 +910,6 @@ def learn_model(
             save_split_params=save_split_params,
             policy_target_mode=PolicyTargetMode(
                 policy_target_mode
-            ),
-            value_target_mode=ValueTargetMode(
-                value_target_mode
             ),
             gradient_accumulation_steps=gradient_accumulation_steps,
             adaptive_batch_config=_build_adaptive_batch_config(

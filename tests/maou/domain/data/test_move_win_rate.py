@@ -631,20 +631,20 @@ class TestNumpyReturnTypes:
 
 
 class TestBestMoveWinRateFallbackStrategy:
-    """Test best_move_win_rate_fallback="raw-outcome" option."""
+    """Test win_rate_fallback="raw-outcome" option."""
 
     def _create_store(
         self,
         tmp_path: Path,
         threshold: int = 3,
-        best_move_win_rate_fallback: str = "uniform",
+        win_rate_fallback: str = "neutral",
     ) -> IntermediateDataStore:
         db_path = tmp_path / "test.duckdb"
         return IntermediateDataStore(
             db_path=db_path,
             position_count_threshold=threshold,
             prior_strength=0.0,
-            best_move_win_rate_fallback=best_move_win_rate_fallback,
+            win_rate_fallback=win_rate_fallback,
         )
 
     def test_raw_outcome_uses_actual_win_loss(
@@ -654,7 +654,7 @@ class TestBestMoveWinRateFallbackStrategy:
         store = self._create_store(
             tmp_path,
             threshold=3,
-            best_move_win_rate_fallback="raw-outcome",
+            win_rate_fallback="raw-outcome",
         )
         try:
             indices_col = [[5]]
@@ -690,7 +690,7 @@ class TestBestMoveWinRateFallbackStrategy:
         store = self._create_store(
             tmp_path,
             threshold=3,
-            best_move_win_rate_fallback="raw-outcome",
+            win_rate_fallback="raw-outcome",
         )
         try:
             indices_col = [[5]]
@@ -721,7 +721,7 @@ class TestBestMoveWinRateFallbackStrategy:
         store = self._create_store(
             tmp_path,
             threshold=3,
-            best_move_win_rate_fallback="raw-outcome",
+            win_rate_fallback="raw-outcome",
         )
         try:
             move_win_rates, best_move_win_rates, _ = (
@@ -750,8 +750,8 @@ class TestBestMoveWinRateFallbackStrategy:
         position, i.e. "everything is a win" regardless of the result.
         """
         for fallback, observed, expected in (
-            ("uniform", 1, 0.5),
-            ("uniform", 3, 0.5),
+            ("neutral", 1, 0.5),
+            ("neutral", 3, 0.5),
             ("raw-outcome", 1, 0.0),
         ):
             case_dir = tmp_path / f"{fallback}-{observed}"
@@ -759,7 +759,7 @@ class TestBestMoveWinRateFallbackStrategy:
             store = self._create_store(
                 case_dir,
                 threshold=3,
-                best_move_win_rate_fallback=fallback,
+                win_rate_fallback=fallback,
             )
             try:
                 indices = list(range(5, 5 + observed))
@@ -788,7 +788,7 @@ class TestBestMoveWinRateFallbackStrategy:
         store = self._create_store(
             tmp_path,
             threshold=3,
-            best_move_win_rate_fallback="raw-outcome",
+            win_rate_fallback="raw-outcome",
         )
         try:
             indices_col = [[5, 15]]
@@ -814,11 +814,11 @@ class TestBestMoveWinRateFallbackStrategy:
     def test_uniform_strategy_unaffected(
         self, tmp_path: Path
     ) -> None:
-        """Default 'uniform' strategy is unchanged (regression guard)."""
+        """Default 'neutral' strategy is unchanged (regression guard)."""
         store = self._create_store(
             tmp_path,
             threshold=3,
-            best_move_win_rate_fallback="uniform",
+            win_rate_fallback="neutral",
         )
         try:
             indices_col = [[5]]
@@ -846,7 +846,7 @@ class TestBestMoveWinRateFallbackStrategy:
         store = self._create_store(
             tmp_path,
             threshold=2,
-            best_move_win_rate_fallback="raw-outcome",
+            win_rate_fallback="raw-outcome",
         )
         try:
             indices_col = [[10, 20, 30]]
@@ -875,15 +875,15 @@ class TestBestMoveWinRateFallbackStrategy:
     def test_invalid_fallback_strategy_rejected(
         self, tmp_path: Path
     ) -> None:
-        """Unknown best_move_win_rate_fallback value raises ValueError."""
+        """Unknown win_rate_fallback value raises ValueError."""
         db_path = tmp_path / "test.duckdb"
         with pytest.raises(
             ValueError,
-            match="best_move_win_rate_fallback must be",
+            match="win_rate_fallback must be",
         ):
             IntermediateDataStore(
                 db_path=db_path,
-                best_move_win_rate_fallback="bogus",
+                win_rate_fallback="bogus",
             )
 
 
