@@ -9,9 +9,7 @@ import math
 import pytest
 
 from maou._rust.maou_search import evaluate as rust_evaluate
-from maou._rust.maou_search import (
-    winrate_to_eval,
-)
+from maou._rust.maou_search import winrate_to_eval
 from maou.interface.infer import infer
 
 HIRATE = (
