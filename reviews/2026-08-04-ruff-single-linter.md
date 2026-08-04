@@ -1,8 +1,8 @@
 ---
 title: lint/format を ruff に一本化し (isort・flake8 廃止)，ruff デフォルト全ルールを採用する
 date: 2026-08-04
-status: pending
-applied_in:
+status: applied
+applied_in: b737720
 target:
   - CLAUDE.md
   - docs/code-quality.md
