@@ -40,9 +40,42 @@ maouプロジェクトでは，以下の4種類のextrasを定義しています
 
 - **cpu-infer**: CPU推論用 (onnxruntime のみ)
 - **onnx-gpu-infer**: GPU推論用 (onnxruntime-gpu==1.22.*)
-- **tensorrt-infer**: TensorRT推論用 (onnxruntime-gpu==1.22.*, tensorrt-cu12==10.*, ほか)
+- **tensorrt-infer**: TensorRT推論用 (onnxruntime-gpu==1.22.*, tensorrt-cu12==10.* ほか)
 
-`onnx-gpu-infer` / `tensorrt-infer` のバージョンが固定されているのは意図的です．Rust wheel (`maou_search`) が ort crate 経由で onnxruntime 1.22系を静的リンクしており，実行時に dlopen される provider の `.so` が**静的コアと同一版でないとABI不一致でロードに失敗する**ためです．詳細は `pyproject.toml` のコメントを参照してください．
+`onnx-gpu-infer` / `tensorrt-infer` のバージョンが固定されているのは意図的です．Rust wheel (`maou_search`) が ort crate 経由で onnxruntime を静的リンクしており，実行時に dlopen される provider の `.so` が**静的コアと同一版でないとABI不一致でロードに失敗する**ためです．
+
+静的リンクされる版は `rust/maou_search/Cargo.toml` の `ort` のバージョンで決まります：
+
+| ort | onnxruntime | TensorRT |
+|---|---|---|
+| `=2.0.0-rc.10` (現在) | 1.22 | 10系 |
+| `=2.0.0-rc.13` | 1.28 | 11系 |
+
+`ort` が `=` で厳密固定されているのはこのためです．**`ort` を上げるときは `pyproject.toml` の
+`onnxruntime-gpu` / `tensorrt-cu12` と `uv.lock` の解決版も必ず同時に合わせる必要があります**．
+
+### 依存更新時の落とし穴 (2026-08-04 に実際に踏んだ)
+
+Dependabot がこの結合を知らずに片側だけ更新し，以下が同時に起きた：
+
+1. **範囲を広げただけでは版は揃わない**．`onnxruntime-gpu>=1.22,<1.29` に緩めても
+   `uv lock` は最小変更で再解決するため 1.22.0 が据え置かれる．
+   一方 Rust 側は ort rc.13 で 1.28 を静的リンクしており，食い違ったまま lock される．
+   揃えるには明示的な upgrade が要る：
+
+   ```bash
+   uv lock --upgrade-package onnxruntime-gpu --upgrade-package tensorrt-cu12
+   ```
+
+2. **`pyproject.toml` だけ更新して `uv.lock` を再生成し忘れる**と，
+   pre-commit の `uv-lock` フックが落ちる．`uv lock --check` で事前に検出できる．
+
+3. **polars 0.54.4 はこのリポジトリの feature 構成でコンパイルが通らない**
+   (`polars-stream` 内で `error[E0433]: cannot find type IRStringFunction`)．
+   PR には Rust をビルドする CI が無いため，`cargo build` / `maturin develop` を
+   手元で通すまで誰も気付かない．そのため polars は 0.53 に据え置いている．
+
+詳細は `pyproject.toml` のコメントを参照してください．
 
 ### 3. クラウドプロバイダごとのextra
 
