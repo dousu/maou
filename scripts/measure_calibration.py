@@ -1,17 +1,73 @@
 #!/usr/bin/env python
 """value head の較正を held-out 棋譜で測る．
 
-予測勝率をビンに分け，そのビンに入った局面の**実際の勝敗頻度**と比較する．
-較正が取れていれば予測 = 実測 (対角線) になり，過信していれば S 字
-(予測が両端に張り付き実測が中央へ寄る) になる．
+## 何を何と比べているか
 
-実測勝率は HCPE の ``gameResult`` (対局の勝敗) のみから算出する．
+**ビンの境界 (``BINS``) はモデルの「予測勝率」を区切るものであり，
+対局結果を区切るものではない．**
+
+1. 各局面にモデルの予測勝率 ``p`` を出す
+2. **``p`` の値でビンに振り分ける** (例: ``p`` が 0.05〜0.10 の局面を集める)
+3. そのビンに入った局面群について，**実際の対局結果 ``y`` (0/1) を平均**する
+
+出力表の 2 列は別々の配列から来る::
+
+    bin           = 予測勝率 p の区間           <- 振り分けの軸
+    pred   = p.mean()   区間内の予測の平均      <- モデル由来
+    actual = y.mean()   同じ局面群の勝敗の平均  <- 対局結果由来
+
+較正が取れていれば ``pred == actual`` (対角線)．過信していれば S 字
+(予測が両端に張り付き，実測が中央へ寄る)．
+
+## 個々の局面は 0/1 しか持たないのに，なぜ連続値が出るのか
+
+同一局面を繰り返す必要はない．中終盤の局面はほぼユニークで 0/1 しか
+持たないが，**「モデルが同程度の確率を出した別々の局面」を数百〜数千集めて
+その 0/1 を平均する**ので連続値になる．必要なのは「同じ局面が何度も出る」
+ことではなく「**同じ予測値を持つ局面が大量にある**」こと．
+
+較正の定義 ``E[Y | p(X) = q] = q`` を，``p(X) ≈ q`` の局面で ``Y`` を
+標本平均して推定していることに相当する．
+
+## なぜ信頼区間を対局単位の bootstrap で求めるのか
+
+同一対局の局面は**まったく同じ**勝敗ラベルを持つ (クラスタ内相関 ρ = 1)．
+ビン内で 1 対局から平均 ``m`` 局面が入るなら，設計効果により実効標本サイズは
+``n / m`` = **そのビンに寄与した対局数**まで縮む
+(コーパス全体の対局数ではない点に注意)．
+
+ただし縮み幅は大きくない．勝率は序盤 0.5 付近から終盤へ向けて発散するので，
+1 対局の局面は多くのビンに散る．実測 (floodgate 2026-03, 800 局):
+
+- 1 対局がまたぐビン数: 中央値 **9 / 全 12 ビン**．1 ビントに収まる対局は **0 局**
+- ply 帯ごとの予測勝率の標準偏差: 0.156 (ply 0-20) → 0.414 (ply 120-)
+- ビンごとの ``m``: **1.6〜4.5** → 実効サイズは局面数の 1/1.6〜1/4.5
+
+``bootstrap_by_game`` は局面ではなく**対局ごと丸ごと**再標本するので，
+``m`` や ρ を推定せずにこの構造が区間幅へ反映される．
+
+**実務上の帰結**: 区間を狭めたければ 1 対局から取る局面を増やすのではなく
+**対局数 (=日数) を増やす**．
+
+## ラベルの出所
+
+``y`` は HCPE の ``gameResult`` (対局の勝敗) のみから算出する
+(手番側が勝ったか = ``preprocess.rs`` の ``result_value``)．
 棋譜中のエンジン評価値 (``eval`` 列) は対局しているクライアントの仕様に
 依存するため使わない．
 
+測っているのは「**入力した棋譜を指した集団のもとでの勝率**」に対する較正で
+あって，ゲーム理論的な真の勝率ではない．本スクリプト自体は棋譜の出所を問わず，
+HCPE ならなんでも受け取る:
+
+- floodgate 棋譜を渡す → floodgate のエンジン集団に対する較正
+- 自己対局の棋譜を渡す → maou 自身の指し手のもとでの較正
+
+**2 つの測定を比べるときは同じ集団から取ること** (学習期間内 vs held-out の
+比較が成立するのは，どちらも floodgate という同一集団だからである)．
+
 同一対局の局面は同じ勝敗ラベルを共有するので独立標本ではない．
-信頼区間は**対局を単位とした bootstrap** で求める (実効的な標本サイズは
-局面数ではなく対局数に近い)．
+信頼区間は**対局を単位とした bootstrap** で求める (下記)．
 
 使い方::
 
@@ -42,6 +98,8 @@ import numpy as np
 import onnxruntime as ort
 import polars as pl
 
+# **モデルの予測勝率** を区切る境界 (対局結果を区切るものではない)．
+# 両端は分布が集中するので細かく刻む．
 BINS = np.array(
     [
         0,
@@ -134,19 +192,33 @@ def predict(
 
 
 def _bin_mask(
-    p: np.ndarray, lo: float, hi: float
+    pred: np.ndarray, lo: float, hi: float
 ) -> np.ndarray:
+    """**予測勝率**が ``[lo, hi)`` に入る局面を選ぶマスクを返す．
+
+    最終ビンだけ右端を含める (``p == 1.0`` を落とさないため)．
+
+    Args:
+        pred: 局面ごとのモデル予測勝率．**対局結果ではない**．
+        lo: 区間の下限 (含む)．
+        hi: 区間の上限 (最終ビン以外は含まない)．
+    """
     return (
-        (p >= lo) & (p < hi)
+        (pred >= lo) & (pred < hi)
         if hi < 1.0
-        else (p >= lo) & (p <= hi)
+        else (pred >= lo) & (pred <= hi)
     )
 
 
 def expected_calibration_error(
     p: np.ndarray, y: np.ndarray
 ) -> float:
-    """ビンごとの |平均予測 − 実測| を件数で重み付けした平均．"""
+    """ビンごとの |平均予測 − 実測勝敗| を件数で重み付けした平均．
+
+    Args:
+        p: 局面ごとの予測勝率 (ビン分けの軸でもある)．
+        y: 局面ごとの実際の勝敗 (0/1)．
+    """
     ece = 0.0
     for lo, hi in itertools.pairwise(BINS):
         m = _bin_mask(p, lo, hi)
@@ -167,7 +239,12 @@ def bootstrap_by_game(
     rounds: int,
     seed: int,
 ) -> np.ndarray:
-    """対局単位で再標本し，ビンごとの実測勝率の分布を返す．"""
+    """対局単位で再標本し，ビンごとの**実測勝敗平均**の分布を返す．
+
+    同一対局の局面は同じ勝敗ラベルを共有するため独立標本ではない．
+    局面ではなく**対局ごと丸ごと**再標本することで，この相関を
+    区間幅に反映させる (詳細はモジュール docstring)．
+    """
     rng = np.random.default_rng(seed)
     by_game = [np.where(gidx == i)[0] for i in range(n_games)]
     boot = np.full((rounds, len(BINS) - 1), np.nan)
@@ -267,18 +344,26 @@ def main() -> int:
     )
 
     print(
-        f"{'bin':>12}{'positions':>11}{'games':>7}"
+        "bin      = predicted win rate interval (the axis positions are "
+        "grouped by)\n"
+        "pred     = mean of the model's predictions inside that interval\n"
+        "actual   = mean of the real game outcomes (0/1) of the SAME "
+        "positions\n"
+        "         -> calibrated means pred == actual\n"
+    )
+    print(
+        f"{'predicted bin':>15}{'positions':>11}{'games':>7}"
         f"{'pred':>8}{'actual':>8}{'diff':>8}"
         + ("       95% CI" if boot is not None else "")
     )
-    print("-" * (54 + (13 if boot is not None else 0)))
+    print("-" * (57 + (13 if boot is not None else 0)))
     for k in range(len(BINS) - 1):
         m = _bin_mask(p, BINS[k], BINS[k + 1])
         if not m.sum():
             continue
         pm, ym = p[m].mean(), y[m].mean()
         line = (
-            f"{f'[{BINS[k]:.2f},{BINS[k + 1]:.2f})':>12}"
+            f"{f'[{BINS[k]:.2f},{BINS[k + 1]:.2f})':>15}"
             f"{m.sum():>11,}{len(np.unique(gidx[m])):>7,}"
             f"{pm:>8.3f}{ym:>8.3f}{pm - ym:>+8.3f}"
         )
@@ -293,7 +378,7 @@ def main() -> int:
     ece = expected_calibration_error(p, y)
     brier = float(np.mean((p - y) ** 2))
     t, ece_t = fit_temperature(z, y)
-    print("-" * (54 + (13 if boot is not None else 0)))
+    print("-" * (57 + (13 if boot is not None else 0)))
     print(f"ECE   = {ece:.4f}")
     print(
         f"Brier = {brier:.4f}   (0.25 = always answering 0.5)"
