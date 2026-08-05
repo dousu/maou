@@ -1,8 +1,8 @@
 ---
 title: linter/formatter の版が pre-commit と dev 依存で二重化する問題を文書化する
 date: 2026-08-05
-status: pending
-applied_in:
+status: applied
+applied_in: b162f7e
 target:
   - docs/code-quality.md
 risk: low
