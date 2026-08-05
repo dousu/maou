@@ -20,13 +20,11 @@ try:
         load_feather_file,
         load_hcpe_feather,
         load_preprocessing_feather,
+        save_feather_batches,
+        split_feather_file,
     )
     from maou._rust.maou_io import (
         merge_feather_files as _merge_feather_files,
-    )
-    from maou._rust.maou_io import (
-        save_feather_batches,
-        split_feather_file,
     )
 
     RUST_BACKEND_AVAILABLE = True

@@ -44,6 +44,7 @@ def test_exit_skipping_teardown_flushes_and_exits(
         capture_output=True,
         text=True,
         timeout=60,
+        check=False,
     )
 
     assert result.returncode == 0, result.stderr

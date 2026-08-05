@@ -8,6 +8,7 @@
 """
 
 from dataclasses import dataclass
+from typing import ClassVar
 
 from maou.domain.board.shogi import (
     PieceId,
@@ -112,12 +113,12 @@ class SVGBoardRenderer:
 
     # 持ち駒の種類（インデックス0-6: 歩香桂銀金角飛．
     # piece_mapping.get_piece_name_ja から導出し駒名表を一本化）
-    HAND_PIECE_NAMES = [
+    HAND_PIECE_NAMES: ClassVar[list[str]] = [
         get_piece_name_ja(piece_id) for piece_id in range(1, 8)
     ]
 
     # 手番の日本語表記
-    TURN_TEXT = {
+    TURN_TEXT: ClassVar[dict[Turn, str]] = {
         Turn.BLACK: "先手番",
         Turn.WHITE: "後手番",
     }
@@ -820,12 +821,11 @@ class SVGBoardRenderer:
             or move_arrow.to_square > 80
         ):
             return None
-        if move_arrow.from_square is not None:
-            if (
-                move_arrow.from_square < 0
-                or move_arrow.from_square > 80
-            ):
-                return None
+        if move_arrow.from_square is not None and (
+            move_arrow.from_square < 0
+            or move_arrow.from_square > 80
+        ):
+            return None
 
         # 盤面のX座標開始位置
         board_x_start = (

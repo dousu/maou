@@ -76,7 +76,9 @@ def _check_import_attr_error(
         for dep in _OPTIONAL_DEPS:
             if f"No module named '{dep}'" in msg:
                 return dep
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: S110
+        # 依存検出の best-effort なので，import 時の任意の失敗
+        # (循環 import・C 拡張のロード失敗等) は None 扱いでよい
         pass
     return None
 

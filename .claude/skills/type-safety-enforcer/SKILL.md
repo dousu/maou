@@ -223,7 +223,6 @@ Type checking is part of the QA pipeline:
 # Full QA pipeline includes mypy
 uv run ruff format src/
 uv run ruff check src/ --fix
-uv run isort src/
 uv run mypy src/  # Type checking step
 uv run pytest
 ```

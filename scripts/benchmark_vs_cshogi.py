@@ -13,7 +13,9 @@ Measures:
 """
 
 import time
-from typing import Callable
+from collections.abc import Callable
+from functools import partial
+from typing import Any
 
 import cshogi
 from cshogi import DfPn
@@ -62,6 +64,29 @@ def _print_header(title: str) -> None:
     print(f"{'=' * 60}")
 
 
+# 以下 3 つは計測対象をループ変数から切り離すためのヘルパ．
+# ループ内で def / lambda を作るとループ変数を遅延束縛で捕捉するため
+# (ruff B023)，partial で明示的に束縛して渡す．
+def _list_legal_moves(board: Any) -> list[Any]:
+    """cshogi の legal_moves はジェネレータなので list 化して計測する．"""
+    return list(board.legal_moves)
+
+
+def _list_legal_moves_maou(board: Any) -> list[Any]:
+    """maou 側．cshogi 版と呼び出しオーバーヘッドを揃えるための対称ラッパ．"""
+    return list(board.legal_moves())
+
+
+def _push_pop(board: Any, move: Any) -> None:
+    board.push(move)
+    board.pop()
+
+
+def _sfen_roundtrip(board: Any, sfen: str) -> None:
+    board.set_sfen(sfen)
+    board.sfen()
+
+
 def _fmt_nps(nodes: int, ms: float) -> str:
     if ms <= 0:
         return "N/A"
@@ -89,9 +114,13 @@ def bench_legal_moves() -> None:
         mb.set_sfen(sfen)
         cb = cshogi.Board(sfen)
 
-        maou_us = _timeit(mb.legal_moves, N_ITER)
+        # 両者に同じ partial + list() の呼び出しオーバーヘッドを乗せる
+        # (片側だけ包むと，その分が一方に不利に計上され比較が歪む)
+        maou_us = _timeit(
+            partial(_list_legal_moves_maou, mb), N_ITER
+        )
         cshogi_us = _timeit(
-            lambda: list(cb.legal_moves), N_ITER
+            partial(_list_legal_moves, cb), N_ITER
         )
 
         n_moves = len(mb.legal_moves())
@@ -115,18 +144,14 @@ def bench_push_pop() -> None:
         cb = cshogi.Board(sfen)
 
         m_move = mb.legal_moves()[0]
-        c_move = list(cb.legal_moves)[0]
+        c_move = next(iter(cb.legal_moves))
 
-        def _maou_push_pop() -> None:
-            mb.push(m_move)
-            mb.pop()
-
-        def _cshogi_push_pop() -> None:
-            cb.push(c_move)
-            cb.pop()
-
-        maou_us = _timeit(_maou_push_pop, N_ITER)
-        cshogi_us = _timeit(_cshogi_push_pop, N_ITER)
+        maou_us = _timeit(
+            partial(_push_pop, mb, m_move), N_ITER
+        )
+        cshogi_us = _timeit(
+            partial(_push_pop, cb, c_move), N_ITER
+        )
 
         print(
             f"{name:<14}{maou_us:>10.3f}{cshogi_us:>12.3f}"
@@ -146,16 +171,12 @@ def bench_sfen() -> None:
         mb = PyBoard()
         cb = cshogi.Board()
 
-        def _maou_sfen() -> None:
-            mb.set_sfen(sfen)
-            mb.sfen()
-
-        def _cshogi_sfen() -> None:
-            cb.set_sfen(sfen)
-            cb.sfen()
-
-        maou_us = _timeit(_maou_sfen, N_ITER)
-        cshogi_us = _timeit(_cshogi_sfen, N_ITER)
+        maou_us = _timeit(
+            partial(_sfen_roundtrip, mb, sfen), N_ITER
+        )
+        cshogi_us = _timeit(
+            partial(_sfen_roundtrip, cb, sfen), N_ITER
+        )
 
         print(
             f"{name:<14}{maou_us:>10.2f}{cshogi_us:>12.2f}"

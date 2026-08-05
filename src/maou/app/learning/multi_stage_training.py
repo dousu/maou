@@ -88,7 +88,7 @@ class Stage3ModelAdapter(torch.nn.Module):
         network: Stage 3 学習対象の Network モデル
     """
 
-    def __init__(self, network: "Network") -> None:
+    def __init__(self, network: Network) -> None:
         super().__init__()
         self.network = network
 
@@ -163,7 +163,7 @@ class Stage1DatasetAdapter(Dataset):
         dataset: ラップする Stage1Dataset
     """
 
-    def __init__(self, dataset: "Stage1Dataset") -> None:
+    def __init__(self, dataset: Stage1Dataset) -> None:
         self._dataset = dataset
 
     def __len__(self) -> int:
@@ -195,7 +195,7 @@ class Stage2DatasetAdapter(Dataset):
         dataset: ラップする Stage2Dataset
     """
 
-    def __init__(self, dataset: "Stage2Dataset") -> None:
+    def __init__(self, dataset: Stage2Dataset) -> None:
         self._dataset = dataset
 
     def __len__(self) -> int:
@@ -918,7 +918,11 @@ class MultiStageTrainingOrchestrator:
         """
         from datetime import datetime
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = (
+            datetime.now()
+            .astimezone()
+            .strftime("%Y%m%d_%H%M%S")
+        )
 
         if stage == TrainingStage.REACHABLE_SQUARES:
             head_filename = (

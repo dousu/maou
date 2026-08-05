@@ -11,8 +11,7 @@ import types
 import click
 import pytest
 
-import maou.infra.console.learn_model as learn_model
-import maou.infra.console.utility as utility
+from maou.infra.console import learn_model, utility
 
 
 def get_command_options(command: click.Command) -> set[str]:

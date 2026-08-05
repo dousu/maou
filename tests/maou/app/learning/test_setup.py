@@ -858,12 +858,14 @@ def test_log_worker_memory_info_level() -> None:
         )(),
     )
 
-    with mock_process:
-        with patch(
+    with (
+        mock_process,
+        patch(
             "maou.app.learning.setup.logging"
-        ) as mock_logging:
-            mock_logger = mock_logging.getLogger.return_value
-            _log_worker_memory(0, "init")
+        ) as mock_logging,
+    ):
+        mock_logger = mock_logging.getLogger.return_value
+        _log_worker_memory(0, "init")
 
     mock_logger.log.assert_called_once()
     args = mock_logger.log.call_args[0]
@@ -886,14 +888,16 @@ def test_log_worker_memory_debug_level() -> None:
         )(),
     )
 
-    with mock_process:
-        with patch(
+    with (
+        mock_process,
+        patch(
             "maou.app.learning.setup.logging"
-        ) as mock_logging:
-            mock_logger = mock_logging.getLogger.return_value
-            _log_worker_memory(
-                3, "after_first_file", level=logging.DEBUG
-            )
+        ) as mock_logging,
+    ):
+        mock_logger = mock_logging.getLogger.return_value
+        _log_worker_memory(
+            3, "after_first_file", level=logging.DEBUG
+        )
 
     mock_logger.log.assert_called_once()
     args = mock_logger.log.call_args[0]
@@ -988,7 +992,7 @@ def test_non_streaming_dataloaders_no_mp_context() -> None:
     train_ds = _make_kifdataset(100)
     val_ds = _make_kifdataset(100)
 
-    train_loader, val_loader = (
+    train_loader, _val_loader = (
         DataLoaderFactory.create_dataloaders(
             dataset_train=train_ds,
             dataset_validation=val_ds,

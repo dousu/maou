@@ -17,7 +17,6 @@ Before creating a PR, ensure all requirements are met:
 # Run complete QA pipeline
 uv run ruff format src/
 uv run ruff check src/ --fix
-uv run isort src/
 uv run mypy src/
 uv run pytest
 
@@ -122,7 +121,7 @@ Guide reviewers on what to focus on:
 
 **## Checklist**
 ```markdown
-- [ ] Code formatted and linted (ruff, isort)
+- [ ] Code formatted and linted (ruff)
 - [ ] Type checking passes (mypy)
 - [ ] All tests pass (pytest)
 - [ ] New tests added for new features
@@ -380,7 +379,7 @@ bundle_000.meta.json  # Metadata: {"array_id": {"offset": 0, "shape": [...]}}
 - Add bundle size optimization based on dataset characteristics
 
 ## Checklist
-- [x] Code formatted and linted (ruff，isort)
+- [x] Code formatted and linted (ruff)
 - [x] Type checking passes (mypy)
 - [x] All tests pass (pytest)
 - [x] New tests added (15 test cases)

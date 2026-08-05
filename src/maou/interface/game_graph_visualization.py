@@ -10,7 +10,7 @@ import copy
 import csv
 import io
 import logging
-from typing import Any, NamedTuple
+from typing import Any, ClassVar, NamedTuple
 
 import polars as pl
 
@@ -84,7 +84,7 @@ class GameGraphVisualizationInterface:
     GameGraphQueryのデータをUI向けに変換する．
     """
 
-    _ROW_MAP: dict[str, str] = {
+    _ROW_MAP: ClassVar[dict[str, str]] = {
         "a": "一",
         "b": "二",
         "c": "三",
@@ -98,7 +98,7 @@ class GameGraphVisualizationInterface:
 
     # USI 駒打ち文字 → 日本語駒名 (駒文字表 HAND_PIECE_SFEN_CHARS と
     # 駒名表 get_piece_name_ja から導出し，独自の駒名表を持たない)
-    _DROP_PIECE_MAP: dict[str, str] = {
+    _DROP_PIECE_MAP: ClassVar[dict[str, str]] = {
         char: get_piece_name_ja(piece_id)
         for piece_id, char in enumerate(
             HAND_PIECE_SFEN_CHARS, start=1

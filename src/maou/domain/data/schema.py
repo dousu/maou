@@ -48,8 +48,6 @@ from maou.domain.move.label import MOVE_LABELS_NUM
 class SchemaValidationError(Exception):
     """Raised when schema validation fails."""
 
-    pass
-
 
 def get_hcpe_dtype() -> np.dtype:
     """Get numpy dtype for HCPE (HuffmanCodedPosAndEval) data format.

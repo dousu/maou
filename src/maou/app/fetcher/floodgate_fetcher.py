@@ -102,7 +102,6 @@ class HttpClient(metaclass=abc.ABCMeta):
         Raises:
             HttpNotFoundError: If the server returns 404.
         """
-        pass
 
     @abc.abstractmethod
     def download(self, url: str, dest: Path) -> None:
@@ -115,7 +114,6 @@ class HttpClient(metaclass=abc.ABCMeta):
         Raises:
             HttpNotFoundError: If the server returns 404.
         """
-        pass
 
 
 class _AnchorHrefParser(HTMLParser):

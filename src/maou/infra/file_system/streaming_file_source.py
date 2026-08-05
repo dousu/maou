@@ -141,14 +141,14 @@ class StreamingFileSource:
     def total_rows(self) -> int:
         """全ファイルの合計行数(初回アクセス時にスキャン実行)."""
         self._ensure_row_counts()
-        assert self._total_rows is not None  # noqa: S101
+        assert self._total_rows is not None
         return self._total_rows
 
     @property
     def row_counts(self) -> list[int]:
         """各ファイルの行数リスト(初回アクセス時にスキャン実行)."""
         self._ensure_row_counts()
-        assert self._row_counts is not None  # noqa: S101
+        assert self._row_counts is not None
         return list(self._row_counts)
 
     def iter_files_columnar(

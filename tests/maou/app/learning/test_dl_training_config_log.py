@@ -33,22 +33,22 @@ class TestLogTrainingConfig:
 
     def _make_config(self, **overrides: object) -> MagicMock:
         """Create a mock config with default values."""
-        defaults = dict(
-            model_architecture="resnet",
-            optimizer_name="adamw",
-            learning_ratio=0.001,
-            optimizer_beta1=0.9,
-            optimizer_beta2=0.999,
-            lr_scheduler_name=None,
-            batch_size=256,
-            epoch=100,
-            dataloader_workers=4,
-            gce_parameter=0.7,
-            policy_loss_ratio=1.0,
-            value_loss_ratio=1.0,
-            datasource_type="hcpe",
-            input_cache_mode="file",
-        )
+        defaults = {
+            "model_architecture": "resnet",
+            "optimizer_name": "adamw",
+            "learning_ratio": 0.001,
+            "optimizer_beta1": 0.9,
+            "optimizer_beta2": 0.999,
+            "lr_scheduler_name": None,
+            "batch_size": 256,
+            "epoch": 100,
+            "dataloader_workers": 4,
+            "gce_parameter": 0.7,
+            "policy_loss_ratio": 1.0,
+            "value_loss_ratio": 1.0,
+            "datasource_type": "hcpe",
+            "input_cache_mode": "file",
+        }
         defaults.update(overrides)
         config = MagicMock()
         for k, v in defaults.items():

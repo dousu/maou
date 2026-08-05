@@ -17,7 +17,7 @@ _saved_mplbackend = os.environ.get("MPLBACKEND")
 if _saved_mplbackend and "inline" in _saved_mplbackend:
     os.environ["MPLBACKEND"] = "Agg"
 
-import matplotlib  # noqa: E402
+import matplotlib
 
 matplotlib.use(
     "Agg", force=True
@@ -30,12 +30,18 @@ if _saved_mplbackend is not None:
 elif "MPLBACKEND" in os.environ:
     del os.environ["MPLBACKEND"]
 
-import gradio as gr  # noqa: E402
+# 以降の import は **すべて上の matplotlib.use("Agg", force=True) より後**に
+# 置く必要がある (間接的に matplotlib を import するものがあり，先に読むと
+# inline backend が選ばれてヘッドレス環境で描画が壊れる)．
+# 整形ツールで先頭へ移動させないこと．
+# 2026-08-04 まで各行に E402 の抑止コメントが付いていたが，ruff の既定集合は
+# E402 を含まないため意味を失い削除した．制約自体は残っている．
+import gradio as gr
 
-from maou.infra.file_system.file_system import (  # noqa: E402
+from maou.infra.file_system.file_system import (
     FileSystem,
 )
-from maou.infra.visualization.game_graph_shared import (  # noqa: E402
+from maou.infra.visualization.game_graph_shared import (
     ELEM_ID_CURRENT_ROOT,
     ELEM_ID_DEPTH_SLIDER,
     ELEM_ID_EXPAND_BRIDGE,
@@ -50,16 +56,16 @@ from maou.infra.visualization.game_graph_shared import (  # noqa: E402
     create_analytics_plot,
     create_empty_plot,
 )
-from maou.infra.visualization.indexing_state import (  # noqa: E402
+from maou.infra.visualization.indexing_state import (
     IndexingState,
 )
-from maou.infra.visualization.search_index import (  # noqa: E402
+from maou.infra.visualization.search_index import (
     SearchIndex,
 )
-from maou.interface.path_suggestions import (  # noqa: E402
+from maou.interface.path_suggestions import (
     PathSuggestionService,
 )
-from maou.interface.visualization import (  # noqa: E402
+from maou.interface.visualization import (
     BoardPosition,
     SVGBoardRenderer,
     VisualizationInterface,
@@ -2401,7 +2407,7 @@ class GradioVisualizationServer:
 
             def _gt_handle_expand(
                 node_id_str: str | list[Any],
-                display_depth: int | float = 3,
+                display_depth: float = 3,
                 min_prob: float = 0.01,
             ) -> bool:
                 """ノード展開の server_function．"""

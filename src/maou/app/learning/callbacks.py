@@ -1148,13 +1148,13 @@ class TimingCallback(BaseCallback):
                 "p50": p50,
                 "p95": sorted_vals[
                     min(
-                        max(int(math.ceil(n * 0.95)) - 1, 0),
+                        max(math.ceil(n * 0.95) - 1, 0),
                         n - 1,
                     )
                 ],
                 "p99": sorted_vals[
                     min(
-                        max(int(math.ceil(n * 0.99)) - 1, 0),
+                        max(math.ceil(n * 0.99) - 1, 0),
                         n - 1,
                     )
                 ],

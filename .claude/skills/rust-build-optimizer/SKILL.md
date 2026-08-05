@@ -826,7 +826,7 @@ The project includes these optimizations by default:
 uv run maturin develop
 
 # 2. Run QA pipeline
-uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/ && uv run mypy src/ && uv run pytest
+uv run ruff format src/ && uv run ruff check src/ --fix && uv run mypy src/ && uv run pytest
 ```
 
 ### Workflow 2: Dependency Update + Rebuild

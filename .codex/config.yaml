@@ -6,8 +6,6 @@ policies:
       - pytest
       - mypy
       - ruff
-      - flake8
-      - isort
       - coverage
       - maou
     deny_without_prefix: true
@@ -22,6 +20,5 @@ defaults:
   qa_pipeline:
     - "uv run ruff format src/"
     - "uv run ruff check src/ --fix"
-    - "uv run isort src/"
     - "uv run mypy src/"
     - "uv run pytest -q"

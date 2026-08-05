@@ -114,7 +114,7 @@ def main():
 
     # Get one batch
     batch = next(iter(dataloader))
-    inputs, (labels_policy, labels_value, legal_move_mask) = (
+    inputs, (_labels_policy, labels_value, _legal_move_mask) = (
         batch
     )
 
@@ -132,7 +132,7 @@ def main():
     # Forward pass
     model.eval()
     with torch.no_grad():
-        policy_logits, value_pred = model(inputs)
+        _policy_logits, value_pred = model(inputs)
 
     print("\nModel predictions:")
     print(f"  value_pred shape: {value_pred.shape}")
@@ -159,7 +159,7 @@ def main():
 
     # Single training step
     optimizer.zero_grad()
-    policy_logits, value_pred = model(inputs)
+    _policy_logits, value_pred = model(inputs)
     loss = loss_fn(value_pred, labels_value)
     loss.backward()
 
@@ -189,7 +189,7 @@ def main():
 
     for step in range(10):
         optimizer.zero_grad()
-        policy_logits, value_pred = model(inputs)
+        _policy_logits, value_pred = model(inputs)
         loss = loss_fn(value_pred, labels_value)
         loss.backward()
         optimizer.step()

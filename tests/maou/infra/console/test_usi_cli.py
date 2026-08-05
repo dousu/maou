@@ -25,6 +25,7 @@ def _run_engine(
         capture_output=True,
         text=True,
         timeout=timeout,
+        check=False,
     )
     assert proc.returncode == 0, f"stderr: {proc.stderr}"
     return proc.stdout.splitlines()

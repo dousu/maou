@@ -26,6 +26,7 @@ def _heavy_modules_after_import(module: str) -> list[str]:
         capture_output=True,
         text=True,
         timeout=120,
+        check=False,
     )
     assert proc.returncode == 0, f"stderr: {proc.stderr}"
     return [

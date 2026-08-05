@@ -2,7 +2,6 @@ from pathlib import Path
 
 import click
 
-import maou.interface.preprocess as preprocess
 from maou.infra.console.common import (
     HAS_AWS,
     HAS_BIGQUERY,
@@ -17,6 +16,7 @@ from maou.infra.console.common import (
     app_logger,
     handle_exception,
 )
+from maou.interface import preprocess
 
 
 @click.command("pre-process")

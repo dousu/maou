@@ -15,8 +15,7 @@ from typing import (
 
 import numpy as np
 
-import maou.interface.learn as learn
-import maou.interface.preprocess as preprocess
+from maou.interface import learn, preprocess
 from maou.interface.data_io import (
     ColumnarBatch,
     convert_preprocessing_df_to_columnar,
@@ -41,7 +40,7 @@ if TYPE_CHECKING:
     )
 
 _DF_TO_NUMPY_CONVERTERS: dict[
-    str, Callable[["pl.DataFrame"], np.ndarray]
+    str, Callable[[pl.DataFrame], np.ndarray]
 ] = {
     "hcpe": convert_hcpe_df_to_numpy,
     "preprocessing": convert_preprocessing_df_to_numpy,
@@ -50,7 +49,7 @@ _DF_TO_NUMPY_CONVERTERS: dict[
 }
 
 _DF_TO_COLUMNAR_CONVERTERS: dict[
-    str, Callable[["pl.DataFrame"], ColumnarBatch]
+    str, Callable[[pl.DataFrame], ColumnarBatch]
 ] = {
     "preprocessing": convert_preprocessing_df_to_columnar,
     "stage1": convert_stage1_df_to_columnar,
@@ -85,7 +84,7 @@ class FileDataSource(
                 "hcpe", "preprocessing", "stage1", "stage2"
             ],
             bit_pack: bool = False,
-            cache_mode: "FileDataSource.CacheMode" = "file",
+            cache_mode: FileDataSource.CacheMode = "file",
         ) -> None:
             self.__file_manager = FileDataSource.FileManager(
                 file_paths=file_paths,
@@ -96,7 +95,7 @@ class FileDataSource(
 
         def train_test_split(
             self, test_ratio: float
-        ) -> tuple["FileDataSource", "FileDataSource"]:
+        ) -> tuple[FileDataSource, FileDataSource]:
             self.logger.info(f"test_ratio: {test_ratio}")
             input_indicies, test_indicies = (
                 self.__train_test_split(
@@ -121,9 +120,7 @@ class FileDataSource(
             self,
             test_ratio: float,
             seed: int | None = None,
-        ) -> tuple[
-            "StreamingFileSource", "StreamingFileSource"
-        ]:
+        ) -> tuple[StreamingFileSource, StreamingFileSource]:
             """ファイル単位のtrain/test分割．
 
             レコード単位ではなくファイル単位で分割し，
@@ -193,12 +190,7 @@ class FileDataSource(
             self,
             data: list,
             test_ratio: float = 0.25,
-            seed: int
-            | float
-            | str
-            | bytes
-            | bytearray
-            | None = None,
+            seed: float | str | bytes | bytearray | None = None,
         ) -> tuple:
             if seed is not None:
                 random.seed(seed)
@@ -237,7 +229,7 @@ class FileDataSource(
                 "hcpe", "preprocessing", "stage1", "stage2"
             ],
             bit_pack: bool,
-            cache_mode: "FileDataSource.CacheMode" = "file",
+            cache_mode: FileDataSource.CacheMode = "file",
         ) -> None:
             """ファイルシステムから複数のファイルに入っているデータを取り出す．
 
@@ -541,7 +533,7 @@ class FileDataSource(
 
         def _load_feather(
             self, file_path: Path
-        ) -> "pl.DataFrame":
+        ) -> pl.DataFrame:
             """Arrow IPCファイルを読み込みPolars DataFrameとして返す．
 
             Args:
@@ -871,7 +863,7 @@ class FileDataSource(
 
     def iter_batches_df(
         self,
-    ) -> Generator[tuple[str, "pl.DataFrame"], None, None]:
+    ) -> Generator[tuple[str, pl.DataFrame], None, None]:
         """Iterate over batches as Polars DataFrames．
 
         Yields .feather files directly as DataFrames．

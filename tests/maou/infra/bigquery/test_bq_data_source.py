@@ -3,7 +3,7 @@ import os
 import re
 import uuid
 from collections.abc import Generator
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import google_crc32c
@@ -105,7 +105,7 @@ class TestBigQueryDataSource:
                 endgameStatus,
                 moves,
                 partitioningKey,
-            ) in zip(  # noqa: E501
+            ) in zip(
                 [str(uuid.uuid4()) for _ in range(num_rows)],
                 [
                     np.zeros(32, dtype=np.uint8)
@@ -334,7 +334,7 @@ class TestBigQueryDataSource:
             partitioning_key_date="partitioningKey",
         )
         # データを読み込む
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         _ = data_source[0]
         client = self.bq.client
 
@@ -413,7 +413,7 @@ class TestBigQueryDataSource:
 
         # キャッシュの動作を間接的に確認する
         # 同じデータを再度読み込んでも，BigQueryへのアクセスが発生しないことを確認
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         for i in range(len(data)):
             data_source[i]
 
@@ -466,7 +466,7 @@ class TestBigQueryDataSource:
 
         # キャッシュの動作を間接的に確認する
         # 同じデータを再度読み込んでも，BigQueryへのアクセスが発生しないことを確認
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         data_source[0]
 
         client = self.bq.client
@@ -518,7 +518,7 @@ class TestBigQueryDataSource:
 
         # キャッシュの動作を間接的に確認する
         # 同じデータを再度読み込んでも，BigQueryへのアクセスが発生しないことを確認
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         data_source[0]
 
         client = self.bq.client
@@ -629,7 +629,7 @@ class TestBigQueryDataSource:
         local_cache_dir = tmp_path / "local_cache"
 
         # 1回目：BigQueryからデータを取得してローカルキャッシュに保存
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         BigQueryDataSource(
             array_type="hcpe",
             dataset_id=self.dataset_id,
@@ -643,7 +643,7 @@ class TestBigQueryDataSource:
         assert len(cache_files) > 0
 
         # 2回目：ローカルキャッシュからデータを読み込む
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         data_source2 = BigQueryDataSource(
             array_type="hcpe",
             dataset_id=self.dataset_id,
@@ -722,7 +722,7 @@ class TestBigQueryDataSource:
         data_source[0]
 
         # 同じデータを再度読み込む
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         data_source[0]
 
         # BigQueryへのアクセスが発生しないことを確認
@@ -769,7 +769,7 @@ class TestBigQueryDataSource:
         local_cache_dir = tmp_path / "local_cache"
 
         # 初期化時にBigQueryへのアクセスが発生することを確認
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
         data_source = BigQueryDataSource(
             array_type="hcpe",
             dataset_id=self.dataset_id,
@@ -790,7 +790,7 @@ class TestBigQueryDataSource:
         )  # 初期化時にBigQueryへのアクセスが発生
 
         # 初期化後のアクセスを確認するための時間を記録
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
 
         # すべてのデータにアクセス
         for i in range(len(data_source)):

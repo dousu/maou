@@ -42,7 +42,7 @@ def parse_summary(output: str) -> dict[str, Any]:
 DAY_URL = DEFAULT_BASE_URL + "2025/01/05/"
 LISTING = (
     f'<html><body><a href="{CSA_NAME}">csa</a></body></html>'
-).encode("utf-8")
+).encode()
 
 
 class FakeHttpClient(HttpClient):

@@ -80,7 +80,6 @@ Validate that the base state passes all checks:
 # Run complete QA pipeline
 uv run ruff format src/
 uv run ruff check src/ --fix
-uv run isort src/
 uv run mypy src/
 uv run pytest
 ```

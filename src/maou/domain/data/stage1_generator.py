@@ -62,7 +62,7 @@ class Stage1DataGenerator:
         elif piece_id == PieceId.KE:
             return list(range(2, 9))  # rows 2-8
         else:
-            return list(range(0, 9))  # rows 0-8
+            return list(range(9))  # rows 0-8
 
     @staticmethod
     def enumerate_board_patterns() -> Generator[

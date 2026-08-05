@@ -1,6 +1,6 @@
 [project]
 name = "maou"
-version = "0.76.1"
+version = "0.77.0"
 description = "Shogi AI"
 authors = [
     {name = "Your Name", email = "your.email@example.com"}
@@ -139,12 +139,15 @@ dev = [
     # scratchpad/gen_kifu_golden.py と交差検証テスト) のため dev に残す．
     "cshogi>=0.9.2",
     "pre-commit>=4.3.0",
-    "flake8>=7.2.0",
     "yamllint>=1.37.1",
-    "isort>=6.1.0",
     "commitizen>=4.9.1",
     "pytest>=8.4.2",
-    "ruff>=0.14.1",
+    # ruff はここが唯一の版指定 (pre-commit は local hook で
+    # `uv run ruff` を呼ぶ)．select を明示していないため
+    # **適用ルール集合 = ruff の版**であり，版を上げると検出結果が変わる．
+    # 範囲指定にすると `uv lock --upgrade` で暗黙に変わるため == で固定する．
+    # 上げるときは docs/code-quality.md の差分検証手順に従うこと．
+    "ruff==0.16.1",
     "types-tqdm>=4.67.0.20250809",
     "mypy>=1.18.2",
     "google-cloud-storage>=3.4.1",
@@ -213,24 +216,63 @@ module = [
   "maou.*",
 ]
 
-[tool.isort]
-profile = "black"
-line_length = 64
-
 [tool.ruff]
 line-length = 64
 indent-width = 4
 
 [tool.ruff.lint]
-# 適用ルールを明示的に固定する (重要):
-#   これは ruff 0.15 までの暗黙デフォルトと同一の集合であり，
-#   本設定を入れても検出結果は変わらない (0.15.4 / 0.16.1 いずれも 0 件)．
-#   明示する理由は ruff がマイナー更新でデフォルトルールセットを
-#   変えることがあるため．実際 0.16 では pyupgrade / pylint / bugbear /
-#   simplify / tryceratops / datetimez 等が既定で有効になり，
-#   同一コードに対し 508 件が新規検出された (2026-08-04)．
-#   hook 引数が --fix のため，放置すると版上げのたびに
-#   未レビューの一括自動書き換えが走る．
-#   ルールを増やすときは「版上げの副作用」ではなく
-#   ここへの明示的な追記として行うこと．
-select = ["E4", "E7", "E9", "F"]
+# 適用ルールは ruff のデフォルト集合に追随する (2026-08-04 時点で 413 ルール)．
+#
+# select を明示していない理由:
+#   ruff のデフォルトはファミリ全体ではなく厳選されたサブセットである
+#   (例: E は E722/E902 のみで E501 を含まない，D は D419 のみ，
+#    N は N999 のみ，S は S102/S110/S112 のみ)．
+#   そのため select にファミリ接頭辞を並べても再現できず，実測では
+#   413 に対し 586 ルールと大幅に超過した (PLR0913 / PLR2004 / PTH1xx /
+#   PT0xx / G004 等が余分に入る)．413 コードの列挙は現実的でない．
+#
+# 版上げ時の必須手順:
+#   ruff を上げるとデフォルト集合が変わりうる (0.15 -> 0.16 では
+#   同一コードに 484 件が新規検出された)．hook 引数が --fix のため，
+#   放置すると未レビューの一括自動書き換えが走る．
+#   MUST 上げる前に新旧の有効ルールを比較し，増分を意図的に採否すること:
+#     uv tool run ruff@<新版> check --show-settings --isolated \
+#       | sed -n '/linter.rules.enabled/,/^]/p' | grep -oE '\([A-Z]+[0-9]+\)'
+#   詳細は docs/code-quality.md を参照．
+#
+# import 順は ruff (I) が担当する．isort は 2026-08-04 に廃止した
+# (両者は 19-22 ファイルで整形が食い違い，同時有効化すると
+#  互いに書き換え合うため)．
+ignore = [
+    # BLE001 (blind-except): 本リポジトリでは `except Exception` は
+    # 境界での意図的な graceful degradation として使っている
+    # (バッチ処理のファイル単位スキップ，ワーカースレッドの例外収集，
+    #  描画失敗時のフォールバック，任意クラウド依存の機能縮退など)．
+    # 例外型を絞ると polars / GCS / PyO3 が投げる想定外の型を取り逃し，
+    # 「1 ファイルをスキップする」はずが「バッチ全体が落ちる」に化ける．
+    # 57 箇所すべてがこの用途だったため個別 noqa ではなく一括で無効化する
+    # (2026-08-04 に全件確認．33 ファイルに分布しており per-file-ignores
+    #  では冗長すぎるため blanket にした)．
+    # 注意: これは「今後書かれる except Exception」も無条件で通す．
+    # 依存追加やレイヤ追加でこの前提が変わったら再監査すること．
+    "BLE001",
+    # ISC004: line-length = 64 という短い設定のため，長いログ行や
+    # メッセージはリスト要素内で f-string を複数行に分けて組み立てざるを
+    # 得ない．このルールは「リスト内のカンマ抜け」を疑うものだが，
+    # 該当 10 箇所はすべて意図的な折り返しだった (2026-08-04 に全件確認)．
+    "ISC004",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 明示的再エクスポート facade (PEP 484 の `from X import name as name` 記法)．
+# PLC0414 は alias を「無意味」とみなすが，除去すると再エクスポートの意図が
+# 失われ，型チェッカから見た公開 API が変わる．記法は意図的なので抑止する．
+"src/maou/infra/console/common.py" = ["PLC0414"]
+"src/maou/interface/analysis_gui.py" = ["PLC0414"]
+"src/maou/interface/data_io.py" = ["PLC0414"]
+"src/maou/interface/data_schema.py" = ["PLC0414"]
+"src/maou/interface/learn.py" = ["PLC0414"]
+"src/maou/interface/visualization.py" = ["PLC0414"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["maou"]

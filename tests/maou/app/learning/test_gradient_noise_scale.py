@@ -1,7 +1,7 @@
 """GradientNoiseScaleEstimator のテスト．"""
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from maou.app.learning.gradient_noise_scale import (
     GNSEstimate,

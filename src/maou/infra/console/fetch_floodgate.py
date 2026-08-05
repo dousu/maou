@@ -3,7 +3,6 @@ from pathlib import Path
 
 import click
 
-import maou.interface.fetcher as fetcher
 from maou.app.fetcher.floodgate_fetcher import (
     DEFAULT_ARCHIVE_BASE_URL,
     DEFAULT_BASE_URL,
@@ -13,6 +12,7 @@ from maou.infra.console.common import handle_exception
 from maou.infra.http.urllib_http_client import (
     UrllibHttpClient,
 )
+from maou.interface import fetcher
 
 
 @click.command("fetch-floodgate")

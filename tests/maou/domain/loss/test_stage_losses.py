@@ -1,8 +1,8 @@
 """Tests for Stage 1 and Stage 2 loss functions."""
 
 import logging
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
 
 import numpy as np
 import torch

@@ -1,16 +1,14 @@
 import logging
 from pathlib import Path
 
-import google.cloud.storage as storage
+import google.cloud.storage as storage  # noqa: PLR0402 (namespace package: from-import だと mypy が属性解決できない)
 
-import maou.interface.learn as learn
 from maou.infra.file_system.file_system import FileSystem
+from maou.interface import learn
 
 
 class BucketNotFound(Exception):
     """指定されたバケット名が存在しないときのエラー."""
-
-    pass
 
 
 class GCS(learn.CloudStorage):

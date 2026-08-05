@@ -19,7 +19,7 @@ from pathlib import Path
 def diagnose_files(directory: Path) -> None:
     """Run diagnostics on all feather files in directory."""
     import polars as pl
-    import pyarrow.ipc as ipc
+    from pyarrow import ipc
 
     from maou.domain.data.rust_io import load_hcpe_df
     from maou.infra.file_system.streaming_file_source import (
@@ -82,8 +82,9 @@ def diagnose_files(directory: Path) -> None:
                     num_batches = 0
                     pyarrow_rows = 0
                     batch_sizes = []
-                    for batch in reader:
-                        num_batches += 1
+                    for num_batches, batch in enumerate(
+                        reader, start=1
+                    ):
                         pyarrow_rows += batch.num_rows
                         batch_sizes.append(batch.num_rows)
         except Exception as e:

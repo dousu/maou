@@ -39,6 +39,10 @@ class FeatureStore(metaclass=abc.ABCMeta):
         pass
 
 
+class ConversionError(Exception):
+    """Rust 側の変換エラーのうち既知の型に分類できないもの."""
+
+
 class NotApplicableFormat(Exception):
     pass
 
@@ -173,7 +177,7 @@ class HCPEConverter:
         elif "undefined format" in error_msg:
             raise NotApplicableFormat(error_msg)
         else:
-            raise Exception(error_msg)
+            raise ConversionError(error_msg)
 
     def _chunk_and_upload(
         self,
@@ -264,11 +268,8 @@ class HCPEConverter:
 
     @contextlib.contextmanager
     def __context(self) -> Generator[None, None, None]:
-        try:
-            if self.__feature_store is not None:
-                with self.__feature_store.feature_store():
-                    yield
-            else:
+        if self.__feature_store is not None:
+            with self.__feature_store.feature_store():
                 yield
-        except Exception:
-            raise
+        else:
+            yield

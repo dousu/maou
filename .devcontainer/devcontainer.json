@@ -37,7 +37,14 @@
 				},
 				"python.analysis.autoImportCompletions": true,
 				"python.analysis.typeCheckingMode": "basic",
+				// Python の整形・import 順は ruff に一本化する．
+				// defaultFormatter を明示しないと，インストール済みの
+				// autopep8 等が保存時フォーマッタを奪い，ruff format と
+				// competing な整形が入る．
+				// import 順は source.organizeImports.ruff が担当する
+				// (isort は 2026-08-04 に廃止した)．
 				"[python]": {
+					"editor.defaultFormatter": "charliermarsh.ruff",
 					"editor.formatOnSave": true,
 					"editor.codeActionsOnSave": {
 						"source.fixAll.ruff": "explicit",

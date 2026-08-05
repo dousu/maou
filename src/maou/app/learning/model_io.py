@@ -387,21 +387,15 @@ class ModelIO:
             # 3つの別ファイルに保存
             backbone_path = (
                 dir
-                / "model_{}_{}_{}_backbone.pt".format(
-                    id, model_tag, epoch
-                )
+                / f"model_{id}_{model_tag}_{epoch}_backbone.pt"
             )
             policy_head_path = (
                 dir
-                / "model_{}_{}_{}_policy_head.pt".format(
-                    id, model_tag, epoch
-                )
+                / f"model_{id}_{model_tag}_{epoch}_policy_head.pt"
             )
             value_head_path = (
                 dir
-                / "model_{}_{}_{}_value_head.pt".format(
-                    id, model_tag, epoch
-                )
+                / f"model_{id}_{model_tag}_{epoch}_value_head.pt"
             )
 
             logger.info(
@@ -439,12 +433,10 @@ class ModelIO:
 
         # torch.onnx.export (統合モデルとしてエクスポート)
         # TorchScriptエクスポーターを使用（PyTorch 2.10でデフォルト変更のため）
-        onnx_model_path = dir / "model_{}_{}_{}.onnx".format(
-            id, model_tag, epoch
+        onnx_model_path = (
+            dir / f"model_{id}_{model_tag}_{epoch}.onnx"
         )
-        logger.info(
-            "Saving model to {}".format(onnx_model_path)
-        )
+        logger.info(f"Saving model to {onnx_model_path}")
         dummy_data = create_empty_preprocessing_array(1)
         dummy_board = (
             torch.from_numpy(
@@ -538,14 +530,9 @@ class ModelIO:
 
         # ONNX FP16バージョン作成
         onnx_model_fp16_path = (
-            dir
-            / "model_{}_{}_{}_fp16.onnx".format(
-                id, model_tag, epoch
-            )
+            dir / f"model_{id}_{model_tag}_{epoch}_fp16.onnx"
         )
-        logger.info(
-            "Saving model to {}".format(onnx_model_fp16_path)
-        )
+        logger.info(f"Saving model to {onnx_model_fp16_path}")
         onnx_model_fp16 = float16.convert_float_to_float16(
             model=onnx_model_simp,
             keep_io_types=True,

@@ -9,6 +9,7 @@ import logging
 import shutil
 from collections.abc import Generator
 from pathlib import Path
+from typing import Self
 
 import duckdb
 import numpy as np
@@ -677,7 +678,7 @@ class IntermediateDataStore:
         )
 
         # データベースのディスク使用状況
-        db_total, db_used, db_free = get_disk_usage(
+        _db_total, _db_used, db_free = get_disk_usage(
             self.db_path
         )
         db_free_gb = db_free / 1024 / 1024 / 1024
@@ -705,7 +706,7 @@ class IntermediateDataStore:
 
         # 出力先のディスク容量もチェック
         if output_dir is not None:
-            out_total, out_used, out_free = get_disk_usage(
+            _out_total, _out_used, out_free = get_disk_usage(
                 output_dir
             )
             out_free_gb = out_free / 1024 / 1024 / 1024
@@ -1213,7 +1214,7 @@ class IntermediateDataStore:
                     f"Failed to delete temporary database: {e}"
                 )
 
-    def __enter__(self) -> "IntermediateDataStore":
+    def __enter__(self) -> Self:
         """Context manager entry."""
         return self
 

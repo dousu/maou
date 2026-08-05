@@ -64,7 +64,6 @@ class RecordRenderer(ABC):
         Returns:
             SVG文字列
         """
-        pass
 
     @abstractmethod
     def extract_display_fields(
@@ -78,7 +77,6 @@ class RecordRenderer(ABC):
         Returns:
             表示フィールドの辞書
         """
-        pass
 
     @abstractmethod
     def get_table_columns(self) -> list[str]:
@@ -87,7 +85,6 @@ class RecordRenderer(ABC):
         Returns:
             カラム名のリスト
         """
-        pass
 
     @abstractmethod
     def format_table_row(
@@ -102,12 +99,11 @@ class RecordRenderer(ABC):
         Returns:
             セル値のリスト
         """
-        pass
 
     @abstractmethod
     def generate_analytics(
         self, records: list[dict[str, Any]]
-    ) -> "go.Figure" | None:
+    ) -> go.Figure | None:
         """レコード群からデータ分析用のPlotly Figureを生成する．
 
         Args:
@@ -116,7 +112,6 @@ class RecordRenderer(ABC):
         Returns:
             Plotly Figureオブジェクト，またはデータがない場合はNone
         """
-        pass
 
     def _create_board_position(
         self, record: dict[str, Any]
@@ -284,7 +279,7 @@ class HCPERecordRenderer(RecordRenderer):
 
     def generate_analytics(
         self, records: list[dict[str, Any]]
-    ) -> "go.Figure" | None:
+    ) -> go.Figure | None:
         """HCPEデータから評価値の分布チャートを生成する．
 
         Args:
@@ -329,10 +324,10 @@ class HCPERecordRenderer(RecordRenderer):
             xaxis_title="評価値",
             yaxis_title="頻度",
             template="plotly_white",
-            font=dict(family="system-ui", size=12),
+            font={"family": "system-ui", "size": 12},
             height=400,
             showlegend=False,
-            margin=dict(l=40, r=40, t=60, b=40),
+            margin={"l": 40, "r": 40, "t": 60, "b": 40},
         )
 
         return fig
@@ -436,7 +431,7 @@ class Stage1RecordRenderer(RecordRenderer):
 
     def generate_analytics(
         self, records: list[dict[str, Any]]
-    ) -> "go.Figure" | None:
+    ) -> go.Figure | None:
         """Stage1データから到達可能マス数の分布チャートを生成する．
 
         Args:
@@ -477,10 +472,10 @@ class Stage1RecordRenderer(RecordRenderer):
             xaxis_title="到達可能マス数",
             yaxis_title="頻度",
             template="plotly_white",
-            font=dict(family="system-ui", size=12),
+            font={"family": "system-ui", "size": 12},
             height=400,
             showlegend=False,
-            margin=dict(l=40, r=40, t=60, b=40),
+            margin={"l": 40, "r": 40, "t": 60, "b": 40},
         )
 
         return fig
@@ -573,7 +568,7 @@ class Stage2RecordRenderer(RecordRenderer):
 
     def generate_analytics(
         self, records: list[dict[str, Any]]
-    ) -> "go.Figure" | None:
+    ) -> go.Figure | None:
         """Stage2データから合法手数の分布チャートを生成する．
 
         Args:
@@ -614,10 +609,10 @@ class Stage2RecordRenderer(RecordRenderer):
             xaxis_title="合法手数",
             yaxis_title="頻度",
             template="plotly_white",
-            font=dict(family="system-ui", size=12),
+            font={"family": "system-ui", "size": 12},
             height=400,
             showlegend=False,
-            margin=dict(l=40, r=40, t=60, b=40),
+            margin={"l": 40, "r": 40, "t": 60, "b": 40},
         )
 
         return fig
@@ -735,7 +730,7 @@ class PreprocessingRecordRenderer(RecordRenderer):
 
     def generate_analytics(
         self, records: list[dict[str, Any]]
-    ) -> "go.Figure" | None:
+    ) -> go.Figure | None:
         """Preprocessingデータから勝率分布チャートを生成する．
 
         resultValueとbestMoveWinRate（存在する場合）の分布を表示する．
@@ -822,10 +817,10 @@ class PreprocessingRecordRenderer(RecordRenderer):
         fig.update_layout(
             title=title,
             template="plotly_white",
-            font=dict(family="system-ui", size=12),
+            font={"family": "system-ui", "size": 12},
             height=400,
             showlegend=False,
-            margin=dict(l=40, r=40, t=60, b=40),
+            margin={"l": 40, "r": 40, "t": 60, "b": 40},
         )
 
         return fig

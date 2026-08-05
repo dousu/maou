@@ -17,7 +17,6 @@ All checks MUST pass:
 # Complete QA pipeline
 uv run ruff format src/
 uv run ruff check src/ --fix
-uv run isort src/
 uv run mypy src/
 uv run pytest
 ```
@@ -157,7 +156,7 @@ If CI checks fail, debug in this order:
 
 1. **Code Formatting**
    ```bash
-   uv run ruff format src/ && uv run ruff check src/ --fix && uv run isort src/
+   uv run ruff format src/ && uv run ruff check src/ --fix
    ```
 
 2. **Type Errors**
@@ -167,7 +166,7 @@ If CI checks fail, debug in this order:
 
 3. **Linting Issues**
    ```bash
-   uv run flake8 src/
+   uv run ruff check src/
    ```
 
 4. **Test Failures**

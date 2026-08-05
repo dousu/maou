@@ -1,3 +1,4 @@
+import contextlib
 import gc
 import json
 import logging
@@ -1691,10 +1692,8 @@ class TrainingBenchmarkUseCase:
                 )
                 gc.collect()
                 torch.cuda.empty_cache()
-                try:
+                with contextlib.suppress(Exception):
                     torch.cuda.reset_peak_memory_stats()
-                except Exception:
-                    pass
                 results.append(
                     {
                         "sweep_batch_size": bs,
@@ -1899,10 +1898,8 @@ class TrainingBenchmarkUseCase:
             if torch.cuda.is_available():
                 gc.collect()
                 torch.cuda.empty_cache()
-                try:
+                with contextlib.suppress(Exception):
                     torch.cuda.reset_peak_memory_stats()
-                except Exception:
-                    pass
             sweep_config = replace(
                 config,
                 learning_ratio=lr,

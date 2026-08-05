@@ -1,5 +1,5 @@
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.nn.common_types import _size_2_t
 
 
@@ -18,7 +18,7 @@ class ResidualBlock(nn.Module):
         kernel_size: _size_2_t = 3,
         padding: _size_2_t = 1,
     ):
-        super(ResidualBlock, self).__init__()
+        super().__init__()
         self.conv1 = nn.Conv2d(
             in_channels,
             out_channels,
@@ -86,7 +86,7 @@ class BottleneckBlock(nn.Module):
         stride: _size_2_t = 1,
         downsample: nn.Module | None = None,
     ):
-        super(BottleneckBlock, self).__init__()
+        super().__init__()
 
         # BottleneckBlockでは，out_channelsは最終的な出力チャンネル数
         # 中間層では out_channels // expansion を使用
@@ -162,7 +162,7 @@ class ResNet(nn.Module):
         strides: list[_size_2_t],
         list_out_channels: list[int],
     ):
-        super(ResNet, self).__init__()
+        super().__init__()
         self.block_in_channels = in_channels
 
         # 各層を構築

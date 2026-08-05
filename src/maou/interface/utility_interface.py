@@ -84,11 +84,12 @@ def benchmark_dataloader(
         )
 
     # Set sample ratio for cloud sources (default: None, means use full data)
-    if sample_ratio is not None:
-        if not 0.01 <= sample_ratio <= 1.0:
-            raise ValueError(
-                f"sample_ratio must be between 0.01 and 1.0, got {sample_ratio}"
-            )
+    if sample_ratio is not None and not (
+        0.01 <= sample_ratio <= 1.0
+    ):
+        raise ValueError(
+            f"sample_ratio must be between 0.01 and 1.0, got {sample_ratio}"
+        )
 
     logger.info("Benchmark configuration:")
     logger.info(f"  Device: {device}")

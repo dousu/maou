@@ -4,14 +4,12 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
 
-import maou.interface.learn as learn
 from maou.infra.file_system.file_system import FileSystem
+from maou.interface import learn
 
 
 class BucketNotFound(Exception):
     """指定されたバケット名が存在しないときのエラー．"""
-
-    pass
 
 
 class S3(learn.CloudStorage):

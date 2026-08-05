@@ -44,7 +44,7 @@ class TestStage1DataGenerator:
             PieceId.KI
         )
         assert len(rows) == 9
-        assert rows == list(range(0, 9))
+        assert rows == list(range(9))
 
     def test_valid_rows_for_promoted_pawn(self) -> None:
         """Test TO (Promoted Pawn) can be on any row."""
@@ -52,7 +52,7 @@ class TestStage1DataGenerator:
             PieceId.TO
         )
         assert len(rows) == 9
-        assert rows == list(range(0, 9))
+        assert rows == list(range(9))
 
     def test_board_pattern_count(self) -> None:
         """Test board pattern enumeration count."""

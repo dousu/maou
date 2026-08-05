@@ -7,7 +7,7 @@ class CrossEntropy(torch.nn.Module):
     def __init__(
         self, q: float = 0.7, alpha: float = 0.1
     ) -> None:
-        super(CrossEntropy, self).__init__()
+        super().__init__()
         self.q = q
         self.alpha = alpha
 
@@ -31,7 +31,7 @@ class KLDivergence(torch.nn.Module):
     def __init__(
         self, q: float = 0.7, alpha: float = 0.1
     ) -> None:
-        super(KLDivergence, self).__init__()
+        super().__init__()
         self.q = q
         self.alpha = alpha
 
@@ -60,7 +60,7 @@ class GCEwithNegativePenaltyLoss(torch.nn.Module):
         alpha: float = 0.1,
         negative_weight: float = 0.01,
     ):
-        super(GCEwithNegativePenaltyLoss, self).__init__()
+        super().__init__()
         self.q = q
         self.alpha = alpha
         self.negative_weight = negative_weight

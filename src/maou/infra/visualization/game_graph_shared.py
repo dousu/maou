@@ -222,8 +222,8 @@ def create_analytics_plot(
         yaxis_title="確率 (%)",
         template="plotly_white",
         height=300,
-        margin=dict(l=40, r=20, t=40, b=60),
-        font=dict(family="Noto Sans JP, sans-serif"),
+        margin={"l": 40, "r": 20, "t": 40, "b": 60},
+        font={"family": "Noto Sans JP, sans-serif"},
     )
     return fig
 
@@ -240,15 +240,15 @@ def create_empty_plot() -> go.Figure:
         template="plotly_white",
         height=300,
         annotations=[
-            dict(
-                text="ノードを選択してください",
-                xref="paper",
-                yref="paper",
-                x=0.5,
-                y=0.5,
-                showarrow=False,
-                font=dict(size=14, color="#718096"),
-            )
+            {
+                "text": "ノードを選択してください",
+                "xref": "paper",
+                "yref": "paper",
+                "x": 0.5,
+                "y": 0.5,
+                "showarrow": False,
+                "font": {"size": 14, "color": "#718096"},
+            }
         ],
     )
     return fig

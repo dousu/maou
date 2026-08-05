@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.utils.data import DataLoader
 
 from maou.app.learning.callbacks import (

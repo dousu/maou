@@ -129,7 +129,7 @@ class FakeStage1Source:
     ) -> Generator[ColumnarBatch, None, None]:
         """Yield columnar batches only for files whose path is in *file_paths*."""
         rng = np.random.default_rng(456)
-        target_set = set(str(fp) for fp in file_paths)
+        target_set = {str(fp) for fp in file_paths}
         for fp in self._file_paths:
             n = self._rows_per_file
             batch = ColumnarBatch(
@@ -320,7 +320,7 @@ class TestSetupStreamingComponents:
             streaming_val_source=val_source,
         )
         learning = Learning()
-        device_config, dataloaders, model_components = (
+        _device_config, dataloaders, model_components = (
             learning._setup_streaming_components(option, None)
         )
 
@@ -466,7 +466,7 @@ class TestInterfaceStreamingStages:
             ) -> Generator[ColumnarBatch, None, None]:
                 """Yield columnar batches only for files in *file_paths*."""
                 rng = np.random.default_rng(789)
-                target_set = set(str(fp) for fp in file_paths)
+                target_set = {str(fp) for fp in file_paths}
                 for fp in self._file_paths:
                     if str(fp) in target_set:
                         yield ColumnarBatch(

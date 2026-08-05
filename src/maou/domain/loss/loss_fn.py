@@ -12,7 +12,7 @@ class GCELoss(torch.nn.Module):
 
     # qはGCEのパラメータ (0 < q <= 1)
     def __init__(self, q: float = 0.7) -> None:
-        super(GCELoss, self).__init__()
+        super().__init__()
         self.q = q
 
     def forward(
@@ -50,7 +50,7 @@ class MaskedGCELoss(torch.nn.Module):
     def __init__(
         self, q: float = 0.7, alpha: float = 0.2
     ) -> None:
-        super(MaskedGCELoss, self).__init__()
+        super().__init__()
         self.q = q
         self.alpha = alpha
 
@@ -81,7 +81,7 @@ class GCEwithNegativePenaltyLoss(torch.nn.Module):
         alpha: float = 0.1,
         negative_weight: float = 0.01,
     ) -> None:
-        super(GCEwithNegativePenaltyLoss, self).__init__()
+        super().__init__()
         self.q = q
         self.alpha = alpha
         self.negative_weight = negative_weight
@@ -140,7 +140,7 @@ class ReachableSquaresLoss(torch.nn.Module):
             reduction: Reduction method ('mean'，'sum'，or 'none').
                 Default: 'mean'
         """
-        super(ReachableSquaresLoss, self).__init__()
+        super().__init__()
         self._pos_weight = torch.tensor([pos_weight])
         self._reduction = reduction
         self._loss_fn = torch.nn.BCEWithLogitsLoss(

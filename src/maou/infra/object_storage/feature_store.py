@@ -6,8 +6,7 @@ from typing import Literal
 
 import polars as pl
 
-import maou.interface.converter as converter
-import maou.interface.preprocess as preprocess
+from maou.interface import converter, preprocess
 
 # Use 'spawn' start method to avoid fork() issues in multi-threaded environments
 # This is required for compatibility with cloud storage clients (GCS, S3)
@@ -17,8 +16,6 @@ _mp_context = mp.get_context("spawn")
 
 class NotFoundKeyColumns(Exception):
     """キーカラムが対象のスキーマ内に見つからない."""
-
-    pass
 
 
 class ObjectStorageFeatureStore(
@@ -83,8 +80,6 @@ class ObjectStorageFeatureStore(
     def feature_store(self) -> Generator[None, None, None]:
         try:
             yield
-        except Exception:
-            raise
         finally:
             self.__cleanup()
 
@@ -188,7 +183,7 @@ class ObjectStorageFeatureStore(
           client.upload_bytes(object_path, byte_data)
         ```
         """
-        raise Exception("uploaderが未実装")
+        raise NotImplementedError("uploaderが未実装")
 
     def __cleanup(self) -> None:
         """store_features用のデストラクタ処理"""

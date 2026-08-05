@@ -8,7 +8,6 @@
 - Lint & Format
   - `uv run ruff format src/`
   - `uv run ruff check src/ --fix`
-  - `uv run isort src/`
-  - `uv run flake8 src/`
+  - `uv run ruff check src/`
 - Project CLI
   - `uv run maou <subcommand> [options]`

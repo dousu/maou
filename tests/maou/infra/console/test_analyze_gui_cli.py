@@ -8,7 +8,7 @@ from click.testing import CliRunner
 
 pytest.importorskip("gradio")
 
-from maou.infra.console.analyze_gui import (  # noqa: E402
+from maou.infra.console.analyze_gui import (
     analyze_gui,
 )
 

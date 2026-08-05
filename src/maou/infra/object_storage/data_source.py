@@ -10,8 +10,7 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 from tqdm.auto import tqdm
 
-import maou.interface.learn as learn
-import maou.interface.preprocess as preprocess
+from maou.interface import learn, preprocess
 
 if TYPE_CHECKING:
     import polars as pl
@@ -34,7 +33,7 @@ class ObjectStorageDataSource(
         def __init__(
             self,
             *,
-            cls_ref: type["ObjectStorageDataSource"],
+            cls_ref: type[ObjectStorageDataSource],
             bucket_name: str,
             prefix: str,
             data_name: str,
@@ -62,7 +61,7 @@ class ObjectStorageDataSource(
         def train_test_split(
             self, test_ratio: float
         ) -> tuple[
-            "ObjectStorageDataSource", "ObjectStorageDataSource"
+            ObjectStorageDataSource, ObjectStorageDataSource
         ]:
             self.logger.info(f"test_ratio: {test_ratio}")
             input_indices, test_indicies = (
@@ -88,12 +87,7 @@ class ObjectStorageDataSource(
             self,
             data: list,
             test_ratio: float = 0.25,
-            seed: int
-            | float
-            | str
-            | bytes
-            | bytearray
-            | None = None,
+            seed: float | str | bytes | bytearray | None = None,
         ) -> tuple:
             if seed is not None:
                 random.seed(seed)
@@ -382,20 +376,19 @@ class ObjectStorageDataSource(
             バケット全体に対して，
             ページ 単位のNumpy Structured Arrayを順次取得するジェネレータ．
             """
-            for name, array in self.memmap_arrays:
-                yield name, array
+            yield from self.memmap_arrays
 
         @staticmethod
         def list_objects(
             bucket_name: str, data_path: str
         ) -> list[tuple[str, int]]:
-            raise Exception("list_objectsが未実装")
+            raise NotImplementedError("list_objectsが未実装")
 
         @staticmethod
         def download_files(
             bucket_name: str, object_paths: list[str]
         ) -> list[bytes]:
-            raise Exception("download_filesが未実装")
+            raise NotImplementedError("download_filesが未実装")
 
     def __init__(
         self,
@@ -490,12 +483,11 @@ class ObjectStorageDataSource(
         GCS のバケット全体に対して，
         ページ 単位のNumpy Structured Arrayを順次取得するジェネレータ．
         """
-        for name, batch in self.__page_manager.iter_batches():
-            yield name, batch
+        yield from self.__page_manager.iter_batches()
 
     def iter_batches_df(
         self,
-    ) -> Generator[tuple[str, "pl.DataFrame"], None, None]:
+    ) -> Generator[tuple[str, pl.DataFrame], None, None]:
         """Iterate over batches as Polars DataFrames．
 
         Converts numpy arrays from cloud storage to DataFrames．

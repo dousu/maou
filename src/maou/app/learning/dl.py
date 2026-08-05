@@ -530,7 +530,11 @@ class Learning:
         return float(logging_callback.last_loss)
 
     def __train(self) -> None:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = (
+            datetime.now()
+            .astimezone()
+            .strftime("%Y%m%d_%H%M%S")
+        )
         model_tag = self.model_tag
         summary_writer_log_dir = (
             self.log_dir
@@ -604,9 +608,7 @@ class Learning:
             )
 
         for _ in range(epoch_number, EPOCHS):
-            self.logger.info(
-                "EPOCH {}:".format(epoch_number + 1)
-            )
+            self.logger.info(f"EPOCH {epoch_number + 1}:")
 
             # Streaming IterableDatasetのエポックシード更新
             for loader in (
@@ -668,9 +670,7 @@ class Learning:
             validation_callback.reset()
 
             self.logger.info(
-                "LOSS train {} valid {}".format(
-                    avg_loss, avg_vloss
-                )
+                f"LOSS train {avg_loss} valid {avg_vloss}"
             )
             self.logger.info(metrics.format_log_lines())
             current_lr = self.optimizer.param_groups[0]["lr"]
@@ -998,8 +998,7 @@ class Learning:
         """
         is_compiled = hasattr(self.model, "_orig_mod")
         has_prefix = any(
-            key.startswith("_orig_mod.")
-            for key in state_dict.keys()
+            key.startswith("_orig_mod.") for key in state_dict
         )
 
         if is_compiled and not has_prefix:

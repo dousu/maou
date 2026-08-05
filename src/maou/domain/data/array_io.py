@@ -10,13 +10,9 @@ import logging
 class DataIOError(Exception):
     """Raised when data I/O operations fail."""
 
-    pass
-
 
 class DataIOArrayTypeError(Exception):
     """Raised when data I/O operations fail."""
-
-    pass
 
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -43,17 +39,17 @@ try:
         save_stage2_df,
     )
 
+    # Polars DataFrame I/O functions (+ Rust backend の可用性フラグ)
     __all__ = [
-        # Polars DataFrame I/O functions
-        "save_hcpe_df",
-        "load_hcpe_df",
-        "save_preprocessing_df",
-        "load_preprocessing_df",
-        "save_stage1_df",
-        "load_stage1_df",
-        "save_stage2_df",
-        "load_stage2_df",
         "RUST_BACKEND_AVAILABLE",
+        "load_hcpe_df",
+        "load_preprocessing_df",
+        "load_stage1_df",
+        "load_stage2_df",
+        "save_hcpe_df",
+        "save_preprocessing_df",
+        "save_stage1_df",
+        "save_stage2_df",
     ]
 except ImportError as e:
     logger.warning(

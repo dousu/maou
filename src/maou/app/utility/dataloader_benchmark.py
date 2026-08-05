@@ -198,7 +198,7 @@ class DataLoaderBenchmark:
         inputs: InputStructure,
         index_path: tuple[int, ...] | None = None,
     ) -> InputStructure:
-        path = index_path or tuple()
+        path = index_path or ()
         if isinstance(inputs, torch.Tensor):
             return self._move_tensor(inputs, index_path=path)
         if isinstance(inputs, tuple):

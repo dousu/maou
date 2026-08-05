@@ -65,7 +65,7 @@ class TestEdgeCases:
         # ページサイズ1000で検索（総レコード数50）
         (
             table_data,
-            page_info,
+            _page_info,
             _,
             _,
             _,
@@ -100,7 +100,7 @@ class TestEdgeCases:
         # ページ100（存在しない）
         (
             table_data,
-            page_info,
+            _page_info,
             _,
             _,
             _,
@@ -167,7 +167,7 @@ class TestEdgeCases:
         )
 
         # 日本語を含むID
-        board_svg, record_details = viz_interface.search_by_id(
+        board_svg, _record_details = viz_interface.search_by_id(
             "テスト_ID_日本語"
         )
 
@@ -329,7 +329,7 @@ class TestErrorHandling:
         # 1000文字のID
         long_id = "a" * 1000
 
-        board_svg, record_details = viz_interface.search_by_id(
+        board_svg, _record_details = viz_interface.search_by_id(
             long_id
         )
 

@@ -91,7 +91,7 @@ class StreamingHcpeDataSource(DataSource):
     def __len__(self) -> int:
         """全ファイルの合計行数(初回アクセス時にスキャン実行)."""
         self._ensure_row_counts()
-        assert self._total_rows is not None  # noqa: S101
+        assert self._total_rows is not None
         return self._total_rows
 
     def iter_batches(

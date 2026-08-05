@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import click.testing
 
-import maou.infra.console.learn_model as learn_model
+from maou.infra.console import learn_model
 
 
 class TestViTCLIOptions:

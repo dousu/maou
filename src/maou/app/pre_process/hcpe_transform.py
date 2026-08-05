@@ -82,11 +82,10 @@ class DataSource:
         Yields:
             tuple[str, np.ndarray]: (batch_name, numpy_array)
         """
-        pass
 
     def iter_batches_df(
         self,
-    ) -> Generator[tuple[str, "pl.DataFrame"], None, None]:
+    ) -> Generator[tuple[str, pl.DataFrame], None, None]:
         """Iterate over batches as Polars DataFrames (modern)．
 
         Default implementation converts numpy arrays to DataFrames．
@@ -391,7 +390,7 @@ class PreProcess:
 
     def aggregate_intermediate_data(
         self,
-    ) -> tuple["pl.DataFrame", int]:
+    ) -> tuple[pl.DataFrame, int]:
         """中間データを集計して最終的な前処理データを作成する（ディスクベース版）．
 
         Returns:
@@ -962,11 +961,8 @@ class PreProcess:
 
     @contextlib.contextmanager
     def __context(self) -> Generator[None, None, None]:
-        try:
-            if self.__feature_store is not None:
-                with self.__feature_store.feature_store():
-                    yield
-            else:
+        if self.__feature_store is not None:
+            with self.__feature_store.feature_store():
                 yield
-        except Exception:
-            raise
+        else:
+            yield

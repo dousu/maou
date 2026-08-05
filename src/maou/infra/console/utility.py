@@ -4,8 +4,6 @@ from typing import Any
 
 import click
 
-import maou.interface.learn as learn
-import maou.interface.utility_interface as utility_interface
 from maou.infra.console.common import (
     HAS_AWS,
     HAS_BIGQUERY,
@@ -21,6 +19,7 @@ from maou.infra.console.common import (
 from maou.infra.console.learn_model import (
     _build_adaptive_batch_config,
 )
+from maou.interface import learn, utility_interface
 from maou.interface.learn import (
     PolicyTargetMode,
 )
@@ -432,7 +431,7 @@ def benchmark_dataloader(
             app_logger.error(error_msg)
             raise ImportError(error_msg)
     else:
-        raise Exception(
+        raise ValueError(
             "Please specify an input directory, a BigQuery table, "
             "a GCS bucket, or an S3 bucket."
         )
@@ -1409,7 +1408,7 @@ def benchmark_training(
         # initialized above, so the main datasource is not needed.
         datasource = None
     else:
-        raise Exception(
+        raise ValueError(
             "Please specify an input directory, a BigQuery table, "
             "a GCS bucket, or an S3 bucket."
         )
@@ -1527,7 +1526,7 @@ def benchmark_training(
         )
 
     # Display estimation results if sample_ratio was used
-    if "estimation" in result and result["estimation"]:
+    if result.get("estimation"):
         click.echo()
         click.echo("=== Data Sampling Estimation ===")
         estimation = result["estimation"]
@@ -1731,7 +1730,6 @@ def generate_stage2_data(
 @click.group()
 def utility() -> None:
     """Utility commands for ML development experiments."""
-    pass
 
 
 utility.add_command(benchmark_dataloader)
@@ -1740,7 +1738,10 @@ utility.add_command(generate_stage1_data)
 utility.add_command(generate_stage2_data)
 
 # screenshot command (defined in screenshot.py, moved under utility group)
-from maou.infra.console.screenshot import (  # noqa: E402
+# この import は **上の utility.add_command(...) 群より後**でなければならない
+# (screenshot.py が utility グループを参照するため，先頭に移動させると
+#  循環 import になる)．整形ツールで移動させないこと．
+from maou.infra.console.screenshot import (
     screenshot,
 )
 

@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
-import maou.infra.console.utility as utility
+from maou.infra.console import utility
 
 
 def _fake_benchmark_training(**kwargs: Any) -> str:

@@ -169,7 +169,7 @@ class ONNXExportVerifier:
         value_mismatches: dict[str, float] = {}
 
         # Check if all parameters from trained model are in cleaned state dict
-        for key in original_state_dict.keys():
+        for key in original_state_dict:
             # Remove _orig_mod. prefix if present
             clean_key = key
             if key.startswith("_orig_mod."):
@@ -220,23 +220,21 @@ class ONNXExportVerifier:
         # Verify output heads specifically
         policy_head_verified = all(
             key.startswith("policy_head.")
-            for key in cleaned_state_dict.keys()
+            for key in cleaned_state_dict
             if "policy_head" in key
         )
         value_head_verified = all(
             key.startswith("value_head.")
-            for key in cleaned_state_dict.keys()
+            for key in cleaned_state_dict
             if "value_head" in key
         )
 
         # Check that output head parameters actually exist
         has_policy_params = any(
-            "policy_head" in key
-            for key in cleaned_state_dict.keys()
+            "policy_head" in key for key in cleaned_state_dict
         )
         has_value_params = any(
-            "value_head" in key
-            for key in cleaned_state_dict.keys()
+            "value_head" in key for key in cleaned_state_dict
         )
 
         if not has_policy_params:
