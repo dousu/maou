@@ -30,12 +30,7 @@ Fix linting issues automatically:
 uv run ruff check src/ --fix
 ```
 
-### 3. Import Sorting
-Organize imports with Black profile:
-```bash
-```
-
-### 4. Type Checking
+### 3. Type Checking
 Validate type hints (REQUIRED before commits):
 ```bash
 uv run mypy src/
@@ -43,7 +38,7 @@ uv run mypy src/
 
 **Critical**: Type hints are required for ALL functions, methods, and class attributes. No exceptions.
 
-### 5. Run Tests
+### 4. Run Tests
 Execute test suite:
 ```bash
 uv run pytest
@@ -90,8 +85,8 @@ If errors occur, follow this order:
 
 1. **Format first**: `uv run ruff format src/`
 2. **Fix lint issues**: `uv run ruff check src/ --fix`
-4. **Check types**: `uv run mypy src/`
-5. **Run tests**: `uv run pytest --tb=short`
+3. **Check types**: `uv run mypy src/`
+4. **Run tests**: `uv run pytest --tb=short`
 
 ## Pre-commit Hooks
 

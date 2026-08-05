@@ -72,6 +72,11 @@ def _list_legal_moves(board: Any) -> list[Any]:
     return list(board.legal_moves)
 
 
+def _list_legal_moves_maou(board: Any) -> list[Any]:
+    """maou 側．cshogi 版と呼び出しオーバーヘッドを揃えるための対称ラッパ．"""
+    return list(board.legal_moves())
+
+
 def _push_pop(board: Any, move: Any) -> None:
     board.push(move)
     board.pop()
@@ -109,7 +114,11 @@ def bench_legal_moves() -> None:
         mb.set_sfen(sfen)
         cb = cshogi.Board(sfen)
 
-        maou_us = _timeit(mb.legal_moves, N_ITER)
+        # 両者に同じ partial + list() の呼び出しオーバーヘッドを乗せる
+        # (片側だけ包むと，その分が一方に不利に計上され比較が歪む)
+        maou_us = _timeit(
+            partial(_list_legal_moves_maou, mb), N_ITER
+        )
         cshogi_us = _timeit(
             partial(_list_legal_moves, cb), N_ITER
         )

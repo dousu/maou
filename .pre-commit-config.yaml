@@ -51,9 +51,27 @@ repos:
     language: system
     pass_filenames: false
     always_run: true
-- repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.16.1
+# ruff は uv 管理の 1 本だけを使う (local hook)．
+# ruff-pre-commit を使うと hook 側が独自に ruff を入れるため，
+# pyproject.toml の dev 依存と 2 版が共存する．
+# select を明示していない本リポジトリでは
+# **適用ルール集合 = ruff の版**なので，版がずれると
+# `uv run ruff check` と pre-commit で結果が食い違う
+# (2026-08-04: hook 0.16.1 / dev 0.15.2 のズレで，0.16.1 基準で剥がした
+#  E402 抑止が 0.15.2 側で 9 件のエラーとして再燃した)．
+# local hook には rev が無いため `pre-commit autoupdate` の対象外になり，
+# ruff の版上げは pyproject.toml の編集としてのみ起きる (差分が見える)．
+- repo: local
   hooks:
   - id: ruff-check
-    args: [ --fix ]
+    name: ruff-check
+    entry: uv run ruff check --fix --force-exclude
+    language: system
+    types_or: [python, pyi]
+    require_serial: true
   - id: ruff-format
+    name: ruff-format
+    entry: uv run ruff format --force-exclude
+    language: system
+    types_or: [python, pyi]
+    require_serial: true

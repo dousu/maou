@@ -1738,6 +1738,9 @@ utility.add_command(generate_stage1_data)
 utility.add_command(generate_stage2_data)
 
 # screenshot command (defined in screenshot.py, moved under utility group)
+# この import は **上の utility.add_command(...) 群より後**でなければならない
+# (screenshot.py が utility グループを参照するため，先頭に移動させると
+#  循環 import になる)．整形ツールで移動させないこと．
 from maou.infra.console.screenshot import (
     screenshot,
 )

@@ -30,6 +30,12 @@ if _saved_mplbackend is not None:
 elif "MPLBACKEND" in os.environ:
     del os.environ["MPLBACKEND"]
 
+# 以降の import は **すべて上の matplotlib.use("Agg", force=True) より後**に
+# 置く必要がある (間接的に matplotlib を import するものがあり，先に読むと
+# inline backend が選ばれてヘッドレス環境で描画が壊れる)．
+# 整形ツールで先頭へ移動させないこと．
+# 2026-08-04 まで各行に E402 の抑止コメントが付いていたが，ruff の既定集合は
+# E402 を含まないため意味を失い削除した．制約自体は残っている．
 import gradio as gr
 
 from maou.infra.file_system.file_system import (
