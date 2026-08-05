@@ -7,6 +7,9 @@ target:
   - docs/commands/utility_split_kifu.md
   - docs/commands/utility_fetch_floodgate.md
   - docs/commands/floodgate.md
+  - docs/commands/visualize.md
+  - docs/commands/utility_generate_stage1_data.md
+  - docs/commands/utility_generate_stage2_data.md
   - docs/dependency_management.md
   - docs/commands/analyze_game.md
   - docs/commands/floodgate.md
@@ -104,6 +107,10 @@ held-out 棋譜で value head の較正を測る．
   `split-kifu` への導線を追加 (取得と分割を分けた理由も記載)
 - `docs/commands/analyze_game.md` / `floodgate.md` / `docs/dependency_management.md`
   — コマンド名とリンク先の参照を更新
+- **命名規約の統一**: `generate-stage1-data.md` / `generate-stage2-data.md` も
+  `utility_generate_stage1_data.md` / `utility_generate_stage2_data.md` に改名．
+  これで utility サブコマンドのドキュメントがすべて `utility_` 接頭辞
+  (アンダースコア区切り) で揃った
 - `docs/design/training-quality/index.md` §4 — 較正測定の手順を
   `scripts/measure_calibration.py` を使う形に更新
 - `scripts/check-cli-docs.sh` — `UTILITY_DOCS` に新ドキュメントを追加し，

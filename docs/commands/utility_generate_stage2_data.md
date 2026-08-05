@@ -74,5 +74,5 @@ Stage 2 data generation complete!
 
 ## 関連コマンド
 
-- [`maou utility generate-stage1-data`](./generate-stage1-data.md) - Stage1データ生成（駒の到達可能マス）
+- [`maou utility generate-stage1-data`](./utility_generate_stage1_data.md) - Stage1データ生成（駒の到達可能マス）
 - [`maou learn-model`](./learn_model.md) - モデル学習（Stage3）

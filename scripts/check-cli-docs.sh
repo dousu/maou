@@ -29,11 +29,11 @@ declare -A CLI_DOC_MAP=(
 UTILITY_DOCS=(
   "utility_benchmark_dataloader.md"
   "utility_benchmark_training.md"
-  "generate-stage1-data.md"
-  "generate-stage2-data.md"
+  "utility_generate_stage1_data.md"
+  "utility_generate_stage2_data.md"
+  "utility_fetch_floodgate.md"
   "utility_screenshot.md"
   "utility_split_kifu.md"
-  "utility_fetch_floodgate.md"
 )
 
 # 除外ファイル（マッピング不要）
