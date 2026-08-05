@@ -77,6 +77,23 @@ class LearningDataSource(DataSource):
             pass
 
 
+def should_stop_early(
+    epochs_without_improvement: int, patience: int
+) -> bool:
+    """Early stopping の停止判定．
+
+    Args:
+        epochs_without_improvement: 検証損失がベストを更新しなかった連続エポック数．
+        patience: 許容する連続未更新エポック数．0 以下で無効．
+
+    Returns:
+        学習を打ち切るべきなら True．
+    """
+    return (
+        patience > 0 and epochs_without_improvement >= patience
+    )
+
+
 class Learning:
     """Learning.
     機械学習のトレーニングを行うユースケースを表現する．
@@ -113,6 +130,7 @@ class Learning:
         optimizer_beta2: float
         optimizer_eps: float
         detect_anomaly: bool = False
+        early_stopping_patience: int = 0
         resume_backbone_from: Path | None = None
         resume_policy_head_from: Path | None = None
         resume_value_head_from: Path | None = None
@@ -552,6 +570,9 @@ class Learning:
 
         best_vloss = 1_000_000.0
         last_metrics: ValidationMetrics | None = None
+        # early stopping: val loss がベストを更新しなかった連続エポック数
+        patience = self.config.early_stopping_patience
+        epochs_without_improvement = 0
 
         # Checkpoint loading and freeze are handled in learn()
         # before optimizer creation.
@@ -693,8 +714,13 @@ class Learning:
             writer.flush()
 
             # Track best performance, and save the model's state
-            if avg_vloss < best_vloss:
+            improved = avg_vloss < best_vloss
+            if improved:
                 best_vloss = avg_vloss
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+            if improved:
                 ModelIO.save_model(
                     trained_model=self.model,
                     dir=self.model_dir,
@@ -722,6 +748,17 @@ class Learning:
                 )
 
             epoch_number += 1
+
+            if should_stop_early(
+                epochs_without_improvement, patience
+            ):
+                self.logger.info(
+                    "Early stopping: validation loss did not improve "
+                    f"for {epochs_without_improvement} consecutive epochs "
+                    f"(patience={patience}). Stopping at epoch "
+                    f"{epoch_number} of {EPOCHS}. best_vloss={best_vloss}"
+                )
+                break
 
         # Record hyperparameters for TensorBoard HParams dashboard
         if last_metrics is not None:

@@ -1725,24 +1725,3 @@ def generate_stage2_data(
 
     click.echo()
     click.echo("Stage 2 data generation complete!")
-
-
-@click.group()
-def utility() -> None:
-    """Utility commands for ML development experiments."""
-
-
-utility.add_command(benchmark_dataloader)
-utility.add_command(benchmark_training)
-utility.add_command(generate_stage1_data)
-utility.add_command(generate_stage2_data)
-
-# screenshot command (defined in screenshot.py, moved under utility group)
-# この import は **上の utility.add_command(...) 群より後**でなければならない
-# (screenshot.py が utility グループを参照するため，先頭に移動させると
-#  循環 import になる)．整形ツールで移動させないこと．
-from maou.infra.console.screenshot import (
-    screenshot,
-)
-
-utility.add_command(screenshot)

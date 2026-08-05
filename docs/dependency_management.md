@@ -92,7 +92,7 @@ Dependabot がこの結合を知らずに片側だけ更新し，以下が同時
 ### 4. その他のextra
 
 - **visualize**: 可視化ツール用 (gradio, matplotlib)
-- **fetch**: floodgate棋譜取得 (`fetch-floodgate`) の年次 `.7z` アーカイブ展開用 (py7zr)
+- **fetch**: floodgate棋譜取得 (`maou utility fetch-floodgate`) の年次 `.7z` アーカイブ展開用 (py7zr)
 
 ### 開発用依存関係 (extraではない)
 

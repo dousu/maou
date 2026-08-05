@@ -202,6 +202,7 @@ def learn(
     compilation: bool = False,
     detect_anomaly: bool = False,
     test_ratio: float | None = None,
+    early_stopping_patience: int = 0,
     epoch: int | None = None,
     batch_size: int | None = None,
     dataloader_workers: int | None = None,
@@ -247,6 +248,8 @@ def learn(
         compilation: Whether to compile the model
         detect_anomaly: Enable torch.autograd anomaly detection
         test_ratio: Ratio of data to use for testing
+        early_stopping_patience: Stop after this many consecutive
+            epochs without a new best validation loss (0 = disabled)
         epoch: Number of training epochs
         batch_size: Training batch size
         dataloader_workers: Number of data loader workers
@@ -469,6 +472,7 @@ def learn(
         gpu=gpu,
         compilation=compilation,
         test_ratio=test_ratio,
+        early_stopping_patience=early_stopping_patience,
         epoch=epoch,
         batch_size=batch_size,
         dataloader_workers=dataloader_workers,
@@ -933,6 +937,7 @@ def learn_multi_stage(
     compilation: bool = False,
     detect_anomaly: bool = False,
     test_ratio: float | None = None,
+    early_stopping_patience: int = 0,
     epoch: int | None = None,
     dataloader_workers: int | None = None,
     pin_memory: bool | None = None,
@@ -1310,6 +1315,7 @@ def learn_multi_stage(
             compilation=compilation,
             detect_anomaly=detect_anomaly,
             test_ratio=test_ratio,
+            early_stopping_patience=early_stopping_patience,
             epoch=epoch,
             batch_size=effective_stage3_batch,
             dataloader_workers=dataloader_workers,

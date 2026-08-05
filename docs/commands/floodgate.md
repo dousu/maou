@@ -162,7 +162,7 @@ uv run maou floodgate \
 
 Game records are published by the server at
 <http://wdoor.c.u-tokyo.ac.jp/shogi/> and can be fetched later with
-[`maou fetch-floodgate`](fetch_floodgate.md).
+[`maou utility fetch-floodgate`](utility_fetch_floodgate.md).
 
 ## Implementation references
 

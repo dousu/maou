@@ -65,7 +65,7 @@ class TestCheckPackages:
         cli = _make_group({"test-cmd": spec})
 
         with patch(
-            "maou.infra.console.app.find_spec",
+            "maou.infra.console.lazy.find_spec",
             side_effect=_mock_find_spec({"torch"}),
         ):
             result = runner.invoke(cli, ["test-cmd"])
@@ -92,7 +92,7 @@ class TestCheckPackages:
         cli = _make_group({"test-cmd": spec})
 
         with patch(
-            "maou.infra.console.app.find_spec",
+            "maou.infra.console.lazy.find_spec",
             side_effect=_mock_find_spec({"torch", "torchinfo"}),
         ):
             result = runner.invoke(cli, ["test-cmd"])
@@ -115,7 +115,7 @@ class TestCheckPackages:
         cli = _make_group({"test-cmd": spec})
 
         with patch(
-            "maou.infra.console.app.find_spec",
+            "maou.infra.console.lazy.find_spec",
             side_effect=_mock_find_spec(set()),
         ):
             result = runner.invoke(cli, ["test-cmd"])
@@ -141,7 +141,7 @@ class TestCheckPackages:
         cli = _make_group({"test-cmd": spec})
 
         with patch(
-            "maou.infra.console.app.find_spec",
+            "maou.infra.console.lazy.find_spec",
             side_effect=_mock_find_spec({"torch", "torchinfo"}),
         ):
             result = runner.invoke(cli, ["test-cmd"])
@@ -162,7 +162,7 @@ class TestCheckPackages:
         cli = _make_group({"test-cmd": spec})
 
         with patch(
-            "maou.infra.console.app.find_spec",
+            "maou.infra.console.lazy.find_spec",
             side_effect=_mock_find_spec({"torch"}),
         ):
             result1 = runner.invoke(cli, ["test-cmd"])
@@ -205,7 +205,7 @@ class TestCheckPackages:
         cli = _make_group({"test-cmd": spec})
 
         with patch(
-            "maou.infra.console.app.find_spec",
+            "maou.infra.console.lazy.find_spec",
             side_effect=_mock_find_spec({"torch"}),
         ):
             result = runner.invoke(cli, ["test-cmd"])
@@ -227,7 +227,7 @@ class TestCheckPackages:
         cli = _make_group({"test-cmd": spec})
 
         with patch(
-            "maou.infra.console.app.find_spec",
+            "maou.infra.console.lazy.find_spec",
             side_effect=_mock_find_spec({"torch"}),
         ):
             result = runner.invoke(cli, ["test-cmd"])
@@ -256,7 +256,7 @@ class TestUnknownOptions:
         cli = _make_group({"visualize": spec})
 
         with patch(
-            "maou.infra.console.app.find_spec",
+            "maou.infra.console.lazy.find_spec",
             side_effect=_mock_find_spec({"gradio"}),
         ):
             result = runner.invoke(
@@ -281,7 +281,7 @@ class TestUnknownOptions:
         cli = _make_group({"visualize": spec})
 
         with patch(
-            "maou.infra.console.app.find_spec",
+            "maou.infra.console.lazy.find_spec",
             side_effect=_mock_find_spec({"gradio"}),
         ):
             result = runner.invoke(
@@ -310,7 +310,7 @@ class TestHelpDisplay:
         cli = _make_group({"test-cmd": spec})
 
         with patch(
-            "maou.infra.console.app.find_spec",
+            "maou.infra.console.lazy.find_spec",
             side_effect=_mock_find_spec({"torch"}),
         ):
             result = runner.invoke(cli, ["test-cmd", "--help"])
@@ -334,7 +334,7 @@ class TestHelpDisplay:
         cli = _make_group({"test-cmd": spec})
 
         with patch(
-            "maou.infra.console.app.find_spec",
+            "maou.infra.console.lazy.find_spec",
             side_effect=_mock_find_spec(set()),
         ):
             result = runner.invoke(cli, ["test-cmd", "--help"])
@@ -359,7 +359,7 @@ class TestHelpDisplay:
         cli = _make_group({"test-cmd": spec})
 
         with patch(
-            "maou.infra.console.app.find_spec",
+            "maou.infra.console.lazy.find_spec",
             side_effect=_mock_find_spec({"torch", "torchinfo"}),
         ):
             # サブコマンドを一度解決させてフォールバックを登録
@@ -395,7 +395,7 @@ class TestImportErrorFallback:
         cli = _make_group({"test-cmd": spec})
 
         with patch(
-            "maou.infra.console.app.import_module",
+            "maou.infra.console.lazy.import_module",
             side_effect=ImportError(
                 "optional 依存が未インストールです"
             ),
@@ -418,7 +418,7 @@ class TestImportErrorFallback:
         cli = _make_group({"test-cmd": spec})
 
         with patch(
-            "maou.infra.console.app.import_module",
+            "maou.infra.console.lazy.import_module",
             side_effect=ImportError(
                 "optional 依存が未インストールです"
             ),
@@ -436,7 +436,7 @@ class TestImportErrorFallback:
         cli = _make_group({"test-cmd": spec})
 
         with patch(
-            "maou.infra.console.app.import_module",
+            "maou.infra.console.lazy.import_module",
             side_effect=ModuleNotFoundError(
                 "No module named 'fake.module'",
                 name="fake.module",

@@ -20,7 +20,7 @@
   none is given, 1000 ms per position is used (same default as `maou search`).
 - Only single-game files are supported: a CSA file containing multiple games
   is rejected with an error (split it into one game per file, e.g. the output
-  of `maou fetch-floodgate`). File encoding is auto-detected (strict UTF-8
+  of `maou utility fetch-floodgate`). File encoding is auto-detected (strict UTF-8
   first, then cp932).
 - `maou selfplay --kifu-dir DIR` writes exactly this shape (one CSA per
   game), so an A/B match can be re-analysed move by move. For those files

@@ -196,6 +196,6 @@ maou visualize --input-path ./data/game-graph/ --array-type game-graph --share
 ## 関連コマンド
 
 - [`maou build-game-graph`](./build_game_graph.md) - ゲームグラフ構築
-- [`maou utility generate-stage1-data`](./generate-stage1-data.md) - Stage1データ生成
+- [`maou utility generate-stage1-data`](./utility_generate_stage1_data.md) - Stage1データ生成
 - [`maou learn-model`](./learn_model.md) - モデル学習
 - [`maou pre-process`](./pre_process.md) - データ前処理

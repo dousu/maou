@@ -1,4 +1,4 @@
-# `maou fetch-floodgate`
+# `maou utility fetch-floodgate`
 
 ## Overview
 
@@ -105,16 +105,16 @@
 
 ```bash
 # One day of games (289 games on 2025-01-05), daily crawl via auto
-maou fetch-floodgate --start-date 2025-01-05 \
+maou utility fetch-floodgate --start-date 2025-01-05 \
     --output-dir ./floodgate
 
 # Probe first: how many games would be fetched?
-maou fetch-floodgate --start-date 2025-01-01 --end-date 2025-01-31 \
+maou utility fetch-floodgate --start-date 2025-01-01 --end-date 2025-01-31 \
     --output-dir ./floodgate --dry-run
 
 # A whole year via the yearly archive (needs: uv sync --extra fetch),
 # keeping the archive for later re-use
-maou fetch-floodgate --start-date 2025-01-01 --end-date 2025-12-31 \
+maou utility fetch-floodgate --start-date 2025-01-01 --end-date 2025-12-31 \
     --output-dir ./floodgate --archive-cache-dir ./floodgate-archives
 
 # Then convert to HCPE
@@ -135,3 +135,26 @@ maou hcpe-convert --input-path ./floodgate --input-format csa \
 - HTTP transport (stdlib urllib) --
   `src/maou/infra/http/urllib_http_client.py`.
   【F:src/maou/infra/http/urllib_http_client.py†L1-L192】
+
+## 次の手順
+
+学習と検証で対局を分けたい場合は，取得後に
+[`maou utility split-kifu`](utility_split_kifu.md) で**対局単位**に分割してから
+`hcpe-convert` にかける．
+
+`maou pre-process` は局面を Zobrist hash で全コーパス横断に集約するため，
+集約後に対局の同一性は復元できない．`learn-model --test-ratio` の分割は
+前処理出力のチャンクファイル単位であり，同一対局の局面が train と val の
+両方に入って検証損失が楽観的になる．対局単位の分割は棋譜の段階でしか行えない．
+
+```bash
+maou utility fetch-floodgate --start-date 2020-01-01 --end-date 2025-12-31 \
+  --output-dir floodgate --strategy archive --archive-cache-dir floodgate-archives
+
+maou utility split-kifu --input-path floodgate \
+  --train-dir floodgate-train --val-dir floodgate-val \
+  --val-ratio 0.05 --ext .csa --mode hardlink
+```
+
+背景と測定結果は
+[docs/design/training-quality/](../design/training-quality/index.md) を参照．

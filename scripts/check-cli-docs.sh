@@ -20,6 +20,8 @@ declare -A CLI_DOC_MAP=(
   ["selfplay.py"]="selfplay.md"
   ["analyze_game.py"]="analyze_game.md"
   ["analyze_gui.py"]="analyze_gui.md"
+  ["fetch_floodgate.py"]="utility_fetch_floodgate.md"
+  ["split_kifu.py"]="utility_split_kifu.md"
   # screenshot.py is a subcommand of utility group; mapped via UTILITY_DOCS
 )
 
@@ -27,13 +29,15 @@ declare -A CLI_DOC_MAP=(
 UTILITY_DOCS=(
   "utility_benchmark_dataloader.md"
   "utility_benchmark_training.md"
-  "generate-stage1-data.md"
-  "generate-stage2-data.md"
+  "utility_generate_stage1_data.md"
+  "utility_generate_stage2_data.md"
+  "utility_fetch_floodgate.md"
   "utility_screenshot.md"
+  "utility_split_kifu.md"
 )
 
 # 除外ファイル（マッピング不要）
-EXCLUDED=("app.py" "common.py" "screenshot.py" "__init__.py")
+EXCLUDED=("app.py" "common.py" "lazy.py" "screenshot.py" "__init__.py")
 
 # ステージングされたファイルを1パスで分類（空白を含むパスにも対応）
 CLI_FILES=()
@@ -94,7 +98,7 @@ for cli_file in "${CLI_FILES[@]}"; do
   fi
 
   # utility.py の特殊処理
-  if [ "$cli_file" = "utility.py" ]; then
+  if [ "$cli_file" = "utility.py" ] || [ "$cli_file" = "utility_group.py" ]; then
     found=0
     for doc in "${UTILITY_DOCS[@]}"; do
       for staged_doc in "${STAGED_DOCS[@]}"; do
