@@ -2,7 +2,7 @@
 title: 棋譜の対局単位分割コマンドと較正測定スクリプトを追加し，utility グループを軽量化する
 date: 2026-08-05
 status: applied
-applied_in: PENDING_SHA
+applied_in: 71285fd
 target:
   - docs/commands/utility_split_kifu.md
   - docs/commands/fetch_floodgate.md
