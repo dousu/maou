@@ -5,7 +5,9 @@ status: applied
 applied_in: 71285fd
 target:
   - docs/commands/utility_split_kifu.md
-  - docs/commands/fetch_floodgate.md
+  - docs/commands/utility_fetch_floodgate.md
+  - docs/commands/floodgate.md
+  - docs/dependency_management.md
   - docs/commands/analyze_game.md
   - docs/commands/floodgate.md
   - docs/design/training-quality/index.md
@@ -95,10 +97,13 @@ held-out 棋譜で value head の較正を測る．
 - `docs/commands/utility_split_kifu.md` (新規) — CLI 仕様と，
   「なぜ前段で分けるのか」の説明，および fetch → split → convert →
   pre-process → learn-model の実行例
-- `docs/commands/fetch_floodgate.md` — コマンド名を
-  `maou utility fetch-floodgate` に更新し，**§次の手順**として
+- `docs/commands/fetch_floodgate.md` → **`utility_fetch_floodgate.md` に改名**．
+  utility サブコマンドのドキュメントは `utility_*` 接頭辞で揃っているため
+  (`utility_benchmark_*` / `utility_screenshot` / `utility_split_kifu`)．
+  コマンド名を `maou utility fetch-floodgate` に更新し，**§次の手順**として
   `split-kifu` への導線を追加 (取得と分割を分けた理由も記載)
-- `docs/commands/analyze_game.md` / `floodgate.md` — コマンド名の参照を更新
+- `docs/commands/analyze_game.md` / `floodgate.md` / `docs/dependency_management.md`
+  — コマンド名とリンク先の参照を更新
 - `docs/design/training-quality/index.md` §4 — 較正測定の手順を
   `scripts/measure_calibration.py` を使う形に更新
 - `scripts/check-cli-docs.sh` — `UTILITY_DOCS` に新ドキュメントを追加し，

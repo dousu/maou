@@ -20,7 +20,7 @@ declare -A CLI_DOC_MAP=(
   ["selfplay.py"]="selfplay.md"
   ["analyze_game.py"]="analyze_game.md"
   ["analyze_gui.py"]="analyze_gui.md"
-  ["fetch_floodgate.py"]="fetch_floodgate.md"
+  ["fetch_floodgate.py"]="utility_fetch_floodgate.md"
   ["split_kifu.py"]="utility_split_kifu.md"
   # screenshot.py is a subcommand of utility group; mapped via UTILITY_DOCS
 )
@@ -33,7 +33,7 @@ UTILITY_DOCS=(
   "generate-stage2-data.md"
   "utility_screenshot.md"
   "utility_split_kifu.md"
-  "fetch_floodgate.md"
+  "utility_fetch_floodgate.md"
 )
 
 # 除外ファイル（マッピング不要）
