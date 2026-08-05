@@ -61,16 +61,21 @@ class FakeHttpClient(HttpClient):
 
 
 class TestCommandRegistration:
-    def test_registered_in_lazy_commands(self) -> None:
-        assert "fetch-floodgate" in LAZY_COMMANDS
-        spec = LAZY_COMMANDS["fetch-floodgate"]
-        assert (
-            spec.module_path
-            == "maou.infra.console.fetch_floodgate"
-        )
-        assert spec.attr_name == "fetch_floodgate"
-        # 標準ライブラリのみで動くので必須パッケージなし
-        assert spec.required_packages == ()
+    def test_not_a_top_level_command(self) -> None:
+        # 2026-08-05: utility グループのサブコマンドへ移動した
+        assert "fetch-floodgate" not in LAZY_COMMANDS
+
+    def test_registered_under_utility_group(self) -> None:
+        from maou.infra.console.utility_group import utility
+
+        assert "fetch-floodgate" in utility.commands
+
+    def test_utility_group_does_not_require_torch(self) -> None:
+        """fetch-floodgate は標準ライブラリのみで動くので，
+        グループ解決が torch を要求してはならない．"""
+        from maou.infra.console.app import LAZY_COMMANDS as top
+
+        assert top["utility"].required_packages == ()
 
     def test_is_click_command(self) -> None:
         assert isinstance(fetch_floodgate, click.Command)

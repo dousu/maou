@@ -207,7 +207,7 @@ floodgate を捨てるのではなく役割で分ける．
 | 学習期間内 / held-out の ECE 比 | 3.5 | 1 に近づける |
 | `policy_empty_target_rate` | 0 | 0 のまま (非ゼロなら教師が壊れている) |
 
-held-out の作り方: `maou fetch-floodgate` で**学習期間外**の日付を取得し，
+held-out の作り方: `maou utility fetch-floodgate` で**学習期間外**の日付を取得し，
 `maou hcpe-convert` で HCPE 化する．実測勝率は `gameResult` のみから算出し，
 `eval` 列は使わない．
 
