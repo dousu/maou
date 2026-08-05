@@ -2,7 +2,7 @@
 title: 教師信号の質を上げる改善プロジェクトの設計ドキュメント化と過学習抑制の実装
 date: 2026-08-04
 status: applied
-applied_in: PENDING_SHA
+applied_in: c264dcf
 target:
   - docs/design/training-quality/index.md
   - docs/commands/learn_model.md

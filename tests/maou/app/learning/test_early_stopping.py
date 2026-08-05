@@ -7,8 +7,8 @@ from pathlib import Path
 import click
 import pytest
 
-import maou.infra.console.learn_model as learn_model
 from maou.app.learning.dl import Learning, should_stop_early
+from maou.infra.console import learn_model
 
 
 class TestShouldStopEarly:
@@ -38,26 +38,26 @@ class TestLearningOptionField:
     """``LearningOption`` が patience を保持することを確認する．"""
 
     def _option(self, **kw: object) -> Learning.LearningOption:
-        base: dict[str, object] = dict(
-            datasource=None,
-            compilation=False,
-            test_ratio=0.1,
-            epoch=10,
-            batch_size=32,
-            dataloader_workers=0,
-            pin_memory=False,
-            prefetch_factor=2,
-            policy_loss_ratio=1.0,
-            value_loss_ratio=1.0,
-            learning_ratio=0.001,
-            momentum=0.9,
-            optimizer_name="adamw",
-            optimizer_beta1=0.9,
-            optimizer_beta2=0.999,
-            optimizer_eps=1e-8,
-            log_dir=Path("."),
-            model_dir=Path("."),
-        )
+        base: dict[str, object] = {
+            "datasource": None,
+            "compilation": False,
+            "test_ratio": 0.1,
+            "epoch": 10,
+            "batch_size": 32,
+            "dataloader_workers": 0,
+            "pin_memory": False,
+            "prefetch_factor": 2,
+            "policy_loss_ratio": 1.0,
+            "value_loss_ratio": 1.0,
+            "learning_ratio": 0.001,
+            "momentum": 0.9,
+            "optimizer_name": "adamw",
+            "optimizer_beta1": 0.9,
+            "optimizer_beta2": 0.999,
+            "optimizer_eps": 1e-8,
+            "log_dir": Path("."),
+            "model_dir": Path("."),
+        }
         base.update(kw)
         return Learning.LearningOption(**base)  # type: ignore[arg-type]
 
