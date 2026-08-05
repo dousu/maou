@@ -369,6 +369,25 @@ def _build_adaptive_batch_config(
     required=False,
 )
 @click.option(
+    "--stage3-validation-data-path",
+    type=click.Path(exists=True, path_type=Path),
+    help="Separate validation data for Stage 3. When given, --stage3-data-path "
+    "is used entirely for training and --test-ratio is ignored. Use this to "
+    "hold out whole games: split the kifu (or HCPE) into two sets first, run "
+    "pre-process on each, then point this at the validation output. The "
+    "default chunk-file split mixes positions of the same game into both "
+    "sides, which makes the validation loss optimistic.",
+    required=False,
+)
+@click.option(
+    "--early-stopping-patience",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Stop training after this many consecutive epochs without a new best "
+    "validation loss. 0 disables early stopping (runs all --epoch epochs).",
+)
+@click.option(
     "--stage1-threshold",
     type=float,
     default=0.99,
@@ -632,6 +651,8 @@ def learn_model(
     stage1_data_path: Path | None,
     stage2_data_path: Path | None,
     stage3_data_path: Path | None,
+    stage3_validation_data_path: Path | None,
+    early_stopping_patience: int,
     stage1_threshold: float,
     stage2_threshold: float,
     stage1_max_epochs: int,
@@ -816,28 +837,54 @@ def learn_model(
             ),
             array_type=_s3_at,
         )
-        if not no_streaming and len(_s3_paths) >= 2:
+        if not no_streaming and (
+            len(_s3_paths) >= 2
+            or stage3_validation_data_path is not None
+        ):
             import random
 
             from maou.infra.file_system.streaming_file_source import (
                 StreamingFileSource,
             )
 
-            rng = random.Random(42)
-            shuffled = list(_s3_paths)
-            rng.shuffle(shuffled)
-            effective_ratio = test_ratio or 0.1
-            n_val = max(1, int(len(shuffled) * effective_ratio))
-            n_train = len(shuffled) - n_val
-            if n_train < 1:
-                n_train = 1
-                n_val = len(shuffled) - 1
+            if stage3_validation_data_path is not None:
+                # 別ディレクトリを検証集合にする．対局単位で分けた
+                # データを渡せば，同一対局の局面が train と val の
+                # 両方に入る問題 (val loss が楽観的になる) を避けられる．
+                _val_paths = FileSystem.collect_files(
+                    stage3_validation_data_path
+                )
+                if not _val_paths:
+                    raise ValueError(
+                        "--stage3-validation-data-path contains no files: "
+                        f"{stage3_validation_data_path}"
+                    )
+                app_logger.info(
+                    f"Stage 3: using {len(_val_paths)} separate validation "
+                    f"file(s); --test-ratio is ignored"
+                )
+                train_paths = list(_s3_paths)
+                val_paths = _val_paths
+            else:
+                rng = random.Random(42)
+                shuffled = list(_s3_paths)
+                rng.shuffle(shuffled)
+                effective_ratio = test_ratio or 0.1
+                n_val = max(
+                    1, int(len(shuffled) * effective_ratio)
+                )
+                n_train = len(shuffled) - n_val
+                if n_train < 1:
+                    n_train = 1
+                    n_val = len(shuffled) - 1
+                train_paths = shuffled[:n_train]
+                val_paths = shuffled[n_train:]
             s3_streaming_train_source = StreamingFileSource(
-                file_paths=shuffled[:n_train],
+                file_paths=train_paths,
                 array_type=_s3_at,
             )
             s3_streaming_val_source = StreamingFileSource(
-                file_paths=shuffled[n_train:],
+                file_paths=val_paths,
                 array_type=_s3_at,
             )
             use_multi_streaming = True
@@ -886,6 +933,7 @@ def learn_model(
             detect_anomaly=detect_anomaly,
             test_ratio=test_ratio,
             epoch=epoch,
+            early_stopping_patience=early_stopping_patience,
             dataloader_workers=dataloader_workers,
             pin_memory=pin_memory,
             prefetch_factor=prefetch_factor,

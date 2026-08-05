@@ -58,6 +58,8 @@ def test_learn_model_options_available_in_benchmark_training() -> (
     # benchmark-trainingに不要なオプション（除外リスト）
     excluded_options = {
         "epoch",  # benchmarkでは--max-batchesで制御
+        "early-stopping-patience",  # エポック単位の停止判定（benchmark不要）
+        "stage3-validation-data-path",  # 検証データ分割（benchmark不要）
         "resume-from",  # チェックポイント再開（不要）
         "resume-backbone-from",  # コンポーネント別再開（不要）
         "stage1-threshold",  # Stage 1閾値（不要）
@@ -171,6 +173,8 @@ def test_option_consistency_documentation() -> None:
     # 除外リスト（benchmark-trainingに不要なオプション）
     excluded_options = {
         "epoch",
+        "early-stopping-patience",
+        "stage3-validation-data-path",
         "resume-from",
         "resume-backbone-from",
         "log-dir",

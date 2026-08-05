@@ -17,7 +17,6 @@ def _make_learning_with_config(
     lr_scheduler_name: str | None = None,
     batch_size: int = 256,
     epoch: int = 100,
-    gce_parameter: float = 0.7,
     policy_loss_ratio: float = 1.0,
     value_loss_ratio: float = 1.0,
 ) -> Learning:
@@ -37,7 +36,6 @@ def _make_learning_with_config(
     config.lr_scheduler_name = lr_scheduler_name
     config.batch_size = batch_size
     config.epoch = epoch
-    config.gce_parameter = gce_parameter
     config.policy_loss_ratio = policy_loss_ratio
     config.value_loss_ratio = value_loss_ratio
     learning.config = config

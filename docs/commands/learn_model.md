@@ -33,7 +33,9 @@
 | `--dataloader-workers INT` | interface default `0` | Worker processes for PyTorch DataLoaders. Negative values raise `ValueError`.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--pin-memory` | `false` | Toggles pinned host memory for faster GPU transfers.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--prefetch-factor INT` | interface default `4` | Number of batches prefetched per worker; must be positive.【F:src/maou/interface/learn.py†L158-L177】 |
-| `--test-ratio FLOAT` | interface default `0.2` | Portion of the dataset reserved for validation. Must satisfy `0 < ratio < 1`.【F:src/maou/interface/learn.py†L132-L140】 |
+| `--test-ratio FLOAT` | interface default `0.2` | Portion of the dataset reserved for validation. Must satisfy `0 < ratio < 1`. **Stage 3 では前処理出力のチャンクファイル単位の分割**であり，チャンクは Zobrist hash 順なので同一対局の局面が train と val の両方に入る．検証損失が楽観的になるため，`--stage3-validation-data-path` の使用を推奨．【F:src/maou/interface/learn.py†L132-L140】 |
+| `--stage3-validation-data-path PATH` | optional | Stage 3 の検証データを別ディレクトリから読む．指定すると `--stage3-data-path` は全量が学習に使われ `--test-ratio` は無視される．棋譜 (または HCPE) を**対局単位で 2 分割**してそれぞれ `pre-process` し，その検証側を指す．前処理は全コーパス横断で集約するため，対局単位の分割は前段でしか行えない．詳細は [docs/design/training-quality/](../design/training-quality/index.md)． |
+| `--early-stopping-patience INT` | `0` | 検証損失がベストを更新しない連続エポック数がこの値に達したら学習を打ち切る．`0` で無効 (`--epoch` 回すべて実行)．`--stage3-validation-data-path` と併用しないと検証損失が楽観的なため機能しにくい． |
 | `--no-streaming` | `false` | Disable streaming mode for file input; uses map-style dataset instead. Streaming is the default for multi-file inputs.【F:src/maou/infra/console/learn_model.py†L520-L524】 |
 
 ### Model architecture (ViT)
