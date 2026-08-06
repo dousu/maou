@@ -2,7 +2,7 @@
 title: 探索由来の value 教師を作る maou utility search-values を追加する
 date: 2026-08-06
 status: applied
-applied_in: TBD
+applied_in: e997e03
 target:
   - docs/commands/utility_search_values.md
   - docs/commands/pre_process.md
