@@ -2,7 +2,7 @@
 title: 自己対局の濃い教師を新レコード型でなく前処理出力スキーマへ載せる
 date: 2026-08-06
 status: applied
-applied_in: TBD
+applied_in: d14cfdc
 target:
   - docs/design/training-quality/index.md
 risk: low
