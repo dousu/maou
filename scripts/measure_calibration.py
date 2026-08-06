@@ -121,8 +121,17 @@ BINS = np.array(
 
 def load_positions(
     hcpe_dir: Path, sample: int, seed: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """HCPE から (予測入力用 hcp, 手番視点の勝敗, 対局 ID) を取り出す．"""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """HCPE から (予測入力用 hcp, 手番視点の勝敗, 対局 ID, ply) を取り出す．
+
+    Args:
+        hcpe_dir: ``.feather`` を含むディレクトリ．
+        sample: 評価する最大局面数 (0 で全件)．
+        seed: 標本抽出の乱数種．
+
+    Returns:
+        ``(hcp (N,32) uint8, wins (N,) float32, games (N,) str, ply (N,) int)``．
+    """
     from maou._rust.maou_search import preprocess_hcpes
 
     paths = sorted(
@@ -159,11 +168,11 @@ def load_positions(
             df["gameResult"].to_numpy().astype(np.int8)
         ),
     )
-    # id は "{棋譜ファイル名}.hcpe_{ply}"．接頭辞が対局 ID．
-    games = np.array(
-        [s.rsplit(".hcpe_", 1)[0] for s in df["id"].to_list()]
-    )
-    return hcp, np.asarray(wins), games
+    # id は "{棋譜ファイル名}.hcpe_{ply}"．接頭辞が対局 ID，接尾辞が手数．
+    ids = df["id"].to_list()
+    games = np.array([s.rsplit(".hcpe_", 1)[0] for s in ids])
+    ply = np.array([int(s.rsplit(".hcpe_", 1)[1]) for s in ids])
+    return hcp, np.asarray(wins), games, ply
 
 
 def predict(
@@ -229,6 +238,51 @@ def expected_calibration_error(
                 * abs(p[m].mean() - y[m].mean())
             )
     return ece
+
+
+PLY_BANDS = [0, 20, 40, 60, 80, 100, 120, 10**9]
+
+
+def report_by_ply(
+    p: np.ndarray,
+    y: np.ndarray,
+    gidx: np.ndarray,
+    ply: np.ndarray,
+) -> None:
+    """手数帯ごとの較正を出す．
+
+    「1 局 = 1 勝敗ビット」の記憶は，**同一局面が他の対局と共有されない
+    中終盤**でしか成立しない．序盤の局面は多数の対局で共有されるので教師は
+    実質的に平均され，個別の対局を思い出す余地がない．したがって
+    **学習期間内と held-out の差が手数帯のどこに集中するか**を見ると，
+    汎化ギャップが記憶由来かどうかを局面ではなく分布で判定できる．
+
+    Args:
+        p: 局面ごとの予測勝率．
+        y: 局面ごとの実際の勝敗 (0/1)．
+        gidx: 局面ごとの対局インデックス．
+        ply: 局面ごとの手数．
+    """
+    print(
+        "\nby ply band (memorisation should concentrate in later plies)"
+    )
+    print(
+        f"{'ply':>10}{'positions':>11}{'games':>7}"
+        f"{'pred':>8}{'actual':>8}{'ECE':>8}{'Brier':>8}"
+    )
+    print("-" * 60)
+    for lo, hi in itertools.pairwise(PLY_BANDS):
+        m = (ply >= lo) & (ply < hi)
+        if m.sum() < 50:
+            continue
+        label = f"{lo}-{hi - 1}" if hi < 10**9 else f"{lo}+"
+        print(
+            f"{label:>10}{m.sum():>11,}"
+            f"{len(np.unique(gidx[m])):>7,}"
+            f"{p[m].mean():>8.3f}{y[m].mean():>8.3f}"
+            f"{expected_calibration_error(p[m], y[m]):>8.4f}"
+            f"{float(np.mean((p[m] - y[m]) ** 2)):>8.4f}"
+        )
 
 
 def bootstrap_by_game(
@@ -311,9 +365,14 @@ def main() -> int:
         default=1000,
         help="game-clustered bootstrap rounds (0 to skip)",
     )
+    ap.add_argument(
+        "--by-ply",
+        action="store_true",
+        help="also break the calibration down by ply band",
+    )
     args = ap.parse_args()
 
-    hcp, wins, games = load_positions(
+    hcp, wins, games, ply_all = load_positions(
         args.hcpe_dir, args.sample, args.seed
     )
     z = predict(args.model, hcp, args.batch)
@@ -321,11 +380,12 @@ def main() -> int:
 
     # 引き分けは較正の定義が曖昧なので除外する
     keep = (wins == 0.0) | (wins == 1.0)
-    z, p, y, g = (
+    z, p, y, g, ply = (
         z[keep],
         p[keep],
         wins[keep].astype(np.float64),
         games[keep],
+        ply_all[keep],
     )
     _, gidx = np.unique(g, return_inverse=True)
     n_games = int(gidx.max()) + 1
@@ -387,6 +447,8 @@ def main() -> int:
         f"diagnostic temperature T = {t:.2f} (ECE would be {ece_t:.4f}); "
         "T far from 1 means over-confidence"
     )
+    if args.by_ply:
+        report_by_ply(p, y, gidx, ply)
     return 0
 
 
