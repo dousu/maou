@@ -2,7 +2,7 @@
 title: Step 2 の評価と，2 つの head の過学習速度の非対称性の記録
 date: 2026-08-06
 status: applied
-applied_in: TBD
+applied_in: 09afc3f
 target:
   - docs/design/training-quality/index.md
   - docs/commands/learn_model.md
