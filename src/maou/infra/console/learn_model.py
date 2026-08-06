@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import click
 
@@ -7,6 +7,7 @@ from maou.infra.console import common
 from maou.interface import learn
 from maou.interface.learn import (
     AdaptiveBatchConfig,
+    EarlyStoppingMetric,
     PolicyTargetMode,
     StageDataConfig,
 )
@@ -385,7 +386,17 @@ def _build_adaptive_batch_config(
     default=0,
     show_default=True,
     help="Stop training after this many consecutive epochs without a new best "
-    "validation loss. 0 disables early stopping (runs all --epoch epochs).",
+    "monitored metric. 0 disables early stopping (runs all --epoch epochs).",
+)
+@click.option(
+    "--early-stopping-metric",
+    type=click.Choice(["total", "value", "policy"]),
+    default="total",
+    show_default=True,
+    help="Validation metric that early stopping and checkpoint saving track. "
+    "'total' is the combined loss, 'value' the Brier score and 'policy' the "
+    "cross entropy. The two heads overfit at different speeds, so the "
+    "combined minimum matches neither head's own minimum.",
 )
 @click.option(
     "--stage1-threshold",
@@ -653,6 +664,7 @@ def learn_model(
     stage3_data_path: Path | None,
     stage3_validation_data_path: Path | None,
     early_stopping_patience: int,
+    early_stopping_metric: str,
     stage1_threshold: float,
     stage2_threshold: float,
     stage1_max_epochs: int,
@@ -934,6 +946,9 @@ def learn_model(
             test_ratio=test_ratio,
             epoch=epoch,
             early_stopping_patience=early_stopping_patience,
+            early_stopping_metric=cast(
+                EarlyStoppingMetric, early_stopping_metric
+            ),
             dataloader_workers=dataloader_workers,
             pin_memory=pin_memory,
             prefetch_factor=prefetch_factor,

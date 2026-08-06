@@ -18,6 +18,7 @@ from maou.infra.console.lazy import (
     PackageRequirement,
 )
 from maou.infra.console.screenshot import screenshot
+from maou.infra.console.search_values import search_values
 from maou.infra.console.split_kifu import split_kifu
 
 _TRAINING_EXTRAS = ("cpu", "cuda", "mpu")
@@ -68,4 +69,5 @@ def utility() -> None:
 # 追加依存を持たないサブコマンド
 utility.add_command(fetch_floodgate)
 utility.add_command(split_kifu)
+utility.add_command(search_values)
 utility.add_command(screenshot)

@@ -164,6 +164,7 @@ class PreProcess:
         prior_strength: float = 5.0,
         win_rate_fallback: str = "neutral",
         drop_below_threshold: bool = False,
+        search_value_path: Path | None = None,
     ):
         """Initialize pre-processor.
 
@@ -186,6 +187,12 @@ class PreProcess:
                 ``bestMoveWinRate`` の双方に適用される．
             drop_below_threshold: True の場合，出現回数が
                 position_count_threshold 未満の局面を出力から完全に除外する．
+            search_value_path: ``maou utility search-values`` の出力．
+                指定すると該当局面の ``resultValue`` を対局結果由来の値から
+                **探索値**へ差し替える．対局結果は 1 対局の全局面で同じ値に
+                なるため「どの対局か」を思い出す近道が成立するが，探索値は
+                局面ごとに異なるのでその近道が効かなくなる．
+                出力に無い局面は対局結果由来のまま残るので部分適用できる．
         """
         self.__feature_store = feature_store
         self.__datasource = datasource
@@ -197,7 +204,52 @@ class PreProcess:
         self.__prior_strength = prior_strength
         self.__win_rate_fallback = win_rate_fallback
         self.__drop_below_threshold = drop_below_threshold
+        self.__search_value_path = search_value_path
+        self.__search_values: pl.DataFrame | None = None
+        self.__search_values_applied = 0
         self.intermediate_store = None
+
+    def _apply_search_values(
+        self, df: pl.DataFrame
+    ) -> pl.DataFrame:
+        """``resultValue`` を探索値へ差し替える (指定時のみ)．
+
+        チャンク処理でも呼ばれるので，適用件数は累積する．
+
+        Args:
+            df: 前処理出力の DataFrame．
+
+        Returns:
+            差し替え後の DataFrame (未指定なら入力をそのまま返す)．
+        """
+        # polars は module 冒頭で import しない方針に合わせる
+        import polars as pl
+
+        from maou.app.pre_process.search_value import (
+            apply_search_values,
+        )
+
+        if self.__search_value_path is None:
+            return df
+        if self.__search_values is None:
+            self.__search_values = pl.read_ipc(
+                self.__search_value_path, memory_map=False
+            )
+            self.logger.info(
+                "Loaded %d search values from %s",
+                len(self.__search_values),
+                self.__search_value_path,
+            )
+        replaced, applied = apply_search_values(
+            df, self.__search_values
+        )
+        self.__search_values_applied += applied
+        return replaced
+
+    @property
+    def search_values_applied(self) -> int:
+        """``resultValue`` を探索値へ差し替えた行数．"""
+        return self.__search_values_applied
 
     @dataclass(kw_only=True, frozen=True)
     class PreProcessOption:
@@ -410,7 +462,10 @@ class PreProcess:
             )
 
         # ディスクストアから最終DataFrameを生成
-        return self.intermediate_store.finalize_to_dataframe()
+        df, fallback = (
+            self.intermediate_store.finalize_to_dataframe()
+        )
+        return self._apply_search_values(df), fallback
 
     def _log_resource_estimates(
         self,
@@ -507,6 +562,7 @@ class PreProcess:
                     delete_after_yield=False,
                 )
             ):
+                chunk_df = self._apply_search_values(chunk_df)
                 # ローカルファイル出力（output_dirが指定されている場合）
                 if output_dir is not None:
                     chunk_filename = f"{output_filename}_chunk{chunk_idx:04d}.feather"
@@ -950,6 +1006,15 @@ class PreProcess:
                             option.output_dir
                             / f"{base_name}.feather",
                         )
+
+        if self.__search_value_path is not None:
+            pre_process_result["search_values_applied"] = str(
+                self.__search_values_applied
+            )
+            self.logger.info(
+                "Replaced resultValue with search values for %d rows",
+                self.__search_values_applied,
+            )
 
         # クリーンアップ: ディスクストアを閉じて削除
         if self.intermediate_store is not None:

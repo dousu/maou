@@ -77,6 +77,21 @@ class LearningDataSource(DataSource):
             pass
 
 
+EarlyStoppingMetric = Literal["total", "value", "policy"]
+"""early stopping とチェックポイント保存が監視する検証指標．
+
+``total`` は policy と value を足した検証損失 (従来の挙動)．
+
+2 つの head は**過学習の速さが違う**ため，合算値の最小点はどちらの head の
+最小点とも一致しない．value 教師は 1 対局につき 1 つの勝敗ビットを全局面へ
+複製したものなので「どの対局か」を思い出せば当たり，先に過学習へ向かう．
+policy 教師は局面ごとに異なるラベルを持つのでその近道が効かない．
+
+較正 (ECE) を見ているときは ``value``，指し手予測を見ているときは
+``policy`` を選ぶと，合算値が黙って行う折衷を避けられる．
+"""
+
+
 def should_stop_early(
     epochs_without_improvement: int, patience: int
 ) -> bool:
@@ -92,6 +107,32 @@ def should_stop_early(
     return (
         patience > 0 and epochs_without_improvement >= patience
     )
+
+
+def monitored_value(
+    metric: EarlyStoppingMetric,
+    avg_vloss: float,
+    metrics: ValidationMetrics,
+) -> float:
+    """監視対象の検証指標を 1 つの数値として返す．
+
+    いずれも**小さいほど良い**向きに揃えてあるので，呼び出し側は
+    値の比較だけで改善を判定できる．
+
+    Args:
+        metric: 監視する指標．
+        avg_vloss: 検証損失 (policy + value の合算)．
+        metrics: エポック終了時の検証メトリクス．
+
+    Returns:
+        監視値．``total`` なら ``avg_vloss``，``value`` なら Brier score，
+        ``policy`` なら交差エントロピー．
+    """
+    if metric == "value":
+        return metrics.value_brier_score
+    if metric == "policy":
+        return metrics.policy_cross_entropy
+    return avg_vloss
 
 
 class Learning:
@@ -131,6 +172,7 @@ class Learning:
         optimizer_eps: float
         detect_anomaly: bool = False
         early_stopping_patience: int = 0
+        early_stopping_metric: EarlyStoppingMetric = "total"
         resume_backbone_from: Path | None = None
         resume_policy_head_from: Path | None = None
         resume_value_head_from: Path | None = None
@@ -569,9 +611,13 @@ class Learning:
         EPOCHS = self.epoch
 
         best_vloss = 1_000_000.0
+        # 監視指標のベスト．early stopping とチェックポイント保存はこちらで
+        # 判定する (best_vloss は HParams へ残す合算値の記録用)．
+        best_monitored = 1_000_000.0
         last_metrics: ValidationMetrics | None = None
-        # early stopping: val loss がベストを更新しなかった連続エポック数
+        # early stopping: 監視指標がベストを更新しなかった連続エポック数
         patience = self.config.early_stopping_patience
+        monitor = self.config.early_stopping_metric
         epochs_without_improvement = 0
 
         # Checkpoint loading and freeze are handled in learn()
@@ -690,8 +736,12 @@ class Learning:
             # Reset callback for next epoch
             validation_callback.reset()
 
+            # 乖離 (valid - train) は「学習側の当てはめのうち未知の対局へ
+            # 移らなかった分」の目安．単調に増えるので停止条件には使えないが，
+            # 監視指標の底と併せて過学習の進み方を読むのに使う．
             self.logger.info(
-                f"LOSS train {avg_loss} valid {avg_vloss}"
+                f"LOSS train {avg_loss} valid {avg_vloss} "
+                f"gap {avg_vloss - avg_loss:+.4f}"
             )
             self.logger.info(metrics.format_log_lines())
             current_lr = self.optimizer.param_groups[0]["lr"]
@@ -714,9 +764,13 @@ class Learning:
             writer.flush()
 
             # Track best performance, and save the model's state
-            improved = avg_vloss < best_vloss
+            best_vloss = min(best_vloss, avg_vloss)
+            current = monitored_value(
+                monitor, avg_vloss, metrics
+            )
+            improved = current < best_monitored
             if improved:
-                best_vloss = avg_vloss
+                best_monitored = current
                 epochs_without_improvement = 0
             else:
                 epochs_without_improvement += 1
@@ -753,10 +807,12 @@ class Learning:
                 epochs_without_improvement, patience
             ):
                 self.logger.info(
-                    "Early stopping: validation loss did not improve "
-                    f"for {epochs_without_improvement} consecutive epochs "
-                    f"(patience={patience}). Stopping at epoch "
-                    f"{epoch_number} of {EPOCHS}. best_vloss={best_vloss}"
+                    f"Early stopping: monitored metric ({monitor}) did not "
+                    f"improve for {epochs_without_improvement} consecutive "
+                    f"epochs (patience={patience}). Stopping at epoch "
+                    f"{epoch_number} of {EPOCHS}. "
+                    f"best_{monitor}={best_monitored} "
+                    f"best_vloss={best_vloss}"
                 )
                 break
 
@@ -851,6 +907,11 @@ class Learning:
         writer.add_scalars(
             "Training vs. Validation Loss",
             {"Training": avg_loss, "Validation": avg_vloss},
+            epoch_number + 1,
+        )
+        writer.add_scalar(
+            "Train-Validation Gap",
+            avg_vloss - avg_loss,
             epoch_number + 1,
         )
         writer.add_scalar(

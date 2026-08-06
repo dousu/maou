@@ -213,6 +213,7 @@ def transform(
     prior_strength: float = 5.0,
     win_rate_fallback: str = "neutral",
     drop_below_threshold: bool = False,
+    search_value_path: Path | None = None,
 ) -> str:
     """Transform HCPE data into neural network training features.
 
@@ -238,6 +239,13 @@ def transform(
             win/loss outcome instead, which is 0.0/1.0 (0.5 for a draw)
             when the position occurred once. Ignored for positions
             excluded via ``drop_below_threshold``.
+        search_value_path: Output of ``maou utility search-values``. When
+            given, ``resultValue`` is replaced by the search value for the
+            positions it covers. A game result is constant across the ~110
+            positions of one game, so recalling which game a position came
+            from fits the training set without transferring to unseen games;
+            search values differ position by position. Positions absent from
+            the file keep their game-result value.
         drop_below_threshold: If True, positions with occurrence count below
             ``position_count_threshold`` are excluded entirely from the
             output instead of receiving a fallback value. (default: False)
@@ -283,6 +291,7 @@ def transform(
         prior_strength=prior_strength,
         win_rate_fallback=win_rate_fallback,
         drop_below_threshold=drop_below_threshold,
+        search_value_path=search_value_path,
     ).transform(option)
 
     return json.dumps(pre_process_result)

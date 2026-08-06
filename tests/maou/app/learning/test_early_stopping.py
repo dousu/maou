@@ -7,7 +7,12 @@ from pathlib import Path
 import click
 import pytest
 
-from maou.app.learning.dl import Learning, should_stop_early
+from maou.app.learning.callbacks import ValidationMetrics
+from maou.app.learning.dl import (
+    Learning,
+    monitored_value,
+    should_stop_early,
+)
 from maou.infra.console import learn_model
 
 
@@ -32,6 +37,63 @@ class TestShouldStopEarly:
     ) -> None:
         assert should_stop_early(0, 1) is False
         assert should_stop_early(1, 1) is True
+
+
+def _metrics(
+    *, policy_ce: float, value_brier: float
+) -> ValidationMetrics:
+    return ValidationMetrics(
+        policy_cross_entropy=policy_ce,
+        value_brier_score=value_brier,
+        policy_top5_accuracy=0.4,
+        policy_f1_score=0.26,
+        value_high_confidence_rate=0.85,
+    )
+
+
+class TestMonitoredValue:
+    """監視指標の選択が実測の分岐を再現することを固定する．
+
+    2026-08-05 の学習 (対局単位分割 + patience 5) では検証の
+    value Brier が epoch 11 で底を打つ一方，policy 交差エントロピーは
+    epoch 21 まで下がり続け，合算値は epoch 16 で底を打った．
+    合算値だけを見ていると value 側の最小点を通り過ぎる．
+    """
+
+    EP11 = _metrics(policy_ce=2.1562, value_brier=0.14949)
+    EP16 = _metrics(policy_ce=2.0875, value_brier=0.15434)
+
+    def test_total_is_the_combined_loss(self) -> None:
+        assert (
+            monitored_value("total", 2.6011, self.EP16)
+            == 2.6011
+        )
+
+    def test_value_tracks_brier_score(self) -> None:
+        assert (
+            monitored_value("value", 2.6011, self.EP16)
+            == 0.15434
+        )
+
+    def test_policy_tracks_cross_entropy(self) -> None:
+        assert (
+            monitored_value("policy", 2.6011, self.EP16)
+            == 2.0875
+        )
+
+    def test_heads_disagree_about_the_better_epoch(
+        self,
+    ) -> None:
+        # 合算値は epoch 16 を選ぶが value 側は epoch 11 の方が良い
+        assert monitored_value(
+            "total", 2.6011, self.EP16
+        ) < monitored_value("total", 2.6478, self.EP11)
+        assert monitored_value(
+            "value", 2.6478, self.EP11
+        ) < monitored_value("value", 2.6011, self.EP16)
+        assert monitored_value(
+            "policy", 2.6011, self.EP16
+        ) < monitored_value("policy", 2.6478, self.EP11)
 
 
 class TestLearningOptionField:
@@ -68,6 +130,13 @@ class TestLearningOptionField:
         opt = self._option(early_stopping_patience=5)
         assert opt.early_stopping_patience == 5
 
+    def test_metric_defaults_to_total(self) -> None:
+        assert self._option().early_stopping_metric == "total"
+
+    def test_carries_metric(self) -> None:
+        opt = self._option(early_stopping_metric="value")
+        assert opt.early_stopping_metric == "value"
+
 
 def _find_option(name: str) -> click.Option:
     for param in learn_model.learn_model.params:
@@ -92,6 +161,21 @@ class TestCliOptions:
         opt = _find_option("--early-stopping-patience")
         assert isinstance(opt.type, click.IntRange)
         assert opt.type.min == 0
+
+    def test_early_stopping_metric_defaults_to_total(
+        self,
+    ) -> None:
+        opt = _find_option("--early-stopping-metric")
+        assert opt.default == "total"
+
+    def test_early_stopping_metric_choices(self) -> None:
+        opt = _find_option("--early-stopping-metric")
+        assert isinstance(opt.type, click.Choice)
+        assert list(opt.type.choices) == [
+            "total",
+            "value",
+            "policy",
+        ]
 
     def test_validation_data_path_requires_existing_path(
         self,

@@ -286,6 +286,18 @@ from maou.interface import preprocess
     default=False,
     required=False,
 )
+@click.option(
+    "--search-value-path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    required=False,
+    help="Output of `maou utility search-values`. Replaces resultValue with "
+    "the per-position search value for the positions it covers. A game "
+    "result is the same for every position of a game, so recalling which "
+    "game a position came from fits the training set without transferring "
+    "to unseen games; search values differ position by position. Positions "
+    "absent from the file keep their game-result value.",
+)
 @handle_exception
 def pre_process(
     input_path: Path | None,
@@ -326,6 +338,7 @@ def pre_process(
     prior_strength: float,
     win_rate_fallback: str,
     drop_below_threshold: bool,
+    search_value_path: Path | None,
 ) -> None:
     import warnings
 
@@ -584,5 +597,6 @@ def pre_process(
             prior_strength=prior_strength,
             win_rate_fallback=win_rate_fallback,
             drop_below_threshold=drop_below_threshold,
+            search_value_path=search_value_path,
         )
     )

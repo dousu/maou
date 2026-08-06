@@ -35,7 +35,8 @@
 | `--prefetch-factor INT` | interface default `4` | Number of batches prefetched per worker; must be positive.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--test-ratio FLOAT` | interface default `0.2` | Portion of the dataset reserved for validation. Must satisfy `0 < ratio < 1`. **Stage 3 では前処理出力のチャンクファイル単位の分割**であり，チャンクは Zobrist hash 順なので同一対局の局面が train と val の両方に入る．検証損失が楽観的になるため，`--stage3-validation-data-path` の使用を推奨．【F:src/maou/interface/learn.py†L132-L140】 |
 | `--stage3-validation-data-path PATH` | optional | Stage 3 の検証データを別ディレクトリから読む．指定すると `--stage3-data-path` は全量が学習に使われ `--test-ratio` は無視される．棋譜 (または HCPE) を**対局単位で 2 分割**してそれぞれ `pre-process` し，その検証側を指す．前処理は全コーパス横断で集約するため，対局単位の分割は前段でしか行えない．詳細は [docs/design/training-quality/](../design/training-quality/index.md)． |
-| `--early-stopping-patience INT` | `0` | 検証損失がベストを更新しない連続エポック数がこの値に達したら学習を打ち切る．`0` で無効 (`--epoch` 回すべて実行)．`--stage3-validation-data-path` と併用しないと検証損失が楽観的なため機能しにくい． |
+| `--early-stopping-patience INT` | `0` | 監視指標がベストを更新しない連続エポック数がこの値に達したら学習を打ち切る．`0` で無効 (`--epoch` 回すべて実行)．`--stage3-validation-data-path` と併用しないと検証損失が楽観的なため機能しにくい． |
+| `--early-stopping-metric [total\|value\|policy]` | `total` | early stopping と**チェックポイント保存**が監視する検証指標．`total` は合算損失，`value` は Brier score，`policy` は交差エントロピー．2 つの head は過学習の速さが違うため，**合算値の最小はどちらの head の最小とも一致しない** (実測: value は epoch 11 で底，policy は epoch 21 まで改善，合算は epoch 16 で底)．較正を追うときは `value` を選ぶと held-out ECE が下がるが policy を等価分だけ失う．詳細は [docs/design/training-quality/](../design/training-quality/index.md) §5.2． |
 | `--no-streaming` | `false` | Disable streaming mode for file input; uses map-style dataset instead. Streaming is the default for multi-file inputs.【F:src/maou/infra/console/learn_model.py†L520-L524】 |
 
 ### Model architecture (ViT)
