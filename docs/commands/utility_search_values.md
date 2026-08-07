@@ -36,7 +36,43 @@ policy 教師 (floodgate の実指し手) には手を触れない．局面の�
 
 局面は Zobrist hash で対応づけられ，これは `maou pre-process` が集約に使う
 キーと同じである．**出力に無い局面は対局結果由来の値のまま残る**ので，
-GPU 予算に収まる範囲だけ探索すれば良い．中断しても `--resume` で再開できる．
+GPU 予算に収まる範囲だけ探索すれば良い．
+
+### 蓄積の保証 (`--resume`)
+
+`--resume` を付けて繰り返し実行すれば，**既に探索した局面は二度と探索されず，
+重複なく貯まっていく**．
+
+- 走査時に既存出力の hash を除外する
+- 同一局面は 1 ファイル内でもファイルをまたいでも 1 回だけ探索する
+- 連結時に id で一意化する (重複時は後勝ち)．
+  重複したまま前処理へ渡すと**左 join が行を複製して学習データが壊れる**ため，
+  `pre-process` 側でも一意化して行数不変を検証する
+
+**`--resume` も `--overwrite` も無いまま既存の出力を指すとエラーになる．**
+出力は数日分の GPU 時間そのものなので，取り違えで捨てさせない．
+既存の出力が無ければフラグ無しでも `--resume` 単体でも通るので，
+**スクリプトには `--resume` を固定で書いておけば初回から中断・再開まで
+同じコマンドで済む**．
+
+**`--resume` と `--overwrite` の同時指定はエラー**である．
+「続きから」と「作り直し」は両立せず，暗黙の優先順位を持たせると
+作り直したつもりの実行で古い値が残る．新しく始めるときは出力を手で消すか
+`--overwrite` を 1 回だけ使う．
+
+```bash
+# 新しい campaign を始めるとき (1 回だけ．手で消しても同じ)
+maou utility search-values ... --overwrite
+
+# 以降は毎回これ (中断したらそのまま再実行)
+maou utility search-values ... --resume
+```
+
+中断すると最後のフラッシュ以降 (`--flush-interval` 局面ぶんが上限) だけ
+再探索する．書き出しは一時ファイル経由の原子的な置換なので，
+フラッシュ中にクラッシュしても出力が壊れることはない．
+
+出力を入力ディレクトリの配下へ置いてもよい (走査から自動的に除外される)．
 
 ### 注意
 
@@ -44,20 +80,46 @@ HCPE は局面のみを持ち指し手履歴を持たないため，SFEN へ復�
 **千日手の文脈は失われる**．元の対局で千日手絡みだった局面は，
 その文脈なしに評価される．
 
+### 検証データには適用しない
+
+**探索値は training 側の前処理にだけ渡す．** 検証側は対局結果 (0/1) のまま
+残すこと．理由は 3 つある．
+
+1. **循環する** — 検証の教師がモデル自身の探索出力になると，
+   「自分の探索を真似るほど良いスコア」になり汎化の指標として機能しない
+2. **North-star とずれる** — 最終目標は実際の対局結果に対する較正である．
+   検証を対局結果のままにすれば，検証損失は「未知の対局の実際の勝敗を
+   どれだけ当てられるか」を測り続ける
+3. **過去の測定と比較できなくなる** — `value_brier_score` は 0/1 教師に対する
+   値なので，検証側を変えると Step 2 の基準
+   (`docs/design/training-quality/` §2.5 の epoch 11) と比較できなくなり，
+   **反証テスト自体が成立しなくなる**
+
+training と validation で教師の意味が違ってよい．検証損失の絶対値は
+前回と比べにくくなるが，`value_brier_score` はどちらも 0/1 相手なので
+直接比較でき，early stopping も同一 run 内の相対比較なので機能する．
+
+なお `scripts/measure_calibration.py` は HCPE の `gameResult` を直接使い
+前処理を経由しないので，held-out 較正の測定はこの選択の影響を受けない．
+
 ## Usage
 
 ```bash
-# GPU で 100 万局面ぶんを探索する (中断したら同じコマンドを再実行する)
+# GPU で 100 万局面ぶんを探索する
+# (中断したら同じコマンドを再実行する — --resume で続きから貯まる)
 maou utility search-values \
-    --input-path hcpe/ \
+    --input-path hcpe_train/ \
     --output-path search_values.feather \
     --model-path model.onnx \
     --min-ply 60 --max-positions 1000000 --playouts 800 \
     --batch-size 64 --tensorrt --cuda --trt-cache-dir trt_cache/ --resume
 
-# 前処理へ渡す
-maou pre-process --input-path hcpe/ --output-dir preprocessed/ \
+# training 側の前処理にだけ渡す
+maou pre-process --input-path hcpe_train/ --output-dir pre_train/ \
     --search-value-path search_values.feather
+
+# validation 側は素のまま (対局結果を教師に残す)
+maou pre-process --input-path hcpe_val/ --output-dir pre_val/
 ```
 
 ## CLI options
@@ -81,6 +143,7 @@ maou pre-process --input-path hcpe/ --output-dir preprocessed/ \
 | `--trt-cache-dir PATH` | optional | TensorRT エンジンキャッシュ保存先． |
 | `--flush-interval INT` | `500` | この局面数ごとに途中結果を書き出す．**中断してもそこまでの結果が残り** `--resume` で続きから再開できる．数十万局面を数日かけて回す用途では必須． |
 | `--resume` | `False` | `--output-path` に既にある局面を飛ばして残りを追記する．中断した実行はそのまま再実行できる． |
+| `--overwrite` | `False` | 既存の `--output-path` を破棄して作り直す．`--resume` も `--overwrite` も無いまま既存の出力を指すと**エラー**になる．`--resume` との**同時指定もエラー**． |
 
 ## 進行状況の確認
 

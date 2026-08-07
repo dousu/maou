@@ -6,12 +6,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import polars as pl
 import pytest
 
 from maou.app.pre_process.search_value import (
     SEARCH_VALUE_SCHEMA,
+    SearchValueCollector,
+    SearchValueOption,
+    _merge,
     _ply_of,
     apply_search_values,
     select_positions,
@@ -180,3 +185,130 @@ class TestApplySearchValues:
         assert out["resultValue"].to_list() == pytest.approx(
             [1.0, 0.0], abs=1e-6
         )
+
+    def test_duplicate_ids_do_not_add_rows(self) -> None:
+        """重複 id で行数が増えないこと．
+
+        左 join は右側に同じキーが 2 行あると左の行を複製する．
+        これを許すと**前処理出力の行数が増えて学習データが静かに壊れる**．
+        実際に修正前は 3 行が 4 行になっていた．
+        """
+        df = _pre_df([1, 2, 3], [1.0, 0.0, 1.0])
+        out, applied = apply_search_values(
+            df, _values([2, 2], [0.4, 0.6])
+        )
+        assert len(out) == 3
+        assert applied == 1
+        # 後勝ち (新しい探索を残す)
+        assert out["resultValue"].to_list() == pytest.approx(
+            [1.0, 0.6, 1.0], abs=1e-6
+        )
+
+
+class TestMerge:
+    """`--resume` の蓄積で重複が生まれないことを固定する．"""
+
+    def test_appends_new_rows(self) -> None:
+        merged = _merge(
+            _values([1], [0.1]), _values([2], [0.2])
+        )
+        assert sorted(merged["id"].to_list()) == [1, 2]
+
+    def test_drops_duplicates_keeping_the_new_one(self) -> None:
+        merged = _merge(
+            _values([1], [0.1]), _values([1], [0.9])
+        )
+        assert len(merged) == 1
+        assert merged[
+            "searchWinRate"
+        ].to_list() == pytest.approx([0.9], abs=1e-6)
+
+    def test_empty_done_returns_fresh(self) -> None:
+        fresh = _values([5], [0.5])
+        assert _merge(
+            pl.DataFrame(schema=SEARCH_VALUE_SCHEMA), fresh
+        ).equals(fresh)
+
+
+class TestOverwriteGuard:
+    """既存の出力を黙って捨てないこと．
+
+    出力は数日分の GPU 時間そのものなので，`--resume` も `--overwrite` も
+    無いまま上書きさせない (修正前は 52 行が 5 行に上書きされた)．
+    """
+
+    def _option(
+        self, out: Path, **kw: object
+    ) -> SearchValueOption:
+        base: dict[str, object] = {
+            "input_path": out.parent,
+            "output_path": out,
+        }
+        base.update(kw)
+        return SearchValueOption(**base)  # type: ignore[arg-type]
+
+    def test_raises_when_output_exists(
+        self, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "sv.feather"
+        _values([1], [0.5]).write_ipc(out)
+        with pytest.raises(ValueError, match="already exists"):
+            SearchValueCollector().collect(self._option(out))
+
+    def test_resume_is_allowed(self, tmp_path: Path) -> None:
+        out = tmp_path / "sv.feather"
+        _values([1], [0.5]).write_ipc(out)
+        # 対象 HCPE が無いので探索は 0 件だが，ガードは通る
+        result = SearchValueCollector().collect(
+            self._option(out, resume=True)
+        )
+        assert result["searched"] == "0"
+
+    def test_overwrite_is_allowed(self, tmp_path: Path) -> None:
+        out = tmp_path / "sv.feather"
+        _values([1], [0.5]).write_ipc(out)
+        result = SearchValueCollector().collect(
+            self._option(out, overwrite=True)
+        )
+        assert result["searched"] == "0"
+
+    def test_resume_and_overwrite_are_mutually_exclusive(
+        self, tmp_path: Path
+    ) -> None:
+        """両方指定は暗黙に resume が勝つのでなくエラーにする．
+
+        実測では両方を付けると `--overwrite` が黙って無視され，
+        作り直したつもりの実行で古い値が残っていた．
+        """
+        out = tmp_path / "sv.feather"
+        _values([1], [0.5]).write_ipc(out)
+        with pytest.raises(
+            ValueError, match="mutually exclusive"
+        ):
+            SearchValueCollector().collect(
+                self._option(out, resume=True, overwrite=True)
+            )
+
+    def test_mutual_exclusion_applies_without_an_output(
+        self, tmp_path: Path
+    ) -> None:
+        # 出力の有無に関わらず矛盾した指定は受け付けない
+        with pytest.raises(
+            ValueError, match="mutually exclusive"
+        ):
+            SearchValueCollector().collect(
+                self._option(
+                    tmp_path / "sv.feather",
+                    resume=True,
+                    overwrite=True,
+                )
+            )
+
+    def test_no_guard_when_output_is_absent(
+        self, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "sv.feather"
+        result = SearchValueCollector().collect(
+            self._option(out)
+        )
+        assert result["searched"] == "0"
