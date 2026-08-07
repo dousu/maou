@@ -2,7 +2,7 @@
 title: search-values の蓄積を安全にし，探索値を training 側にだけ適用する方針を明記する
 date: 2026-08-07
 status: applied
-applied_in: TBD
+applied_in: 19fd0bd
 target:
   - docs/commands/utility_search_values.md
   - docs/design/training-quality/index.md
