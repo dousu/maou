@@ -90,10 +90,57 @@ from maou.infra.console.common import handle_exception
     help="Run the root parallel dfpn mate search.",
 )
 @click.option(
+    "--root-dfpn-nodes",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Node budget for the root dfpn search (Rust default: 2,000,000). "
+    "--min-ply 60 deliberately selects tactically dense positions, so mate "
+    "proving can dominate the wall time; lower this to find out.",
+)
+@click.option(
+    "--root-dfpn-depth",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Depth limit for the root dfpn search (Rust default).",
+)
+@click.option(
     "--leaf-mate/--no-leaf-mate",
     default=True,
     show_default=True,
     help="Run the short mate search at MCTS leaves.",
+)
+@click.option(
+    "--leaf-mate-nodes",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Node budget per leaf-mate call (Rust default: 50).",
+)
+@click.option(
+    "--leaf-mate-threads",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Dedicated leaf-mate threads (Rust default: 1).",
+)
+@click.option(
+    "--defensive-mate/--no-defensive-mate",
+    default=None,
+    help="Run the defensive mate search (root losing-move filter). It is "
+    "CPU-side work per position. Omit to keep the Rust default.",
+)
+@click.option(
+    "--defensive-mate-threads",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Parallelism of the root losing-move filter (Rust default).",
+)
+@click.option(
+    "--pad-buckets/--no-pad-buckets",
+    default=None,
+    help="Round TensorRT evaluation batches up to power-of-two buckets "
+    "instead of padding every batch to --batch-size. This workload runs one "
+    "cold search per position, so early playouts have few leaves and fixed "
+    "padding makes a 1-leaf batch cost a full --batch-size batch. Omit to "
+    "keep the Rust default (fixed padding).",
 )
 @click.option(
     "--cuda/--no-cuda",
@@ -151,7 +198,14 @@ def search_values(
     threads: int,
     batch_size: int,
     root_dfpn: bool,
+    root_dfpn_nodes: int | None,
+    root_dfpn_depth: int | None,
     leaf_mate: bool,
+    leaf_mate_nodes: int | None,
+    leaf_mate_threads: int | None,
+    defensive_mate: bool | None,
+    defensive_mate_threads: int | None,
+    pad_buckets: bool | None,
     cuda: bool,
     tensorrt: bool,
     trt_cache_dir: Path | None,
@@ -189,7 +243,14 @@ def search_values(
         threads=threads,
         batch_size=batch_size,
         root_dfpn=root_dfpn,
+        root_dfpn_nodes=root_dfpn_nodes,
+        root_dfpn_depth=root_dfpn_depth,
         leaf_mate=leaf_mate,
+        leaf_mate_nodes=leaf_mate_nodes,
+        leaf_mate_threads=leaf_mate_threads,
+        defensive_mate=defensive_mate,
+        defensive_mate_threads=defensive_mate_threads,
+        pad_buckets=pad_buckets,
         cuda=cuda,
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_cache_dir,

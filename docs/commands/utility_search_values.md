@@ -137,7 +137,14 @@ maou pre-process --input-path hcpe_val/ --output-dir pre_val/
 | `--threads INT` | `1` | 探索スレッド数． |
 | `--batch-size INT` | `8` | 評価バッチサイズ．GPU では 64 以上． |
 | `--root-dfpn / --no-root-dfpn` | `True` | ルート並行 dfpn 詰み探索． |
+| `--root-dfpn-nodes INT` | Rust 既定 (2,000,000) | ルート dfpn のノード予算．`--min-ply 60` は戦術的に濃い局面を狙って選ぶので，詰み探索が壁時計を支配しうる．下げて切り分ける． |
+| `--root-dfpn-depth INT` | Rust 既定 | ルート dfpn の深さ上限． |
 | `--leaf-mate / --no-leaf-mate` | `True` | MCTS の葉の短手詰み探索． |
+| `--leaf-mate-nodes INT` | Rust 既定 (50) | leaf-mate 1 回あたりのノード予算． |
+| `--leaf-mate-threads INT` | Rust 既定 (1) | leaf-mate 専用スレッド数． |
+| `--defensive-mate / --no-defensive-mate` | Rust 既定 | 受け方向の詰み探索 (root 敗着フィルタ)．**局面ごとの CPU 側の仕事**． |
+| `--defensive-mate-threads INT` | Rust 既定 | root 敗着フィルタの並列度． |
+| `--pad-buckets / --no-pad-buckets` | Rust 既定 (固定 padding) | TensorRT の評価バッチを `--batch-size` へ固定 padding せず 2 冪バケットへ切り上げる．**1 局面 1 探索で毎回 root から立ち上げるので序盤の葉は少なく，固定 padding だと 1 件の評価が `--batch-size` 件分のコストを払う**． |
 | `--cuda / --no-cuda` | `False` | CUDA Execution Provider (`onnx-cuda` 付き wheel が必要)． |
 | `--tensorrt / --no-tensorrt` | `False` | TensorRT Execution Provider (`onnx-tensorrt` 付き wheel が必要)． |
 | `--trt-cache-dir PATH` | optional | TensorRT エンジンキャッシュ保存先． |
@@ -168,15 +175,47 @@ Searching positions:  12%|█▏  | 122093/1000000 [2:41:07<19:19:02, 12.6pos/s,
 | `searchWinRate` | `Float32` | 手番側から見た探索の勝率 (0-1)．`resultValue` と同じ規約． |
 | `playouts` | `Int32` | 実際に消化した playout 数． |
 | `stop` | `String` | 探索の停止理由 (`playout_limit` / `root_proven` など)． |
+| `elapsedMs` | `Int32` | 1 局面あたりの探索時間 (ミリ秒)．**律速の切り分け用**．0.82.0 以前の出力には無く null になる． |
 
-## Cost
+## Cost (実測)
 
-L4 (10,257 playouts/s, batch 64, fp16 TRT+CUDA) で 800 playouts/局面なら
-**約 0.078 秒/局面**．木の再利用が効かない独立探索なので自己対局より
-1 局面あたりは割高だが，**必要な局面だけ選べる**．
+**公称 playouts/s からの割り算を根拠にしない．** 当初この節は
+「10,257 playouts/s ÷ 800 = 0.078 秒/局面 ⇒ 1M = 22 時間」と書いていたが，
+これは compass § TRIPWIRE「公称パラメータを信じない」に反しており，
+GPU によって 2.7 倍ずれる．
 
-| 局面数 | L4 時間 (800 playouts) | 同 (200 playouts) |
+| GPU | 実測 | 1 局面あたり |
 |---|---|---|
-| 100k | 2.2 時間 | 0.5 時間 |
-| 1M | 22 時間 | 5.4 時間 |
-| 19M (ply≥60 の全量) | 411 時間 | 103 時間 |
+| G4 | 1M = **22 時間** (Colab Pro の連続 24 時間に収まる) | 0.079 秒 |
+| L4 | 300k = **18 時間** | **0.216 秒** |
+
+**この用途は自己対局と違って木の再利用が効かず，毎回 root から探索を立ち上げる**
+ため，公称のスループットは出ない．
+
+## 律速の切り分け
+
+出力には `playouts` / `stop` / `elapsedMs` を記録しているので，
+**本番実行そのものが計測になる**．別途 A/B を組まなくても後から追える．
+
+```bash
+uv run python -c "
+import polars as pl
+d = pl.read_ipc('search_values.feather', memory_map=False)
+print(d.group_by('stop').len().sort('len', descending=True).to_dicts())
+print('playouts 中央値', d['playouts'].median(),
+      '/ 800 未満の割合', (d['playouts'] < 800).mean())
+print('elapsedMs 中央値', d['elapsedMs'].median())"
+```
+
+- `stop` が `root_proven` 中心 / `playouts` が 800 に届かない
+  → **時間は playout でなく詰み探索に行っている**．
+  `--root-dfpn-nodes` を下げる，`--no-defensive-mate` を試す
+- `playouts` が 800 に張り付いていて `elapsedMs` が大きい
+  → **評価バッチが埋まっていない可能性**．`--pad-buckets` /
+  `--threads` を上げる / `--batch-size` を下げるを試す
+
+いずれも**教師の質を変えうる**ので，速度だけで既定を決めない
+(詰みが証明された局面の探索値は 0/1 の真値になり教師として最良)．
+
+`elapsedMs` は 0.82.0 で追加した．**それ以前の出力には無いが，読み込み時に
+null で補われるので `--resume` はそのまま継続できる**．
