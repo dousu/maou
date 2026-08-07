@@ -25,7 +25,14 @@ def collect_search_values(
     threads: int = 1,
     batch_size: int = 8,
     root_dfpn: bool = True,
+    root_dfpn_nodes: int | None = None,
+    root_dfpn_depth: int | None = None,
     leaf_mate: bool = True,
+    leaf_mate_nodes: int | None = None,
+    leaf_mate_threads: int | None = None,
+    defensive_mate: bool | None = None,
+    defensive_mate_threads: int | None = None,
+    pad_buckets: bool | None = None,
     cuda: bool = False,
     tensorrt: bool = False,
     trt_engine_cache_dir: Path | None = None,
@@ -47,7 +54,14 @@ def collect_search_values(
         threads: 探索スレッド数．
         batch_size: 評価バッチサイズ．
         root_dfpn: ルート並行 dfpn 詰み探索を行うか．
+        root_dfpn_nodes: ルート dfpn のノード予算 (None で Rust 既定)．
+        root_dfpn_depth: ルート dfpn の深さ上限 (None で Rust 既定)．
         leaf_mate: 葉の短手詰み探索を行うか．
+        leaf_mate_nodes: leaf-mate 1 回あたりのノード予算 (None で Rust 既定)．
+        leaf_mate_threads: leaf-mate 専用スレッド数 (None で Rust 既定)．
+        defensive_mate: 受け方向の詰み探索 (None で Rust 既定)．
+        defensive_mate_threads: root 敗着フィルタの並列度 (None で Rust 既定)．
+        pad_buckets: TensorRT の padding を 2 冪バケットへ切り上げるか．
         cuda: CUDA Execution Provider を使うか．
         tensorrt: TensorRT Execution Provider を使うか．
         trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
@@ -83,7 +97,14 @@ def collect_search_values(
         threads=threads,
         batch_size=batch_size,
         root_dfpn=root_dfpn,
+        root_dfpn_nodes=root_dfpn_nodes,
+        root_dfpn_depth=root_dfpn_depth,
         leaf_mate=leaf_mate,
+        leaf_mate_nodes=leaf_mate_nodes,
+        leaf_mate_threads=leaf_mate_threads,
+        defensive_mate=defensive_mate,
+        defensive_mate_threads=defensive_mate_threads,
+        pad_buckets=pad_buckets,
         cuda=cuda,
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_engine_cache_dir,

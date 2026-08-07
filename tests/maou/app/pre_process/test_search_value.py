@@ -18,6 +18,7 @@ from maou.app.pre_process.search_value import (
     SearchValueOption,
     _merge,
     _ply_of,
+    _with_current_schema,
     apply_search_values,
     select_positions,
 )
@@ -133,6 +134,9 @@ def _values(
                 "stop",
                 ["playout_limit"] * len(ids),
                 dtype=pl.String,
+            ),
+            "elapsedMs": pl.Series(
+                "elapsedMs", [120] * len(ids), dtype=pl.Int32
             ),
         },
         schema=SEARCH_VALUE_SCHEMA,
@@ -312,3 +316,38 @@ class TestOverwriteGuard:
             self._option(out)
         )
         assert result["searched"] == "0"
+
+
+class TestOlderOutputFormat:
+    """0.82.0 より前の出力 (``elapsedMs`` 無し) を捨てさせない．
+
+    既に数十万件を貯めている実行があるので，列が増えたら読めなくなる，
+    では困る．欠けている列は null で補って `--resume` を続けられること．
+    """
+
+    def _old(self) -> pl.DataFrame:
+        return _values([1, 2], [0.4, 0.6]).drop("elapsedMs")
+
+    def test_backfills_missing_column(self) -> None:
+        out = _with_current_schema(self._old())
+        assert list(out.columns) == list(SEARCH_VALUE_SCHEMA)
+        assert out["elapsedMs"].null_count() == 2
+
+    def test_keeps_existing_values(self) -> None:
+        out = _with_current_schema(self._old())
+        assert out["id"].to_list() == [1, 2]
+        assert out["searchWinRate"].to_list() == pytest.approx(
+            [0.4, 0.6], abs=1e-6
+        )
+
+    def test_current_format_is_untouched(self) -> None:
+        cur = _values([1], [0.5])
+        assert _with_current_schema(cur).equals(cur)
+
+    def test_merges_with_new_rows(self) -> None:
+        merged = _merge(
+            _with_current_schema(self._old()),
+            _values([3], [0.7]),
+        )
+        assert sorted(merged["id"].to_list()) == [1, 2, 3]
+        assert merged["elapsedMs"].null_count() == 2

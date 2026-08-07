@@ -45,11 +45,18 @@ from tqdm.auto import tqdm
 logger: logging.Logger = logging.getLogger(__name__)
 
 #: 出力 feather のスキーマ．``id`` は前処理出力の ``id`` と同じ Zobrist hash．
+#:
+#: ``playouts`` / ``stop`` / ``elapsedMs`` は**律速の切り分け用**に持つ．
+#: 本番実行そのものが計測になるので，別途 A/B を組まなくても「時間が playout に
+#: 行っているのか詰み探索に行っているのか」を後から追える．
+#: ``elapsedMs`` は 0.82.0 で追加したため**古い出力には無い**
+#: (`_with_current_schema` が null で補う)．
 SEARCH_VALUE_SCHEMA: dict[str, pl.DataType] = {
     "id": pl.UInt64(),
     "searchWinRate": pl.Float32(),
     "playouts": pl.Int32(),
     "stop": pl.String(),
+    "elapsedMs": pl.Int32(),
 }
 
 
@@ -70,7 +77,17 @@ class SearchValueOption:
         threads: 探索スレッド数．
         batch_size: 評価バッチサイズ．GPU では 64 以上．
         root_dfpn: ルート並行 dfpn 詰み探索を行うか．
+        root_dfpn_nodes: ルート dfpn のノード予算 (None で Rust 既定 2,000,000)．
+        root_dfpn_depth: ルート dfpn の深さ上限 (None で Rust 既定)．
         leaf_mate: 葉の短手詰み探索を行うか．
+        leaf_mate_nodes: leaf-mate 1 回あたりのノード予算 (None で Rust 既定)．
+        leaf_mate_threads: leaf-mate 専用スレッド数 (None で Rust 既定)．
+        defensive_mate: 受け方向の詰み探索 (root 敗着フィルタ)．None で Rust 既定．
+        defensive_mate_threads: root 敗着フィルタの並列度 (None で Rust 既定)．
+        pad_buckets: TensorRT の padding を `batch_size` 固定でなく 2 冪バケットへ
+            切り上げる．**この用途は 1 局面 1 探索で毎回 root から立ち上げるので
+            葉が少なく，固定 padding だと 1 件の評価が `batch_size` 件分のコストを
+            払う**．None で Rust 既定 (固定 padding)．
         cuda: CUDA Execution Provider を使うか．
         tensorrt: TensorRT Execution Provider を使うか．
         trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
@@ -92,7 +109,14 @@ class SearchValueOption:
     threads: int = 1
     batch_size: int = 8
     root_dfpn: bool = True
+    root_dfpn_nodes: int | None = None
+    root_dfpn_depth: int | None = None
     leaf_mate: bool = True
+    leaf_mate_nodes: int | None = None
+    leaf_mate_threads: int | None = None
+    defensive_mate: bool | None = None
+    defensive_mate_threads: int | None = None
+    pad_buckets: bool | None = None
     cuda: bool = False
     tensorrt: bool = False
     trt_engine_cache_dir: Path | None = None
@@ -243,11 +267,43 @@ def apply_search_values(
     )
 
 
+def _with_current_schema(df: pl.DataFrame) -> pl.DataFrame:
+    """古い出力を現行スキーマへ揃える．
+
+    `elapsedMs` は 0.82.0 で追加した．**既に走っている実行の出力を捨てさせない**
+    ため，欠けている列は null で補って `--resume` を継続できるようにする．
+
+    Args:
+        df: 読み込んだ既存出力．
+
+    Returns:
+        `SEARCH_VALUE_SCHEMA` の列を揃えた DataFrame．
+    """
+    missing = [
+        c for c in SEARCH_VALUE_SCHEMA if c not in df.columns
+    ]
+    if missing:
+        logger.info(
+            "Backfilling %s from an older output format",
+            ", ".join(missing),
+        )
+        df = df.with_columns(
+            [
+                pl.lit(
+                    None, dtype=SEARCH_VALUE_SCHEMA[c]
+                ).alias(c)
+                for c in missing
+            ]
+        )
+    return df.select(list(SEARCH_VALUE_SCHEMA))
+
+
 def _frame(
     ids: list[int],
     win_rates: list[float],
     playouts: list[int],
     stops: list[str],
+    elapsed_ms: list[int],
 ) -> pl.DataFrame:
     """探索結果の列から `SEARCH_VALUE_SCHEMA` の DataFrame を作る．
 
@@ -256,6 +312,7 @@ def _frame(
         win_rates: 手番側から見た探索の勝率．
         playouts: 消化した playout 数．
         stops: 停止理由．
+        elapsed_ms: 1 局面あたりの探索時間 (ミリ秒)．
 
     Returns:
         `SEARCH_VALUE_SCHEMA` の DataFrame．
@@ -270,6 +327,9 @@ def _frame(
                 "playouts", playouts, dtype=pl.Int32
             ),
             "stop": pl.Series("stop", stops, dtype=pl.String),
+            "elapsedMs": pl.Series(
+                "elapsedMs", elapsed_ms, dtype=pl.Int32
+            ),
         },
         schema=SEARCH_VALUE_SCHEMA,
     )
@@ -327,8 +387,10 @@ class SearchValueCollector:
             既存の出力 (無ければ空の DataFrame)．
         """
         if option.resume and option.output_path.exists():
-            done = pl.read_ipc(
-                option.output_path, memory_map=False
+            done = _with_current_schema(
+                pl.read_ipc(
+                    option.output_path, memory_map=False
+                )
             )
             self.logger.info(
                 "Resuming: %d positions already searched",
@@ -511,6 +573,7 @@ class SearchValueCollector:
             batch_size=option.batch_size,
             use_cuda=option.cuda,
             use_tensorrt=option.tensorrt,
+            pad_buckets=option.pad_buckets,
             trt_engine_cache_dir=(
                 str(option.trt_engine_cache_dir)
                 if option.trt_engine_cache_dir
@@ -522,6 +585,7 @@ class SearchValueCollector:
         win_rates: list[float] = []
         playouts: list[int] = []
         stops: list[str] = []
+        elapsed: list[int] = []
         progress = tqdm(
             self._iter_targets(option, selected),
             total=len(selected),
@@ -535,36 +599,51 @@ class SearchValueCollector:
                 max_playouts=option.max_playouts,
                 time_ms=option.time_ms,
                 root_dfpn=option.root_dfpn,
+                root_dfpn_nodes=option.root_dfpn_nodes,
+                root_dfpn_depth=option.root_dfpn_depth,
                 leaf_mate=option.leaf_mate,
+                leaf_mate_nodes=option.leaf_mate_nodes,
+                leaf_mate_threads=option.leaf_mate_threads,
+                defensive_mate=option.defensive_mate,
+                defensive_mate_threads=option.defensive_mate_threads,
             )
             ids.append(hash_id)
             win_rates.append(float(result.winrate))
             playouts.append(int(result.playouts))
             stops.append(str(result.stop))
+            elapsed.append(int(result.elapsed_ms))
             # 途中経過を落とさない: 実運用では数十万局面を数日かけて回すので，
             # 最後にしか書かないと中断で全損する (--resume はここに依存する)
             if n % option.flush_interval == 0:
                 self._write(
                     _merge(
                         done,
-                        _frame(ids, win_rates, playouts, stops),
+                        _frame(
+                            ids,
+                            win_rates,
+                            playouts,
+                            stops,
+                            elapsed,
+                        ),
                     ),
                     option.output_path,
                     quiet=True,
                 )
                 progress.set_postfix(
                     mean_wr=f"{np.mean(win_rates):.3f}",
+                    ms=f"{np.mean(elapsed):.0f}",
                     flushed=n,
                 )
         progress.close()
 
-        fresh = _frame(ids, win_rates, playouts, stops)
+        fresh = _frame(ids, win_rates, playouts, stops, elapsed)
         merged = _merge(done, fresh)
         self._write(merged, option.output_path)
         return {
             "searched": str(len(fresh)),
             "total": str(len(merged)),
             "mean_win_rate": f"{np.mean(win_rates):.4f}",
+            "mean_elapsed_ms": f"{np.mean(elapsed):.0f}",
             "output": str(option.output_path),
         }
 
