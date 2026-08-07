@@ -2,7 +2,7 @@
 title: search-values のコスト表を実測へ訂正し，探索予算の knob を公開する
 date: 2026-08-07
 status: applied
-applied_in: TBD
+applied_in: 956d546
 target:
   - docs/commands/utility_search_values.md
 risk: low
