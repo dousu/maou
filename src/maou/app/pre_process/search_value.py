@@ -33,6 +33,7 @@ HCPE は局面のみを持ち指し手履歴を持たないため，SFEN へ復�
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,6 +75,8 @@ class SearchValueOption:
         tensorrt: TensorRT Execution Provider を使うか．
         trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
         resume: 出力が既にあるとき，未計算の局面だけを追加で探索する．
+        overwrite: 出力が既にあっても破棄して作り直す．``resume`` と
+            どちらも指定しなければ既存出力があるとエラーにする．
         flush_interval: 途中結果を書き出す局面数の間隔．中断しても
             ここまでの結果が残り ``resume`` で再開できる．
     """
@@ -94,21 +97,34 @@ class SearchValueOption:
     tensorrt: bool = False
     trt_engine_cache_dir: Path | None = None
     resume: bool = False
+    overwrite: bool = False
     flush_interval: int = 500
 
 
-def _hcpe_paths(input_path: Path) -> list[Path]:
+def _hcpe_paths(
+    input_path: Path, exclude: Path | None = None
+) -> list[Path]:
     """入力パス配下の HCPE feather を列挙する．
+
+    `exclude` は出力ファイルを想定している．出力を入力ディレクトリ配下へ
+    置く運用はあり得るが，それを HCPE として読むと `hcp` カラムが無くて落ちる．
 
     Args:
         input_path: ディレクトリまたは単一ファイル．
+        exclude: 列挙から外すパス (出力ファイル)．
 
     Returns:
         `.feather` のパス一覧 (安定した順序)．
     """
-    if input_path.is_file():
-        return [input_path]
-    return sorted(input_path.glob("**/*.feather"))
+    paths = (
+        [input_path]
+        if input_path.is_file()
+        else sorted(input_path.glob("**/*.feather"))
+    )
+    if exclude is None:
+        return paths
+    skipped = exclude.resolve()
+    return [p for p in paths if p.resolve() != skipped]
 
 
 def _ply_of(record_id: str) -> int:
@@ -181,20 +197,39 @@ def apply_search_values(
     `values` に無い局面はそのまま (対局結果由来の値) 残る．
     したがって floodgate の全局面を探索しなくても部分適用できる．
 
+    **`values` は id で一意化してから join する．** 左 join は右側に同じキーが
+    2 行あると左の行を複製するため，重複を許すと**前処理出力の行数が増えて
+    学習データが静かに壊れる**．行数不変はここで保証する．
+
     Args:
         df: 前処理出力の DataFrame (``id`` / ``resultValue`` が必要)．
         values: `SEARCH_VALUE_SCHEMA` の DataFrame．
 
     Returns:
         `(差し替え後の DataFrame, 差し替えた行数)`．
+
+    Raises:
+        RuntimeError: join で行数が変わった場合 (起こらないはずの保険)．
     """
     if values.is_empty():
         return df, 0
+    unique_values = values.unique(subset=["id"], keep="last")
+    if len(unique_values) != len(values):
+        logger.warning(
+            "search value file has %d duplicate id(s); keeping the last "
+            "occurrence of each",
+            len(values) - len(unique_values),
+        )
     joined = df.join(
-        values.select(["id", "searchWinRate"]),
+        unique_values.select(["id", "searchWinRate"]),
         on="id",
         how="left",
     )
+    if len(joined) != len(df):
+        raise RuntimeError(
+            f"join changed the row count ({len(df)} -> {len(joined)}); "
+            "the search value file is not unique by id"
+        )
     applied = int(joined["searchWinRate"].is_not_null().sum())
     return (
         joined.with_columns(
@@ -243,18 +278,32 @@ def _frame(
 def _merge(
     done: pl.DataFrame, fresh: pl.DataFrame
 ) -> pl.DataFrame:
-    """既存の結果と今回の結果を連結する．
+    """既存の結果と今回の結果を連結し，id で一意化する．
+
+    通常の経路では走査時に既探索の hash を除外しているので重複は出ない．
+    それでも一意化するのは，**重複した出力を前処理に渡すと行数が増えて
+    学習データが壊れる**ためで，ここが最後の防波堤になる
+    (手で結合したファイルなど経路外の入力もあり得る)．
 
     Args:
         done: 既存の結果 (resume 時のみ非空)．
         fresh: 今回探索した結果．
 
     Returns:
-        連結した DataFrame．
+        id で一意な DataFrame (重複時は後勝ち = 新しい探索を残す)．
     """
-    if done.is_empty():
-        return fresh
-    return pl.concat([done, fresh], how="vertical")
+    merged = (
+        fresh
+        if done.is_empty()
+        else pl.concat([done, fresh], how="vertical")
+    )
+    deduped = merged.unique(subset=["id"], keep="last")
+    if len(deduped) != len(merged):
+        logger.warning(
+            "dropped %d duplicate id(s) while merging search values",
+            len(merged) - len(deduped),
+        )
+    return deduped
 
 
 class SearchValueCollector:
@@ -328,7 +377,9 @@ class SearchValueCollector:
             昇順・重複なしの hash 配列 (`--max-positions` 適用後)．
         """
         done_ids = done["id"].to_numpy()
-        paths = _hcpe_paths(option.input_path)
+        paths = _hcpe_paths(
+            option.input_path, option.output_path
+        )
         chunks: list[np.ndarray] = []
         for path in tqdm(
             paths, desc="Scanning HCPE", unit="file"
@@ -378,7 +429,9 @@ class SearchValueCollector:
 
         emitted = np.zeros(len(selected), dtype=bool)
         board = PyBoard()
-        for path in _hcpe_paths(option.input_path):
+        for path in _hcpe_paths(
+            option.input_path, option.output_path
+        ):
             if emitted.all():
                 break
             _, hcp, hashes = self._read_hashes(path)
@@ -403,8 +456,33 @@ class SearchValueCollector:
 
         Returns:
             表示用の要約 dict．
+
+        Raises:
+            ValueError: `resume` と `overwrite` を同時に指定した場合，
+                または出力が既にあるのにどちらも指定されていない場合．
         """
         from maou._rust.maou_search import SearchEngine
+
+        if option.resume and option.overwrite:
+            # 「続きから」と「作り直し」は両立しない．暗黙の優先順位を持たせると
+            # 作り直したつもりで古い値が残る (実測で確認した)
+            raise ValueError(
+                "--resume and --overwrite are mutually exclusive. Use "
+                "--overwrite once to start a new run, then --resume for "
+                "every following run."
+            )
+
+        if (
+            option.output_path.exists()
+            and not option.resume
+            and not option.overwrite
+        ):
+            # 出力は数日分の GPU 時間そのものなので黙って捨てさせない
+            raise ValueError(
+                f"{option.output_path} already exists. Pass --resume to "
+                "continue accumulating into it (already-searched positions "
+                "are skipped), or --overwrite to discard it and start over."
+            )
 
         done = self._load_done(option)
         selected = self._scan_targets(option, done)
@@ -505,7 +583,11 @@ class SearchValueCollector:
             quiet: 途中フラッシュではログを出さない．
         """
         path.parent.mkdir(parents=True, exist_ok=True)
-        df.write_ipc(path, compression="lz4")
+        # 途中フラッシュはクラッシュと同時に起こりうる．直接書くと壊れた
+        # ファイルが残り，数日分の探索が resume 不能になる
+        tmp = path.with_name(path.name + ".tmp")
+        df.write_ipc(tmp, compression="lz4")
+        os.replace(tmp, path)
         if not quiet:
             self.logger.info(
                 "Wrote %d search values to %s", len(df), path

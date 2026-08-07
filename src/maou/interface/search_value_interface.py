@@ -30,6 +30,7 @@ def collect_search_values(
     tensorrt: bool = False,
     trt_engine_cache_dir: Path | None = None,
     resume: bool = False,
+    overwrite: bool = False,
     flush_interval: int = 500,
 ) -> dict[str, str]:
     """HCPE の局面を探索して value 教師を作る．
@@ -51,6 +52,7 @@ def collect_search_values(
         tensorrt: TensorRT Execution Provider を使うか．
         trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
         resume: 既存の出力にある局面を飛ばして続きから探索するか．
+        overwrite: 既存の出力を破棄して作り直すか．
         flush_interval: 途中結果を書き出す局面数の間隔．
 
     Returns:
@@ -86,6 +88,7 @@ def collect_search_values(
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_engine_cache_dir,
         resume=resume,
+        overwrite=overwrite,
         flush_interval=flush_interval,
     )
     return SearchValueCollector().collect(option)

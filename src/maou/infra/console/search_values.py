@@ -130,6 +130,14 @@ from maou.infra.console.common import handle_exception
     help="Skip positions already present in --output-path and append the "
     "rest. An interrupted run can simply be re-executed.",
 )
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    help="Discard an existing --output-path and start over. Without this "
+    "or --resume, an existing output is an error: it usually represents "
+    "days of GPU time.",
+)
 @handle_exception
 def search_values(
     input_path: Path,
@@ -148,6 +156,7 @@ def search_values(
     tensorrt: bool,
     trt_cache_dir: Path | None,
     resume: bool,
+    overwrite: bool,
     flush_interval: int,
 ) -> None:
     """Search floodgate positions to build per-position value targets.
@@ -185,6 +194,7 @@ def search_values(
         tensorrt=tensorrt,
         trt_engine_cache_dir=trt_cache_dir,
         resume=resume,
+        overwrite=overwrite,
         flush_interval=flush_interval,
     )
     click.echo(result)
