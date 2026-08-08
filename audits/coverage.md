@@ -11,7 +11,7 @@ always current where a checked-in list would not be.
 | Path | Scope | Status | Level | Last SHA | Record | Open items |
 |---|---|---|---|---|---|---|
 | `src/maou/domain/game_graph` | python | done | high | `2686689` | [2026-08-08](2026-08-08-src-maou-domain-game-graph.md) | 2 deferred, 5 out-of-scope |
-| `src/maou/app/learning` | python | done | high | `fa0701e` | [2026-08-08](2026-08-08-src-maou-app-learning.md) | 12 deferred, 4 out-of-scope, 1 reviews pending |
+| `src/maou/app/learning` | python | done | high | `5b61444` | [2026-08-08](2026-08-08-src-maou-app-learning.md) | 12 deferred, 4 out-of-scope |
 
 ## Blocked
 

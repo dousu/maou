@@ -4,7 +4,7 @@ scope: python
 level: high
 status: done
 started: 2026-08-08
-last_sha: fa0701e
+last_sha: 5b61444
 ---
 
 # Audit — src/maou/app/learning
@@ -258,8 +258,9 @@ to average sizes; `setup.py:713-726`/`750-765` restate defaults that
 ## Doc findings
 
 Filed as `reviews/2026-08-08-learning-docs-drift.md` (`fa0701e`) —
-**9 WRONG / 5 STALE**, `status: pending`, awaiting the user's
-approve/reject/defer. Highest-impact:
+**9 WRONG / 5 STALE**. **Approved by the user and applied in `5b61444`**
+(10 files); proposal frontmatter set to `status: applied`.
+Highest-impact:
 
 - **WRONG** `docs/performance.md:35-43` — a "GPU Prefetching
   (Auto-Enabled)" section documenting `enable_gpu_prefetch=True` with
