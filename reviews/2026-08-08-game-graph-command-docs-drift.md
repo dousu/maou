@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 2686689
 date: 2026-08-08
 target: [docs/commands/build_game_graph.md, docs/commands/visualize.md]
 risk: low
