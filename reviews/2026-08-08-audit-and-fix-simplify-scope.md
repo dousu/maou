@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in: ""
+applied_in: 5a2c0b0
 date: 2026-08-08
 target:
   - .claude/commands/audit-and-fix.md
