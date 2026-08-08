@@ -605,36 +605,10 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_forward_pass_end(context)
 
-        # Check loss finitude periodically to reduce GPU sync points
-        if (
-            context.batch_idx % self._finitude_check_interval
-            == 0
+        if self._abort_on_nonfinite_loss(
+            context, policy_loss, value_loss
         ):
-            loss_is_finite = torch.isfinite(context.loss)
-            if not bool(loss_is_finite.item()):
-                policy_loss_is_finite = torch.isfinite(
-                    policy_loss
-                )
-                value_loss_is_finite = torch.isfinite(
-                    value_loss
-                )
-                self.logger.warning(
-                    "Non-finite loss detected (epoch=%d, batch=%d): loss=%s "
-                    "policy_loss=%s (finite=%s) value_loss=%s (finite=%s)",
-                    context.epoch_idx,
-                    context.batch_idx,
-                    context.loss.detach(),
-                    policy_loss.detach(),
-                    bool(policy_loss_is_finite.item()),
-                    value_loss.detach(),
-                    bool(value_loss_is_finite.item()),
-                )
-                self.optimizer.zero_grad(set_to_none=True)
-                # GNS estimator をリセット: backward() がスキップされるため
-                # on_backward_end() と compute() が呼ばれず stale データが残る
-                if self._gns_estimator is not None:
-                    self._gns_estimator.reset_cycle()
-                return True
+            return True
 
         # 逆伝播
         for callback in self.callbacks:
@@ -705,6 +679,64 @@ class TrainingLoop:
                 callback.on_optimizer_step_end(context)
 
         return False
+
+    def _abort_on_nonfinite_loss(
+        self,
+        context: TrainingContext,
+        policy_loss: torch.Tensor,
+        value_loss: torch.Tensor,
+    ) -> bool:
+        """損失が非有限ならバッチを破棄すべきか判定する．
+
+        mixed precision 経路と full precision 経路の両方から呼ばれる．
+        以前は 29 行が両経路に逐語コピーされており，数値安定性の
+        セーフティネットでありながら，片方だけ強化して他方が
+        取り残される形になっていた．
+
+        ``.item()`` は GPU 同期を伴うため，``_finitude_check_interval``
+        バッチに 1 回だけ検査する．
+
+        Args:
+            context: 損失が設定済みの学習コンテキスト
+            policy_loss: 方策損失 (診断ログ用)
+            value_loss: 価値損失 (診断ログ用)
+
+        Returns:
+            非有限を検知し勾配を破棄した場合 True．
+            検査間隔外，または損失が有限なら False．
+        """
+        if (
+            context.batch_idx % self._finitude_check_interval
+            != 0
+        ):
+            return False
+        if context.loss is None:
+            # 呼び出し元が直後に RuntimeError を送出する
+            return False
+
+        loss_is_finite = torch.isfinite(context.loss)
+        if bool(loss_is_finite.item()):
+            return False
+
+        policy_loss_is_finite = torch.isfinite(policy_loss)
+        value_loss_is_finite = torch.isfinite(value_loss)
+        self.logger.warning(
+            "Non-finite loss detected (epoch=%d, batch=%d): loss=%s "
+            "policy_loss=%s (finite=%s) value_loss=%s (finite=%s)",
+            context.epoch_idx,
+            context.batch_idx,
+            context.loss.detach(),
+            policy_loss.detach(),
+            bool(policy_loss_is_finite.item()),
+            value_loss.detach(),
+            bool(value_loss_is_finite.item()),
+        )
+        self.optimizer.zero_grad(set_to_none=True)
+        # GNS estimator をリセット: backward() がスキップされるため
+        # on_backward_end() と compute() が呼ばれず stale データが残る
+        if self._gns_estimator is not None:
+            self._gns_estimator.reset_cycle()
+        return True
 
     @staticmethod
     def _record_stream(
@@ -862,35 +894,10 @@ class TrainingLoop:
         for callback in self.callbacks:
             callback.on_loss_computation_end(context)
 
-        # Check loss finitude periodically to reduce GPU sync points
-        if (
-            context.batch_idx % self._finitude_check_interval
-            == 0
+        if self._abort_on_nonfinite_loss(
+            context, policy_loss, value_loss
         ):
-            loss_is_finite = torch.isfinite(context.loss)
-            if not bool(loss_is_finite.item()):
-                policy_loss_is_finite = torch.isfinite(
-                    policy_loss
-                )
-                value_loss_is_finite = torch.isfinite(
-                    value_loss
-                )
-                self.logger.warning(
-                    "Non-finite loss detected (epoch=%d, batch=%d): loss=%s "
-                    "policy_loss=%s (finite=%s) value_loss=%s (finite=%s)",
-                    context.epoch_idx,
-                    context.batch_idx,
-                    context.loss.detach(),
-                    policy_loss.detach(),
-                    bool(policy_loss_is_finite.item()),
-                    value_loss.detach(),
-                    bool(value_loss_is_finite.item()),
-                )
-                self.optimizer.zero_grad(set_to_none=True)
-                # GNS estimator をリセット(mixed precision パスと同様)
-                if self._gns_estimator is not None:
-                    self._gns_estimator.reset_cycle()
-                return True
+            return True
 
         # 逆伝播
         for callback in self.callbacks:
