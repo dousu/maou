@@ -353,23 +353,48 @@ on this path requires `python -m maturin develop --release` first
 (**24m34s** in this container; a `patchelf` rpath warning is harmless).
 
 The git pre-commit hook is **not installed** (`.git/hooks/pre-commit`
-absent); hooks were run manually via `pre-commit run --files`. Results:
+absent); hooks were run manually via `pre-commit run --files`.
+
+**During the run**, `uv-lock`, `test`, `mypy`, `ruff-check` and
+`ruff-format` all **failed** for one shared environment reason — they
+are `uv run`-based, and `uv run` re-resolves the project, which pulls
+`maou[tensorrt-infer]` → `tensorrt-cu12-libs` from `pypi.nvidia.com`,
+then blocked by the agent proxy (`403 to CONNECT`). Only
 `trim trailing whitespace`, `fix end of files`, `check toml`,
-`check for added large files`, **`check-cli-docs`** passed;
-`uv-lock`, `test`, `mypy`, `ruff-check`, `ruff-format` **failed**, all
-for the same environment reason — they are `uv run`-based, and `uv run`
-re-resolves the project, which pulls `maou[tensorrt-infer]` →
-`tensorrt-cu12-libs` from `pypi.nvidia.com`, unreachable here. The same
-tools run directly against `.venv` all pass:
+`check for added large files` and **`check-cli-docs`** could run.
+QA was therefore done by invoking the same tools directly against
+`.venv`, which all passed (ruff format/check clean, mypy 284 files
+clean, `pytest tests/maou/app/learning` 477 passed / 1 skipped).
 
-- `ruff format src/ tests/`: 285 files already formatted
-- `ruff check src/ tests/`: all checks passed
-- `mypy src/ tests/`: no issues in 284 source files
-- `pytest tests/maou/app/learning`: **476 passed, 1 skipped**
+**Resolved after the run.** `pypi.nvidia.com` was allowed through the
+proxy and the whole hook set was re-run against every file this branch
+changed. **All 12 hooks pass**, including the five that had been
+blocked:
 
-A stale `.mypy_cache` produced a spurious
-`AssertionError: Cannot find module for google`; `rm -rf .mypy_cache`
-cleared it.
+| Hook | During run | After allow |
+|---|---|---|
+| `uv-lock` | Failed | **Passed** |
+| `test` | Failed | **Passed** — 1716 passed, 54 skipped (full suite, not just this path) |
+| `mypy` | Failed | **Passed** |
+| `ruff-check` / `ruff-format` | Failed | **Passed** |
+
+So the QA claims above are no longer resting on hand-run substitutes —
+they are confirmed under the project's own toolchain, and against the
+**full** test suite rather than the `tests/maou/app/learning` subset.
+
+Two flakes worth knowing about for the next run:
+
+- The first post-allow `test` invocation failed on
+  `tests/maou/infra/console/test_usi_cli.py::test_usi_go_mate_e2e`
+  (`go mate 5000` returned `checkmate timeout` instead of `G*5b`); it
+  passed on re-run. It is a wall-clock-budgeted dfpn e2e test and the
+  machine was still loaded from the ~1GB tensorrt install. Unrelated to
+  `src/maou/app/learning`. Compare CLAUDE.md §"重いテスト (Rust dfpn)":
+  dfpn is ~6× slower in a debug build, so a time-budgeted mate test is
+  the first thing to fail under load.
+- A stale `.mypy_cache` produced a spurious
+  `AssertionError: Cannot find module for google`; `rm -rf .mypy_cache`
+  cleared it.
 
 **Step 2 note.** The first attempt at the simplify pass lost all four
 review agents to an API session limit and produced nothing; it was
