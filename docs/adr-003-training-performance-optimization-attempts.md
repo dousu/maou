@@ -432,7 +432,7 @@ This ADR serves as a comprehensive record of:
 
 - **Baseline Investigation**: `docs/TRAINING_INVESTIGATION_REPORT.md`
 - **DataLoader Optimization History**: `docs/adr-001-dataloader-multiprocessing-optimization.md`
-- **GPU Prefetching Implementation**: `src/maou/app/learning/gpu_prefetcher.py`
+- **GPU Prefetching Implementation**: `src/maou/app/learning/gpu_prefetcher.py` (削除済み — 本 ADR 記述時点の実装)
 - **Benchmark Tool**: `src/maou/app/utility/training_benchmark.py`
 - **Training Loop**: `src/maou/app/learning/training_loop.py`
 - **File Data Source**: `src/maou/infra/file_system/file_data_source.py`

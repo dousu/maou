@@ -124,12 +124,13 @@ class SystemResourceMonitor:
                 self._memory_max_percent = max(
                     self._memory_max_percent, memory.percent
                 )
-
-                time.sleep(self.monitoring_interval)
             except Exception as e:
                 self.logger.error(
                     f"Error during system resource monitoring: {e}"
                 )
+
+            # sleep は try の外に置く (GPUResourceMonitor と同じ理由)．
+            time.sleep(self.monitoring_interval)
 
     def _reset_statistics(self) -> None:
         """統計情報をリセットする．"""
@@ -308,12 +309,15 @@ class GPUResourceMonitor:
                     self._gpu_memory_max_percent,
                     gpu_memory_percent,
                 )
-
-                time.sleep(self.monitoring_interval)
             except Exception as e:
                 self.logger.error(
                     f"Error during GPU resource monitoring: {e}"
                 )
+
+            # sleep は try の外に置く．中に置くと，サンプリングが継続的に
+            # 失敗した際にスリープを飛ばしてループが全速で回り，
+            # CPU を焼きながらログを溢れさせる．
+            time.sleep(self.monitoring_interval)
 
     def _reset_statistics(self) -> None:
         """GPU統計情報をリセットする．"""

@@ -849,13 +849,6 @@ class ValidationCallback(BaseCallback):
         return f1
 
 
-@dataclass(frozen=True)
-class TimingData:
-    """Timing data for a single measurement."""
-
-    value: float
-
-
 class TimingCallback(BaseCallback):
     """Callback for timing training operations."""
 
@@ -941,14 +934,24 @@ class TimingCallback(BaseCallback):
     def on_forward_pass_end(
         self, context: TrainingContext
     ) -> None:
-        total_forward_time = (
-            time.perf_counter()
-            - self._temp_timings["forward_start"]
-        )
+        forward_start = self._temp_timings["forward_start"]
+        total_forward_time = time.perf_counter() - forward_start
         # 純粋なモデル順伝播時間 = 全体時間 - 損失計算時間
+        #
+        # 損失計算を順伝播区間の内側で行う経路 (AMP) と，外側で
+        # 順伝播終了後に行う経路 (full precision) の両方がある．
+        # 後者で無条件に減算すると「前バッチの」損失計算時間を
+        # 引いてしまい，負値になり得る．今回の順伝播が始まった後に
+        # 計測された損失時間のみを減算する．
+        loss_start = self._temp_timings.get("loss_start")
+        loss_time = (
+            self._temp_timings.get("loss_computation", 0.0)
+            if loss_start is not None
+            and loss_start >= forward_start
+            else 0.0
+        )
         self._temp_timings["forward_pass"] = (
-            total_forward_time
-            - self._temp_timings.get("loss_computation", 0.0)
+            total_forward_time - loss_time
         )
 
     def on_loss_computation_start(

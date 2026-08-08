@@ -355,9 +355,30 @@ class TruncatedStageModel(torch.nn.Module):
         input_channels: int,
         board_size: tuple[int, int],
     ) -> int:
-        """ダミー入力を通して partial backbone の出力チャンネル数を推定する．"""
+        """ダミー入力を通して partial backbone の出力チャンネル数を推定する．
+
+        ``partial`` は既にデバイスへ移動済みの backbone から切り出される
+        (StageComponentFactory は ``backbone.to(device)`` 済みのものを渡す)
+        ため，ダミー入力も同じデバイス・dtype で生成する．CPU 固定で
+        生成すると resnet + ``--trainable-layers`` + ``--gpu`` の組み合わせが
+        モデル構築時点で RuntimeError になる．
+        """
+        try:
+            ref = next(partial.parameters())
+            device = ref.device
+            dtype = ref.dtype
+        except StopIteration:
+            # パラメータを持たない partial (n_use=0 等) は CPU で評価する
+            device = torch.device("cpu")
+            dtype = torch.float32
         with torch.no_grad():
-            dummy = torch.zeros(1, input_channels, *board_size)
+            dummy = torch.zeros(
+                1,
+                input_channels,
+                *board_size,
+                device=device,
+                dtype=dtype,
+            )
             out = partial(dummy)
         return int(out.shape[1])
 

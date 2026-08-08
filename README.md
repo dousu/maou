@@ -182,37 +182,16 @@ uv run maou learn-model --detect-anomaly [...他の引数]
 uv run maou utility benchmark-training --detect-anomaly [...他の引数]
 ```
 
-## TensorBoardヒストグラムの制御
+## TensorBoardへの出力
 
-学習ループではデフォルトで損失や正解率などのスカラー値のみをTensorBoardに
-書き出すため，ログファイルは比較的軽量で扱えます。パラメータ／勾配の分布を
-追跡したい場合は `--tensorboard-histogram-frequency` を設定することで，指定した
-エポック間隔ごとにヒストグラムを追加できます。0を指定するとヒストグラム記録は
-無効化されたままです（従来のスカラー指標は常に出力されます）。
+学習ループはTensorBoardにスカラー指標のみを書き出します。パラメータ／勾配の
+ヒストグラム出力を制御していた `--tensorboard-histogram-frequency` と
+`--tensorboard-histogram-module` は2026-08-04に削除されました。
 
-特定モジュールだけを記録したい場合は `--tensorboard-histogram-module` を複数回
-指定してグロブパターン（例: `backbone.*`, `head.value*`）を登録してください。
+## Preprocessingデータの読み込み方式
 
-```bash
-uv run maou learn-model \
-  --tensorboard-histogram-frequency 5 \
-  --tensorboard-histogram-module "backbone.*" \
-  --tensorboard-histogram-module "head.*" \
-  [...他の引数]
-```
-
-フィルタを指定しない場合は全パラメータ／勾配を記録します。ヒストグラム無効時も
-学習率や検証指標などのスカラー値は引き続き記録されるため，既存のTensorBoard
-ダッシュボードはそのまま利用できます。
-
-## Preprocessingデータのメモリマップ方式
-
-前処理済みの`.npy`ファイルはデフォルトでコピーオンライト(`mmap_mode="c"`)
-としてメモリマップされます。これにより`numpy.memmap`が
-`writeable=True`のまま保持され、`torch.from_numpy()`によるゼロコピー変換が
-可能になります。ファイルを汚染することなくテンソルから値を更新できるため、
-訓練用データセットをGPUへ転送する際のコピーを削減できます。
-
-ファイルシステム／オブジェクトストレージ／BigQueryの各データソースには
-`preprocessing_mmap_mode`引数を追加しており、必要に応じてコピーオンライト以外の
-モードへ切り替えることもできます。
+前処理済みデータは Arrow IPC (`.feather`) が既定で、読み込み方式は
+`--input-cache-mode {file,memory}` で選びます (`mmap` は deprecated で、
+内部的に `file` に変換されます)。`KifDataset` は `torch.from_numpy()` で
+ゼロコピー変換するため、read-only 配列を渡すと `ValueError` になります
+(`src/maou/app/learning/dataset.py:186-198`)。

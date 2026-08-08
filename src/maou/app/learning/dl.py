@@ -1215,10 +1215,15 @@ class Learning:
         )
 
         # Also freeze _hand_projection (Network-level attribute)
-        if hasattr(self.model, "_hand_projection"):
-            for (
-                param
-            ) in self.model._hand_projection.parameters():
+        #
+        # hand_projection_dim <= 0 のとき Network は属性そのものを
+        # None で定義するため，hasattr は常に True になり
+        # None.parameters() で AttributeError になっていた．
+        hand_projection = getattr(
+            self.model, "_hand_projection", None
+        )
+        if hand_projection is not None:
+            for param in hand_projection.parameters():
                 param.requires_grad = False
                 frozen_count += 1
 
