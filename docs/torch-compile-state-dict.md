@@ -18,7 +18,7 @@ compiled.state_dict()  # {"_orig_mod.backbone.layer.weight": ...}
 `torch.compile()` は `OptimizedModule` でラップし，元モジュールを `_orig_mod` 属性として保持する．
 パラメータ自体は同一オブジェクトを共有しており，学習時の勾配更新は元モジュールにも反映される．
 
-## 現在の対応状況 (v0.5.5)
+## 現在の対応状況
 
 ### ユーティリティ
 

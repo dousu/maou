@@ -10,7 +10,7 @@
 - The interface (`maou.interface.learn`) converts the parsed flags into a
   `Learning.LearningOption`, instantiates the requested datasource, and then
   hands control to the `Learning` app layer, which prepares DataLoaders, models,
-  optimizers, checkpoints, and optional cloud uploads.【F:src/maou/interface/learn.py†L101-L266】【F:src/maou/app/learning/dl.py†L94-L209】
+  optimizers, checkpoints, and optional cloud uploads.【F:src/maou/interface/learn.py†L101-L266】
 
 ## CLI options
 
@@ -132,11 +132,11 @@ missing and continues with local-only writes.【F:src/maou/infra/console/learn_m
 3. **Training setup** – The app-layer `Learning` object prepares DataLoaders,
    networks (`BACKBONE_ARCHITECTURES`), optimizers, schedulers, and callbacks
    (TensorBoard, checkpointing, optional cloud uploads) via
-   `TrainingSetup.setup_training_components`.【F:src/maou/app/learning/dl.py†L94-L209】
+   `TrainingSetup.setup_training_components`.【F:src/maou/app/learning/setup.py†L1083-L1190】
 4. **Execution and persistence** – `TrainingLoop` drives the epochs, writes
    TensorBoard runs under `log_dir`, saves PyTorch/ONNX checkpoints in
    `model_dir`, and mirrors artifacts to the configured cloud storage when
-   enabled.【F:src/maou/app/learning/dl.py†L94-L209】【F:src/maou/app/learning/model_io.py†L1-L86】
+   enabled.【F:src/maou/app/learning/model_io.py†L1-L86】
 
 ## Validation and guardrails
 
@@ -157,7 +157,7 @@ missing and continues with local-only writes.【F:src/maou/infra/console/learn_m
 
 - Training produces TensorBoard logs under `log_dir/<arch>_training_log_*`, best
   checkpoints and ONNX exports inside `model_dir`, and optional mirrors in the
-  configured cloud bucket via `CloudStorage`.【F:src/maou/app/learning/dl.py†L94-L209】【F:src/maou/app/learning/model_io.py†L1-L86】
+  configured cloud bucket via `CloudStorage`.【F:src/maou/app/learning/model_io.py†L1-L86】
 - The CLI prints progress and returns once the requested epochs complete; any
   warnings about datasources or uploads surface before the training loop starts.
 - Pair this command with `maou utility benchmark-dataloader` or
@@ -182,7 +182,7 @@ uv run maou learn-model \
 - Interface normalization helpers and scheduler/optimizer guards –
   `src/maou/interface/learn.py`.【F:src/maou/interface/learn.py†L12-L266】
 - Training setup, checkpoints, and logging –
-  `src/maou/app/learning/dl.py`, `src/maou/app/learning/model_io.py`.【F:src/maou/app/learning/dl.py†L94-L209】【F:src/maou/app/learning/model_io.py†L1-L86】
+  `src/maou/app/learning/dl.py`, `src/maou/app/learning/model_io.py`.【F:src/maou/app/learning/model_io.py†L1-L86】
 
 ## 変更履歴
 

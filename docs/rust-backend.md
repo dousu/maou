@@ -731,7 +731,9 @@ dataloader = DataLoader(
 # Training loop works identically
 for features, targets in dataloader:
     board, pieces = features
-    move_label, result_value, legal_move_mask = targets
+    # moveWinRate 列があれば 4 要素 (旧データでは 3 要素)
+    move_label, result_value, legal_move_mask, *rest = targets
+    move_win_rate = rest[0] if rest else None
     # ... training code ...
 ```
 

@@ -91,7 +91,7 @@ Focal Lossではγが正例/負例共通であるため，この独立制御が�
 - `--stage2-test-ratio=0.1` (推奨): 10%を検証用に確保
 - 閾値判定: 検証分割が有効な場合，`--stage2-threshold` は検証F1で判定される
 
-**注意**: ストリーミングモード(`--streaming`)では検証分割は非対応(警告ログを出力)．
+**注意**: ストリーミングモード(既定．`--no-streaming` で無効化)では検証分割は非対応(警告ログを出力)．
 
 ### パラメータ探索の推奨手順
 
@@ -201,8 +201,12 @@ raw 1496次元の `topk` / `argmax` で計算しているため，上表のと�
 ### Clean Architecture
 
 損失関数はすべてdomain層(`src/maou/domain/loss/loss_fn.py`)に配置する．
-損失関数の選択とパラメータ設定はinterface層(`src/maou/interface/learn.py`)で行い，
-CLIオプションはinfra層(`src/maou/infra/console/learn_model.py`)で定義する．
+損失関数の選択とパラメータ設定はapp層で行う (Stage 1/2 は
+`src/maou/app/learning/stage_component_factory.py`，Stage 3 は
+`LossOptimizerFactory.create_loss_functions` in
+`src/maou/app/learning/setup.py`)．CLIオプションはinfra層
+(`src/maou/infra/console/learn_model.py`)で定義し，interface層
+(`src/maou/interface/learn.py`)は値の検証・正規化のみを担う．
 
 依存フロー: `infra → interface → app → domain`
 
