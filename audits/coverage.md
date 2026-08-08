@@ -10,7 +10,7 @@ always current where a checked-in list would not be.
 
 | Path | Scope | Status | Level | Last SHA | Record | Open items |
 |---|---|---|---|---|---|---|
-| _(none yet)_ | | | | | | |
+| `src/maou/domain/game_graph` | python | in-progress | high | `d8ab488` | [2026-08-08](2026-08-08-src-maou-domain-game-graph.md) | — |
 
 ## Blocked
 
