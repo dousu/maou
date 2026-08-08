@@ -43,6 +43,12 @@ class PolarsDataFrameSource:
         self.dataframe = dataframe
         self.array_type = array_type
         self._length = len(dataframe)
+        # 列名 → タプル位置の対応を一度だけ作る．位置を直接
+        # 埋め込むと，スキーマに列が増減した時点で黙って別の列を
+        # 読むようになる (実際 preprocessing で発生していた)．
+        self._col_idx: dict[str, int] = {
+            name: i for i, name in enumerate(dataframe.columns)
+        }
 
         logger.info(
             f"PolarsDataFrameSource initialized: {self._length} samples, "
@@ -51,6 +57,40 @@ class PolarsDataFrameSource:
 
     def __len__(self) -> int:
         return self._length
+
+    def _row_by_names(
+        self,
+        row_tuple: tuple[Any, ...],
+        *,
+        required: tuple[str, ...],
+        optional: tuple[str, ...] = (),
+    ) -> _PolarsRow:
+        """列名で行タプルから必要なフィールドだけを取り出す．
+
+        Args:
+            row_tuple: ``DataFrame.row(idx)`` が返す位置つきタプル
+            required: 必須列名．欠けていれば ``KeyError``
+            optional: 存在すれば含める列名
+
+        Returns:
+            _PolarsRow: numpy構造化配列風のアクセスを提供するラッパー
+
+        Raises:
+            KeyError: 必須列がDataFrameに存在しない場合
+        """
+        data: dict[str, Any] = {}
+        for name in required:
+            if name not in self._col_idx:
+                raise KeyError(
+                    f"DataFrame for array_type={self.array_type!r} "
+                    f"lacks required column {name!r}; "
+                    f"got {list(self._col_idx)}"
+                )
+            data[name] = row_tuple[self._col_idx[name]]
+        for name in optional:
+            if name in self._col_idx:
+                data[name] = row_tuple[self._col_idx[name]]
+        return _PolarsRow(data)
 
     def __getitem__(self, idx: int) -> _PolarsRow:
         """Get a single row as numpy-compatible format．
@@ -93,37 +133,43 @@ class PolarsDataFrameSource:
             )
 
         elif self.array_type == "preprocessing":
-            # Preprocessing schema: id, boardIdPositions, piecesInHand, moveLabel, resultValue
-            return _PolarsRow(
-                {
-                    "id": row_tuple[0],
-                    "boardIdPositions": row_tuple[1],
-                    "piecesInHand": row_tuple[2],
-                    "moveLabel": row_tuple[3],
-                    "resultValue": row_tuple[4],
-                }
+            # get_preprocessing_polars_schema() を参照．moveWinRate /
+            # bestMoveWinRate は任意で，存在すれば KifDataset の
+            # 4要素タプル経路が有効になる．
+            return self._row_by_names(
+                row_tuple,
+                required=(
+                    "id",
+                    "boardIdPositions",
+                    "piecesInHand",
+                    "moveLabel",
+                    "resultValue",
+                ),
+                optional=("moveWinRate", "bestMoveWinRate"),
             )
 
         elif self.array_type == "stage1":
-            # Stage1 schema: id, boardIdPositions, piecesInHand, reachableSquares
-            return _PolarsRow(
-                {
-                    "id": row_tuple[0],
-                    "boardIdPositions": row_tuple[1],
-                    "piecesInHand": row_tuple[2],
-                    "reachableSquares": row_tuple[3],
-                }
+            # get_stage1_polars_schema() を参照．
+            return self._row_by_names(
+                row_tuple,
+                required=(
+                    "id",
+                    "boardIdPositions",
+                    "piecesInHand",
+                    "reachableSquares",
+                ),
             )
 
         elif self.array_type == "stage2":
-            # Stage2 schema: id, boardIdPositions, piecesInHand, legalMovesLabel
-            return _PolarsRow(
-                {
-                    "id": row_tuple[0],
-                    "boardIdPositions": row_tuple[1],
-                    "piecesInHand": row_tuple[2],
-                    "legalMovesLabel": row_tuple[3],
-                }
+            # get_stage2_polars_schema() を参照．
+            return self._row_by_names(
+                row_tuple,
+                required=(
+                    "id",
+                    "boardIdPositions",
+                    "piecesInHand",
+                    "legalMovesLabel",
+                ),
             )
 
         else:

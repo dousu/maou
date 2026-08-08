@@ -169,6 +169,35 @@ class ModelIO:
         )
 
     @staticmethod
+    def _load_component(
+        file_path: Path,
+        device: torch.device,
+        *,
+        label: str,
+    ) -> dict[str, torch.Tensor]:
+        """コンポーネントの state_dict をファイルから読み込む．
+
+        5 つの公開ローダはログ文言以外が同一だったため，読み込み
+        セマンティクス (``weights_only``，``map_location``，
+        ``_orig_mod.`` プレフィックス除去) をここ 1 箇所に集約する．
+
+        Args:
+            file_path: パラメータファイルのパス
+            device: パラメータを載せるデバイス
+            label: ログに出すコンポーネント名
+
+        Returns:
+            プレフィックス除去済みの state_dict
+        """
+        logger.info(
+            f"Loading {label} parameters from {file_path}"
+        )
+        state_dict: dict[str, torch.Tensor] = torch.load(
+            file_path, weights_only=True, map_location=device
+        )
+        return ModelIO._strip_orig_mod_prefix(state_dict)
+
+    @staticmethod
     def load_backbone(
         file_path: Path, device: torch.device
     ) -> dict[str, torch.Tensor]:
@@ -181,13 +210,9 @@ class ModelIO:
         Returns:
             Backbone state_dict
         """
-        logger.info(
-            f"Loading backbone parameters from {file_path}"
+        return ModelIO._load_component(
+            file_path, device, label="backbone"
         )
-        state_dict: dict[str, torch.Tensor] = torch.load(
-            file_path, weights_only=True, map_location=device
-        )
-        return ModelIO._strip_orig_mod_prefix(state_dict)
 
     @staticmethod
     def load_policy_head(
@@ -202,13 +227,9 @@ class ModelIO:
         Returns:
             Policy head state_dict
         """
-        logger.info(
-            f"Loading policy head parameters from {file_path}"
+        return ModelIO._load_component(
+            file_path, device, label="policy head"
         )
-        state_dict: dict[str, torch.Tensor] = torch.load(
-            file_path, weights_only=True, map_location=device
-        )
-        return ModelIO._strip_orig_mod_prefix(state_dict)
 
     @staticmethod
     def load_value_head(
@@ -223,13 +244,9 @@ class ModelIO:
         Returns:
             Value head state_dict
         """
-        logger.info(
-            f"Loading value head parameters from {file_path}"
+        return ModelIO._load_component(
+            file_path, device, label="value head"
         )
-        state_dict: dict[str, torch.Tensor] = torch.load(
-            file_path, weights_only=True, map_location=device
-        )
-        return ModelIO._strip_orig_mod_prefix(state_dict)
 
     @staticmethod
     def load_reachable_head(
@@ -246,13 +263,11 @@ class ModelIO:
         Returns:
             Reachable head state_dict
         """
-        logger.info(
-            f"Loading reachable squares head parameters from {file_path}"
+        return ModelIO._load_component(
+            file_path,
+            device,
+            label="reachable squares head",
         )
-        state_dict: dict[str, torch.Tensor] = torch.load(
-            file_path, weights_only=True, map_location=device
-        )
-        return ModelIO._strip_orig_mod_prefix(state_dict)
 
     @staticmethod
     def load_legal_moves_head(
@@ -269,13 +284,9 @@ class ModelIO:
         Returns:
             Legal moves head state_dict
         """
-        logger.info(
-            f"Loading legal moves head parameters from {file_path}"
+        return ModelIO._load_component(
+            file_path, device, label="legal moves head"
         )
-        state_dict: dict[str, torch.Tensor] = torch.load(
-            file_path, weights_only=True, map_location=device
-        )
-        return ModelIO._strip_orig_mod_prefix(state_dict)
 
     @staticmethod
     def save_model(

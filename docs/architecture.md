@@ -139,7 +139,9 @@ datasource = S3DataSource(
 )
 ```
 
-Available types: `"hcpe"` (game records), `"preprocessing"` (training features)
+Available types: `"hcpe"` (game records), `"preprocessing"` (Stage 3 training features), `"stage1"` (reachable squares), `"stage2"` (legal moves)．
+正準の定義は `src/maou/infra/file_system/file_data_source.py` の
+`array_type` Literal であり，増えた場合はそちらが真．
 
 ## 追加資料
 

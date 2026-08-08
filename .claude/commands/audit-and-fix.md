@@ -198,11 +198,42 @@ Triage each finding:
 - Record every deferred item verbatim (`file:line` + the finding) so it
   survives the session handoff — step 9 records it.
 
-### 2. Simplification cleanup
+### 2. Simplification cleanup — the whole path, never the diff
 
 Run `/simplify <path>` for the quality-only cleanups (reuse,
 simplification, efficiency, altitude) that step 1 did not already fix.
 Quality-only means lower risk, so this one auto-applies.
+
+**Scope is `<path>` in full — every file under it, changed or not.**
+
+This needs stating because `/simplify` is a general-purpose command whose
+*default* scope is the current diff: its own instructions say "treat this
+diff as the review scope", and three of its four angles are worded around
+what "the diff adds", "the diff introduces", or what is "new code".
+Passing a path is meant to override that, but the angle wording pulls the
+review back toward changed lines anyway.
+
+Left at its default here it reviews **whatever step 1 just committed** —
+the smallest slice of the path, and the one slice already reviewed
+minutes earlier. That inverts the point of the step. A path is audited to
+find accumulated complexity nobody has revisited, which by definition
+lives in the files this run did *not* touch.
+
+So when handing the work to review agents, override the framing
+explicitly: name `<path>`, tell each agent to read the files under it,
+and phrase its angle as "existing code in this module" rather than "new
+code" or "the diff". If a review returns citing only lines this run
+changed, its scope was wrong — re-run it with the path restated.
+
+The same caution applies to `/code-review <path> <level>` in step 1: it
+also falls back to a branch/working-tree diff when one exists, which on a
+**resumed** audit is this run's own earlier commits. Check its scope note
+names `<path>`, not a commit range, before trusting its findings as a
+path-wide bug hunt.
+
+Record in step 9 which files the pass actually covered. "Ran /simplify"
+is not evidence the path was covered; a run that reviewed only the step 1
+diff must be reported as **not done**, not as a clean pass.
 
 ### 3. Applicable project validators
 

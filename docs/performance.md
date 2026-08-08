@@ -6,9 +6,8 @@
 The project uses optimized BottleneckBlock architecture (1x1→3x3→1x1 convolution):
 
 **Shogi-optimized configuration:**
-- Layers: [2, 2, 2, 1] - Wide and shallow
-- Bottleneck widths: [24, 48, 96, 144]
-- ~40% fewer parameters than ResNet-50
+- Layers: [2, 2, 2, 2]，strides [1, 2, 2, 2]
+- Stage 出力チャンネル: [64, 128, 256, 512] (`BottleneckBlock`)
 
 ### Mixed Precision Training
 Automatic mixed precision (AMP) enabled for CUDA:
@@ -32,15 +31,12 @@ uv run maou utility benchmark-training \
   --gpu cuda:0
 ```
 
-### GPU Prefetching (Auto-Enabled)
-Automatic GPU prefetching overlaps data loading with computation. **Enabled by default** on CUDA devices.
+### GPU Prefetching (削除済み)
 
-**Performance**: -93.6% data loading time, +53.2% training throughput (2,202 → 3,374 samples/sec)
-
-```python
-# Default: enable_gpu_prefetch=True, gpu_prefetch_buffer_size=3
-# To disable: enable_gpu_prefetch=False (not recommended)
-```
+GPU プリフェッチ (`DataPrefetcher` / `gpu_prefetcher.py`) は削除された．
+H2D 転送は DataLoader の `--pin-memory` + `--prefetch-factor` と，
+`TrainingLoop._iterate_cuda_overlap` の CUDA ストリーム
+オーバーラップに一本化されている．
 
 ### Gradient Accumulation
 Simulate larger batch sizes without increasing GPU memory. Effective batch size = `batch_size × gradient_accumulation_steps`.
@@ -58,7 +54,7 @@ training_loop = TrainingLoop(
 ### DataLoader Benchmarking
 ```bash
 uv run maou utility benchmark-dataloader \
-  --input-path /path/to/processed \
+  --stage3-data-path /path/to/processed \
   --gpu cuda:0 \
   --batch-size 256
 ```
@@ -66,7 +62,7 @@ uv run maou utility benchmark-dataloader \
 ### Training Performance
 ```bash
 uv run maou utility benchmark-training \
-  --input-path /path/to/processed \
+  --stage3-data-path /path/to/processed \
   --gpu cuda:0 \
   --batch-size 256
 ```

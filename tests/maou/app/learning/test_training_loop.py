@@ -101,6 +101,66 @@ def test_nan_loss_does_not_call_scaler_update() -> None:
     mock_scaler.update.assert_not_called()
 
 
+def test_nan_loss_full_precision_skips_batch_and_resets_gns() -> (
+    None
+):
+    """full precision 経路でもNaN損失でバッチが破棄されることを確認する．
+
+    非有限損失ガードは以前 mixed precision 経路と full precision 経路に
+    逐語コピーされており，テストは前者にしか無かった．両経路を
+    ``_abort_on_nonfinite_loss`` に統合したので，後者も同じ挙動を
+    することを固定する．
+    """
+    model = torch.nn.Linear(10, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    mock_gns = MagicMock()
+
+    loop = TrainingLoop(
+        model=model,
+        device=torch.device("cpu"),
+        optimizer=optimizer,
+        loss_fn_policy=torch.nn.CrossEntropyLoss(),
+        loss_fn_value=torch.nn.MSELoss(),
+        policy_loss_ratio=1.0,
+        value_loss_ratio=1.0,
+    )
+    loop._gns_estimator = mock_gns
+
+    context = TrainingContext(
+        batch_idx=0,  # finitude_check_interval の倍数でチェック発生
+        epoch_idx=0,
+        inputs=torch.zeros(2, 10),
+        labels_policy=torch.zeros(2, dtype=torch.long),
+        labels_value=torch.zeros(2),
+        legal_move_mask=None,
+        batch_size=2,
+    )
+    context.outputs_policy = torch.zeros(2, 2)
+    context.outputs_value = torch.zeros(2)
+
+    with (
+        patch.object(
+            loop,
+            "_compute_policy_loss",
+            return_value=torch.tensor(float("nan")),
+        ),
+        patch.object(
+            loop.model,
+            "forward",
+            return_value=(torch.zeros(2, 2), torch.zeros(2)),
+        ),
+    ):
+        skipped = loop._train_batch_full_precision(
+            context,
+            is_accumulation_step=False,
+            accumulation_step=0,
+        )
+
+    # バッチはスキップされ，GNS の stale サイクルはリセットされる
+    assert skipped is True
+    mock_gns.reset_cycle.assert_called_once()
+
+
 class _SimpleBatchDataset(torch.utils.data.IterableDataset):
     """Yields simple batches for testing iteration methods."""
 

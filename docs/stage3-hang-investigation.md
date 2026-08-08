@@ -1,5 +1,9 @@
 # Stage 3 ハング調査報告
 
+> 注: 本調査時点の `DataPrefetcher` はその後削除された
+> (現在は DataLoader の pin_memory / prefetch_factor と
+> `TrainingLoop._iterate_cuda_overlap` のみ)．
+
 ## 1. 問題の概要
 
 - Stage 3（preprocessing データ，~40M レコード）の学習が "Training 0%" でハングする

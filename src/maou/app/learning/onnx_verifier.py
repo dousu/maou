@@ -9,7 +9,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from maou.app.learning.network import Network
+from maou.app.learning.network import (
+    DEFAULT_BOARD_VOCAB_SIZE,
+    Network,
+)
+from maou.domain.board import shogi
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -129,7 +133,7 @@ class GraphStructureReport:
             issues: list[str] = []
             if not self.graph_valid:
                 issues.append("invalid graph")
-            if self.input_names != ["input"]:
+            if self.input_names != ["board", "hand"]:
                 issues.append(
                     f"unexpected inputs: {self.input_names}"
                 )
@@ -324,6 +328,38 @@ class ONNXExportVerifier:
         )
 
     @staticmethod
+    def _random_sample(
+        rng: np.random.Generator,
+        board_vocab_size: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """等価性検証用のランダムな (board, hand) を1件生成する．
+
+        以前は ``create_empty_preprocessing_array(1)`` の全ゼロ配列を
+        毎回使っていたため，どれだけサンプル数を増やしても空盤面 1 種類
+        しか検証できず，非ゼロ入力でのみ現れる ONNX 変換の不一致を
+        取りこぼしていた．
+
+        Args:
+            rng: 乱数生成器
+            board_vocab_size: 盤面 ID の語彙サイズ (embedding の行数)
+
+        Returns:
+            (9x9 の盤面 ID 配列，持ち駒ベクトル) のタプル
+        """
+        board = rng.integers(
+            0,
+            board_vocab_size,
+            size=(9, 9),
+            dtype=np.int64,
+        )
+        # 持ち駒は [自陣7種，相手陣7種] で，各要素の上限は駒種ごとに異なる
+        hand_max = np.asarray(
+            shogi.MAX_PIECES_IN_HAND * 2, dtype=np.int64
+        )
+        hand = rng.integers(0, hand_max + 1)
+        return board, hand
+
+    @staticmethod
     def verify_onnx_functional_equivalence(
         pytorch_model: Network,
         onnx_model_path: Path,
@@ -351,10 +387,6 @@ class ONNXExportVerifier:
                 "Install with `uv sync --extra cpu` or `uv sync --extra cpu-infer`"
             ) from exc
 
-        from maou.domain.data.schema import (
-            create_empty_preprocessing_array,
-        )
-
         # Set up ONNX Runtime session
         options = ort.SessionOptions()
         options.graph_optimization_level = (
@@ -381,19 +413,26 @@ class ONNXExportVerifier:
 
         policy_max_abs_diff = 0.0
         value_max_abs_diff = 0.0
+        policy_ok = True
+        value_ok = True
+        # 固定シードで再現可能にしつつ，サンプルごとに異なる局面を作る
+        rng = np.random.default_rng(0)
+        board_vocab_size = int(
+            getattr(
+                pytorch_model,
+                "board_vocab_size",
+                DEFAULT_BOARD_VOCAB_SIZE,
+            )
+        )
 
         # Test with multiple random samples
         with torch.no_grad():
             for _ in range(num_test_samples):
                 # Generate random test input
-                dummy_data = create_empty_preprocessing_array(1)
-                dummy_board = np.asarray(
-                    dummy_data[0]["boardIdPositions"],
-                    dtype=np.uint8,
-                )
-                dummy_hand = np.asarray(
-                    dummy_data[0]["piecesInHand"],
-                    dtype=np.uint8,
+                dummy_board, dummy_hand = (
+                    ONNXExportVerifier._random_sample(
+                        rng, board_vocab_size
+                    )
                 )
 
                 # PyTorch inference (2入力: board + hand)
@@ -448,13 +487,25 @@ class ONNXExportVerifier:
                     value_max_abs_diff, value_diff
                 )
 
-        # Check if differences are within tolerance
-        policy_ok = np.allclose(
-            pytorch_policy_np, onnx_policy, rtol=rtol, atol=atol
-        )
-        value_ok = np.allclose(
-            pytorch_value_np, onnx_value, rtol=rtol, atol=atol
-        )
+                # 許容誤差判定はサンプルごとに行う．ループ後にまとめて
+                # 判定すると最後のサンプルしか見ず，途中の不一致を
+                # 取りこぼす (かつ num_test_samples=0 で NameError)．
+                policy_ok = policy_ok and bool(
+                    np.allclose(
+                        pytorch_policy_np,
+                        onnx_policy,
+                        rtol=rtol,
+                        atol=atol,
+                    )
+                )
+                value_ok = value_ok and bool(
+                    np.allclose(
+                        pytorch_value_np,
+                        onnx_value,
+                        rtol=rtol,
+                        atol=atol,
+                    )
+                )
 
         success = policy_ok and value_ok
 

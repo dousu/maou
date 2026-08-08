@@ -118,10 +118,17 @@ class ModelComponents:
     lr_scheduler: LRScheduler | None = None
 
 
-LR_SCHEDULER_DISPLAY_NAMES: dict[str, str] = {
-    "warmup_cosine_decay": "Warmup+CosineDecay",
-    "cosine_annealing_lr": "CosineAnnealingLR",
-}
+SUPPORTED_LR_SCHEDULER_KEYS: tuple[str, ...] = (
+    "warmup_cosine_decay",
+    "cosine_annealing_lr",
+)
+"""``create_scheduler`` が受理する正規化済みスケジューラ名．
+
+以前は表示名 ("Warmup+CosineDecay" 等) との対応表だったが，表示名は
+どこからも読まれていなかった (正準の対応表は
+``maou.interface.learn.SUPPORTED_LR_SCHEDULERS``)．未対応時の
+エラーはここに並ぶキーを案内する．
+"""
 
 
 class DeviceSetup:
@@ -138,9 +145,14 @@ class DeviceSetup:
         """GPU/CPUデバイスの設定."""
         if gpu is not None and gpu != "cpu":
             device = torch.device(gpu)
-            cls.logger.info(
-                f"Using GPU: {torch.cuda.get_device_name(device)}"
-            )
+            # get_device_name は CUDA 専用．"mps" のような非 CUDA
+            # デバイス名を渡されると例外になるため型で分岐する．
+            if device.type == "cuda":
+                cls.logger.info(
+                    f"Using GPU: {torch.cuda.get_device_name(device)}"
+                )
+            else:
+                cls.logger.info(f"Using device: {device}")
             torch.set_float32_matmul_precision("high")
         else:
             device = torch.device("cpu")
@@ -1065,9 +1077,10 @@ class SchedulerFactory:
                 optimizer, T_max=total_steps
             )
 
-        supported = ", ".join(
-            LR_SCHEDULER_DISPLAY_NAMES.values()
-        )
+        # 受理されるのは正規化後のキーであって表示名ではない．
+        # 表示名 ("Warmup+CosineDecay" 等) を案内すると，
+        # そのまま指定したユーザーが再び同じエラーに当たる．
+        supported = ", ".join(SUPPORTED_LR_SCHEDULER_KEYS)
         raise ValueError(
             "Unsupported learning rate scheduler. "
             f"Supported options are: {supported}"
