@@ -22,7 +22,7 @@ into the other.
 
 | Path | Role |
 |---|---|
-| `audits/coverage.md` | The ledger. One row per audited path: status, resume point, open items. |
+| `audits/coverage.md` | The ledger. One row per audited path: status, resume point, open items. Also carries the **out-of-scope backlog**. |
 | `audits/YYYY-MM-DD-<path-slug>.md` | One record per `/audit-and-fix` run. Immutable once the run's status is `done`. |
 
 `<path-slug>` is the target path with separators flattened:
@@ -35,6 +35,28 @@ Such a list would go stale on every new module — the same defect the
 audit exists to find. Rows are added as paths are worked. To see what is
 left, compare the ledger against the tree at read time (`ls`, `find`),
 which is always current.
+
+## The out-of-scope backlog
+
+An audit stays inside its target path, so it regularly notices real
+problems it must not fix. Those go in `coverage.md`'s **Out-of-scope
+backlog**, not only in the run's own record.
+
+The reason is retrieval, not bookkeeping. A per-run record is read only
+when someone opens that specific path — so a finding filed there is
+visible exactly to the audit least able to act on it. `coverage.md` is
+read at the start of *every* run, which is the only place a cross-path
+finding reliably resurfaces.
+
+Each row carries the record that found it, the path that should fix it,
+and enough of the finding to act on without reopening the record.
+
+- **Before auditing a path**, check the backlog for rows whose target
+  falls inside it, and fold them into the run.
+- **At the end of a run**, append any new out-of-scope findings.
+- **When an item is resolved**, delete its row. The resolving audit's
+  record is the durable account; the backlog is a worklist, not an
+  archive. Do not delete a row that was merely re-triaged elsewhere.
 
 ## Status vocabulary
 

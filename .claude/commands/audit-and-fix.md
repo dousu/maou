@@ -113,8 +113,13 @@ report:
   row you were asked about. Name them even when you are not resuming them.
 - every `blocked` row and its blocker.
 - the most recent record file (largest filename date), skimmed for its
-  Deferred and Out-of-scope sections — that is where the previous session
-  left findings addressed to whoever comes next.
+  Deferred section — that is where the previous session left findings
+  addressed to whoever comes next.
+- **`coverage.md`'s Out-of-scope backlog**, in full. Any row whose target
+  falls inside `<path>` is **in scope for this run** — fold it in and say
+  so. Those rows are findings an earlier audit confirmed but was not
+  allowed to fix; picking them up here is the whole point of the backlog,
+  and skipping them strands work that is already diagnosed.
 
 **0c. Resolve the target.**
 
@@ -384,6 +389,15 @@ leave `status: in-progress` with a sharpened resume point otherwise.
 Update the `audits/coverage.md` row with status, level, last SHA, record
 link, and open-item count.
 
+**Also update `coverage.md`'s Out-of-scope backlog:**
+- **Append** a row for every out-of-scope finding this run made — with the
+  record that found it, the path that should fix it, and enough of the
+  finding to act on without reopening the record. Writing it only into the
+  run's record buries it where no other audit will look.
+- **Delete** the rows this run resolved (including any it folded in at
+  step 0b). The backlog is a worklist, not an archive — the resolving
+  record is the durable account.
+
 Commit both:
 ```
 docs(audits): record audit of <path>
@@ -410,7 +424,8 @@ Print a compact summary (~12 lines):
 - Version bump(s) (old → new, which manifest) or "none (doc-only)"
 - Commit SHAs: code, reviews, doc-edit (if approved), audits
 - Ledger: `audits/coverage.md` row status for this path
-- Out-of-scope issues noticed, as `/audit-and-fix <path>` suggestions
+- Out-of-scope: N appended to the backlog, M folded in from it and
+  resolved
 
 ### 11. Handoff
 
