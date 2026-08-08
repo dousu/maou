@@ -4,7 +4,7 @@ scope: python
 level: high
 status: done
 started: 2026-08-08
-last_sha: 5b61444
+last_sha: 52d9bd2
 ---
 
 # Audit — src/maou/app/learning
@@ -119,6 +119,27 @@ Step 2 simplify — only the findings whose blast radius is contained.
   objects on every call (4-5× per sample, in every worker); added
   `_resolve_expected_dtypes` with a module-level cache.
 
+### Code commit `52d9bd2` (`pyproject.toml` 0.82.3 → 0.82.4, patch)
+
+Applied on a follow-up request after the initial run — this was the one
+deferred item whose blast radius was already contained, held back only
+for session budget.
+
+- `training_loop.py` — the 29-line non-finite-loss guard was duplicated
+  verbatim between `_train_batch_mixed_precision` and
+  `_train_batch_full_precision` (differing only in the GNS-reset
+  comment). Extracted to `_abort_on_nonfinite_loss()`; both paths now
+  call it. This is the numerical safety net, so the duplication meant a
+  hardening change applied to one path silently missed the other.
+- `tests/maou/app/learning/test_training_loop.py` — coverage was
+  **asymmetric in exactly the way the duplication predicted**:
+  `test_nan_loss_does_not_call_scaler_update` exercised only the AMP
+  path. Added
+  `test_nan_loss_full_precision_skips_batch_and_resets_gns` asserting
+  the batch is skipped and `GradientNoiseScaleEstimator.reset_cycle()`
+  fires. Verified non-vacuous by neutering the guard — both tests then
+  fail.
+
 ## Deferred
 
 Verified but **not** applied. Each is real; the reason for deferring is
@@ -231,14 +252,7 @@ given.
     ignored. **Not applied because** removing the parameter requires
     editing `interface/learn.py`, outside this path.
 
-11. **`training_loop.py:608-637` vs `:865-893` — the non-finite-loss
-    guard is duplicated verbatim** between the AMP and full-precision
-    paths (29 lines, differing only in one comment). This is the
-    numerical safety net, so a hardening change applied to one path
-    silently misses the other. Contained; deferred only for lack of
-    session budget — a good first pick for the next pass.
-
-12. **`multi_stage_training.py:399-417` — `TruncatedStageModel.forward`
+11. **`multi_stage_training.py:399-417` — `TruncatedStageModel.forward`
     re-drives `HeadlessNetwork`'s private preprocessing** (`_separate_inputs`,
     `_prepare_inputs`, `_hand_projection`, `_combine_board_and_hand`,
     `_embedding_channels`, `_board_size`), copying `network.py:164-172`
