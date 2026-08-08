@@ -161,9 +161,10 @@ a. Print a one-line summary: filename, title, target files, risk.
 b. Ask: "**approve / reject / defer**?"
 c. On **approve**:
    - **The model applies the edit itself** — edit `CLAUDE.md` / `docs/`
-     exactly per the proposal's "Proposed change" section. (Approval in
-     step 5 is the authorization; this is the ONLY path by which the model
-     may edit `CLAUDE.md` / `docs/architecture.md`.)
+     exactly per the proposal's "Proposed change" section. (Approval is the
+     authorization. It is not exclusive to this command: `/audit-and-fix`
+     step 8 reconciles the proposals its own run files. What the rule
+     forbids is a durable-doc edit with *no* approved proposal behind it.)
    - Run pre-commit (never `--no-verify`) and commit the durable-doc edit:
      `docs: <proposal title>` + trailers. Note the resulting short SHA.
    - Update the proposal frontmatter — single `Edit` per file:

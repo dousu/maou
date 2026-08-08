@@ -1,5 +1,5 @@
 ---
-description: Audit one path (source module, Rust crate, or doc tree) for correctness bugs, simplification opportunities, and documentation drift — then APPLY the code fixes, bump the version, and commit. Documentation drift is detected but never edited directly; it is filed as a reviews/ proposal for approval. Sized so each path is an independent, resumable unit across sessions.
+description: Audit one path (source module, Rust crate, or doc tree) for correctness bugs, simplification opportunities, and documentation drift — then APPLY the code fixes, bump the version, and commit. Documentation drift is never edited silently: it is filed as a reviews/ proposal and reconciled with the user in the same run, then applied on approval. Records coverage in audits/ so a path can be resumed across sessions.
 argument-hint: <path-or-crate> [effort-level: low|medium|high|max, default medium]
 ---
 
@@ -9,7 +9,9 @@ unit of the repo-wide refactor / bugfix / doc-audit effort, sized so it can
 be handed to a fresh session without losing continuity.
 
 This command **changes code**. Code fixes are applied and committed here.
-Documentation fixes are **not** applied here — see the routing rule below.
+Documentation fixes are never applied *silently* — they are proposed,
+approved by the user in this same run, and only then applied. See the
+routing rule below.
 
 `$ARGUMENTS` is `<path> [level]`:
 - First token: target path, e.g. `src/maou/domain/model`,
@@ -41,8 +43,8 @@ Findings split into two streams that are handled **differently**:
 
 | Finding lands in | Handling | Committed by |
 |---|---|---|
-| Source: anything under `src/`, `rust/`, `tests/`, `scripts/` — including docstrings and Japanese comments *inside* source files | Fix applied directly | this command (step 8) |
-| Durable docs: `CLAUDE.md`, `AGENTS.md`, and every tracked prose file under `docs/` or the repo root | **Detected and reported only — never edited here** | filed as `reviews/*.md` `status: pending` (step 9); applied later by `/checkpoint-context` step 5 after user approval |
+| Source: anything under `src/`, `rust/`, `tests/`, `scripts/` — including docstrings and Japanese comments *inside* source files | Fix applied directly | this command (step 7) |
+| Durable docs: `CLAUDE.md`, `AGENTS.md`, and every tracked prose file under `docs/` or the repo root | **Never edited before approval.** Filed as a `reviews/*.md` proposal, then reconciled with the user in step 8 — applied in this run if approved | this command (step 8), or a later `/checkpoint-context` if deferred |
 
 To decide which stream a file is in, ask whether it is **tracked prose
 that documents the system** (durable doc) or **code and its inline
@@ -57,17 +59,22 @@ fix looks. Do not rationalize an exception for "trivial" doc drift — the
 approval gate is the safeguard against silent durable-doc edits, and a
 one-word fix bypasses it exactly as much as a rewrite.
 
+What the gate requires is **approval**, not a particular command. This run
+files the proposal *and* takes the approval (step 8), so a doc fix found
+here can be applied here. Deferring to `/checkpoint-context` is a fallback
+for when the user does not want to decide now, not the normal path.
+
 ## Hard constraints
 
 - **Never `--no-verify`.** Pre-commit runs on every commit.
-- **Version bumps follow the manifest that owns the file** (step 7).
+- **Version bumps follow the manifest that owns the file** (step 6).
 - **Don't blind-apply bug fixes.** Obvious, low-risk, contained fixes are
   applied directly; ambiguous or architecturally significant ones are
   surfaced to the user before touching code. Check CLAUDE.md's
   `infra → interface → app → domain` rule before any fix that crosses
   layers.
 - **Respect the Code Exploration Policy.** Steps that need to read
-  multiple unfamiliar files (especially step 5) are delegated to an
+  multiple unfamiliar files (especially step 4) are delegated to an
   `Explore` agent, not run as a direct Grep/Read loop.
 - **Serena MCP tools are called one at a time** — never in parallel
   (memory-constrained DevContainer).
@@ -78,14 +85,28 @@ one-word fix bypasses it exactly as much as a rewrite.
 
 ## Steps
 
-### 0. Resolve scope
+### 0. Resolve scope and pick up prior coverage
 
-Confirm `<path>` exists, then classify it **by inspecting the tree**, in
-this order:
+**First read `audits/coverage.md`** (shape and protocol:
+`audits/README.md`).
+
+- If a row for `<path>` is `in-progress`, open its record file and resume
+  from the recorded resume point. Do **not** restart the path — the
+  record's Deferred section lists findings already triaged, and
+  re-deriving them wastes the session that the ledger exists to save.
+- If a row is `done`, report its `Last SHA` and ask whether to re-audit.
+  A `done` row that predates significant change to `<path>` is worth
+  redoing; one that does not, is not.
+- If a row is `blocked`, surface the blocker and ask how to proceed rather
+  than retrying silently.
+- If there is no row, this is a fresh path.
+
+Then confirm `<path>` exists and classify it **by inspecting the tree**,
+in this order:
 
 1. **Rust crate** — walk up from `<path>` to the nearest ancestor
    containing a `Cargo.toml` with a `version` field. That manifest is the
-   crate root and the version file for step 7. This resolves any crate,
+   crate root and the version file for step 6. This resolves any crate,
    including ones added after this command was written.
 2. **Python source** — under `src/`, file suffix `.py`. Version file is
    the nearest ancestor `pyproject.toml`.
@@ -121,7 +142,7 @@ Triage each finding:
 - **Defer to user** — ambiguous, cross-layer, or changing a public API
   other code calls.
 - Record every deferred item verbatim (`file:line` + the finding) so it
-  survives the session handoff (step 11).
+  survives the session handoff — step 9 records it.
 
 ### 2. Simplification cleanup
 
@@ -148,7 +169,7 @@ Fix trivial gaps directly **when they live in source** (a missing type
 hint, a missing docstring, a punctuation fix in a docstring) — the routing
 rule allows it. Flag anything needing real design thought (an ambiguous
 return type, a dependency inversion) instead of guessing. Violations in
-durable docs go to step 9, never fixed here.
+durable docs go to step 8, never fixed here.
 
 ### 4. Documentation accuracy (the drift hunt)
 
@@ -184,7 +205,7 @@ checkable ways — check the claims that have a truth value in code:
 
 Classify each: **accurate** / **stale** (was true, code moved on) /
 **wrong** (never true, or now actively misleading). Only stale and wrong
-ones go to step 9.
+ones go to step 8.
 
 **4c. CLI option sync** (when `<path>` is under
 `src/maou/infra/console/` or backs a CLI command): does a
@@ -243,8 +264,9 @@ fix|refactor: <what changed under <path>>
 
 Run pre-commit; never skip it.
 
-### 8. File the documentation drift as a proposal
+### 8. File the documentation drift — and reconcile it now
 
+**8a. File the proposal.**
 If step 3 or step 4 found anything stale or wrong, create
 `reviews/$(TZ=Asia/Tokyo date '+%Y-%m-%d')-<kebab-title>.md` with
 `status: pending` and the shape in `docs/memory-architecture.md`
@@ -273,36 +295,88 @@ commit, per `/checkpoint-context` step 5.5):
 docs(reviews): propose <one-line summary> (from audit of <path>)
 ```
 
-If nothing drifted, skip this step and say so explicitly in step 9 —
+If nothing drifted, skip 8a–8b entirely and say so explicitly in step 10 —
 "docs verified accurate" is a real result and stops the next session from
 re-checking.
 
-### 9. Report
+**8b. Reconcile it with the user, in this run.**
+Do not end the run leaving your own proposal dangling. Present it —
+filename, title, target files, risk, and the concrete before/after — and
+ask: **approve / reject / defer**?
+
+- **approve** → apply the edits yourself, exactly as written in "Proposed
+  change". Run pre-commit (never `--no-verify`) and commit:
+  `docs: <proposal title>`. Then set the proposal's frontmatter to
+  `status: applied` + `applied_in: <sha of that doc commit>` and commit
+  the frontmatter change. This is the authorized path — CLAUDE.md ties the
+  gate to approval, not to `/checkpoint-context`.
+- **reject** → ask for a one-line reason, set `status: rejected` with that
+  reason in the body, and commit. The file is **retained** as committed
+  do-not-redo provenance; delete it only if it was never substantive.
+- **defer** → leave `status: pending`. It resurfaces at the next
+  `/checkpoint-context`. Record in step 9's record file that it is
+  outstanding, so the next audit of a neighbouring path does not re-file
+  the same drift.
+
+If the run produced many separate findings, print the list first and let
+the user pick which to decide now; the rest stay `pending`.
+
+### 9. Write the audit record and ledger
+
+Write `audits/YYYY-MM-DD-<path-slug>.md` (JST date; `<path-slug>` is
+`<path>` with separators flattened) using the record shape in
+`audits/README.md`: frontmatter (`path`, `scope`, `level`, `status`,
+`started`, `last_sha`), then Resume point / Applied / Deferred / Doc
+findings / Out of scope.
+
+Update the `audits/coverage.md` row for `<path>` — add it if absent — with
+status, level, last SHA, record link, and open-item count.
+
+Commit both:
+```
+docs(audits): record audit of <path>
+```
+
+**This step also runs when the audit stops early.** If the session is
+ending, the context is filling, or the path turned out too large to
+finish, write the record with `status: in-progress` and a resume point
+naming the next step and the sub-paths still uncovered, then commit. An
+interrupted run that leaves no record is indistinguishable from one that
+never happened, and the next session pays for it by starting over.
+
+### 10. Report
 
 Print a compact summary (~12 lines):
 - Target path, effort level, **scope classes found** (flag any skipped)
 - Bugs: found / fixed / **deferred** (with `file:line` for each deferred)
 - Simplifications applied (count)
 - Validators run (step 3) and what each found
-- Doc drift: N stale, M wrong → `reviews/<file>` (or "docs verified
-  accurate")
+- Doc drift: N stale, M wrong → `reviews/<file>` **and its resolved
+  status** (applied `<sha>` / rejected / deferred-pending), or "docs
+  verified accurate"
 - QA result (pass/fail, what ran, any missing test path)
 - Version bump(s) (old → new, which manifest) or "none (doc-only)"
-- Commit SHAs: code commit, reviews commit
+- Commit SHAs: code, reviews, doc-edit (if approved), audits
+- Ledger: `audits/coverage.md` row status for this path
 - Out-of-scope issues noticed, as `/audit-and-fix <path>` suggestions
 
-### 10. Handoff
+### 11. Handoff
 
-Do **not** call `/checkpoint-context` from here — step 7 already
+Do **not** call `/checkpoint-context` from here — steps 7–9 already
 committed, so the dirty-tree gate is satisfied and the user may want to
 audit several paths before checkpointing.
 
-Before the session ends or the next path starts, remind the user to run
-`/checkpoint-context`, and restate the **deferred** findings (step 1/3)
-and the **pending proposal** (step 8) in that same turn, so they land in
-`scratchpad/current.md`. That is what lets a *different* session run
-`/audit-and-fix <next-path>` without re-discovering what this run already
-found and deliberately did not fix.
+The `audits/` record written in step 9 is what carries this run across
+sessions — it is committed, so it survives container reclamation, and it
+holds the deferred findings and the resume point. That is what lets a
+*different* session run `/audit-and-fix` on this path or a neighbouring
+one without re-discovering what this run already found and deliberately
+did not fix.
+
+`/checkpoint-context` remains the campaign memory's checkpoint and is
+worth running at session end, but it is **not** where audit coverage
+lives; do not duplicate the audit record into `worklog/` or
+`scratchpad/compass.md`.
 
 ## Extending this command
 
