@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in: ""
+status: applied
+applied_in: 5b61444
 date: 2026-08-08
 target:
   - docs/performance.md
