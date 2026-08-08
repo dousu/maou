@@ -18,7 +18,7 @@ frontmatter field on each file.
 
 ```yaml
 ---
-status: pending          # pending | approved | applied
+status: pending          # pending | approved | applied | rejected
 applied_in:              # commit SHA, filled when status becomes applied
 date: YYYY-MM-DD
 target: [CLAUDE.md, docs/architecture.md]
@@ -30,13 +30,20 @@ reversibility: trivial | moderate | hard
 ## Status lifecycle
 
 ```
-pending  → applied   (user approves during /checkpoint-context;
-                      user applies the edit + commits;
-                      model writes status: applied, applied_in: <sha>)
-pending  → deleted   (user rejects during /checkpoint-context)
+pending  → applied   (user approves; the MODEL applies the edit +
+                      commits, then writes status: applied,
+                      applied_in: <sha>)
+pending  → rejected  (user rejects; file RETAINED as do-not-redo
+                      provenance, with the reason in the body)
+pending  → deleted   (rejected AND never substantive)
 ```
 
-`status: applied` is terminal — applied proposals are never modified.
+Approval is **not bound to one command**. `/checkpoint-context` step 5 is
+the routine reconciliation point; `/audit-and-fix` step 8 reconciles the
+proposals its own run filed. What the rule requires is explicit user
+approval before the edit — not the command it happens in.
+
+`status: applied` and `status: rejected` are terminal — never modified.
 `approved` is permitted as an intermediate when approval and apply
 must be split in time; normal flow skips it.
 

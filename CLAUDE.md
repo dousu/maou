@@ -45,12 +45,12 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 - Version is the single source of truth in `pyproject.toml` (`version_provider = "pep621"`)
 
 ### Versioning (Rust crates)
-- MUST bump version in the corresponding `Cargo.toml` when modifying files under `rust/<crate>/`
-  - `rust/maou_shogi/Cargo.toml` for `maou_shogi` crate
-  - `rust/maou_rust/Cargo.toml` for `maou_rust` crate (PyO3 bindings)
-  - `rust/maou_io/Cargo.toml` for `maou_io` crate
-  - `rust/maou_index/Cargo.toml` for `maou_index` crate
-  - `rust/maou_search/Cargo.toml` for `maou_search` crate
+- MUST bump version in the **owning** `Cargo.toml` when modifying files under `rust/<crate>/`
+  - The owning manifest is the nearest ancestor `Cargo.toml` with a `version` field.
+    Resolve it from the changed file, never from a list here — crates added later are
+    then covered automatically. `ls rust/` is the current set (as of 2026-08-08:
+    `maou_convert`, `maou_index`, `maou_io`, `maou_rust` (PyO3 bindings), `maou_search`,
+    `maou_shogi`, `maou_usi`).
 - MUST follow semantic versioning independently per crate: `fix:` → patch, `feat:` → minor, breaking change → major
 - MUST NOT push changes to `rust/<crate>/` without a corresponding version bump in that crate's `Cargo.toml`
 - Rust crate versions are independent of the Python package version in `pyproject.toml`
@@ -81,15 +81,21 @@ Full spec: [docs/memory-architecture.md](docs/memory-architecture.md).
 | `scratchpad/compass.md` | Always-loaded binding layer. Fixed sections: VETOES → TRIPWIRES → North-star → Invariants[scope] → REFUTED → 環境リファレンス. ≤ ~9KB. | no (`.gitignore`d) |
 | `worklog/YYYY-MM-DD-HHMMSS.md` | One file per checkpoint, JST, immutable. | no (`.gitignore`d) |
 | `~/.claude/.../memory/` (auto-memory) | `feedback_*.md` process rules ONLY (advisory). NOT campaign state; no new `project_*.md`. | n/a (per-machine) |
-| `.claude/commands/checkpoint-context.md` | The only writer. | yes |
+| `audits/coverage.md` | Repo-wide audit ledger: per-path status, resume point, open items. | yes |
+| `audits/YYYY-MM-DD-<path-slug>.md` | One record per `/audit-and-fix` run. | yes |
+| `.claude/commands/checkpoint-context.md` | Writer of campaign working memory (`worklog/`, `scratchpad/`). | yes |
 | `.claude/commands/resume-context.md` | Read-only resume. | yes |
+| `.claude/commands/audit-and-fix.md` | Writer of `audits/`. | yes |
 
 ### MUST rules
 
 - MUST NOT edit `CLAUDE.md` / `docs/` without an **approved** `reviews/*.md`
-  proposal. Draft it `status: pending`; **on user approval in
-  `/checkpoint-context` step 5, the model applies the edit itself and
-  commits** (approval is the safeguard against *silent* edits).
+  proposal. Draft it `status: pending`; **on explicit user approval the
+  model applies the edit itself and commits**, then sets `status: applied`
+  + `applied_in: <sha>` (approval is the safeguard against *silent* edits
+  — it is not tied to any one command). `/checkpoint-context` step 5 and
+  `/audit-and-fix` step 8 both reconcile proposals; either may take the
+  approval.
 - MUST treat `worklog/*.md` as immutable. Each `/checkpoint-context`
   creates a **new** file — never edit a previous one.
 - MUST preserve failed attempts, reasoning, and uncertainty in every
@@ -120,6 +126,15 @@ Full spec: [docs/memory-architecture.md](docs/memory-architecture.md).
 - MUST surface `compass.md` § 🚫 VETOES and § 🚦 TRIPWIRES FIRST and
   verbatim (Confirmed-binding) at `/resume-context`, and commit every
   `reviews/` `status:` transition immediately (audit trail).
+- MUST record every `/audit-and-fix` run in `audits/` (ledger row +
+  record file) and commit it — `audits/` is the only cross-session record
+  of repo-wide audit coverage, and unlike `scratchpad/` it survives
+  container reclamation. An interrupted run MUST still write its resume
+  point before the session ends.
+- MUST keep `audits/` independent of the campaign memory (`worklog/` /
+  `scratchpad/compass.md`). The campaign layer tracks one
+  stable-environment measurement campaign; `audits/` tracks traversal of
+  the tree. Do not mirror one into the other.
 
 ## Code Exploration Policy (MUST)
 

@@ -18,7 +18,8 @@ layers**.
 | `scratchpad/current.md` | Authoritative current working state. | no — `.gitignore`d |
 | `scratchpad/compass.md` | Curated campaign invariants + north-star metrics. Always loaded; prunable. | no — `.gitignore`d |
 | `worklog/YYYY-MM-DD-HHMMSS.md` | One file per checkpoint, JST. Immutable. | no — `.gitignore`d |
-| `.claude/commands/checkpoint-context.md` | The only writer. | yes |
+| `audits/` | Repo-wide audit coverage ledger + per-run records. Separate system — see `audits/README.md`. | yes |
+| `.claude/commands/checkpoint-context.md` | The only writer of campaign working memory (`worklog/`, `scratchpad/`). | yes |
 | `.claude/commands/resume-context.md` | Read-only resume. | yes |
 
 `scratchpad/` and `worklog/` are per-developer working memory and are
@@ -44,9 +45,9 @@ session end / context heavy / handoff
         ├─ if architecture changed: drafts reviews/<date>-<title>.md
         │                            (frontmatter status: pending)
         └─ reconciles all pending reviews with the user:
-              approve → user applies + gives SHA
+              approve → the MODEL applies the edit + commits
                      → frontmatter becomes status: applied, applied_in: <sha>
-              reject  → delete file
+              reject  → status: rejected (retained as provenance)
               defer   → leave as pending; resurfaces next checkpoint
 ```
 
@@ -227,23 +228,31 @@ How to undo: which files revert, what code breaks, what to redo.
 ### Status transitions
 
 ```
-pending  → applied   (user approves during /checkpoint-context;
-                      the MODEL applies the edit + commits;
+pending  → applied   (user approves — in /checkpoint-context step 5,
+                      /audit-and-fix step 8, or any other explicit
+                      approval; the MODEL applies the edit + commits;
                       model writes status: applied, applied_in: <sha>)
 pending  → rejected  (user rejects; file RETAINED as do-not-redo
                       provenance — set status: rejected with a reason)
 pending  → deleted   (rejected AND never substantive)
-approved → applied | rejected  (split-state, resolved next /checkpoint-context)
+approved → applied | rejected  (split-state, resolved at the next
+                      reconciliation by whichever command runs first)
 ```
 
 `status: applied` and `status: rejected` are terminal — never modified.
 `rejected` covers an architectural experiment that completed but was
 measured-rejected, or a findings doc with no doc to apply (retained for
 provenance, never re-promoted). The intermediate value `approved` is for
-when approval and apply are split in time; step 5 reconciles `approved`
-as well as `pending` so it cannot dangle. **On approval the model itself
-applies the durable-doc edit** (approval is the safeguard against silent
-edits) — it no longer waits for the user to hand-apply.
+when approval and apply are split in time; reconciliation covers
+`approved` as well as `pending` so it cannot dangle. **On approval the
+model itself applies the durable-doc edit** (approval is the safeguard
+against silent edits) — it no longer waits for the user to hand-apply.
+
+Approval is **not bound to one command**. `/checkpoint-context` step 5 is
+the routine reconciliation point, and `/audit-and-fix` step 8 reconciles
+the proposals its own run filed, so a doc fix found during an audit can be
+approved and applied in the same session. What the rule requires is
+explicit user approval before the edit — not the command it happens in.
 
 ## Confirmed / Assumed / Unresolved
 

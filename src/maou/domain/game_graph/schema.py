@@ -1,4 +1,4 @@
-"""ゲームグラフデータのPolarsスキーマ定義."""
+"""ゲームグラフデータのPolarsスキーマ定義．"""
 
 from __future__ import annotations
 
