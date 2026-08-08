@@ -98,12 +98,34 @@ impasse.>
 
 ## Protocol
 
-1. `/audit-and-fix` reads `coverage.md` before starting, to pick up an
-   `in-progress` row for the same path rather than restarting it.
-2. It writes the record and the ledger row, and commits them, at the end
-   of the run — and also when stopping early, which is what makes an
-   interrupted run resumable.
-3. `blocked` rows surface to the user; they are not silently retried.
+A run assumes **no memory of any previous run**. Everything needed to
+resume is here.
+
+1. **Sync first.** `git fetch origin <branch>` before reading the ledger —
+   another session, possibly on another machine, may have pushed records
+   after this working copy was created. A stale ledger silently re-audits
+   finished paths.
+2. **Read the whole ledger, not one row.** Every `in-progress` row is
+   reported, *including paths other than the one being audited* — a
+   half-finished path left by an earlier session is the thing most likely
+   to be lost, and it never surfaces if only the requested row is checked.
+   The most recent record file is skimmed for its Deferred and
+   Out-of-scope sections.
+3. **Claim before working.** The `in-progress` row and record are written
+   and committed *before* the audit starts, not after. A session that dies
+   mid-run then still leaves a resume point, and a concurrent session sees
+   the path is taken.
+4. **Finish or hand off.** At the end of the run the same record and row
+   are updated — `done` with the resume point cleared, or `in-progress`
+   with a sharpened one. Stopping early takes the same path; that is what
+   makes an interrupted run resumable.
+5. **Staleness is decided concretely.** For a `done` row,
+   `git log <last_sha>..HEAD -- <path>` answers whether a re-audit is
+   warranted. A `done` row's Deferred section is read before any re-audit.
+6. `blocked` rows surface to the user; they are not silently retried.
+
+Running `/audit-and-fix` with **no path** is the intended way to open a
+cold session: it reports ledger state and offers the unfinished work.
 
 ## See also
 

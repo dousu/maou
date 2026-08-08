@@ -1,6 +1,6 @@
 ---
 description: Audit one path (source module, Rust crate, or doc tree) for correctness bugs, simplification opportunities, and documentation drift — then APPLY the code fixes, bump the version, and commit. Documentation drift is never edited silently: it is filed as a reviews/ proposal and reconciled with the user in the same run, then applied on approval. Records coverage in audits/ so a path can be resumed across sessions.
-argument-hint: <path-or-crate> [effort-level: low|medium|high|max, default medium]
+argument-hint: [path-or-crate | omit to resume from the audits/ ledger] [effort-level: low|medium|high|max, default medium]
 ---
 
 You are auditing **one path** — a source module, a layer directory, a Rust
@@ -13,15 +13,18 @@ Documentation fixes are never applied *silently* — they are proposed,
 approved by the user in this same run, and only then applied. See the
 routing rule below.
 
-`$ARGUMENTS` is `<path> [level]`:
+`$ARGUMENTS` is `[path] [level]`, both optional:
 - First token: target path, e.g. `src/maou/domain/model`,
   `src/maou/app/learning`, `rust/maou_shogi`, `docs/design/tsume-solver`.
+  **Omit it to resume** — step 0 reads the `audits/` ledger and offers the
+  unfinished work.
 - Second token (optional): effort level `low|medium|high|max`, default
   `medium`. Bug hunting benefits from `high`/`max`; a small, stable path
-  can use `low`/`medium`.
+  can use `low`/`medium`. When resuming, default to the level recorded for
+  that path.
 
-If the first token is missing or the path does not exist, stop and ask for
-a valid target instead of guessing one.
+If a path is given but does not exist, stop and ask for a valid target
+instead of guessing one.
 
 ## Standing principle: derive, never enumerate
 
@@ -85,24 +88,62 @@ for when the user does not want to decide now, not the normal path.
 
 ## Steps
 
-### 0. Resolve scope and pick up prior coverage
+### 0. Pick up prior coverage, then resolve scope
 
-**First read `audits/coverage.md`** (shape and protocol:
-`audits/README.md`).
+Assume **no memory of any previous run**. Everything you need is in
+`audits/`, and it is committed precisely so a cold session can read it.
 
-- If a row for `<path>` is `in-progress`, open its record file and resume
-  from the recorded resume point. Do **not** restart the path — the
-  record's Deferred section lists findings already triaged, and
-  re-deriving them wastes the session that the ledger exists to save.
-- If a row is `done`, report its `Last SHA` and ask whether to re-audit.
-  A `done` row that predates significant change to `<path>` is worth
-  redoing; one that does not, is not.
-- If a row is `blocked`, surface the blocker and ask how to proceed rather
-  than retrying silently.
-- If there is no row, this is a fresh path.
+**0a. Sync the ledger before reading it.** Another session — possibly on
+another machine — may have pushed audit records after this working copy
+was created:
+```bash
+git fetch origin <current-branch>
+git status -sb          # report if behind; the ledger you are about to
+                        # read is stale until it is caught up
+```
+Do not auto-merge; report and let the user decide if there is in-flight
+work. A stale ledger silently re-audits paths someone else finished.
 
-Then confirm `<path>` exists and classify it **by inspecting the tree**,
-in this order:
+**0b. Read the whole ledger, not just one row.** Read
+`audits/coverage.md` in full (shape and protocol: `audits/README.md`) and
+report:
+- every `in-progress` row — **including paths other than `<path>`**. A
+  half-finished path left by an earlier session is the single thing most
+  likely to be lost, and it will never surface if you only look up the
+  row you were asked about. Name them even when you are not resuming them.
+- every `blocked` row and its blocker.
+- the most recent record file (largest filename date), skimmed for its
+  Deferred and Out-of-scope sections — that is where the previous session
+  left findings addressed to whoever comes next.
+
+**0c. Resolve the target.**
+
+If `<path>` was given:
+- **`in-progress`** → open its record file and resume from the recorded
+  resume point. Do **not** restart the path — the record's Deferred
+  section lists findings already triaged, and re-deriving them wastes the
+  session the ledger exists to save.
+- **`done`** → decide staleness *concretely* rather than by feel:
+  ```bash
+  git log --oneline <last_sha>..HEAD -- <path>
+  ```
+  No commits → say so and ask whether a re-audit is really wanted.
+  Commits since → report how many and re-audit, treating the record's
+  Deferred section as already-known findings.
+  Either way, read the record's Deferred section before starting; a
+  completed audit's deferred items are the highest-value context for the
+  next one.
+- **`blocked`** → surface the blocker and ask how to proceed. Never retry
+  a blocked path silently.
+- **no row** → fresh path.
+
+If `<path>` was **omitted**, do not stop immediately. Report the ledger
+state from 0b and offer the natural continuations — resume an
+`in-progress` path, revisit a `blocked` one, or start a named fresh path —
+then wait for the user to choose. "Where was I?" is the expected way to
+open a new session, and the ledger can answer it.
+
+**0d. Classify the target** **by inspecting the tree**, in this order:
 
 1. **Rust crate** — walk up from `<path>` to the nearest ancestor
    containing a `Cargo.toml` with a `version` field. That manifest is the
@@ -128,9 +169,17 @@ A path may span classes (e.g. `src/maou/infra/visualization` holds both
 step 10 which classes were found — a silently skipped asset type is how
 these audits leave holes.
 
-Then run `git status --short -- <path>`. If it is already dirty from
-unrelated work, say so and ask whether to build on it or stash first.
-Never silently blend this audit's diff into pre-existing changes.
+**0e. Check the working tree.** Run `git status --short -- <path>`. If it
+is already dirty from unrelated work, say so and ask whether to build on
+it or stash first. Never silently blend this audit's diff into
+pre-existing changes.
+
+**0f. Claim the path.** Before running step 1, write the `in-progress`
+row and record file for `<path>` (step 9's shape) and commit them. This
+costs one commit and buys two things: a session that dies mid-run still
+leaves a resume point, and a concurrent session reading the ledger sees
+the path is taken. Do not defer this to the end — a crash before step 9
+is exactly the case the ledger exists for.
 
 ### 1. Bug detection
 
@@ -323,14 +372,17 @@ the user pick which to decide now; the rest stay `pending`.
 
 ### 9. Write the audit record and ledger
 
-Write `audits/YYYY-MM-DD-<path-slug>.md` (JST date; `<path-slug>` is
-`<path>` with separators flattened) using the record shape in
-`audits/README.md`: frontmatter (`path`, `scope`, `level`, `status`,
-`started`, `last_sha`), then Resume point / Applied / Deferred / Doc
-findings / Out of scope.
+Finish the record and row **claimed in step 0f** — update them, do not
+create a second set. `audits/YYYY-MM-DD-<path-slug>.md` (JST date;
+`<path-slug>` is `<path>` with separators flattened) follows the record
+shape in `audits/README.md`: frontmatter (`path`, `scope`, `level`,
+`status`, `started`, `last_sha`), then Resume point / Applied / Deferred /
+Doc findings / Out of scope.
 
-Update the `audits/coverage.md` row for `<path>` — add it if absent — with
-status, level, last SHA, record link, and open-item count.
+Set `status: done` and clear the resume point when the path is complete;
+leave `status: in-progress` with a sharpened resume point otherwise.
+Update the `audits/coverage.md` row with status, level, last SHA, record
+link, and open-item count.
 
 Commit both:
 ```
