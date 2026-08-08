@@ -417,6 +417,9 @@ class TrainingLoop:
         計算とオーバーラップさせることでスループットを向上させる．
         """
         stream = torch.cuda.Stream()
+        # 学習を実行するストリーム．転送ストリームで確保したテンソルを
+        # こちらで消費するため record_stream() の相手として保持する．
+        compute_stream = torch.cuda.current_stream()
         data_iter = iter(dataloader)
 
         # 最初のバッチは同期転送
@@ -442,6 +445,13 @@ class TrainingLoop:
                 # 転送ストリーム上で実行される．将来のコールバックでCUDA操作を行うと
                 # 誤ったストリームにスケジュールされるため注意．
                 self._transfer_to_device(next_ctx)
+
+            # 転送先テンソルは転送ストリーム上で確保されるため，
+            # caching allocator はそれらを解放した時点で「転送ストリーム
+            # 専用」として即座に再利用してよいと判断する．実際には計算
+            # ストリームがまだ読んでいる可能性があるので，消費側の
+            # ストリームを明示的に記録して再利用を抑止する．
+            self._record_stream(next_ctx, compute_stream)
 
             # デフォルトストリームで現在のバッチを学習（H2D転送とオーバーラップ）
             yield batch_idx, current_ctx
@@ -695,6 +705,37 @@ class TrainingLoop:
                 callback.on_optimizer_step_end(context)
 
         return False
+
+    @staticmethod
+    def _record_stream(
+        context: TrainingContext,
+        stream: "torch.cuda.Stream",
+    ) -> None:
+        """context内の全CUDAテンソルに消費側ストリームを記録する．
+
+        別ストリームでH2D転送したテンソルを，デフォルトストリームの
+        計算で読む場合に必要．これを省くと，テンソル解放後に転送
+        ストリームがそのメモリを次のバッチ転送に再利用し，計算
+        ストリームがまだ読んでいる領域を上書きしうる．
+
+        Args:
+            context: 転送直後の学習コンテキスト
+            stream: テンソルを消費する側のCUDAストリーム
+        """
+
+        def record(value: object) -> None:
+            if isinstance(value, torch.Tensor):
+                if value.is_cuda:
+                    value.record_stream(stream)
+            elif isinstance(value, (tuple, list)):
+                for item in value:
+                    record(item)
+
+        record(context.inputs)
+        record(context.labels_policy)
+        record(context.labels_value)
+        record(context.legal_move_mask)
+        record(context.move_win_rate)
 
     def _move_inputs_to_device(
         self,
