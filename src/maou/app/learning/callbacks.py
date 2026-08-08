@@ -849,13 +849,6 @@ class ValidationCallback(BaseCallback):
         return f1
 
 
-@dataclass(frozen=True)
-class TimingData:
-    """Timing data for a single measurement."""
-
-    value: float
-
-
 class TimingCallback(BaseCallback):
     """Callback for timing training operations."""
 

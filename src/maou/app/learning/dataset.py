@@ -8,6 +8,39 @@ import torch
 from numpy.typing import DTypeLike
 from torch.utils.data import Dataset
 
+_EXPECTED_DTYPE_CACHE: dict[object, tuple[np.dtype, ...]] = {}
+
+
+def _resolve_expected_dtypes(
+    expected_dtype: DTypeLike | tuple[DTypeLike, ...],
+) -> tuple[np.dtype, ...]:
+    """許容dtype指定を ``np.dtype`` のタプルへ正規化する (キャッシュ付き)．
+
+    ``_numpy_to_tensor`` はサンプルごとに 4〜5 回呼ばれ，その度に
+    ``np.dtype()`` を作り直していた．呼び出し側が渡す指定は
+    モジュール定数の少数パターンしかないため，結果をキャッシュする．
+
+    Args:
+        expected_dtype: 単一dtype，またはdtypeのタプル
+
+    Returns:
+        正規化された ``np.dtype`` のタプル
+    """
+    key: object = expected_dtype
+    cached = _EXPECTED_DTYPE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    resolved = (
+        tuple(
+            np.dtype(cast(DTypeLike, dtype))
+            for dtype in expected_dtype
+        )
+        if isinstance(expected_dtype, tuple)
+        else (np.dtype(cast(DTypeLike, expected_dtype)),)
+    )
+    _EXPECTED_DTYPE_CACHE[key] = resolved
+    return resolved
+
 
 class DataSource:
     @abc.abstractmethod
@@ -162,13 +195,10 @@ class KifDataset(Dataset, Sized):
         expected_dtype: DTypeLike | tuple[DTypeLike, ...],
     ) -> torch.Tensor:
         np_array = np.asarray(array)
-        expected_dtypes = (
-            tuple(
-                np.dtype(cast(DTypeLike, dtype))
-                for dtype in expected_dtype
-            )
-            if isinstance(expected_dtype, tuple)
-            else (np.dtype(cast(DTypeLike, expected_dtype)),)
+        # np.dtype() の再構築はサンプル毎×フィールド毎に走る
+        # (worker のホットパス) ため結果をキャッシュする．
+        expected_dtypes = _resolve_expected_dtypes(
+            expected_dtype
         )
         if np_array.dtype not in expected_dtypes:
             expected_desc = (

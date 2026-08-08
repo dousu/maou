@@ -118,10 +118,17 @@ class ModelComponents:
     lr_scheduler: LRScheduler | None = None
 
 
-LR_SCHEDULER_DISPLAY_NAMES: dict[str, str] = {
-    "warmup_cosine_decay": "Warmup+CosineDecay",
-    "cosine_annealing_lr": "CosineAnnealingLR",
-}
+SUPPORTED_LR_SCHEDULER_KEYS: tuple[str, ...] = (
+    "warmup_cosine_decay",
+    "cosine_annealing_lr",
+)
+"""``create_scheduler`` が受理する正規化済みスケジューラ名．
+
+以前は表示名 ("Warmup+CosineDecay" 等) との対応表だったが，表示名は
+どこからも読まれていなかった (正準の対応表は
+``maou.interface.learn.SUPPORTED_LR_SCHEDULERS``)．未対応時の
+エラーはここに並ぶキーを案内する．
+"""
 
 
 class DeviceSetup:
@@ -1073,7 +1080,7 @@ class SchedulerFactory:
         # 受理されるのは正規化後のキーであって表示名ではない．
         # 表示名 ("Warmup+CosineDecay" 等) を案内すると，
         # そのまま指定したユーザーが再び同じエラーに当たる．
-        supported = ", ".join(LR_SCHEDULER_DISPLAY_NAMES.keys())
+        supported = ", ".join(SUPPORTED_LR_SCHEDULER_KEYS)
         raise ValueError(
             "Unsupported learning rate scheduler. "
             f"Supported options are: {supported}"
