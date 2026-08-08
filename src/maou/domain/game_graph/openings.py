@@ -5,10 +5,7 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -95,6 +92,16 @@ _DEFAULT_OPENINGS: list[OpeningEntry] = [
 ]
 
 
+# 最長一致で照合するため，長いパターンを先頭に並べておく．
+# 並び順は表の性質でありインスタンスごとに変わらないので，
+# 構築のたびにソートせずモジュールロード時に一度だけ確定させる．
+_ENTRIES_LONGEST_FIRST: list[OpeningEntry] = sorted(
+    _DEFAULT_OPENINGS,
+    key=lambda e: len(e.moves),
+    reverse=True,
+)
+
+
 class OpeningDatabase:
     """定跡データベース．
 
@@ -103,11 +110,7 @@ class OpeningDatabase:
 
     def __init__(self) -> None:
         """初期化．デフォルトパターンを使用する．"""
-        self._entries = sorted(
-            _DEFAULT_OPENINGS,
-            key=lambda e: len(e.moves),
-            reverse=True,
-        )
+        self._entries = _ENTRIES_LONGEST_FIRST
 
     def find_opening(
         self, moves: list[str]
