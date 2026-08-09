@@ -184,3 +184,53 @@ def test_optimizer_includes_unfrozen_groups_partial_freeze() -> (
         assert id(param) in opt_param_ids, (
             "Value head param should be in optimizer"
         )
+
+
+def test_resolve_trainable_layers_warns_only_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """複数回呼んでも警告は1回だけ出す．
+
+    ``_resolve_trainable_layers`` は ``learn()`` の freeze 適用時と
+    学習設定ログの生成時の2箇所から呼ばれる．メモ化しないと同じ
+    警告が1回の実行で2回出力される．
+    """
+    learning = _make_learning(
+        trainable_layers=2, freeze_backbone=True
+    )
+
+    maou_logger = logging.getLogger("maou")
+    original_propagate = maou_logger.propagate
+    maou_logger.propagate = True
+    try:
+        with caplog.at_level(logging.WARNING):
+            first = learning._resolve_trainable_layers()
+            second = learning._resolve_trainable_layers()
+    finally:
+        maou_logger.propagate = original_propagate
+
+    assert first == 2
+    assert second == 2
+
+    warnings = [
+        record
+        for record in caplog.records
+        if "freeze_backbone" in record.message
+        and "trainable_layers" in record.message
+    ]
+    assert len(warnings) == 1
+
+
+def test_resolve_trainable_layers_memoizes_none() -> None:
+    """解決結果が None でもメモ化される．
+
+    素の値でキャッシュ判定すると None が「未解決」と区別できず，
+    毎回解決し直してしまう．セルの中身が None であることを固定する．
+    """
+    learning = _make_learning(
+        trainable_layers=None, freeze_backbone=False
+    )
+
+    assert learning._resolve_trainable_layers() is None
+    assert learning._resolve_trainable_layers() is None
+    assert learning._trainable_layers_cell == (None,)

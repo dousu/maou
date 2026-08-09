@@ -7,6 +7,9 @@ from maou.app.learning.callbacks import (
     ValidationCallback,
     ValidationMetrics,
 )
+from maou.app.learning.policy_targets import (
+    normalize_policy_targets,
+)
 
 
 def _create_context(
@@ -806,3 +809,193 @@ class TestLRSchedulerStepCallback:
         )
 
         assert scheduler.last_epoch == start
+
+
+class TestValidationCallbackSharedComputation:
+    """同一 logits に対する log_softmax / topk の共有に関する回帰テスト．
+
+    ``on_batch_end`` は 1 バッチにつき ``log_softmax`` を 1 回，
+    ``topk`` を 1 回だけ計算し，CE 2 種・expected_win_rate・
+    top5 精度・F1 の各指標へ使い回す．共有によって値が変わって
+    いないことを固定する．
+    """
+
+    @staticmethod
+    def _context_with_win_rate() -> TrainingContext:
+        policy_targets = torch.tensor(
+            [
+                [0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [0.5, 0.0, 0.5, 0.0, 0.0, 0.0],
+            ],
+            dtype=torch.float32,
+        )
+        outputs_policy = torch.tensor(
+            [
+                [0.1, 2.0, 0.0, -1.0, 0.3, 0.2],
+                [1.5, 0.2, 1.4, 0.1, -0.5, 0.0],
+            ],
+            dtype=torch.float32,
+        )
+        legal_move_mask = torch.ones(
+            (2, 6), dtype=torch.float32
+        )
+        move_win_rate = torch.tensor(
+            [
+                [0.1, 0.9, 0.2, 0.3, 0.4, 0.5],
+                [0.7, 0.2, 0.6, 0.1, 0.3, 0.4],
+            ],
+            dtype=torch.float32,
+        )
+        return TrainingContext(
+            batch_idx=0,
+            epoch_idx=0,
+            inputs=torch.zeros((2, 1), dtype=torch.float32),
+            labels_policy=policy_targets,
+            labels_value=torch.tensor(
+                [1.0, 0.0], dtype=torch.float32
+            ),
+            legal_move_mask=legal_move_mask,
+            outputs_policy=outputs_policy,
+            outputs_value=torch.tensor(
+                [4.0, -4.0], dtype=torch.float32
+            ),
+            loss=torch.tensor(0.5, dtype=torch.float32),
+            batch_size=2,
+            policy_target_distribution=policy_targets,
+            move_win_rate=move_win_rate,
+        )
+
+    def test_expected_win_rate_matches_independent_softmax(
+        self,
+    ) -> None:
+        """使い回した log_probs でも独立計算と同じ値になる．"""
+        context = self._context_with_win_rate()
+        callback = ValidationCallback()
+
+        callback.on_batch_end(context)
+        metrics = callback.get_average_metrics()
+
+        assert context.outputs_policy is not None
+        assert context.move_win_rate is not None
+        probs = torch.softmax(context.outputs_policy, dim=1)
+        expected = (
+            (probs * context.move_win_rate)
+            .sum(dim=1)
+            .mean()
+            .item()
+        )
+
+        assert metrics.policy_expected_win_rate is not None
+        assert (
+            metrics.policy_expected_win_rate
+            == pytest.approx(expected)
+        )
+
+    def test_move_label_ce_matches_independent_softmax(
+        self,
+    ) -> None:
+        """2 つ目の CE も同じ log_probs を使うが値は変わらない．"""
+        context = self._context_with_win_rate()
+        callback = ValidationCallback()
+
+        callback.on_batch_end(context)
+        metrics = callback.get_average_metrics()
+
+        assert context.outputs_policy is not None
+        log_probs = torch.log_softmax(
+            context.outputs_policy, dim=1
+        )
+        targets = normalize_policy_targets(
+            context.labels_policy, context.legal_move_mask
+        )
+        expected = (
+            -torch.sum(targets * log_probs, dim=1).mean().item()
+        )
+
+        assert metrics.policy_move_label_ce is not None
+        assert metrics.policy_move_label_ce == pytest.approx(
+            expected
+        )
+
+    def test_precomputed_top_indices_match_internal_topk(
+        self,
+    ) -> None:
+        """topk を外から渡しても内部計算と同じ結果になる．"""
+        context = self._context_with_win_rate()
+        callback = ValidationCallback()
+        logits = context.outputs_policy
+        targets = context.policy_target_distribution
+        assert logits is not None
+        assert targets is not None
+        top_indices = torch.topk(
+            logits.detach(), k=5, dim=1
+        ).indices
+
+        internal_ratio, internal_count = (
+            callback._compute_policy_top5_accuracy_stats_gpu(
+                logits=logits, targets=targets
+            )
+        )
+        shared_ratio, shared_count = (
+            callback._compute_policy_top5_accuracy_stats_gpu(
+                logits=logits,
+                targets=targets,
+                prediction_top_indices=top_indices,
+            )
+        )
+        assert internal_count == shared_count
+        assert torch.equal(internal_ratio, shared_ratio)
+
+        internal_f1 = (
+            callback._compute_policy_f1_components_gpu(
+                logits=logits, targets=targets
+            )
+        )
+        shared_f1 = callback._compute_policy_f1_components_gpu(
+            logits=logits,
+            targets=targets,
+            prediction_top_indices=top_indices,
+        )
+        for internal_t, shared_t in zip(
+            internal_f1, shared_f1, strict=True
+        ):
+            assert torch.equal(internal_t, shared_t)
+
+    def test_log_softmax_and_topk_run_once_per_batch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """同じ logits に対する log_softmax / topk を再計算しない．
+
+        以前は log_softmax が 3 回 (CE 2 種 + expected_win_rate)，
+        topk が 2 回 (top5 精度 + F1) 走っていた．
+        """
+        context = self._context_with_win_rate()
+        callback = ValidationCallback()
+
+        log_softmax_calls = 0
+        topk_calls = 0
+        original_log_softmax = torch.log_softmax
+        original_topk = torch.topk
+
+        def counting_log_softmax(
+            *args: object, **kwargs: object
+        ):  # type: ignore[no-untyped-def]
+            nonlocal log_softmax_calls
+            log_softmax_calls += 1
+            return original_log_softmax(*args, **kwargs)  # type: ignore[arg-type]
+
+        def counting_topk(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+            nonlocal topk_calls
+            topk_calls += 1
+            return original_topk(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(
+            torch, "log_softmax", counting_log_softmax
+        )
+        monkeypatch.setattr(torch, "topk", counting_topk)
+
+        callback.on_batch_end(context)
+
+        assert log_softmax_calls == 1
+        # targets 側の topk は logits と別物なので 1 回残る．
+        assert topk_calls == 2

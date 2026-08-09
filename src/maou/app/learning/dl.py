@@ -205,6 +205,12 @@ class Learning:
         cloud_storage: CloudStorage | None = None,
     ):
         self.__cloud_storage = cloud_storage
+        # _resolve_trainable_layers() の結果を保持するセル．
+        # None は「未解決」，1要素タプルは解決済み (中身が None
+        # でありうるため素の値では未解決と区別できない)．
+        self._trainable_layers_cell: (
+            tuple[int | None] | None
+        ) = None
 
     def learn(
         self,
@@ -606,7 +612,6 @@ class Learning:
             model_tag,
         )
         writer = SummaryWriter(summary_writer_log_dir)
-        epoch_number = 0
 
         EPOCHS = self.epoch
 
@@ -1178,9 +1183,24 @@ class Learning:
     def _resolve_trainable_layers(self) -> int | None:
         """Resolve effective trainable_layers from config options.
 
+        解決結果はインスタンスにメモ化する．このメソッドは
+        ``learn()`` の freeze 適用時とモデル設定ログの生成時の
+        2箇所から呼ばれるため，メモ化しないと下の警告が1回の
+        実行で2回出力される．
+
         Returns:
             int if freezing should be applied, None otherwise.
         """
+        cell = self._trainable_layers_cell
+        if cell is not None:
+            return cell[0]
+
+        resolved = self._compute_trainable_layers()
+        self._trainable_layers_cell = (resolved,)
+        return resolved
+
+    def _compute_trainable_layers(self) -> int | None:
+        """Compute effective trainable_layers without memoization."""
         if (
             self.trainable_layers is not None
             and self.freeze_backbone
