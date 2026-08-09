@@ -252,12 +252,18 @@ class StageComponentFactory:
         gamma_pos: float = 0.0,
         gamma_neg: float = 0.0,
         clip: float = 0.0,
-        test_ratio: float = 0.0,
         dataloader_workers: int = 0,
         pin_memory: bool = False,
         prefetch_factor: int = 2,
     ) -> StageDataPipeline:
         """Stage2 用のストリーミングデータパイプラインを生成する．
+
+        Note:
+            ストリーミング経路には検証データ分割がないため
+            ``test_ratio`` は受け取らない (Stage1 のストリーミング
+            パイプラインと同じ)．CLI の ``--stage2-test-ratio`` は
+            ``interface/learn.py`` の ``run_stage2_streaming`` が
+            無視する旨を警告する．
 
         Args:
             streaming_source: ストリーミングデータソース．
@@ -266,7 +272,6 @@ class StageComponentFactory:
             gamma_pos: Asymmetric Focal Loss の正例ガンマ．
             gamma_neg: Asymmetric Focal Loss の負例ガンマ．
             clip: Asymmetric Focal Loss のクリップ値．
-            test_ratio: テストデータの割合．
             dataloader_workers: DataLoader のワーカー数．
             pin_memory: ピンメモリを使用するかどうか．
             prefetch_factor: プリフェッチファクター．
@@ -567,7 +572,6 @@ class StageComponentFactory:
         clip: float = 0.0,
         head_hidden_dim: int | None = None,
         head_dropout: float = 0.0,
-        test_ratio: float = 0.0,
         dataloader_workers: int = 0,
         pin_memory: bool = False,
         prefetch_factor: int = 2,
@@ -594,7 +598,6 @@ class StageComponentFactory:
             clip: Asymmetric Focal Loss のクリップ値．
             head_hidden_dim: ヘッドの隠れ層次元数．
             head_dropout: ヘッドのドロップアウト率．
-            test_ratio: テストデータの割合．
             dataloader_workers: DataLoader のワーカー数．
             pin_memory: ピンメモリを使用するかどうか．
             prefetch_factor: プリフェッチファクター．
@@ -617,7 +620,6 @@ class StageComponentFactory:
             gamma_pos=gamma_pos,
             gamma_neg=gamma_neg,
             clip=clip,
-            test_ratio=test_ratio,
             dataloader_workers=dataloader_workers,
             pin_memory=pin_memory,
             prefetch_factor=prefetch_factor,

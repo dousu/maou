@@ -845,7 +845,6 @@ def _run_stage2_streaming(
         clip=stage2_clip,
         head_hidden_dim=stage2_head_hidden_dim,
         head_dropout=stage2_head_dropout,
-        test_ratio=stage2_test_ratio,
         dataloader_workers=dataloader_workers,
         pin_memory=pin_memory,
         prefetch_factor=prefetch_factor,
