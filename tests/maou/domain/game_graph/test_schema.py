@@ -5,8 +5,6 @@ from __future__ import annotations
 import polars as pl
 
 from maou.domain.game_graph.schema import (
-    create_empty_edges_df,
-    create_empty_nodes_df,
     get_game_graph_edges_schema,
     get_game_graph_nodes_schema,
 )
@@ -37,19 +35,6 @@ class TestNodesSchema:
         assert schema["depth"] == pl.UInt16()
         assert schema["is_depth_cutoff"] == pl.Boolean()
 
-    def test_create_empty_df(self) -> None:
-        """空の DataFrame を生成できる."""
-        df = create_empty_nodes_df()
-        assert len(df) == 0
-        assert set(df.columns) == set(
-            get_game_graph_nodes_schema().keys()
-        )
-
-    def test_create_empty_df_with_size(self) -> None:
-        """指定サイズの DataFrame を生成できる."""
-        df = create_empty_nodes_df(5)
-        assert len(df) == 5
-
 
 class TestEdgesSchema:
     """edges スキーマのテスト."""
@@ -77,16 +62,3 @@ class TestEdgesSchema:
         assert schema["probability"] == pl.Float32()
         assert schema["win_rate"] == pl.Float32()
         assert schema["is_leaf"] == pl.Boolean()
-
-    def test_create_empty_df(self) -> None:
-        """空の DataFrame を生成できる."""
-        df = create_empty_edges_df()
-        assert len(df) == 0
-        assert set(df.columns) == set(
-            get_game_graph_edges_schema().keys()
-        )
-
-    def test_create_empty_df_with_size(self) -> None:
-        """指定サイズの DataFrame を生成できる."""
-        df = create_empty_edges_df(3)
-        assert len(df) == 3
