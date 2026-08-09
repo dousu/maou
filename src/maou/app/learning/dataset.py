@@ -121,16 +121,19 @@ class KifDataset(Dataset, Sized):
             data["resultValue"].item(), dtype=torch.float32
         ).reshape(1)
 
-        legal_move_mask_tensor = torch.ones_like(
-            move_label_tensor
-        )
-
         # DataLoaderのpin_memory機能と競合を避けるため、Dataset内ではCPUテンソルを返す
         # GPU転送はDataLoaderが自動的に処理する
         #
-        # moveWinRateが存在する場合のみ4要素tupleを返す．
+        # legal_move_mask は返さない．この経路が作れるマスクは
+        # 常に torch.ones_like(moveLabel) であり，消費側の 5 つの
+        # カーネルすべてで no-op でありながら，バッチ毎に
+        # moveLabel と同じサイズ (B=1024 で約 9MB) を PCIe 上に
+        # 流していた．TrainingLoop._unpack_batch() は
+        # legal_move_mask=None として扱う．
+        #
+        # moveWinRateが存在する場合のみ3要素tupleを返す．
         # Noneを含むtupleはPyTorchのdefault_collateに非対応のため，
-        # 3要素tuple（旧形式）を維持して後方互換性を確保する．
+        # 2要素tupleを維持する．
         if self._has_move_win_rate is None:
             self._has_move_win_rate = (
                 data.dtype.names is not None
@@ -152,7 +155,6 @@ class KifDataset(Dataset, Sized):
                 (
                     move_label_tensor,
                     result_value_tensor,
-                    legal_move_mask_tensor,
                     move_win_rate_tensor,
                 ),
             )
@@ -162,7 +164,6 @@ class KifDataset(Dataset, Sized):
             (
                 move_label_tensor,
                 result_value_tensor,
-                legal_move_mask_tensor,
             ),
         )
 

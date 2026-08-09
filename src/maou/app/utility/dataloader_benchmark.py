@@ -144,10 +144,14 @@ class DataLoaderBenchmark:
             if i >= self.config.num_batches:
                 break
 
-            (
-                inputs,
-                (labels_policy, labels_value, legal_move_mask),
-            ) = batch
+            inputs, targets = batch
+            labels_policy = targets[0]
+            labels_value = targets[1]
+            # 3 要素目は move_win_rate (省略可)．
+            # legal_move_mask はどのデータ経路も供給しない．
+            move_win_rate = (
+                targets[2] if len(targets) > 2 else None
+            )
 
             # Simulate GPU transfer if using CUDA
             if self.config.device.type == "cuda":
@@ -162,8 +166,8 @@ class DataLoaderBenchmark:
                     dtype=torch.float32,
                     non_blocking=True,
                 )
-                if legal_move_mask is not None:
-                    legal_move_mask = legal_move_mask.to(
+                if move_win_rate is not None:
+                    move_win_rate = move_win_rate.to(
                         self.config.device,
                         dtype=torch.float32,
                         non_blocking=True,

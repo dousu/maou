@@ -326,17 +326,23 @@ class TestUnpackBatch:
         assert ctx.labels_value is targets[1]
         assert ctx.legal_move_mask is None
 
-    def test_unpacks_4_element_tuple_with_move_win_rate(
+    def test_unpacks_3_element_tuple_with_move_win_rate(
         self,
     ) -> None:
-        """4-element target tuple with move_win_rate is unpacked."""
+        """3 要素目は move_win_rate として読む．
+
+        これがこの契約の罠である．legal_move_mask を
+        データ側から外したとき ``_unpack_batch`` を直さないと，
+        index 2 は依然 legal_move_mask として読まれ，
+        moveWinRate の float 値がそのまま合法手マスクとして
+        ``masked_fill`` に渡る — 損失が静かに壊れる．
+        """
         loop = _make_loop()
         features = torch.zeros(4, 3)
         move_win_rate = torch.rand(4, 10)
         targets = (
             torch.zeros(4),
             torch.ones(4),
-            None,
             move_win_rate,
         )
         raw_data = (features, targets)
@@ -346,31 +352,12 @@ class TestUnpackBatch:
         )
 
         assert ctx.move_win_rate is move_win_rate
+        assert ctx.legal_move_mask is None
 
-    def test_unpacks_4_element_tuple_none_move_win_rate(
+    def test_unpacks_3_element_tuple_none_move_win_rate(
         self,
     ) -> None:
-        """4-element target tuple with None move_win_rate."""
-        loop = _make_loop()
-        features = torch.zeros(4, 3)
-        targets = (
-            torch.zeros(4),
-            torch.ones(4),
-            None,
-            None,
-        )
-        raw_data = (features, targets)
-
-        ctx = loop._unpack_batch(
-            raw_data, batch_idx=0, epoch_idx=0
-        )
-
-        assert ctx.move_win_rate is None
-
-    def test_unpacks_3_element_tuple_no_move_win_rate(
-        self,
-    ) -> None:
-        """3-element target tuple sets move_win_rate=None."""
+        """3-element target tuple with None move_win_rate."""
         loop = _make_loop()
         features = torch.zeros(4, 3)
         targets = (
@@ -385,6 +372,26 @@ class TestUnpackBatch:
         )
 
         assert ctx.move_win_rate is None
+        assert ctx.legal_move_mask is None
+
+    def test_unpacks_2_element_tuple_no_move_win_rate(
+        self,
+    ) -> None:
+        """2-element target tuple sets move_win_rate=None."""
+        loop = _make_loop()
+        features = torch.zeros(4, 3)
+        targets = (
+            torch.zeros(4),
+            torch.ones(4),
+        )
+        raw_data = (features, targets)
+
+        ctx = loop._unpack_batch(
+            raw_data, batch_idx=0, epoch_idx=0
+        )
+
+        assert ctx.move_win_rate is None
+        assert ctx.legal_move_mask is None
 
 
 class _TwoHeadModelForAdaptive(torch.nn.Module):
