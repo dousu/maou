@@ -513,8 +513,18 @@ class TestStreamingDataPipeline:
 
         return _FakeStage1Source()
 
-    def _make_fake_stage2_source(self) -> object:
-        """Stage 2 用の fake streaming source を生成する．"""
+    def _make_fake_stage2_source(
+        self, *, n_files: int = 2, rows_per_file: int = 10
+    ) -> object:
+        """Stage 2 用の fake streaming source を生成する．
+
+        Args:
+            n_files: ファイル数．
+            rows_per_file: 1 ファイルあたりの行数．
+
+        Returns:
+            ``StreamingDataSource`` プロトコル互換の fake．
+        """
         from pathlib import Path
 
         from maou.domain.data.columnar_batch import (
@@ -523,9 +533,10 @@ class TestStreamingDataPipeline:
 
         class _FakeStage2Source:
             def __init__(self) -> None:
+                self._rows = rows_per_file
                 self._file_paths = [
-                    Path("/fake/stage2_0.feather"),
-                    Path("/fake/stage2_1.feather"),
+                    Path(f"/fake/stage2_{i}.feather")
+                    for i in range(n_files)
                 ]
 
             @property
@@ -534,11 +545,11 @@ class TestStreamingDataPipeline:
 
             @property
             def total_rows(self) -> int:
-                return 20
+                return n_files * rows_per_file
 
             @property
             def row_counts(self) -> list[int]:
-                return [10, 10]
+                return [rows_per_file] * n_files
 
             def _make_batch(self, n: int) -> ColumnarBatch:
                 rng = np.random.default_rng(42)
@@ -558,7 +569,7 @@ class TestStreamingDataPipeline:
 
             def iter_files_columnar(self):  # type: ignore[no-untyped-def]
                 for _ in range(len(self._file_paths)):
-                    yield self._make_batch(10)
+                    yield self._make_batch(self._rows)
 
             def iter_files_columnar_subset(  # type: ignore[no-untyped-def]
                 self, file_paths: list[Path]
@@ -566,7 +577,7 @@ class TestStreamingDataPipeline:
                 target_set = {str(fp) for fp in file_paths}
                 for fp in self._file_paths:
                     if str(fp) in target_set:
-                        yield self._make_batch(10)
+                        yield self._make_batch(self._rows)
 
         return _FakeStage2Source()
 
@@ -595,3 +606,42 @@ class TestStreamingDataPipeline:
         assert isinstance(pipeline.train_dataloader, DataLoader)
         assert isinstance(pipeline.loss_fn, LegalMovesLoss)
         assert pipeline.val_dataloader is None
+
+    def test_stage2_streaming_len_uses_effective_worker_count(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``len(dataloader)`` は要求値ではなく実効ワーカー数で数える．
+
+        ``create_streaming_dataloaders`` はワーカー数をファイル数と
+        メモリ制約で切り下げる (``_clamp_workers``)．要求値を
+        ``StreamingStage2Dataset`` に渡すと，切り下げが起きた実行で
+        バッチ数を読み違え，``steps_per_epoch`` 経由で LR スケジューラ
+        の総ステップ数がずれる．
+        """
+        from maou.app.learning import setup as setup_module
+
+        # メモリ由来の上限を 2 に固定して切り下げを確定的に起こす．
+        monkeypatch.setattr(
+            setup_module,
+            "_estimate_max_workers_by_memory",
+            lambda **_kwargs: 2,
+        )
+
+        source = self._make_fake_stage2_source(
+            n_files=24, rows_per_file=100
+        )
+        pipeline = StageComponentFactory.create_stage2_streaming_data_pipeline(
+            source,  # type: ignore[arg-type]
+            batch_size=64,
+            dataloader_workers=20,
+        )
+        loader = pipeline.train_dataloader
+
+        # 要求 20 に対し実効は 2 (メモリ上限で切り下げ)．
+        assert loader.num_workers == 2
+        # 実効 2: 各 shard 12 ファイル → グループ (10, 2)
+        #   (ceil(1000/64) + ceil(200/64)) * 2 = (16 + 4) * 2 = 40
+        # 3 通りの値が別々になるよう行数・ファイル数を選んでいる:
+        #   未配線 (0 のまま) → 1 shard, グループ (10,10,4) → 39
+        #   要求値 20 を使う → 4 shard が 2 ファイル, 16 shard が 1 → 48
+        assert len(loader) == 40

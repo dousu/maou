@@ -117,6 +117,56 @@ def _compute_total_batches(
     return sum(math.ceil(n / batch_size) for n in row_counts)
 
 
+def _compute_concat_total_batches(
+    row_counts: list[int],
+    batch_size: int,
+    *,
+    num_workers: int,
+    group_size: int = _FILES_PER_CONCAT,
+) -> int:
+    """ファイルを ``group_size`` 個ずつ結合する反復のバッチ数を返す．
+
+    ``StreamingStage2Dataset.__iter__`` はファイルを単純に 1 個ずつ
+    バッチ化するのではなく，``group_size`` 個まとめて
+    ``ColumnarBatch.concatenate()`` してからバッチ化する．
+    したがって端数バッチはファイルごとではなく**結合グループごと**に
+    1 個しか出ない．``_compute_total_batches`` (ファイル単位) を
+    そのまま使うと系統的に過大評価になる．
+
+    マルチワーカー環境では ``_resolve_worker_files`` がファイルを
+    ラウンドロビンで各 worker に分配し，結合は worker の担当分の
+    **中で**行われる．よって shard ごとに端数グループが 1 個ずつ
+    生じるため，worker 数を無視すると今度は過小評価になる．
+    ここでは同じラウンドロビン分割を再現して数える．
+
+    Note:
+        ``shuffle=True`` のときファイル順は epoch ごとに変わるので，
+        どのファイルがどの shard のどのグループに入るかは seed 依存で
+        ある．shard あたりのファイル数とグループの区切り方は
+        シャッフルによらず一定なので，本関数はグループ**構造**は正確に
+        再現するが，各グループの行数合計は近似となる
+        (ファイル間で行数が等しい場合は厳密)．
+
+    Args:
+        row_counts: 各ファイルの行数リスト
+        batch_size: バッチサイズ
+        num_workers: DataLoader の実効ワーカー数(0 ならシングルプロセス)
+        group_size: 結合するファイル数
+
+    Returns:
+        合計バッチ数
+    """
+    n_shards = max(1, num_workers)
+    total = 0
+    for shard_id in range(n_shards):
+        shard = row_counts[shard_id::n_shards]
+        for start in range(0, len(shard), group_size):
+            group_rows = sum(shard[start : start + group_size])
+            if group_rows > 0:
+                total += math.ceil(group_rows / batch_size)
+    return total
+
+
 # ============================================================================
 # StreamingDataSource Protocol
 # ============================================================================
@@ -471,6 +521,7 @@ class StreamingStage2Dataset(IterableDataset):
         self._shuffle = shuffle
         self._seed = seed
         self._epoch = 0
+        self._num_workers = 0
 
     def set_epoch(self, epoch: int) -> None:
         """エポック番号を設定(シード管理用)．
@@ -479,6 +530,23 @@ class StreamingStage2Dataset(IterableDataset):
             epoch: 現在のエポック番号(0-based)
         """
         self._epoch = epoch
+
+    def set_num_workers(self, num_workers: int) -> None:
+        """``__len__`` が使う実効ワーカー数を設定する．
+
+        ``__iter__`` の結合は worker ごとの担当ファイル内で行われるため，
+        正確なバッチ数はワーカー数に依存する．**要求された**ワーカー数
+        ではなく DataLoader が実際に使う値を渡すこと．
+        ``DataLoaderFactory.create_streaming_dataloaders()`` は
+        ファイル数とメモリ制約でワーカー数を切り下げる
+        (``_clamp_workers``) ため，要求値を渡すと切り下げが起きた
+        すべての実行でバッチ数を読み違える．
+
+        Args:
+            num_workers: DataLoader の実効ワーカー数
+                (``DataLoader.num_workers``)
+        """
+        self._num_workers = num_workers
 
     def __iter__(
         self,
@@ -600,10 +668,18 @@ class StreamingStage2Dataset(IterableDataset):
             raise
 
     def __len__(self) -> int:
-        """バッチ数を返す(tqdmプログレスバー用)."""
-        return _compute_total_batches(
+        """バッチ数を返す(tqdm と LR スケジューラ用)．
+
+        ``__iter__`` の結合グループ(``_FILES_PER_CONCAT``)と
+        worker 分割を再現して数える．この値は tqdm の表示だけでなく
+        ``steps_per_epoch`` として LR スケジューラへ渡るため
+        (``stage_component_factory.py``)，過大評価すると
+        cosine decay が最後まで下がりきらない．
+        """
+        return _compute_concat_total_batches(
             self._source.row_counts,
             self._batch_size,
+            num_workers=self._num_workers,
         )
 
 

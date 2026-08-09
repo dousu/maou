@@ -307,6 +307,14 @@ class StageComponentFactory:
             )
         )
 
+        # ``__len__`` は結合グループを worker の担当ファイル内で数える．
+        # 要求値ではなく DataLoader が実際に使うワーカー数を渡すこと
+        # (``create_streaming_dataloaders`` はファイル数とメモリ制約で
+        # 切り下げるため，要求値だとバッチ数を読み違える)．
+        raw_dataset.set_num_workers(
+            train_dataloader.num_workers
+        )
+
         loss_fn = LegalMovesLoss(
             pos_weight=pos_weight,
             gamma_pos=gamma_pos,
