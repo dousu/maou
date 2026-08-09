@@ -324,6 +324,14 @@ Recorded for future `/audit-and-fix` runs; **not** fixed here.
    `step` are absent from the alias table
    (`interface/learn.py:66-82`), so both always raise `ValueError`. The
    CLI advertises two options that can never work.
+   **RESOLVED** 2026-08-09 in `064806e` — see
+   [2026-08-09 backlog tier-a](2026-08-09-out-of-scope-tier-a.md).
+   The `Choice` is now derived from `learn.SUPPORTED_LR_SCHEDULERS`
+   (canonical keys + display names), matching the two siblings that
+   already did so, so the list cannot drift from the alias table again.
+   Side effect: `cosine_annealing_lr` — implemented in
+   `SchedulerFactory.create_scheduler` (`setup.py:1071`) but never
+   selectable here — became available.
 2. `/audit-and-fix src/maou/interface` — `learn.py:830` passes
    `stage2_test_ratio` into
    `create_stage2_streaming_data_pipeline` after logging that it is
