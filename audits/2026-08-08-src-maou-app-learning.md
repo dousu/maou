@@ -403,3 +403,46 @@ re-run after the limit reset. This exposed a real defect in
 scope is the current diff, so it would have reviewed step 1's own commit
 rather than the path. Fixed in `5a2c0b0`
 (`reviews/2026-08-08-audit-and-fix-simplify-scope.md`, applied).
+
+## Corrections
+
+以下は後続の run が HEAD に対して再検証した際に，**この record の
+診断または示唆した修正そのものが誤りだった**と判明した箇所である．
+worklist の状態ではなく，記述の誤りだけを訂正する．
+
+**Deferred 1 の因果が誤り** (2026-08-09, `cdc4031`)．「`dl.py:318` と
+`:498` が `steps_per_epoch=len(loader)` を渡すので Stage2 の
+`__len__` 過大評価が scheduler を汚染する」としているが，`dl.py` の
+loader は **kif 経路**であり，その `__len__` (`streaming_dataset.py:306`)
+は正しい．Stage2 の scheduler は
+`stage_component_factory.py:713` / `:803` で
+`steps_per_epoch=len(pipeline.train_dataloader)` として作られ，
+`Stage2StreamingAdapter.__len__` (`streaming_dataset.py:636`) 経由で
+過大評価を受け取る．欠陥自体は実在するが，参照すべき行が違う．
+
+**Deferred 9 / Out-of-scope 4 の「公開 API だから消せない」根拠が偽**
+(2026-08-09, `1c714db`)．`docs/rust-backend.md:704` が
+`polars_row_to_*_tensors` を文書化しているとしているが，同ファイルを
+`polars_row_to` / `dataframe_to_tensor` / `polars_tensor` のいずれで
+検索しても 0 ヒットである (該当行は `S3DataSource` /
+`GCSDataSource` の `iter_batches_df()` 例)．4 関数はリポジトリ全体で
+出現箇所が定義 1 行のみだった．この誤った根拠が「削除できない」と
+いう判断を支えていたので，訂正しておく．
+
+**Deferred 10 / Out-of-scope 2 の callee 名が 1 ホップずれている**
+(2026-08-09, `cdc4031`)．`learn.py:830` が
+`create_stage2_streaming_data_pipeline` を呼ぶとしているが，実際に
+呼んでいるのは `create_stage2_streaming_components` (`:836`，
+`test_ratio` の転送は `:848`) であり，そこから
+`stage_component_factory.py:612` を経て
+`create_stage2_streaming_data_pipeline` (`:255`) へ届く．関係する
+シグネチャは 2 つでなく 3 つ．さらに **`stage2_test_ratio` は全体と
+しては死んでいない** — `learn.py:682` が同じ CLI 値を非 streaming の
+Stage 2 へ渡し，`stage_component_factory.py:196-216` で実際に使われる
+(`docs/loss-functions.md:87-91` も `--stage2-test-ratio 0.1` を推奨)．
+素直にパラメータごと削ると非 streaming の検証分割が壊れる．
+
+**Out-of-scope 3 のファイルパスが存在しない** (2026-08-09, `cdc4031`)．
+`getattr` プローブの位置を `network.py:179-188` としているが，
+`src/maou/domain/model/network.py` は存在しない．実体は
+`src/maou/app/learning/network.py` の同じ行番号だった (偶然一致)．
