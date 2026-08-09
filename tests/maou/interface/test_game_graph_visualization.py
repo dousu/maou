@@ -11,7 +11,7 @@ from maou.app.game_graph.layout import (
     GameGraphLayoutService,
     GraphLayout,
 )
-from maou.domain.board.shogi import Board
+from maou.domain.board.shogi import Board, move_to_usi
 from maou.domain.game_graph.schema import (
     get_game_graph_edges_schema,
     get_game_graph_nodes_schema,
@@ -349,6 +349,63 @@ def _build_tree_with_edge() -> tuple[
     return nodes, edges
 
 
+#: 5g5f の move16．square = (file - 1) * 9 + (rank - 1) なので
+#: from=5g=42, to=5f=41，move16 = (42 << 7) | 41．
+#: 値の正しさは test_chuo_hisha_move16_is_5g5f が保証する．
+_CHUO_HISHA_MOVE16 = 5417
+
+#: 平手初期局面から 7g7f 3c3d と進んだ局面 (先手番)．
+#: 5g5f はこの局面でも合法だが，定跡照合の対象外であるべき．
+_MIDDLEGAME_SFEN = (
+    "lnsgkgsnl/1r5b1/pppppp1pp/6p2/9/2P6/"
+    "PP1PPPPPP/1B5R1/LNSGKGSNL b - 3"
+)
+
+
+def _build_tree_with_chuo_hisha() -> tuple[
+    pl.DataFrame, pl.DataFrame
+]:
+    """テスト用のグラフ(ルート + 5g5f の子ノード)．
+
+    5g5f は _DEFAULT_OPENINGS の「先手中飛車」に単独で一致する
+    唯一の1手パターンなので，定跡照合のスコープ検証に使う．
+    """
+    nodes = _make_nodes(
+        [
+            {
+                "position_hash": 100,
+                "result_value": 0.52,
+                "best_move_win_rate": 0.53,
+                "num_branches": 1,
+                "depth": 0,
+                "is_depth_cutoff": False,
+            },
+            {
+                "position_hash": 200,
+                "result_value": 0.48,
+                "best_move_win_rate": 0.49,
+                "num_branches": 0,
+                "depth": 1,
+                "is_depth_cutoff": False,
+            },
+        ]
+    )
+    edges = _make_edges(
+        [
+            {
+                "parent_hash": 100,
+                "child_hash": 200,
+                "move16": _CHUO_HISHA_MOVE16,
+                "move_label": 10,
+                "probability": 0.6,
+                "win_rate": 0.52,
+                "is_leaf": False,
+            },
+        ]
+    )
+    return nodes, edges
+
+
 class TestGetBoardSvg:
     """get_board_svg のテスト."""
 
@@ -465,6 +522,18 @@ class TestGetBreadcrumbData:
         assert len(breadcrumb) == 0
 
 
+def test_chuo_hisha_move16_is_5g5f() -> None:
+    """テスト用 move16 定数が実際に 5g5f であることを確認する."""
+    assert move_to_usi(_CHUO_HISHA_MOVE16) == "5g5f"
+
+
+def test_middlegame_sfen_is_loadable_and_not_startpos() -> None:
+    """中盤局面SFENが読み込め，かつ平手と異なることを確認する."""
+    board = Board()
+    board.set_sfen(_MIDDLEGAME_SFEN)
+    assert board.get_sfen() != Board().get_sfen()
+
+
 class TestGetOpeningName:
     """get_opening_name のテスト."""
 
@@ -482,6 +551,57 @@ class TestGetOpeningName:
         result = viz.get_opening_name(200)
         # 7g7f のみではデフォルト定跡に一致しない
         assert result is None
+
+    def test_startpos_root_matches_opening(self) -> None:
+        """平手ルートでは5g5fが先手中飛車に一致する."""
+        nodes, edges = _build_tree_with_chuo_hisha()
+        viz = GameGraphVisualizationInterface(nodes, edges)
+        result = viz.get_opening_name(200)
+        assert result is not None
+        assert result.name == "先手中飛車"
+
+    def test_resolved_startpos_sfen_still_matches(self) -> None:
+        """解決済みの平手SFENを渡しても一致する.
+
+        本番経路では metadata の initial_sfen が常に具体的なSFEN
+        (build_game_graph.py の resolved_sfen = Board().get_sfen())
+        なので，Noneではなくこの形が渡る．None判定だけのガードを
+        入れると定跡表示が全滅するため，その回帰テスト．
+        """
+        nodes, edges = _build_tree_with_chuo_hisha()
+        viz = GameGraphVisualizationInterface(
+            nodes, edges, initial_sfen=Board().get_sfen()
+        )
+        result = viz.get_opening_name(200)
+        assert result is not None
+        assert result.name == "先手中飛車"
+
+    def test_middlegame_root_does_not_match(self) -> None:
+        """平手でないルートでは定跡名を返さない.
+
+        回帰テスト: 定跡データベースの全エントリは平手初期局面から
+        の指し手列なので，--initial-sfen で中盤局面から構築した
+        グラフの初手5g5fを「先手中飛車」と誤ラベルしていた．
+        """
+        nodes, edges = _build_tree_with_chuo_hisha()
+        viz = GameGraphVisualizationInterface(
+            nodes,
+            edges,
+            initial_sfen=_MIDDLEGAME_SFEN,
+        )
+        assert viz.get_opening_name(200) is None
+
+    def test_gote_root_does_not_match(self) -> None:
+        """手番だけが違うルートでも定跡名を返さない."""
+        nodes, edges = _build_tree_with_chuo_hisha()
+        gote_sfen = (
+            "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/"
+            "PPPPPPPPP/1B5R1/LNSGKGSNL w - 1"
+        )
+        viz = GameGraphVisualizationInterface(
+            nodes, edges, initial_sfen=gote_sfen
+        )
+        assert viz.get_opening_name(200) is None
 
 
 class TestExportSfenPath:

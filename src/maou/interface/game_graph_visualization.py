@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import functools
 import io
 import logging
 from typing import Any, ClassVar, NamedTuple
@@ -63,6 +64,18 @@ _BoardCache = tuple[int, Board | None]
 
 #: boards dict で「未登録」と「復元失敗 (None)」を区別する sentinel
 _MISSING: object = object()
+
+
+@functools.cache
+def _startpos_sfen_fields() -> tuple[str, ...]:
+    """平手初期局面SFENの盤面・手番・持駒フィールドを返す．
+
+    手数フィールド (4番目) は局面の同一性に関与しないため除外する．
+
+    Returns:
+        (盤面, 手番, 持駒) の3要素タプル
+    """
+    return tuple(Board().get_sfen().split()[:3])
 
 
 class MoveRow(NamedTuple):
@@ -701,6 +714,24 @@ class GameGraphVisualizationInterface:
 
         return path, moves
 
+    def _root_is_startpos(self) -> bool:
+        """グラフのルートが平手初期局面かどうかを返す．
+
+        ``initial_sfen`` は未指定 (None) のほか，
+        ``build-game-graph`` が解決した平手初期局面の具体的なSFEN
+        (`build_game_graph.py` の ``resolved_sfen``) でも渡される．
+        後者が本番の経路なので，None判定だけでは平手を識別できない．
+
+        Returns:
+            ルートが平手初期局面ならTrue
+        """
+        if not self._initial_sfen:
+            return True
+        return (
+            tuple(self._initial_sfen.split()[:3])
+            == _startpos_sfen_fields()
+        )
+
     def get_opening_name(
         self, position_hash: int
     ) -> OpeningInfo | None:
@@ -709,12 +740,20 @@ class GameGraphVisualizationInterface:
         ルートからの指し手列を定跡データベースと照合し，
         一致するパターンがあれば定跡情報を返す．
 
+        定跡データベースの全エントリは平手初期局面からの指し手列
+        として定義されているため，ルートが平手でないグラフ
+        (``--initial-sfen <中盤局面>``) では照合しない．
+
         Args:
             position_hash: 対象ノードのZobrist hash
 
         Returns:
             一致した定跡の情報．見つからない場合None．
+            ルートが平手初期局面でない場合もNone．
         """
+        if not self._root_is_startpos():
+            return None
+
         path, moves = self._get_moves_to_position(position_hash)
         if len(path) < 2:
             return None
