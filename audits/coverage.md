@@ -4,9 +4,14 @@ One row per path touched by `/audit-and-fix`. Shape, status vocabulary,
 and protocol: [README.md](README.md).
 
 **This table lists only what has been audited.** It is not a plan and not
-an inventory of remaining work — to see what is left, compare against the
-tree (`ls src/maou/*/`, `ls rust/`, `find docs -name '*.md'`), which is
-always current where a checked-in list would not be.
+an inventory of remaining *paths* — to see which paths are left, compare
+against the tree (`ls src/maou/*/`, `ls rust/`, `find docs -name '*.md'`),
+which is always current where a checked-in list would not be.
+
+Remaining *findings* are a different question, and they **are** inventoried
+here: see § "Open findings backlog" below. That is the live worklist; the
+per-run records are immutable accounts and are never read to decide what
+work remains.
 
 | Path | Scope | Status | Level | Last SHA | Record | Open items |
 |---|---|---|---|---|---|---|
@@ -20,23 +25,70 @@ _(none)_
 <!-- Rows move here only while status is `blocked`, with the blocker and
      what would unblock it. Keep the main table for in-progress/done. -->
 
-## Out-of-scope backlog
+## Open findings backlog — the single live worklist
 
-Findings an audit surfaced *outside* the path it was auditing. They live
-here, not only in the per-run record, because a record is read only when
-someone opens that specific path — while this file is read at the start of
-every run. That is what makes them recoverable.
+The two tables below are **the** authority on what audit work remains.
+Both `/audit-and-fix` and `/audit-backlog` gather candidate work from
+here and **only** from here.
 
-**Protocol.** Before auditing a path, check this table for rows whose
-target falls inside it and fold them into the run. When a row is
-resolved, delete it — the resolving audit's record is the durable
-account. Do not delete a row that was merely re-triaged.
+**Why this file and not the records.** A per-run record is read only when
+someone opens that specific path — so a finding left there is visible
+exactly to the audit least able to act on it. This file is read at the
+start of every run.
 
-Resolved rows are deleted. The account of a deleted row lives in the
-record that resolved it — including `kind: backlog` consumption records
-from `/audit-backlog`:
+**Why the records are not also consulted.** A record is an *immutable
+account of one run at one time*: its Deferred section says "as of that
+run, this was deferred", and that stays true forever even after the
+finding is fixed. Reading records for open work therefore re-surfaces
+resolved findings on every run, with no way to remove them — the ledger
+would never shrink. Deleting a row here is what makes a finding
+*consumed*, and it is the only mechanism that does.
+
+**Protocol (both tables).**
+- **Before auditing a path**, check both tables for rows whose target
+  falls inside it and fold them into the run.
+- **At the end of a run**, append a row for every finding left open —
+  deferred (inside the path) and out-of-scope (outside it) alike.
+  Writing it only into the run's record buries it.
+- **When a finding is resolved, delete its row.** The resolving record is
+  the durable account. Do not delete a row that was merely re-triaged —
+  sharpen its text instead.
+
+Records of runs that resolved rows deleted from here:
 
 - [2026-08-09 backlog tier-a](2026-08-09-out-of-scope-tier-a.md)
+
+### Deferred backlog
+
+Findings an audit **confirmed inside** its target path but deliberately
+did not fix — ambiguous, cross-layer, architecturally significant, or
+needing a decision. A deferred finding is a diagnosis with the fix
+withheld pending a decision, **not** a decision never to fix it.
+
+| Found by | Target | Item |
+|---|---|---|
+| [2026-08-08 game_graph](2026-08-08-src-maou-domain-game-graph.md) Deferred 1 | `src/maou/domain/game_graph` | `schema.py:41-79` `_create_empty_df` / `create_empty_nodes_df` / `create_empty_edges_df` have **no production callers** (tests only); the `size` parameter exists solely to satisfy those tests. **Needs a keep/delete decision** — deleting is a public-API removal plus its tests; keeping means fixing `create_empty_nodes_df(5)` yielding 5 all-null rows *including `position_hash`* (the schema's unique key), and a negative `size` surfacing a raw polars `InvalidOperationError` instead of `ValueError`. |
+| [2026-08-08 game_graph](2026-08-08-src-maou-domain-game-graph.md) Deferred 2 | `src/maou/domain/game_graph` | `openings.py:109-133` `find_opening` takes a bare `moves: list[str]` with no way to express "this list starts from 平手初期局面", though every `_DEFAULT_OPENINGS` entry is valid only from startpos. The **symptom** was fixed caller-side in `cc10790`; the domain API still cannot state its own precondition. Right shape (require an initial SFEN argument? return None unless root is startpos? leave it to the caller?) is a design decision on a public domain API the interface layer calls. |
+| [2026-08-08 app/learning](2026-08-08-src-maou-app-learning.md) Deferred 1 | `src/maou/app/learning` | `streaming_dataset.py:604` `StreamingStage2Dataset.__len__` overestimates — `_compute_total_batches` sums per-file `ceil(rows/batch)` but `__iter__` concatenates `_FILES_PER_CONCAT = 10` files before batching. **Not just tqdm**: `dl.py:318,498` pass `steps_per_epoch=len(loader)` to the scheduler, so `total_steps` is inflated and cosine decay never completes. Exact fix needs `num_workers` (grouping is per worker), unavailable in `__len__` — how to model sharding is a design decision. Magnitude ~0.08% at 100K rows/file, batch 256; matters for small shards. `StreamingKifDataset.__len__` (:306) is correct. |
+| [2026-08-08 app/learning](2026-08-08-src-maou-app-learning.md) Deferred 2 | `src/maou/app/learning` | Stage 1 / Stage 2 pipeline cloned across five files (three of four review angles reported it independently). `run_stage1_with_training_loop` / `run_stage2_with_training_loop` (`multi_stage_training.py:436`/`:585`, ~150 lines each) differ only in head class, callback class, metric getter and two log strings — the loop class is already shared. `_build_stage1_model_and_optimizer` / `_build_stage2_model_and_optimizer` (`stage_component_factory.py:636`/`:724`) have byte-identical 38-line tails. Also `dataset.py:202`/`:279`, `streaming_dataset.py:775`/`:835`. **~400-line refactor of the multi-stage training path — architecturally significant.** |
+| [2026-08-08 app/learning](2026-08-08-src-maou-app-learning.md) Deferred 3 | `src/maou/app/learning` | Six adapter classes are three duplicated pairs. `Stage1ModelAdapter`/`Stage2ModelAdapter` (`multi_stage_training.py:111`/`:240`) differ in **zero** characters; `Stage1DatasetAdapter`/`Stage2DatasetAdapter` (`:151`/`:183`) in one type annotation; `Stage1StreamingAdapter`/`Stage2StreamingAdapter` (`streaming_dataset.py:645`/`:610`) in a redundant `hasattr` guard. Merging also deletes the `isinstance` dispatch + `TypeError` arm at `stage_component_factory.py:866-872`, which exists only to choose between two identical classes. Six public names referenced from tests — should land as its own reviewed change. |
+| [2026-08-08 app/learning](2026-08-08-src-maou-app-learning.md) Deferred 4 | `src/maou/app/learning` | `callbacks.py` — `_ensure_device` written six times (`:238`, `:362`, `:1007`, `:1396`, `:1521`, `:1668`), plus three copies of the loss-accumulator scaffolding (`:1375`, `:1499`, `:1652`). `ValidationCallback` hand-lists the same 13 accumulator tensors in three places (`__init__` / `_ensure_device` / `reset`) — the exact shape that produces "new metric added, never moved to GPU, never reset" defects. Base-class extraction across the module's metric hub (~250 → ~120 lines). |
+| [2026-08-08 app/learning](2026-08-08-src-maou-app-learning.md) Deferred 5 | `src/maou/app/learning` | `training_loop.py:1093` per-batch host-device sync — `if not has_legal.all():` calls `Tensor.__bool__` on a CUDA tensor, a full pipeline stall once per training *and* validation batch, to guard a warning. Stage 3 always ships a `legal_move_mask`, so the branch is always taken. The branchless rewrite changes the loss path — **measure, don't assume**. Needs GPU hardware. |
+| [2026-08-08 app/learning](2026-08-08-src-maou-app-learning.md) Deferred 6 | `src/maou/app/learning` | `training_loop.py:460` `stream.synchronize()` blocks the host, defeating much of the prefetch it implements. `wait_stream()` gives the same ordering guarantee device-side without stalling the CPU, and the `record_stream()` added in `073adbd` already covers the allocator hazard. **Second untested GPU-semantics change stacked on the first** — validate both together on real hardware. |
+| [2026-08-08 app/learning](2026-08-08-src-maou-app-learning.md) Deferred 7 | `src/maou/app/learning` | `gradient_noise_scale.py:150,188-192,246` — one GPU sync per parameter tensor per micro-batch (`.item()` inside `for param in model.parameters()`): 60-300 syncs per micro-batch on a ResNet/ViT backbone whenever adaptive batch is on. Accumulating into a device scalar changes when the value materializes, and GNS feeds the adaptive batch controller — needs a numerical equivalence check. |
+| [2026-08-08 app/learning](2026-08-08-src-maou-app-learning.md) Deferred 8 | `src/maou/app/learning` | `dataset.py:91` / `streaming_dataset.py:754` — an all-ones `legal_move_mask` is built per sample and shipped over PCIe per batch (~9 MB/batch at B=1024), then consumed by five kernels that are no-ops for an all-ones mask. `callbacks.py:493` keys the `policy_move_label_ce` metric off `legal_move_mask is not None`, so it must stay non-`None`; the fix is "build once on device", which **changes the dataset contract**. |
+| [2026-08-08 app/learning](2026-08-08-src-maou-app-learning.md) Deferred 9 | `src/maou/app/learning` | `polars_datasource.py:205-268` `_PolarsField` fakes numpy flags to get past validation it cannot satisfy — guesses dtypes from Python value shape rather than the schema, and synthesizes a `FakeFlags` asserting `c_contiguous=True, writeable=True` purely so `dataset.py:186-198`'s zero-copy guards pass (the guards are structurally unreachable on this path). Switching to `domain/data/polars_tensor.py`'s finished-tensor helpers activates never-exercised code and that is a documented public API (`docs/rust-backend.md:704`). Pairs with the `src/maou/domain/data` out-of-scope row. |
+| [2026-08-08 app/learning](2026-08-08-src-maou-app-learning.md) Deferred 11 | `src/maou/app/learning` | `multi_stage_training.py:399-417` `TruncatedStageModel.forward` re-drives `HeadlessNetwork`'s private preprocessing (`_separate_inputs`, `_prepare_inputs`, `_hand_projection`, `_combine_board_and_hand`, `_embedding_channels`, `_board_size`), copying `network.py:164-172` verbatim. A public `HeadlessNetwork.embed_inputs()` would fix it. Pairs with the `src/maou/domain/model` out-of-scope row. |
+| [2026-08-08 app/learning](2026-08-08-src-maou-app-learning.md) "Smaller confirmed items" | `src/maou/app/learning` | Five confirmed items not individually filed, batched here so they are not lost: `dl.py:296`/`:1034` emit the "Both freeze_backbone and trainable_layers specified" warning twice per run; `dl.py:609` assigns a dead `epoch_number = 0`; `callbacks.py:416,500,511` recompute `log_softmax` three times and `topk` twice on identical logits per validation batch; `setup.py:229-235` `stat()`s every data file on the startup path just to average sizes; `setup.py:713-726`/`750-765` restate defaults `network.py:47-60` already has. |
+
+`/audit-and-fix src/maou/app/learning` Deferred 10 is **not** listed: its
+fix requires editing `src/maou/interface`, so it lives in the
+out-of-scope table below instead of being duplicated here.
+
+### Out-of-scope backlog
+
+Findings an audit surfaced **outside** the path it was auditing, and was
+therefore not allowed to fix.
 
 | Found by | Target | Item |
 |---|---|---|

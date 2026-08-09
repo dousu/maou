@@ -1,5 +1,5 @@
 ---
-description: Consume the deferred and out-of-scope findings that /audit-and-fix left behind. Gathers them from the whole audits/ tree, re-verifies each against HEAD, ranks them by priority, and lets the user pick which to resolve — then applies the fixes on the normal route (version bump, regression test, reviews/ proposal for durable docs), deletes the resolved backlog rows, and records the run in audits/.
+description: Consume the deferred and out-of-scope findings that /audit-and-fix left behind. Gathers them from audits/coverage.md's backlog tables, re-verifies each against HEAD, ranks them by priority, and lets the user pick which to resolve — then applies the fixes on the normal route (version bump, regression test, reviews/ proposal for durable docs), deletes the resolved backlog rows, and records the run in audits/.
 argument-hint: [item-selector or tier | omit to list everything] [effort-level: low|medium|high|max, default medium]
 ---
 
@@ -75,7 +75,7 @@ So: trust a record for **where to look**, never for **what to do**.
 
 ## Steps
 
-### 1. Gather the backlog — from two places, not one
+### 1. Gather the backlog — from `coverage.md`, and only from there
 
 Assume no memory of any previous run.
 
@@ -84,36 +84,35 @@ Assume no memory of any previous run.
 git fetch origin <current-branch>
 git status -sb
 ```
-Report if behind; do not auto-merge. A stale `audits/` tree silently
-re-proposes work another session already finished.
+Report if behind; do not auto-merge. A stale ledger silently re-proposes
+work another session already finished.
 
-**1b. Read the out-of-scope backlog.** `audits/coverage.md`
-§ "Out-of-scope backlog", in full. These are cross-path findings — an audit
-saw them from outside and was not allowed to fix them.
+**1b. Read `audits/coverage.md` § "Open findings backlog" in full** — both
+the Deferred backlog and the Out-of-scope backlog tables. That is the
+complete worklist.
 
-**1c. Read every record's Deferred section.** This is the half that is easy
-to miss. `coverage.md` carries only a *count* per row ("11 deferred"); the
-items themselves exist **only inside the record files**. Enumerate them from
-the directory, never from a list:
+**1c. MUST NOT read the records' `## Deferred` / `## Out of scope` sections
+to decide what work remains.** A record is an immutable account of one run
+at one time: its Deferred section says "as of that run, this was deferred",
+and that stays true forever even after the finding ships. Gathering from
+records therefore re-surfaces resolved findings on every run with no way to
+remove them — the backlog would never shrink, and step 2 would burn its
+verification budget re-confirming work that is already done.
 
-```bash
-ls audits/*.md          # excluding README.md and coverage.md
-```
+Deleting a row from `coverage.md` is what makes a finding **consumed**, and
+it is the only mechanism that does. So `coverage.md` is the authority on
+what is open, and records are the authority on what happened.
 
-Read the `## Deferred` section of each. Every audited path contributes, not
-just the newest — deferred items have no expiry and the oldest are the most
-likely to have been forgotten.
+You may still *open* a record — to recover the full reasoning behind a row
+you are about to act on (rows are condensed; records are not). Reading a
+record for context is fine. Reading it for the worklist is the error.
 
-Also read each record's `## Out of scope` section and reconcile it against
-1b: a finding present in a record but missing from `coverage.md`'s table is a
-**retrieval bug in the ledger** worth reporting and fixing in this run, since
-the table is the only copy any future run will read.
-
-**1d. Note the asymmetry explicitly** in your report. Out-of-scope findings
-are surfaced to every run by `coverage.md`; deferred findings are reachable
-only by opening the specific record. That makes deferred items the more
-neglected class, and they should not be ranked below out-of-scope items
-merely because they were harder to find.
+**1d. Reconcile, don't second-guess.** If a record documents an open
+finding that has **no row** in `coverage.md`, that is a **retrieval bug in
+the ledger**: the finding is invisible to every future run. Report it, add
+the missing row, and say so in step 5 — but treat this as a ledger repair,
+not as a licence to gather from records generally. The reverse case (a row
+whose record is gone) is a broken link worth reporting too.
 
 ### 2. Re-verify each candidate against HEAD
 
@@ -229,30 +228,36 @@ separately from the code. Then present it and take the decision:
 Three separate bookkeeping duties. All are required; the first is the one
 that keeps the backlog from growing forever.
 
-**5a. Delete the resolved rows** from `coverage.md`'s Out-of-scope backlog.
-The backlog is a worklist, not an archive — the record written in 5c is the
-durable account. Also delete rows that step 2 found **stale**, noting in 5c
-that they were already fixed elsewhere rather than fixed here. Do **not**
-delete a row that was merely re-triaged; sharpen its text instead.
+**5a. Delete the resolved rows** from `coverage.md` — from **either** the
+Deferred backlog or the Out-of-scope backlog, whichever table held them.
+This is the step that makes consumption real; without it the finding is
+still open as far as every future run is concerned.
 
-**5b. Annotate the source record's Deferred item — do not rewrite it.**
-`audits/README.md` treats a `done` record as immutable, and that is right:
-it is the account of one run at one time. But a Deferred section is also a
-live worklist, and leaving a resolved item unmarked means the next reader
-re-derives a fix that already shipped.
+Also delete rows that step 2 found **stale**, noting in 5c that they were
+already fixed elsewhere rather than fixed here. Do **not** delete a row that
+was merely re-triaged — sharpen its text instead, so the next run inherits
+the better reasoning rather than the original impasse.
 
-So annotate in place, additively, leaving the original reasoning intact:
+Update the `Open items` count on the affected main-table row to match.
+
+**5b. Leave the source records alone.** They are immutable accounts; their
+Deferred sections stay as written, describing what that run decided at that
+time. Do **not** add resolution markers, do **not** renumber, do **not**
+move an item into Applied. The row deletion in 5a is the resolution record,
+and 5c is its account.
+
+One narrow exception: when step 2 proved a record's **diagnosis or proposed
+fix wrong** (not merely resolved — *wrong*), append a short correction to
+that record, because leaving it uncorrected makes it actively misleading to
+the next reader. State the correction, never the worklist state:
 
 ```markdown
-3. **`foo.py:120` — <original finding text, unchanged>**
-   **Not applied because** <original reason, unchanged>
-   **RESOLVED** 2026-08-09 in `<sha>` — see
-   [2026-08-09 backlog](2026-08-09-backlog-<slug>.md).
+   **Correction** (2026-08-09, `<sha>`): the fix suggested above would
+   have <consequence>, because <what the record missed>.
 ```
 
-Never delete the original text or renumber the surviving items — the numbers
-are cited from `coverage.md` and from other records. Update the row's
-open-item count in `coverage.md` to match.
+If you find yourself wanting to write "RESOLVED" or "done" in a record,
+that is worklist state — it belongs in 5a's deletion, not here.
 
 **5c. Write this run's record.**
 `audits/$(TZ=Asia/Tokyo date '+%Y-%m-%d')-backlog-<slug>.md`, where `<slug>`
@@ -287,14 +292,15 @@ from one never attempted.
 ### 6. Report
 
 Compact summary:
-- Backlog size found: N out-of-scope + M deferred, across which records
+- Backlog size found: N deferred + M out-of-scope (from `coverage.md`)
 - Verification: confirmed / stale / changed-shape counts
 - Selected and resolved (IDs + one line each), with commit SHAs
 - Re-triaged / rejected, with the reason
 - Doc drift → `reviews/<file>` and its status
 - QA: what ran, what passed, what was blocked and why
 - Version bump(s), old → new, which manifest
-- Ledger: rows deleted, records annotated, new record path
+- Ledger: rows deleted (which table), rows added by 1d's repair, any
+  record correction from 5b, new record path
 - Backlog remaining, by tier — so the next run knows what is left
 
 ### 7. Handoff
@@ -309,7 +315,10 @@ campaign memory are deliberately separate systems.
 
 Keep the derive-never-enumerate property:
 
-- **New audited path** — nothing to do; step 1c globs `audits/*.md`.
+- **New audited path** — nothing to do, provided `/audit-and-fix` appended
+  its open findings to `coverage.md`. If a path's findings never reach the
+  backlog tables, no amount of work here recovers them; that is a defect in
+  `/audit-and-fix` step 9, not in this command.
 - **New scope class** (new language, new top-level dir) — add its QA path to
   4c, keyed off a discoverable marker (a manifest, a
   `.pre-commit-config.yaml` entry), not a hardcoded path.

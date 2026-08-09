@@ -36,6 +36,16 @@ reversibility: moderate
    `done` record の Deferred 項目が Applied に移されている．
    ルールと実務のどちらかを直す必要がある．
 
+   **これが 1 と同根である**ことが，本提案の初版をユーザレビューに
+   かけて判明した．初版は deferred 項目を record 内に残したまま
+   「RESOLVED 注釈を追記する」方式を提案していたが，これは誤検出を
+   構造的に防げない: record は消せないので，消化済み項目が毎回 worklist
+   として再浮上する．注釈をフィルタとして使う手はあるが，
+   フィルタの有無に正しさが依存する設計になる．
+   out-of-scope が誤検出しないのは **coverage.md から行を削除できる**
+   からであり，deferred も同じ構造にすれば注釈機構ごと不要になる．
+   本提案はその方針に改訂済み (§4, §5)．
+
 3. **backlog 消化の記録先が未定義**．個別 finding を消化した run は
    `audits/` に何を書くべきか決まっていない．メインテーブルに `done` 行を
    書くと未監査パスを監査済みと主張してしまう (今回この判断が必要になった)．
@@ -89,13 +99,22 @@ reversibility: moderate
 ```markdown
 - MUST record every `/audit-and-fix` **and `/audit-backlog`** run in
   `audits/` and commit it — `/audit-and-fix` writes a ledger row + record
-  file; `/audit-backlog` writes a `kind: backlog` record, deletes the
-  backlog rows it resolved, and annotates the source record's Deferred
-  item, but MUST NOT write a main-table row (a row there claims the whole
-  path was audited). `audits/` is the only cross-session record of
-  repo-wide audit coverage, and unlike `scratchpad/` it survives container
-  reclamation. An interrupted run MUST still write its resume point before
-  the session ends.
+  file; `/audit-backlog` writes a `kind: backlog` record and MUST NOT
+  write a main-table row (a row there claims the whole path was audited).
+  `audits/` is the only cross-session record of repo-wide audit coverage,
+  and unlike `scratchpad/` it survives container reclamation. An
+  interrupted run MUST still write its resume point before the session
+  ends.
+- MUST treat `audits/coverage.md` § "Open findings backlog" as the **only**
+  live worklist of open findings, deferred and out-of-scope alike:
+  `/audit-and-fix` MUST append a row for every finding it leaves open, and
+  a run that resolves one MUST delete its row. MUST NOT read a record's
+  `## Deferred` / `## Out of scope` section to decide what work remains —
+  a record is an immutable account whose Deferred section stays true after
+  the finding ships, so treating it as a worklist re-surfaces resolved
+  findings forever. MUST NOT amend a record to carry state (no `RESOLVED`
+  markers, no Deferred→Applied moves, no renumbering); a **correction** of
+  a wrong diagnosis is the only permitted amendment.
 ```
 
 ### 4. audits/README.md — deferred 項目の到達性 (新規小節)
@@ -107,22 +126,22 @@ reversibility: moderate
 
 A record's `## Deferred` section holds findings the audit **confirmed but
 deliberately did not fix** — ambiguous, cross-layer, or needing a
-decision. `coverage.md` carries only their *count* per row, so unlike
-out-of-scope findings they are reachable only by opening the specific
+decision. A deferred finding is a diagnosis with the fix withheld pending
+a decision, **not** a decision never to fix it.
+
+Deferred findings therefore get a row in `coverage.md`'s **Deferred
+backlog**, exactly as out-of-scope findings get one in the Out-of-scope
+backlog. The retrieval argument above applies to both classes in full:
+what is written only into a record is visible only to whoever opens that
 record.
 
-That makes them the more neglected class, not the less important one: the
-retrieval argument above ("a per-run record is read only when someone
-opens that specific path") applies to them in full. `/audit-backlog`
-exists to close that gap — it globs `audits/*.md` and reads every
-Deferred section, rather than waiting for someone to audit that path
-again.
-
-A deferred item is therefore **not** a decision to never fix it. It is a
-diagnosis with the fix withheld pending a decision.
+`coverage.md` is the authority on **what is open**; records are the
+authority on **what happened**. The row is the condensed, deletable index
+entry; the record's Deferred section is the durable reasoning behind it.
+Both are written, and only the row is ever deleted.
 ```
 
-### 5. audits/README.md — immutability の明確化
+### 5. audits/README.md — records are worklist-free
 
 **Before**
 
@@ -133,37 +152,41 @@ diagnosis with the fix withheld pending a decision.
 **After**
 
 ```markdown
-| `audits/YYYY-MM-DD-<path-slug>.md` | One record per `/audit-and-fix` run. The account of the run is immutable once `done` — but a resolved Deferred item is **annotated in place** (see below). |
+| `audits/YYYY-MM-DD-<path-slug>.md` | One record per `/audit-and-fix` run. Immutable once the run's status is `done` — it is an account, never a worklist (see below). |
 | `audits/YYYY-MM-DD-backlog-<slug>.md` | One record per `/audit-backlog` run (`kind: backlog`). Consumes individual findings; gets no main-table row. |
 ```
 
 そして § "Status vocabulary" の直前に:
 
 ```markdown
-## Amending a done record
+## Records are accounts, not worklists
 
-A `done` record is the account of one run at one time, and that account
-is immutable — do not rewrite its findings, reasoning, or numbering.
+A `done` record is the account of one run at one time. Its Deferred
+section says "as of that run, this was deferred" — and that stays true
+forever, **including after the finding has shipped**.
 
-But a `## Deferred` section is also a live worklist. When a later run
-resolves a deferred item, it is **annotated additively**, leaving the
-original text and number intact:
+That is why no command reads a record to decide what work remains. Doing
+so would re-surface every resolved finding on every run, with no way to
+remove it: a record cannot be "cleared" without destroying the account,
+so the list would only ever grow. Deleting a row from `coverage.md` is
+what marks a finding consumed, and it is the only mechanism that does.
+
+So a record is **never amended to carry state**: no `RESOLVED` markers,
+no moving an item from Deferred into Applied, no renumbering. Commit
+`916e874` did move a deferred item into Applied — that predates the
+Deferred backlog, when the record was the only place to record it, and it
+is not the pattern to follow now.
+
+The one narrow exception is a **correction**: when a later run proves a
+record's diagnosis or proposed fix *wrong*, append a short note saying
+so, because an uncorrected record actively misleads the next reader. A
+correction states what the record got wrong, never whether the work is
+done:
 
 ```markdown
-3. **`foo.py:120` — <original finding, unchanged>**
-   **Not applied because** <original reason, unchanged>
-   **RESOLVED** YYYY-MM-DD in `<sha>` — see
-   [YYYY-MM-DD backlog](YYYY-MM-DD-backlog-<slug>.md).
+   **Correction** (YYYY-MM-DD, `<sha>`): the fix suggested above would
+   have <consequence>, because <what the record missed>.
 ```
-
-Never renumber surviving items — the numbers are cited from
-`coverage.md` and from other records. Update the row's open-item count in
-`coverage.md` to match.
-
-This resolves the contradiction between the immutability rule and commit
-`916e874`, which moved a deferred item into Applied on a `done` record.
-Annotation keeps both properties: the account stays intact, and the
-worklist stays accurate.
 ```
 
 ## Motivation
@@ -177,15 +200,27 @@ worklist stays accurate.
 immutability の矛盾を放置すると，次のセッションは `916e874` の前例と
 README の文面のどちらに従うかを毎回判断し直すことになる．
 
+そして「消化済みを表現する手段」を record 側に持たせようとすると必ず
+誤検出が残る．record は削除できない (削除は account の破壊) ので，
+worklist としての状態は**削除できる場所**に置くしかない．
+それが `coverage.md` の行である．
+
 ## Alternatives considered
 
 - **`/audit-and-fix` に消化モードを足す**．却下: あのコマンドは既に505行
   あり，スコープが「1パス」であることが resumability の根拠になっている．
   個別 finding 消化はスコープの定義が違う (パスを横断する) ので，
   同じコマンドに入れると step 0 の path 解決が二重化する．
-- **deferred 項目を coverage.md に全部転記する**．却下: 13件の本文を
-  ledger に展開すると ledger が読めなくなり，record との二重管理になる．
-  glob で読む方が単一の真実を保てる．
+- **record を glob して Deferred を読み，RESOLVED 注釈で消化済みを
+  マークする** (本提案の初版)．**却下**: record は削除できないので，
+  消化済み項目が毎回 worklist として再浮上する．注釈をフィルタに使えば
+  回避できるが，「フィルタが正しく効いているか」に設計の正しさが依存し，
+  フィルタを書き忘れた初版は実際に誤検出する仕様になっていた．
+  行削除なら誤検出が**構造的に**起こりえない．
+  さらに注釈方式は `/audit-and-fix` step 0c (「re-audit 前に record の
+  Deferred を読む」) にも同じ問題を残す — 誤検出が別コマンドへ移るだけ．
+- **deferred は record にだけ置き，転記しない** (現状)．却下: 13件が
+  record を開かない限り不可視で，実際に誰も消化していなかった．
 - **消化 run にもメインテーブル行を書く**．却下: 未監査パスを
   監査済みと主張することになる (本提案 3 の理由)．
 
@@ -193,13 +228,21 @@ README の文面のどちらに従うかを毎回判断し直すことになる�
 
 - deferred / out-of-scope が「溜まる一方」でなくなる — 消化に正常ルートが
   でき，優先度提示 → ユーザ選択 → 修正 → 行削除 + 記録 が1コマンドで回る．
-- record を後から安全に注釈できる — immutability を壊さずに worklist を
-  最新に保てる．
+- **誤検出が構造的に起こりえない** — 消化 = 行削除なので，消化済み項目が
+  worklist に再浮上する経路が存在しない．`coverage.md` = 何が開いているか，
+  record = 何が起きたか，と権威が1つずつに分かれる．
+- record が真に immutable になる (correction のみ例外)．
+  `916e874` のような state 書き換えが不要になる．
 
 ## What this constrains
 
-- `/audit-backlog` は今後 record の Deferred 番号を **renumber できない**
-  (他ファイルから参照されるため)．注釈は追記のみ．
+- `/audit-and-fix` は open finding を **必ず** `coverage.md` に append
+  しなければならない (record だけに書くと不可視)．コマンド側 step 9 を
+  改訂済み．これは追加の義務だが，deferred が失われる唯一の経路を閉じる．
+- `coverage.md` が長くなる (現在 deferred 13行 + out-of-scope 6行)．
+  ただし消化すれば縮む — それが設計意図であり，record と違って縮められる．
+- 行と record の二重記述になる．行は条約された index，record は durable な
+  理由づけ，という役割分担で許容する (out-of-scope で既に確立した形)．
 - consumption record が増えるので `audits/` のファイル数は増える．
   ledger のメインテーブルは増えない．
 

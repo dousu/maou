@@ -207,7 +207,34 @@ commit ではフックが走っていない．`uv run` ベースのフック
    だった．
 2. **record の immutability が実運用と矛盾．** README は `done` record を
    immutable とするが，`916e874` が `done` record の Deferred を Applied
-   に移している．追記注釈方式で両立させる案を提案中．
+   に移している．
 3. **消化 run の記録先が未定義．** メインテーブルに `done` 行を書けない
    (未監査パスを監査済みと主張してしまう) ため，`kind: backlog` の
    record + backlog 表からのリンクという形を採った．
+
+**1 と 2 は同根だった (ユーザレビューによる訂正).** `/audit-backlog` の
+初版は 1 を「record を glob して Deferred を読み，消化時に RESOLVED を
+追記注釈する」方式で解こうとしたが，これは誤検出を構造的に防げない:
+record は削除できないので，消化済み項目が毎回 worklist として再浮上する．
+初版は注釈をフィルタとして使う指示すら書いておらず，実際に毎回13件を
+読み直して再検証する仕様だった．さらに同じ問題は `/audit-and-fix`
+step 0c (「re-audit 前に record の Deferred を読む」) にも残るので，
+誤検出が別コマンドへ移動するだけだった．
+
+out-of-scope が誤検出しないのは **`coverage.md` から行を削除できる**
+からである．よって deferred も同じ構造にした:
+
+- `coverage.md` に **Deferred backlog** 表を新設し，13件を移送した
+  (out-of-scope 表と並ぶ兄弟)．§ "Open findings backlog" が両表を束ねる．
+- 両コマンドは worklist を `coverage.md` からのみ収集する．
+  **record を open work の判定に読むことを禁止**した．
+- 消化 = 行削除．record への state 書き込み (RESOLVED / Deferred→Applied
+  / renumber) は禁止．**correction** (record の診断自体が誤っていた場合)
+  のみ例外．
+- `/audit-and-fix` step 9 は open finding を必ず `coverage.md` に append
+  する義務を負う (record だけに書くと不可視のまま)．
+
+この run で本記録が最初に付けた RESOLVED 注釈も撤回し，correction のみ
+残した (`cc10790` の producer 発見と，A3 の sibling 見落とし)．
+`coverage.md` / `audit-backlog.md` / `audit-and-fix.md` /
+`reviews/2026-08-09-audit-backlog-command.md` を改訂済み．
