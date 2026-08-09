@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 1df2675ba2c93e576c519dd619eaf296d9dde36a
 date: 2026-08-09
 target: [docs/commands/pre_process.md]
 risk: low
