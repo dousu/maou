@@ -127,7 +127,7 @@ maou pre-process --input-path hcpe_val/ --output-dir pre_val/
 | Option | Default | Description |
 |---|---|---|
 | `--input-path PATH` | required | HCPE (`.feather`) のディレクトリまたはファイル．再帰的に走査する． |
-| `--output-path PATH` | required | 出力する feather (`id` / `searchWinRate` / `playouts` / `stop`)． |
+| `--output-path PATH` | required | 出力する feather (`id` / `searchWinRate` / `playouts` / `stop`)．拡張子は `.feather` か `.arrow` でなければ**エラー**になる．`pre-process --search-value-path` にディレクトリを渡すとこの拡張子で配下を拾うため，別の名前で書くとそのファイルだけ無言で飛ばされて部分適用になる． |
 | `--model-path PATH` | optional | ONNX モデル．未指定なら決定論的な mock 評価器 (API 検証用．**値に意味は無い**)． |
 | `--min-ply INT` | `60` | この手数以上の局面のみ対象にする．記憶は中終盤に集中し，序盤の局面は多数の対局で共有されて教師が平均化されるので手を入れる必要が無い． |
 | `--max-positions INT` | `0` | 対象局面数の上限 (`0` で無制限)．GPU 予算に合わせる．標本抽出は `--seed` で決まりラベルに依存しない． |
