@@ -31,10 +31,13 @@ class _ArrayDataSource(DataSource):
         return len(self._data)
 
 
-def test_preprocessed_batches_provide_legal_move_masks() -> (
-    None
-):
-    """Collating preprocessed records should yield a tensor mask, not ``None``."""
+def test_preprocessed_batches_omit_legal_move_mask() -> None:
+    """前処理済みレコードは legal_move_mask を含まない．
+
+    この経路が作れるマスクは常に全 1 で消費側では no-op なの
+    に，バッチ毎に moveLabel と同じサイズを転送していた．
+    moveWinRate がない旧形式では targets は 2 要素になる．
+    """
 
     dtype = np.dtype(
         [
@@ -65,9 +68,7 @@ def test_preprocessed_batches_provide_legal_move_masks() -> (
     dataset = KifDataset(datasource=_ArrayDataSource(data))
 
     loader = DataLoader(dataset, batch_size=2)
-    (boards, pieces), (_, _, legal_move_mask) = next(
-        iter(loader)
-    )
+    (boards, pieces), targets = next(iter(loader))
 
     assert isinstance(boards, torch.Tensor)
     assert boards.dtype == torch.uint8
@@ -75,8 +76,11 @@ def test_preprocessed_batches_provide_legal_move_masks() -> (
     assert isinstance(pieces, torch.Tensor)
     assert pieces.dtype == torch.uint8
     assert pieces.shape == (2, 14)
-    assert isinstance(legal_move_mask, torch.Tensor)
-    assert torch.all(legal_move_mask == 1)
+    # moveWinRate がないので (move_label, result_value) のみ．
+    assert len(targets) == 2
+    move_label, result_value = targets
+    assert move_label.shape == (2, 5)
+    assert result_value.shape == (2, 1)
 
 
 def test_dataset_accepts_float16_move_labels() -> None:
@@ -104,13 +108,13 @@ def test_dataset_accepts_float16_move_labels() -> None:
 
     dataset = KifDataset(datasource=_ArrayDataSource(data))
 
-    (_, _), (policy, _, _) = dataset[0]
+    (_, _), (policy, _) = dataset[0]
 
     assert policy.dtype == torch.float16
 
 
 def test_dataset_returns_move_win_rate_when_present() -> None:
-    """moveWinRate field in structured array is returned as 4th target element."""
+    """moveWinRate field is returned as the 3rd target element."""
 
     dtype = np.dtype(
         [
@@ -136,7 +140,7 @@ def test_dataset_returns_move_win_rate_when_present() -> None:
 
     dataset = KifDataset(datasource=_ArrayDataSource(data))
 
-    (_, _), (_, _, _, move_win_rate) = dataset[0]
+    (_, _), (_, _, move_win_rate) = dataset[0]
 
     assert move_win_rate is not None
     assert move_win_rate.dtype == torch.float32
@@ -147,10 +151,10 @@ def test_dataset_returns_move_win_rate_when_present() -> None:
     )
 
 
-def test_dataset_returns_3_element_tuple_when_no_win_rate() -> (
+def test_dataset_returns_2_element_tuple_when_no_win_rate() -> (
     None
 ):
-    """Target tuple has 3 elements when moveWinRate field is absent."""
+    """Target tuple has 2 elements when moveWinRate field is absent."""
 
     dtype = np.dtype(
         [
@@ -176,7 +180,7 @@ def test_dataset_returns_3_element_tuple_when_no_win_rate() -> (
 
     (_, _), targets = dataset[0]
 
-    assert len(targets) == 3
+    assert len(targets) == 2
 
 
 def test_dataset_requires_board_identifiers() -> None:

@@ -633,32 +633,95 @@ class TestValidationCallbackWinRateMetrics:
             expected_ce
         )
 
-    def test_move_label_ce_none_without_legal_move_mask(
+    def test_move_label_ce_computed_without_legal_move_mask(
         self,
     ) -> None:
-        """policy_move_label_ce is None when legal_move_mask is absent."""
+        """legal_move_mask が None でも policy_move_label_ce を出す．
+
+        以前は ``legal_move_mask is not None`` でゲートして
+        いたため，全データ経路がマスクの供給をやめた時点で
+        この指標が黙って消えてしまう．マスク無しでも
+        ``normalize_policy_targets`` は素の正規化を行い，
+        ``policy_log_probs`` と同じ確率空間になる．
+        """
         callback = ValidationCallback()
 
+        outputs_policy = torch.tensor(
+            [[1.0, 0.0]], dtype=torch.float32
+        )
+        policy_targets = torch.tensor(
+            [[0.8, 0.2]], dtype=torch.float32
+        )
         move_win_rate = torch.tensor(
             [[0.5, 0.5]],
             dtype=torch.float32,
         )
         ctx = self._create_context_with_win_rate(
-            outputs_policy=torch.tensor(
-                [[1.0, 0.0]], dtype=torch.float32
-            ),
-            policy_target_distribution=torch.tensor(
-                [[0.8, 0.2]], dtype=torch.float32
-            ),
+            outputs_policy=outputs_policy,
+            policy_target_distribution=policy_targets,
             labels_value=torch.zeros(1),
             outputs_value=torch.zeros(1),
             move_win_rate=move_win_rate,
-            legal_move_mask=None,  # maskなし → metricsはNone
+            legal_move_mask=None,
         )
         callback.on_batch_end(ctx)
         metrics = callback.get_average_metrics()
 
-        assert metrics.policy_move_label_ce is None
+        log_probs = torch.nn.functional.log_softmax(
+            outputs_policy, dim=1
+        )
+        normalized = policy_targets / policy_targets.sum(
+            dim=1, keepdim=True
+        )
+        expected_ce = (
+            -torch.sum(normalized * log_probs, dim=1)
+            .mean()
+            .item()
+        )
+        assert metrics.policy_move_label_ce is not None
+        assert metrics.policy_move_label_ce == pytest.approx(
+            expected_ce
+        )
+
+    def test_move_label_ce_matches_all_ones_mask(
+        self,
+    ) -> None:
+        """全 1 マスクを渡した場合と None の場合で値が一致する．
+
+        データ経路からマスクを外した変更が指標を動かして
+        いないことを固定する (全 1 マスクは no-op なので，
+        マスク有無で結果が変わってはいけない)．
+        """
+        outputs_policy = torch.tensor(
+            [[2.0, 1.0, 0.0]], dtype=torch.float32
+        )
+        policy_targets = torch.tensor(
+            [[0.7, 0.3, 0.0]], dtype=torch.float32
+        )
+        move_win_rate = torch.tensor(
+            [[0.5, 0.5, 0.0]], dtype=torch.float32
+        )
+
+        values = []
+        for mask in (
+            None,
+            torch.ones(1, 3, dtype=torch.float32),
+        ):
+            callback = ValidationCallback()
+            ctx = self._create_context_with_win_rate(
+                outputs_policy=outputs_policy,
+                policy_target_distribution=policy_targets,
+                labels_value=torch.zeros(1),
+                outputs_value=torch.zeros(1),
+                move_win_rate=move_win_rate,
+                legal_move_mask=mask,
+            )
+            callback.on_batch_end(ctx)
+            ce = callback.get_average_metrics().policy_move_label_ce
+            assert ce is not None
+            values.append(ce)
+
+        assert values[0] == pytest.approx(values[1])
 
     def test_metrics_none_without_move_win_rate(self) -> None:
         """Win rate metrics are None when move_win_rate is absent."""

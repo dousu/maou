@@ -153,7 +153,7 @@ class Stage1DatasetAdapter(Dataset):
 
     Stage1Dataset は ((board, hand), reachable_squares) を返すが，
     TrainingLoop._unpack_batch() は
-    ((board, hand), (labels_policy, labels_value, legal_move_mask))
+    ((board, hand), (labels_policy, labels_value, move_win_rate))
     を期待する．
 
     PyTorch の default_collate は None を処理できないため，
@@ -185,7 +185,7 @@ class Stage2DatasetAdapter(Dataset):
 
     Stage2Dataset は ((board, hand), legal_moves) を返すが，
     TrainingLoop._unpack_batch() は
-    ((board, hand), (labels_policy, labels_value, legal_move_mask))
+    ((board, hand), (labels_policy, labels_value, move_win_rate))
     を期待する．
 
     PyTorch の default_collate は None を処理できないため，
@@ -225,7 +225,7 @@ def pre_stage_collate_fn(
 ]:
     """Stage1/Stage2 DatasetAdapter の出力をバッチに collate する．
 
-    両アダプタは legal_move_mask=None を含むタプルを返すが，
+    両アダプタは move_win_rate=None を含むタプルを返すが，
     PyTorch の default_collate は None を処理できないため，
     None を手動で伝播させるカスタム collate 関数が必要．
     """

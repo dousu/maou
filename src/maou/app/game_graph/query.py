@@ -154,11 +154,23 @@ class GameGraphQuery:
         同一 position_hash に対する2回目以降の呼び出しは
         キャッシュから即座に返す．
 
+        戻り値の先頭は必ず depth 0 のルートである．親をたどれ
+        なくなった時点で打ち切って部分パスを返すことはしない
+        (先頭がルートでないリストは，呼び出し側が「ルートから
+        の手順」として解釈すると黙って誤った定跡名や SFEN を
+        生成するため)．ビルダの出力は常に連結なので，
+        ``ValueError`` はグラフが壊れている場合にのみ起きる．
+
         Args:
             position_hash: 対象ノードのZobrist hash
 
         Returns:
-            ルートから対象ノードまでのposition_hashリスト
+            ルートから対象ノードまでのposition_hashリスト．
+            ``position_hash`` がグラフに存在しない場合は空リスト．
+
+        Raises:
+            ValueError: 親チェーンが途中で切れており，ルート
+                (depth 0) まで到達できない場合．
         """
         if position_hash in self._path_cache:
             self._path_cache.move_to_end(position_hash)
@@ -174,7 +186,14 @@ class GameGraphQuery:
 
         while True:
             node_depth = self._get_depth(current)
-            if node_depth is None or node_depth == 0:
+            if node_depth is None:
+                msg = (
+                    f"Broken parent chain from node {position_hash}: "
+                    f"node {current} is referenced as a parent but "
+                    "is absent from nodes_df"
+                )
+                raise ValueError(msg)
+            if node_depth == 0:
                 break
 
             # depth が 1 小さい親を選択(複数ある場合は確率最大のエッジを優先)
@@ -182,7 +201,12 @@ class GameGraphQuery:
                 pl.col("child_hash") == current
             )
             if len(parent_edges) == 0:
-                break
+                msg = (
+                    f"Broken parent chain from node {position_hash}: "
+                    f"node {current} has depth {node_depth} but no "
+                    "incoming edge"
+                )
+                raise ValueError(msg)
 
             parent_with_depth = parent_edges.join(
                 self.nodes_df.select("position_hash", "depth"),
@@ -191,7 +215,12 @@ class GameGraphQuery:
             ).filter(pl.col("depth") == node_depth - 1)
 
             if len(parent_with_depth) == 0:
-                break
+                msg = (
+                    f"Broken parent chain from node {position_hash}: "
+                    f"node {current} has depth {node_depth} but no "
+                    f"parent at depth {node_depth - 1}"
+                )
+                raise ValueError(msg)
 
             best_parent = parent_with_depth.sort(
                 "probability", descending=True

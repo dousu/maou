@@ -113,9 +113,9 @@ Ridnik et al., "Asymmetric Loss For Multi-Label Classification", ICCV 2021
 #### ターゲット形式
 
 前処理パイプラインで棋譜から出現率マップ(ソフトターゲット)を計算し，
-確率分布として保存する．`normalize_policy_targets` で
-`legal_move_mask` を適用した上で確率分布に正規化する
-(ただし現行のマスクはダミーであり実質的な絞り込みは起きない．後述)．
+確率分布として保存する．`normalize_policy_targets` は
+`legal_move_mask` を受け取れるが，現行のデータ経路はマスクを
+供給しないため素の正規化になる(後述)．
 
 #### 選択理由
 
@@ -136,16 +136,25 @@ masked_logits = outputs_policy.masked_fill(~legal_move_mask.bool(), float("-inf"
 policy_log_probs = F.log_softmax(masked_logits, dim=1)
 ```
 
-しかし **Stage 3 に供給される `legal_move_mask` は全要素 1 のダミー**である
-(`dataset.py` / `streaming_dataset.py` の `torch.ones_like`)．前処理出力スキーマに
-合法手の情報が無いためで，結果として:
+しかし **どのデータ経路も `legal_move_mask` を供給しない**．前処理出力
+スキーマに合法手の情報が無いためで，`TrainingLoop._unpack_batch()` は
+`legal_move_mask=None` を立てる．結果として:
 
-- `masked_fill` は恒等変換になり，`log_softmax` は **1496 次元全体**で正規化される
-- `normalize_policy_targets` の `targets * mask` も 1 倍で無変更
-- **`legal_move_mask=None` を渡した場合と勾配まで完全に一致する**
+- `masked_fill` の分岐に入らず，`log_softmax` は **1496 次元全体**で正規化される
+- `normalize_policy_targets` はマスク無しで正規化する
+- 上のマスキング経路は丸ごと休眠している
 
 つまりこの節が想定していた「有効次元が1496→~20に縮小される」効果は**得られていない**．
 モデルは非合法手のlogitsを押し下げる学習に勾配を費やしている．
+
+2026-08-09 まで `dataset.py` / `streaming_dataset.py` は
+`torch.ones_like(moveLabel)` の全 1 マスクを実際に作って targets に
+入れていた．勾配は `None` の場合と完全に一致する一方，バッチ毎に
+moveLabel と同じサイズ (B=1024 で約 9MB) を PCIe 上に流し，消費側の
+5 つのカーネルを no-op として通していたため，データ側からは外した．
+`TrainingContext.legal_move_mask` と `_compute_policy_loss` の
+マスク分岐は，本物の合法手マスクを流す経路が将来できたときのために
+残してある．
 
 **実害は限定的**である．推論時は Rust 側 (`rust/maou_search/src/onnx.rs`) が
 合法手のラベルに対応するlogitsだけを取り出してsoftmaxを取るため，
@@ -196,7 +205,7 @@ raw 1496次元の `topk` / `argmax` で計算しているため，上表のと�
 
 - Stage 1: `ReachableSquaresLoss(pos_weight=1.0)` = 従来BCE
 - Stage 2: `LegalMovesLoss(gamma_pos=0.0, gamma_neg=0.0, clip=0.0)` = 従来BCE
-- Stage 3: Policy損失に合法手マスキングを追加(デフォルトで有効，`legal_move_mask` がない場合は従来動作)
+- Stage 3: Policy損失に合法手マスキング機構を追加(現行データ経路はマスクを供給しないため従来動作)
 
 ### Clean Architecture
 

@@ -267,7 +267,6 @@ class StreamingKifDataset(IterableDataset):
             tuple[
                 torch.Tensor,
                 torch.Tensor,
-                torch.Tensor,
                 torch.Tensor | None,
             ],
         ]
@@ -281,7 +280,7 @@ class StreamingKifDataset(IterableDataset):
         担当ファイルのみを読み込む．
 
         Yields:
-            ((board_tensor, pieces_tensor), (move_label_tensor, result_value_tensor, legal_move_mask_tensor, move_win_rate_tensor))
+            ((board_tensor, pieces_tensor), (move_label_tensor, result_value_tensor, move_win_rate_tensor))
         """
         # persistent_workers対応: worker_info.seedはエポックごとに変わる
         worker_info = torch.utils.data.get_worker_info()
@@ -688,8 +687,9 @@ class Stage2StreamingAdapter(IterableDataset):
 
     StreamingStage2Dataset は ``((board, hand), legal_moves)`` を yield するが，
     TrainingLoop._unpack_batch() は
-    ``((board, hand), (labels_policy, labels_value, legal_move_mask))``
-    を期待する．このアダプタがダミーの value ラベルと None マスクを挿入する．
+    ``((board, hand), (labels_policy, labels_value, move_win_rate))``
+    を期待する．このアダプタがダミーの value ラベルと None の
+    move_win_rate を挿入する．
     """
 
     def __init__(self, dataset: StreamingStage2Dataset) -> None:
@@ -723,7 +723,7 @@ class Stage1StreamingAdapter(IterableDataset):
 
     StreamingStage1Dataset は ((board, hand), reachable_squares) を yield するが，
     TrainingLoop._unpack_batch() は
-    ((board, hand), (labels_policy, labels_value, legal_move_mask))
+    ((board, hand), (labels_policy, labels_value, move_win_rate))
     を期待する．
 
     Args:
@@ -774,7 +774,6 @@ def _yield_kif_batches(
         tuple[
             torch.Tensor,
             torch.Tensor,
-            torch.Tensor,
             torch.Tensor | None,
         ],
     ],
@@ -790,7 +789,7 @@ def _yield_kif_batches(
         rng: 乱数生成器
 
     Yields:
-        ((board_tensor, pieces_tensor), (move_label_tensor, result_value_tensor, legal_move_mask_tensor, move_win_rate_tensor))
+        ((board_tensor, pieces_tensor), (move_label_tensor, result_value_tensor, move_win_rate_tensor))
     """
     n = len(columnar_batch)
     if n == 0:
@@ -827,10 +826,9 @@ def _yield_kif_batches(
             .float()
             .unsqueeze(1)
         )  # (N,) → (N, 1)
-        legal_move_mask_tensor = torch.ones_like(
-            move_label_tensor
-        )
-
+        # legal_move_mask は yield しない (KifDataset と同じ理由:
+        # この経路のマスクは常に全 1 で消費側では no-op であり，
+        # バッチ毎の PCIe 転送だけが残るため)．
         move_win_rate_tensor: torch.Tensor | None = None
         if batch.move_win_rate is not None:
             move_win_rate_tensor = torch.from_numpy(
@@ -842,7 +840,6 @@ def _yield_kif_batches(
             (
                 move_label_tensor,
                 result_value_tensor,
-                legal_move_mask_tensor,
                 move_win_rate_tensor,
             ),
         )

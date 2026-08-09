@@ -327,9 +327,7 @@ class TestStreamingKifDataset:
 
         features, targets = batches[0]
         board, pieces = features
-        move_label, result_value, legal_mask, _move_win_rate = (
-            targets
-        )
+        move_label, result_value, _move_win_rate = targets
 
         assert board.shape == (4, 9, 9)
         assert board.dtype == torch.uint8
@@ -337,7 +335,9 @@ class TestStreamingKifDataset:
         assert pieces.dtype == torch.uint8
         assert move_label.shape == (4, MOVE_LABELS_NUM)
         assert result_value.shape == (4, 1)
-        assert legal_mask.shape == (4, MOVE_LABELS_NUM)
+        # legal_move_mask は yield されない (常に全 1 の no-op
+        # だったため targets から外した)．
+        assert len(targets) == 3
 
     def test_last_batch_smaller(self) -> None:
         """Last batch is smaller when data doesn't divide evenly."""
@@ -449,8 +449,13 @@ class TestStreamingKifDataset:
         assert targets[1].shape == (5, 1)
         assert targets[1].dtype == torch.float32
 
-    def test_legal_move_mask_is_ones(self) -> None:
-        """Legal move mask is all ones for preprocessing data."""
+    def test_legal_move_mask_not_yielded(self) -> None:
+        """legal_move_mask は targets に含まれない．
+
+        この経路が作れるマスクは常に全 1 で消費側では
+        no-op なのに，バッチ毎に moveLabel と同じサイズを
+        PCIe 上に流していた．3 要素目は move_win_rate．
+        """
         source = FakePreprocessingSource(
             n_files=1, rows_per_file=5
         )
@@ -462,14 +467,15 @@ class TestStreamingKifDataset:
         )
 
         _, targets = next(iter(dataset))
-        assert torch.all(targets[2] == 1.0)
+        assert len(targets) == 3
+        assert targets[2] is None
 
 
 class TestStreamingKifDatasetMoveWinRate:
     """Test StreamingKifDataset with move_win_rate."""
 
     def test_move_win_rate_present(self) -> None:
-        """4th target element is a tensor when move_win_rate exists."""
+        """3rd target element is a tensor when move_win_rate exists."""
         source = FakePreprocessingSourceWithWinRate(
             n_files=1, rows_per_file=6
         )
@@ -485,7 +491,6 @@ class TestStreamingKifDatasetMoveWinRate:
         (
             _move_label,
             _result_value,
-            _legal_mask,
             move_win_rate,
         ) = targets
 
@@ -494,7 +499,7 @@ class TestStreamingKifDatasetMoveWinRate:
         assert move_win_rate.dtype == torch.float32
 
     def test_move_win_rate_absent(self) -> None:
-        """4th target element is None when move_win_rate is absent."""
+        """3rd target element is None when move_win_rate is absent."""
         source = FakePreprocessingSource(
             n_files=1, rows_per_file=5
         )
@@ -507,7 +512,7 @@ class TestStreamingKifDatasetMoveWinRate:
 
         batches = list(dataset)
         _, targets = batches[0]
-        assert targets[3] is None
+        assert targets[2] is None
 
     def test_move_win_rate_values_nonzero(self) -> None:
         """move_win_rate tensor has non-trivial values."""
@@ -523,8 +528,8 @@ class TestStreamingKifDatasetMoveWinRate:
 
         batches = list(dataset)
         _, targets = batches[0]
-        assert targets[3] is not None
-        assert targets[3].sum() > 0
+        assert targets[2] is not None
+        assert targets[2].sum() > 0
 
 
 # ============================================================================
@@ -1396,6 +1401,6 @@ def test_streaming_kif_dataset_normal_operation_with_exception_handling() -> (
     batches = list(dataset)
     # 2 files × 10 rows / 5 batch_size = 4 batches
     assert len(batches) == 4
-    for (board, pieces), (move, value, mask, _) in batches:
+    for (board, pieces), (move, value, _) in batches:
         assert board.shape[0] == 5
         assert pieces.shape[0] == 5

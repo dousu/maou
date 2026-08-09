@@ -488,16 +488,26 @@ class TrainingLoop:
         batch_idx: int,
         epoch_idx: int,
     ) -> TrainingContext:
-        """Unpack raw dataloader output into a TrainingContext."""
+        """Unpack raw dataloader output into a TrainingContext.
+
+        ``targets`` の並びは ``(labels_policy, labels_value,
+        move_win_rate)`` で，``move_win_rate`` は省略可 (Stage1 /
+        Stage2 アダプタは ``None`` を入れる)．
+
+        legal_move_mask はどのデータ経路も供給しない．供給できた
+        マスクは常に全 1 = no-op でありながらバッチ毎に PCIe を
+        占有していたため，データ側から外した．マスク機構自体
+        (``TrainingContext.legal_move_mask`` と
+        ``_compute_policy_loss`` のマスク分岐) は，本物の合法手
+        マスクを流す経路が将来できたときのために残してある．
+        """
         inputs, targets = data
         labels_policy = targets[0]
         labels_value = targets[1]
-        legal_move_mask: torch.Tensor | None = (
-            targets[2] if len(targets) > 2 else None
-        )
+        legal_move_mask: torch.Tensor | None = None
         move_win_rate: torch.Tensor | None = None
-        if len(targets) > 3:
-            move_win_rate = targets[3]
+        if len(targets) > 2:
+            move_win_rate = targets[2]
 
         # value 教師は resultValue (= win_count / count) を直接使う．
         # 指し手別勝率の最大値を使う方式は max による上方バイアス

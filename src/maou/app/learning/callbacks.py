@@ -504,24 +504,27 @@ class ValidationCallback(BaseCallback):
                     )
 
                     # policy_move_label_ce: moveLabelとのCE(参考値)
-                    # legal_move_maskがある場合のみ計算する．
-                    # maskなしで正規化したmoveLabelはマスク付き確率空間と不整合になるため．
-                    if context.legal_move_mask is not None:
-                        move_label_targets = (
-                            normalize_policy_targets(
-                                context.labels_policy,
-                                context.legal_move_mask,
-                            )
+                    # normalize_policy_targets は legal_move_mask が
+                    # None なら素の正規化を行い，マスクがあれば
+                    # マスク付き確率空間に合わせる．どちらの場合も
+                    # policy_log_probs と同じ空間になるので，
+                    # マスクの有無で分岐せず常に計算してよい．
+                    # (以前は `legal_move_mask is not None` で
+                    # ゲートしていたが，全経路がマスクの供給を
+                    # やめた時点でこの指標が黙って消えてしまう．)
+                    move_label_targets = (
+                        normalize_policy_targets(
+                            context.labels_policy,
+                            context.legal_move_mask,
                         )
-                        self._policy_move_label_ce_sum += (
-                            self._cross_entropy_from_log_probs(
-                                policy_log_probs,
-                                move_label_targets,
-                            )
+                    )
+                    self._policy_move_label_ce_sum += (
+                        self._cross_entropy_from_log_probs(
+                            policy_log_probs,
+                            move_label_targets,
                         )
-                        self.policy_move_label_ce_count += (
-                            batch_n
-                        )
+                    )
+                    self.policy_move_label_ce_count += batch_n
 
                     # policy_expected_win_rate: Σ softmax(logits)[i] × moveWinRate[i]
                     # log_softmax + exp で softmax を得る(数値安定性のため)

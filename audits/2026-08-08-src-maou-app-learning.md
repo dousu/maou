@@ -463,3 +463,31 @@ seed に依存するのは各結合グループの**行数合計**だけで，sh
 ファイル数とグループの区切り方はシャッフルによらず一定である．
 したがって `__iter__` の構造を再現する修正は判断待ちにする必要が
 なかった (`51eadfa` で適用済み)．
+
+**Deferred 9 の「ガードを通すために FakeFlags がある」が誤り**
+(2026-08-09, `b2cf8e8`)．`_PolarsField` の `FakeFlags` は
+「`dataset.py:186-198` の zero-copy ガードを通すためだけに」
+`c_contiguous=True, writeable=True` を主張している，としているが，
+そのガードは `_PolarsField.flags` を**一度も読まない**．
+`_numpy_to_tensor` は先頭で `np.asarray(array)` を呼び (`dataset.py:197`)，
+`__array__` 経由で本物の numpy 配列を作ってから，その配列の
+`.flags` を `:216` / `:222` で見る．リポジトリ全体で
+`_PolarsField.flags` の読み手は 0 件だった．つまりこれは
+「満たせない検証を欺くための足場」ではなく単なる死んだコードであり，
+削除に設計上の判断は要らなかった．dtype 推測の方は実在する欠陥
+だが，こちらも**現時点では潜在的**である — 全列の推測がたまたま
+スキーマと一致しており (`List(List(UInt8))`→uint8，
+`List(Float32)`→float32 等)，実害が出るのは将来
+`List(UInt16)` 等の列が入ったときである．
+
+**Deferred 8 は「device 上で 1 回作る」より外す方が正しかった**
+(2026-08-09, `b2cf8e8`)．示唆された修正は全 1 マスクを device 上で
+1 回だけ構築して使い回すというものだが，それでも消費側の 5 つの
+no-op カーネルと常駐バッファは残る．マスクを供給する経路は
+リポジトリ内に一つも無かった (`torch.ones_like` が 2 箇所とも
+無条件) ので，targets タプルから外し `legal_move_mask=None` を
+立てる方が転送もカーネルも消える．ただし record が指摘していない
+罠が一つある: `_unpack_batch` は `targets[2]` を mask，
+`targets[3]` を `move_win_rate` として**位置で**読むため，
+データ側だけ直すと `move_win_rate` の float 値がそのまま
+合法手マスクとして `masked_fill` に渡り，損失が静かに壊れる．

@@ -19,6 +19,38 @@ from maou.domain.data.polars_tensor import (
 logger = logging.getLogger(__name__)
 
 
+def _leaf_numpy_dtype(
+    dtype: Any,
+) -> np.dtype[Any] | None:
+    """Polars dtype から対応する numpy dtype を導出する．
+
+    ``pl.List`` / ``pl.Array`` は入れ子を剥がして最内の型を見る
+    (``List(List(UInt8))`` → ``uint8``)．
+
+    変換表を書き下さず polars 自身に空 Series を numpy 化させて
+    問い合わせるので，polars の型が増えても追従不要である．
+
+    Args:
+        dtype: 列の Polars dtype
+
+    Returns:
+        対応する numpy dtype．判定できない型では ``None``
+        (呼び出し側は値からの推測にフォールバックする)．
+    """
+    leaf = dtype
+    while isinstance(leaf, (pl.List, pl.Array)):
+        leaf = leaf.inner
+    try:
+        return np.dtype(
+            pl.Series("", [], dtype=leaf).to_numpy().dtype
+        )
+    except Exception:  # pragma: no cover - 未知のPolars型
+        logger.debug(
+            "Could not derive numpy dtype from %r", leaf
+        )
+        return None
+
+
 class PolarsDataFrameSource:
     """DataSource wrapper for Polars DataFrames．
 
@@ -48,6 +80,15 @@ class PolarsDataFrameSource:
         # 読むようになる (実際 preprocessing で発生していた)．
         self._col_idx: dict[str, int] = {
             name: i for i, name in enumerate(dataframe.columns)
+        }
+        # 列名 → numpy dtype をスキーマから導出しておく．値の
+        # Python 型から推測すると，例えば List(UInt16) の列が
+        # uint8 として作られて値が 256 で折り返し，しかも
+        # KifDataset 側の dtype ガードは (期待どおりの uint8 な
+        # ので) 素通りする — 静かなデータ破壊になる．
+        self._np_dtypes: dict[str, np.dtype[Any] | None] = {
+            name: _leaf_numpy_dtype(dtype)
+            for name, dtype in dataframe.schema.items()
         }
 
         logger.info(
@@ -90,7 +131,12 @@ class PolarsDataFrameSource:
         for name in optional:
             if name in self._col_idx:
                 data[name] = row_tuple[self._col_idx[name]]
-        return _PolarsRow(data)
+        return _PolarsRow(
+            data,
+            np_dtypes={
+                name: self._np_dtypes.get(name) for name in data
+            },
+        )
 
     def __getitem__(self, idx: int) -> _PolarsRow:
         """Get a single row as numpy-compatible format．
@@ -185,8 +231,22 @@ class _PolarsRow:
     that expects numpy structured arrays．
     """
 
-    def __init__(self, data: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        data: dict[str, Any],
+        *,
+        np_dtypes: dict[str, np.dtype[Any] | None]
+        | None = None,
+    ) -> None:
+        """Initialize the row wrapper．
+
+        Args:
+            data: 列名 → 値
+            np_dtypes: 列名 → スキーマ由来の numpy dtype．
+                省略した列は値から推測される．
+        """
         self._data = data
+        self._np_dtypes = np_dtypes or {}
         self.dtype = _FakeDtype(list(data.keys()))
 
     def __getitem__(self, key: str) -> _PolarsField:
@@ -196,7 +256,9 @@ class _PolarsRow:
         for scalar values．
         """
         value = self._data[key]
-        return _PolarsField(value)
+        return _PolarsField(
+            value, np_dtype=self._np_dtypes.get(key)
+        )
 
     def __repr__(self) -> str:
         return f"_PolarsRow({self._data})"
@@ -205,17 +267,31 @@ class _PolarsRow:
 class _PolarsField:
     """Wrapper for Polars field values that mimics numpy array/scalar behavior．"""
 
-    def __init__(self, value: Any) -> None:
+    def __init__(
+        self,
+        value: Any,
+        *,
+        np_dtype: np.dtype[Any] | None = None,
+    ) -> None:
+        """Wrap one field value．
+
+        Args:
+            value: 列の値 (リストまたはスカラ)
+            np_dtype: スキーマ由来の numpy dtype．``None`` の
+                ときだけ値の形から推測する (HCPE 経路のように
+                既に numpy 化された値を渡す場合)．
+        """
         self._value = value
+        self._np_dtype = np_dtype
+        self._array: np.ndarray[Any, Any] | None = None
         # Convert Polars list to numpy array for tensor conversion
         if isinstance(value, list):
-            # Infer dtype from field type
-            # For board/pieces: uint8, for moveLabel: float32
-            if value and isinstance(value[0], list):
+            if np_dtype is not None:
+                # スキーマが正．入れ子リストでもそのまま渡せる．
+                self._array = np.array(value, dtype=np_dtype)
+            elif value and isinstance(value[0], list):
                 # Nested list (e.g., boardIdPositions)
-                self._array: np.ndarray[Any, Any] | None = (
-                    np.array(value, dtype=np.uint8)
-                )
+                self._array = np.array(value, dtype=np.uint8)
             elif value and isinstance(value[0], float):
                 # Float list (e.g., moveLabel)
                 self._array = np.array(value, dtype=np.float32)
@@ -245,6 +321,8 @@ class _PolarsField:
         """Return dtype (mimics numpy array)．"""
         if self._array is not None:
             return self._array.dtype
+        if self._np_dtype is not None:
+            return self._np_dtype
         # Return dtype for scalar
         if isinstance(self._value, int):
             return np.dtype("int64")
@@ -252,20 +330,14 @@ class _PolarsField:
             return np.dtype("float64")
         return np.dtype("object")
 
-    @property
-    def flags(self) -> Any:
-        """Return flags (mimics numpy array)．"""
-        if self._array is not None:
-            return self._array.flags
-        # For scalars, create fake flags
-        return type(
-            "FakeFlags",
-            (),
-            {
-                "c_contiguous": True,
-                "writeable": True,
-            },
-        )()
+    # ``flags`` は意図的に実装しない．KifDataset の zero-copy
+    # ガード (dataset.py の ``_numpy_to_tensor``) は
+    # ``np.asarray(field)`` で本物の numpy 配列を作ってから
+    # その ``.flags`` を見るので，このラッパの ``flags`` は
+    # 一度も参照されない．以前ここにあった ``FakeFlags``
+    # (c_contiguous/writeable を無条件に True と主張するもの) は
+    # ガードを黙らせるために必要だと記録されていたが，実際には
+    # 誰も読まない死んだコードだった．
 
     @property
     def shape(self) -> tuple[int, ...]:
