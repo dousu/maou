@@ -41,6 +41,25 @@ app --> domain
 
 - ここではentityだけが存在する
 
+## Game Graph サブシステム
+
+棋譜群を局面 (Zobrist hash) をノード，指し手をエッジとする DAG に
+畳み込み，分岐と勝率を可視化するサブシステム．2 レイヤにまたがる:
+
+| 層 | パス | 責務 |
+|---|---|---|
+| domain | `src/maou/domain/game_graph/` | Polars スキーマ (`schema.py`)，グラフの entity (`model.py`)，定跡データベース (`openings.py`) |
+| app | `src/maou/app/game_graph/` | グラフ構築 (`builder.py`) とクエリ (`query.py`) のユースケース |
+
+依存方向は他と同じく app → domain のみ．`openings.py` の
+`OpeningDatabase.find_opening()` は**平手初期局面からの手順**を前提と
+する純粋関数で，起点が平手かどうかの検査は行わない (手順だけからは
+起点が分からない)．この前提の担保は interface 層
+(`game_graph_visualization.py` の `_root_is_startpos()`) の責務である．
+
+CLI は [build-game-graph](commands/build_game_graph.md) と
+[visualize](commands/visualize.md)．
+
 ## Shogi Engine (Rust) Encapsulation
 
 The project uses the in-house Rust engine `maou_shogi` (exposed via the
