@@ -1,6 +1,15 @@
-# Global build configuration for memory-constrained environments
-[build]
-jobs = 1  # Single parallel job to reduce memory usage
+# Global build configuration.
+#
+# `jobs` は**意図的に設定しない** (cargo 既定 = CPU 数).
+# このファイルは tracked なので，ここに書いた値は潤沢な環境にも一律に効く．
+# `jobs = 1` を既定にしていた間，4 CPU の環境で py-ext のコールドビルドが
+# 37分47秒 かかっていた．同じビルドが jobs=4 では 10分09秒 (3.7倍) で終わる．
+# 並列度はプロファイル選択より桁で影響が大きい (2026-08-09 実測)．
+#
+# 代償はピーク RSS で，jobs=1 の 3.8GB に対し jobs=4 は 7.2GB.
+# したがってメモリ制約環境では絞る必要があるが，それは環境ごとの判断であり
+# tracked config の仕事ではない — `scripts/dev-init.sh` が user cargo config に
+# `jobs = 1` を書くので，DevContainer 等はそちらで絞られる．
 
 # Profile-specific debug info settings
 [profile.dev]
