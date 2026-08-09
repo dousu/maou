@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 03b61ad
 date: 2026-08-09
 target: [docs/loss-functions.md, docs/rust-backend.md, docs/adr-001-dataloader-multiprocessing-optimization.md]
 risk: low
