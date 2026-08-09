@@ -239,13 +239,17 @@ def transform(
             win/loss outcome instead, which is 0.0/1.0 (0.5 for a draw)
             when the position occurred once. Ignored for positions
             excluded via ``drop_below_threshold``.
-        search_value_path: Output of ``maou utility search-values``. When
-            given, ``resultValue`` is replaced by the search value for the
-            positions it covers. A game result is constant across the ~110
-            positions of one game, so recalling which game a position came
-            from fits the training set without transferring to unseen games;
-            search values differ position by position. Positions absent from
-            the file keep their game-result value.
+        search_value_path: Output of ``maou utility search-values`` -- a
+            single ``.feather`` or a directory of them, whose contents are
+            unioned. When given, ``resultValue`` is replaced by the search
+            value for the positions it covers. A game result is constant
+            across the ~110 positions of one game, so recalling which game a
+            position came from fits the training set without transferring to
+            unseen games; search values differ position by position.
+            Positions absent from the input keep their game-result value.
+            An unreadable file, or one without a usable ``id`` /
+            ``searchWinRate``, raises ``ValueError`` before any conversion
+            work starts.
         drop_below_threshold: If True, positions with occurrence count below
             ``position_count_threshold`` are excluded entirely from the
             output instead of receiving a fallback value. (default: False)

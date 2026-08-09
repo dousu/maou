@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,6 +57,16 @@ SEARCH_VALUE_SCHEMA: dict[str, pl.DataType] = {
     "playouts": pl.Int32(),
     "stop": pl.String(),
     "elapsedMs": pl.Int32(),
+}
+
+#: 前処理が ``resultValue`` の差し替えに実際に使う列．
+#:
+#: 診断列 (``playouts`` / ``stop`` / ``elapsedMs``) は前処理では読まない．
+#: **読み込み時点でこの 2 列へ射影する**ので，診断列の構成が違うファイル
+#: (``elapsedMs`` を持たない 0.82.0 より前の出力など) 同士でも union できる．
+SEARCH_VALUE_REQUIRED_SCHEMA: dict[str, pl.DataType] = {
+    "id": pl.UInt64(),
+    "searchWinRate": pl.Float32(),
 }
 
 
@@ -125,6 +135,23 @@ class SearchValueOption:
     flush_interval: int = 500
 
 
+def _feather_paths(path: Path) -> list[Path]:
+    """ファイルならそれ自身，ディレクトリなら配下の `.feather` を列挙する．
+
+    パス指定オプションはこのプロジェクト全体でディレクトリを受け付けるので，
+    探索値の入出力も同じ規約に揃える．
+
+    Args:
+        path: ディレクトリまたは単一ファイル．
+
+    Returns:
+        `.feather` のパス一覧 (パス順で安定)．
+    """
+    if path.is_file():
+        return [path]
+    return sorted(path.glob("**/*.feather"))
+
+
 def _hcpe_paths(
     input_path: Path, exclude: Path | None = None
 ) -> list[Path]:
@@ -140,11 +167,7 @@ def _hcpe_paths(
     Returns:
         `.feather` のパス一覧 (安定した順序)．
     """
-    paths = (
-        [input_path]
-        if input_path.is_file()
-        else sorted(input_path.glob("**/*.feather"))
-    )
+    paths = _feather_paths(input_path)
     if exclude is None:
         return paths
     skipped = exclude.resolve()
@@ -213,6 +236,122 @@ def select_positions(
     return rows
 
 
+def _check_search_value_schema(
+    path: Path, schema: Mapping[str, pl.DataType]
+) -> None:
+    """1 ファイルのスキーマが前処理で使える形かを検査する．
+
+    Args:
+        path: 検査対象のパス (エラーメッセージ用)．
+        schema: そのファイルのスキーマ．
+
+    Raises:
+        ValueError: 必要な列が無い，または型が数値でない場合．
+    """
+    missing = [
+        c
+        for c in SEARCH_VALUE_REQUIRED_SCHEMA
+        if c not in schema
+    ]
+    if missing:
+        raise ValueError(
+            f"{path} is not a search value file: it has no "
+            f"{', '.join(missing)} column "
+            f"(its columns are {', '.join(schema) or '<none>'}). "
+            "--search-value-path takes the output of "
+            "`maou utility search-values`; when it is a directory, every "
+            "*.feather under it must be such an output -- point it at the "
+            "search value directory, not at the HCPE directory the values "
+            "were searched from."
+        )
+    for (
+        column,
+        expected,
+    ) in SEARCH_VALUE_REQUIRED_SCHEMA.items():
+        actual = schema[column]
+        if not actual.is_numeric():
+            raise ValueError(
+                f"{path}: column '{column}' has type {actual}, which cannot "
+                f"be used as the {expected} that pre-processing needs. "
+                "The file does not look like the output of "
+                "`maou utility search-values`."
+            )
+
+
+def load_search_values(path: Path) -> pl.DataFrame:
+    """``--search-value-path`` を読み，前処理が使う 2 列の表にまとめる．
+
+    ディレクトリを渡すと配下の `.feather` を全て union する
+    (行方向の連結．重複 id は `apply_search_values` がパス順で後勝ちに解決する)．
+
+    **検査は読み込みより先に全ファイル分をまとめて行う．** 前処理での探索値
+    適用は HCPE 変換と集約が終わった後に走るので，ここで弾かないと不備が
+    数時間後に判明する．スキーマ検査は IPC のフッタしか読まないので，
+    先に全部見ておく方が安い．
+
+    Args:
+        path: ディレクトリまたは単一の `.feather`．
+
+    Returns:
+        `SEARCH_VALUE_REQUIRED_SCHEMA` の DataFrame．
+
+    Raises:
+        ValueError: ディレクトリ配下に `.feather` が無い，feather として
+            読めない，前処理に必要な列が無い，または型が使えない場合．
+    """
+    paths = _feather_paths(path)
+    if not paths:
+        raise ValueError(
+            f"{path} contains no .feather file. --search-value-path takes "
+            "the output of `maou utility search-values`, either the file "
+            "itself or a directory containing one or more of them."
+        )
+
+    for p in paths:
+        try:
+            schema = pl.scan_ipc(p).collect_schema()
+        except Exception as exc:
+            raise ValueError(
+                f"{p} could not be read as a feather (Arrow IPC) file: {exc}"
+            ) from exc
+        _check_search_value_schema(p, dict(schema))
+
+    columns = list(SEARCH_VALUE_REQUIRED_SCHEMA)
+    frames: list[pl.DataFrame] = []
+    for p in paths:
+        try:
+            frames.append(
+                pl.read_ipc(
+                    p, columns=columns, memory_map=False
+                ).cast(SEARCH_VALUE_REQUIRED_SCHEMA)  # type: ignore[arg-type]
+            )
+        except Exception as exc:
+            raise ValueError(
+                f"{p}: could not read {', '.join(columns)} as "
+                f"{', '.join(str(t) for t in SEARCH_VALUE_REQUIRED_SCHEMA.values())}"
+                f": {exc}"
+            ) from exc
+
+    values = (
+        frames[0]
+        if len(frames) == 1
+        else pl.concat(frames, how="vertical")
+    )
+    logger.info(
+        "Loaded %d search values from %d file(s) under %s",
+        len(values),
+        len(paths),
+        path,
+    )
+    if values.is_empty():
+        logger.warning(
+            "%s holds no search value; every resultValue will keep its "
+            "game-result value",
+            path,
+        )
+    return values
+
+
 def apply_search_values(
     df: pl.DataFrame, values: pl.DataFrame
 ) -> tuple[pl.DataFrame, int]:
@@ -240,8 +379,9 @@ def apply_search_values(
     unique_values = values.unique(subset=["id"], keep="last")
     if len(unique_values) != len(values):
         logger.warning(
-            "search value file has %d duplicate id(s); keeping the last "
-            "occurrence of each",
+            "search value input has %d duplicate id(s); keeping the last "
+            "occurrence of each (with a directory, that is the last file "
+            "in path order)",
             len(values) - len(unique_values),
         )
     joined = df.join(

@@ -285,3 +285,65 @@ def test_preprocess_with_input_splitting(
 
     output_files = list(output_dir.glob("*.feather"))
     assert len(output_files) > 0
+
+
+def test_search_value_directory_is_applied(
+    tmp_path: Path,
+) -> None:
+    """ディレクトリ指定でも探索値が適用され，行数が変わらないこと．"""
+    from maou.domain.data.rust_io import load_preprocessing_df
+
+    input_paths = _create_test_hcpe_data(
+        tmp_path / "input", samples=5
+    )
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+
+    baseline_dir = tmp_path / "baseline"
+    baseline_dir.mkdir()
+    PreProcess(
+        datasource=FileDataSource(
+            file_paths=input_paths, array_type="hcpe"
+        ),
+        feature_store=None,
+    ).transform(
+        PreProcess.PreProcessOption(
+            output_dir=baseline_dir, max_workers=1
+        )
+    )
+    baseline = load_preprocessing_df(
+        next(baseline_dir.glob("*.feather"))
+    )
+
+    values_dir = tmp_path / "values"
+    values_dir.mkdir()
+    target = int(baseline["id"][0])
+    pl.DataFrame(
+        {
+            "id": pl.Series("id", [target], dtype=pl.UInt64),
+            "searchWinRate": pl.Series(
+                "searchWinRate", [0.125], dtype=pl.Float32
+            ),
+        }
+    ).write_ipc(values_dir / "a.feather", compression="lz4")
+
+    PreProcess(
+        datasource=FileDataSource(
+            file_paths=input_paths, array_type="hcpe"
+        ),
+        feature_store=None,
+        search_value_path=values_dir,
+    ).transform(
+        PreProcess.PreProcessOption(
+            output_dir=output_dir, max_workers=1
+        )
+    )
+    out = load_preprocessing_df(
+        next(output_dir.glob("*.feather"))
+    )
+
+    assert len(out) == len(baseline)
+    replaced = out.filter(pl.col("id") == target)[
+        "resultValue"
+    ][0]
+    assert replaced == pl.Series([0.125], dtype=pl.Float32)[0]

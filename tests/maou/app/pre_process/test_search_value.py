@@ -6,13 +6,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
 import polars as pl
 import pytest
 
+from maou.app.pre_process.hcpe_transform import DataSource
 from maou.app.pre_process.search_value import (
+    SEARCH_VALUE_REQUIRED_SCHEMA,
     SEARCH_VALUE_SCHEMA,
     SearchValueCollector,
     SearchValueOption,
@@ -20,6 +23,7 @@ from maou.app.pre_process.search_value import (
     _ply_of,
     _with_current_schema,
     apply_search_values,
+    load_search_values,
     select_positions,
 )
 
@@ -351,3 +355,260 @@ class TestOlderOutputFormat:
         )
         assert sorted(merged["id"].to_list()) == [1, 2, 3]
         assert merged["elapsedMs"].null_count() == 2
+
+
+class TestLoadSearchValues:
+    """``--search-value-path`` の受け付ける形と，早期に落ちる条件を固定する．
+
+    差し替え自体は HCPE 変換と集約が終わった後にしか走らない．
+    入力の不備をそこまで運んでしまうと数時間の実行が丸ごと無駄になるので，
+    **読み込みの時点で落ちる**ことがこのクラスの主題である．
+    """
+
+    def _write(self, path: Path, df: pl.DataFrame) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        df.write_ipc(path, compression="lz4")
+        return path
+
+    def test_reads_a_single_file(self, tmp_path: Path) -> None:
+        self._write(
+            tmp_path / "v.feather", _values([1, 2], [0.4, 0.6])
+        )
+        out = load_search_values(tmp_path / "v.feather")
+        assert out["id"].to_list() == [1, 2]
+        assert out["searchWinRate"].to_list() == pytest.approx(
+            [0.4, 0.6], abs=1e-6
+        )
+
+    def test_projects_to_the_columns_pre_processing_uses(
+        self, tmp_path: Path
+    ) -> None:
+        """診断列は落とす (union をスキーマ差で失敗させないため)．"""
+        self._write(tmp_path / "v.feather", _values([1], [0.4]))
+        out = load_search_values(tmp_path / "v.feather")
+        assert list(out.columns) == list(
+            SEARCH_VALUE_REQUIRED_SCHEMA
+        )
+        assert out.schema["id"] == pl.UInt64
+        assert out.schema["searchWinRate"] == pl.Float32
+
+    def test_directory_unions_every_feather(
+        self, tmp_path: Path
+    ) -> None:
+        self._write(
+            tmp_path / "a.feather", _values([1, 2], [0.1, 0.2])
+        )
+        self._write(tmp_path / "b.feather", _values([3], [0.3]))
+        out = load_search_values(tmp_path)
+        assert sorted(out["id"].to_list()) == [1, 2, 3]
+
+    def test_directory_recurses(self, tmp_path: Path) -> None:
+        self._write(tmp_path / "a.feather", _values([1], [0.1]))
+        self._write(
+            tmp_path / "nested" / "b.feather",
+            _values([2], [0.2]),
+        )
+        assert sorted(
+            load_search_values(tmp_path)["id"].to_list()
+        ) == [1, 2]
+
+    def test_directory_ignores_non_feather(
+        self, tmp_path: Path
+    ) -> None:
+        self._write(tmp_path / "a.feather", _values([1], [0.1]))
+        (tmp_path / "notes.txt").write_text("not a feather")
+        assert load_search_values(tmp_path)["id"].to_list() == [
+            1
+        ]
+
+    def test_unions_across_schema_versions(
+        self, tmp_path: Path
+    ) -> None:
+        """``elapsedMs`` は 0.82.0 で追加された．
+
+        新旧の出力が同じディレクトリに並ぶのは普通に起こる．診断列の
+        構成差で union が失敗すると，過去の GPU 時間が使えなくなる．
+        """
+        old = _values([1], [0.1]).drop("elapsedMs")
+        self._write(tmp_path / "old.feather", old)
+        self._write(
+            tmp_path / "new.feather", _values([2], [0.2])
+        )
+        assert sorted(
+            load_search_values(tmp_path)["id"].to_list()
+        ) == [1, 2]
+
+    def test_directory_result_is_usable(
+        self, tmp_path: Path
+    ) -> None:
+        """union した結果がそのまま差し替えに使えること．"""
+        self._write(
+            tmp_path / "a.feather", _values([1], [0.25])
+        )
+        self._write(
+            tmp_path / "b.feather", _values([2], [0.75])
+        )
+        out, applied = apply_search_values(
+            _pre_df([1, 2, 3], [1.0, 0.0, 1.0]),
+            load_search_values(tmp_path),
+        )
+        assert applied == 2
+        assert out["resultValue"].to_list() == pytest.approx(
+            [0.25, 0.75, 1.0], abs=1e-6
+        )
+
+    def test_duplicate_ids_across_files_do_not_add_rows(
+        self, tmp_path: Path
+    ) -> None:
+        """union は重複を生みうるが，行数不変は崩れてはならない．"""
+        self._write(tmp_path / "a.feather", _values([2], [0.4]))
+        self._write(tmp_path / "b.feather", _values([2], [0.6]))
+        out, applied = apply_search_values(
+            _pre_df([1, 2], [1.0, 0.0]),
+            load_search_values(tmp_path),
+        )
+        assert len(out) == 2
+        assert applied == 1
+        # パス順で後勝ち
+        assert out["resultValue"].to_list() == pytest.approx(
+            [1.0, 0.6], abs=1e-6
+        )
+
+    def test_empty_directory_raises(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "empty").mkdir()
+        with pytest.raises(
+            ValueError, match="no .feather file"
+        ):
+            load_search_values(tmp_path / "empty")
+
+    def test_missing_column_raises_naming_the_file(
+        self, tmp_path: Path
+    ) -> None:
+        """HCPE ディレクトリを渡す取り違えがここで止まること．"""
+        self._write(
+            tmp_path / "ok.feather", _values([1], [0.1])
+        )
+        self._write(
+            tmp_path / "hcpe.feather",
+            pl.DataFrame(
+                {"id": ["g.hcpe_1"], "hcp": [b"x" * 32]}
+            ),
+        )
+        with pytest.raises(
+            ValueError, match="searchWinRate"
+        ) as excinfo:
+            load_search_values(tmp_path)
+        assert "hcpe.feather" in str(excinfo.value)
+
+    def test_unusable_dtype_raises(
+        self, tmp_path: Path
+    ) -> None:
+        self._write(
+            tmp_path / "v.feather",
+            pl.DataFrame(
+                {
+                    "id": pl.Series(
+                        "id", ["1"], dtype=pl.String
+                    ),
+                    "searchWinRate": pl.Series(
+                        "searchWinRate", [0.5], dtype=pl.Float32
+                    ),
+                }
+            ),
+        )
+        with pytest.raises(ValueError, match="cannot be used"):
+            load_search_values(tmp_path / "v.feather")
+
+    def test_unreadable_file_raises(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "broken.feather").write_bytes(
+            b"not arrow ipc"
+        )
+        with pytest.raises(
+            ValueError, match="could not be read"
+        ):
+            load_search_values(tmp_path)
+
+    def test_checks_every_file_before_reading_any(
+        self, tmp_path: Path
+    ) -> None:
+        """検査は全ファイル分を先に済ませる．
+
+        1 ファイル目を読んでから 2 ファイル目で落ちる作りだと，
+        ファイル数が増えるほど失敗が遅れる．
+        """
+        for i in range(3):
+            self._write(
+                tmp_path / f"{i}_ok.feather",
+                _values([i], [0.1]),
+            )
+        self._write(
+            tmp_path / "9_bad.feather",
+            pl.DataFrame({"id": [1]}),
+        )
+        with pytest.raises(ValueError, match="searchWinRate"):
+            load_search_values(tmp_path)
+
+
+class _NoDataSource(DataSource):
+    """``__init__`` の検査だけを見るためのダミー．
+
+    早期検証は ``transform`` より前に走るので，データソースは触られない．
+    """
+
+    def __len__(self) -> int:
+        return 0
+
+    def iter_batches(self) -> Iterator[tuple[str, np.ndarray]]:
+        return iter(())
+
+
+class TestEarlyValidation:
+    """探索値の不備が ``transform`` より前に落ちること．
+
+    回帰: 以前は差し替え直前まで遅延ロードしていたため，HCPE 変換と
+    集約が全部終わってから落ちていた．パスの取り違え 1 つで数時間の実行が
+    丸ごと無駄になる．検査は `PreProcess` の構築時点で済んでいなければ
+    ならない．
+    """
+
+    def _preprocess(self, path: Path) -> None:
+        from maou.app.pre_process.hcpe_transform import (
+            PreProcess,
+        )
+
+        PreProcess(
+            datasource=_NoDataSource(),
+            feature_store=None,
+            search_value_path=path,
+        )
+
+    def test_rejects_wrong_schema_at_construction(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "wrong.feather").write_bytes(b"")
+        pl.DataFrame({"id": ["g.hcpe_1"]}).write_ipc(
+            tmp_path / "wrong.feather", compression="lz4"
+        )
+        with pytest.raises(ValueError, match="searchWinRate"):
+            self._preprocess(tmp_path)
+
+    def test_rejects_empty_directory_at_construction(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(
+            ValueError, match="no .feather file"
+        ):
+            self._preprocess(tmp_path)
+
+    def test_accepts_a_directory_of_values(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "a.feather").write_bytes(b"")
+        _values([1], [0.5]).write_ipc(
+            tmp_path / "a.feather", compression="lz4"
+        )
+        self._preprocess(tmp_path)

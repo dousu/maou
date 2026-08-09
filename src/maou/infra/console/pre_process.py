@@ -291,12 +291,15 @@ from maou.interface import preprocess
     type=click.Path(exists=True, path_type=Path),
     default=None,
     required=False,
-    help="Output of `maou utility search-values`. Replaces resultValue with "
+    help="Output of `maou utility search-values`: a .feather file, or a "
+    "directory whose *.feather are all unioned. Replaces resultValue with "
     "the per-position search value for the positions it covers. A game "
     "result is the same for every position of a game, so recalling which "
     "game a position came from fits the training set without transferring "
     "to unseen games; search values differ position by position. Positions "
-    "absent from the file keep their game-result value.",
+    "absent from the input keep their game-result value. Unreadable files, "
+    "or files without a usable id/searchWinRate column, fail the run before "
+    "any conversion work starts.",
 )
 @handle_exception
 def pre_process(
