@@ -25,6 +25,7 @@ from maou.app.pre_process.search_value import (
     apply_search_values,
     load_search_values,
     select_positions,
+    validate_search_value_source,
 )
 
 
@@ -479,7 +480,7 @@ class TestLoadSearchValues:
     ) -> None:
         (tmp_path / "empty").mkdir()
         with pytest.raises(
-            ValueError, match="no .feather file"
+            ValueError, match="no .feather or .arrow file"
         ):
             load_search_values(tmp_path / "empty")
 
@@ -600,7 +601,7 @@ class TestEarlyValidation:
         self, tmp_path: Path
     ) -> None:
         with pytest.raises(
-            ValueError, match="no .feather file"
+            ValueError, match="no .feather or .arrow file"
         ):
             self._preprocess(tmp_path)
 
@@ -612,3 +613,154 @@ class TestEarlyValidation:
             tmp_path / "a.feather", compression="lz4"
         )
         self._preprocess(tmp_path)
+
+
+class TestDedupHappensOnce:
+    """重複排除は load で 1 回だけ済ませる．
+
+    回帰: ``apply_search_values`` は出力チャンクごとに呼ばれるので，
+    そちらに重複解決を任せると union 全体の排除と同一の警告を
+    チャンク数だけ繰り返す．resume を重ねた出力を union すると
+    重複は普通に起こるため，この経路は通常経路である．
+    """
+
+    def _dir(self, tmp_path: Path) -> Path:
+        (tmp_path / "a.feather").write_bytes(b"")
+        _values([1, 2], [0.4, 0.9]).write_ipc(
+            tmp_path / "a.feather", compression="lz4"
+        )
+        (tmp_path / "b.feather").write_bytes(b"")
+        _values([2], [0.6]).write_ipc(
+            tmp_path / "b.feather", compression="lz4"
+        )
+        return tmp_path
+
+    def test_load_returns_unique_ids(
+        self, tmp_path: Path
+    ) -> None:
+        out = load_search_values(self._dir(tmp_path))
+        assert sorted(out["id"].to_list()) == [1, 2]
+
+    def test_load_resolves_last_in_path_order(
+        self, tmp_path: Path
+    ) -> None:
+        out = load_search_values(self._dir(tmp_path))
+        got = dict(
+            zip(
+                out["id"].to_list(),
+                out["searchWinRate"].to_list(),
+                strict=True,
+            )
+        )
+        assert got[2] == pytest.approx(0.6, abs=1e-6)
+
+    def test_apply_finds_nothing_left_to_drop(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """チャンクごとの適用で警告が出ないこと．"""
+        values = load_search_values(self._dir(tmp_path))
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            for _ in range(3):  # チャンク 3 回ぶん
+                apply_search_values(
+                    _pre_df([1, 2], [1.0, 0.0]), values
+                )
+        assert "duplicate id" not in caplog.text
+
+
+class TestValidateSearchValueSource:
+    """検査だけを切り出した入口 (データを読まない)．"""
+
+    def test_returns_paths_in_order(
+        self, tmp_path: Path
+    ) -> None:
+        for name in ("b.feather", "a.feather"):
+            (tmp_path / name).write_bytes(b"")
+            _values([1], [0.5]).write_ipc(
+                tmp_path / name, compression="lz4"
+            )
+        assert [
+            p.name
+            for p in validate_search_value_source(tmp_path)
+        ] == ["a.feather", "b.feather"]
+
+    def test_raises_on_bad_schema(self, tmp_path: Path) -> None:
+        (tmp_path / "x.feather").write_bytes(b"")
+        pl.DataFrame({"id": [1]}).write_ipc(
+            tmp_path / "x.feather", compression="lz4"
+        )
+        with pytest.raises(ValueError, match="searchWinRate"):
+            validate_search_value_source(tmp_path)
+
+    def test_picks_up_arrow_files(self, tmp_path: Path) -> None:
+        """`.arrow` も拾う．
+
+        取りこぼしはエラーにならず**無言の部分適用**になるので，
+        実際に読める形式は拾っておく．
+        """
+        (tmp_path / "v.arrow").write_bytes(b"")
+        _values([1], [0.5]).write_ipc(
+            tmp_path / "v.arrow", compression="lz4"
+        )
+        assert [
+            p.name
+            for p in validate_search_value_source(tmp_path)
+        ] == ["v.arrow"]
+
+    def test_ignores_flush_temporaries(
+        self, tmp_path: Path
+    ) -> None:
+        """`_write` の中間ファイル (`*.feather.tmp`) は拾わない．"""
+        (tmp_path / "v.feather").write_bytes(b"")
+        _values([1], [0.5]).write_ipc(
+            tmp_path / "v.feather", compression="lz4"
+        )
+        (tmp_path / "v.feather.tmp").write_bytes(b"partial")
+        assert [
+            p.name
+            for p in validate_search_value_source(tmp_path)
+        ] == ["v.feather"]
+
+
+class TestOutputPathSuffix:
+    """``search-values --output-path`` の拡張子を生成側で守らせる．
+
+    別の名前で書くと `pre-process --search-value-path` のディレクトリ
+    指定から無言で漏れる．数日分の GPU 時間がエラーも警告も無く消えるので，
+    書き始める前に弾く．
+    """
+
+    def _option(self, output_path: Path) -> SearchValueOption:
+        return SearchValueOption(
+            input_path=output_path.parent,
+            output_path=output_path,
+        )
+
+    def test_rejects_other_suffixes(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(
+            ValueError, match="--output-path must end in"
+        ):
+            SearchValueCollector().collect(
+                self._option(tmp_path / "values.bin")
+            )
+
+    def test_rejects_before_touching_the_output(
+        self, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "values.bin"
+        with pytest.raises(ValueError):
+            SearchValueCollector().collect(self._option(out))
+        assert not out.exists()
+
+    @pytest.mark.parametrize("suffix", [".feather", ".arrow"])
+    def test_accepts_collected_suffixes(
+        self, tmp_path: Path, suffix: str
+    ) -> None:
+        """拡張子の検査を通り，別の理由 (入力なし) まで進むこと．"""
+        out = tmp_path / f"values{suffix}"
+        result = SearchValueCollector().collect(
+            self._option(out)
+        )
+        assert result["searched"] == "0"

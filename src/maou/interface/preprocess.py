@@ -201,6 +201,31 @@ def resize_input_files(
     return ok_files
 
 
+def validate_search_value_path(path: Path | None) -> None:
+    """``--search-value-path`` を実行の最初に検査する．
+
+    `transform` の中で検査すると，クラウド入力のダウンロードや
+    `resize_input_files` による入力コーパスの書き直しを済ませた後になる．
+    パスの打ち間違い 1 つでその 1 往復を捨てることになるので，
+    **どの入力にも触る前に**呼べる形で切り出してある．
+
+    データは読まず，Arrow IPC のフッタからスキーマだけを見る．
+
+    Args:
+        path: ``--search-value-path`` の値．``None`` なら何もしない．
+
+    Raises:
+        ValueError: 探索値として読めない場合．
+    """
+    if path is None:
+        return
+    from maou.app.pre_process.search_value import (
+        validate_search_value_source,
+    )
+
+    validate_search_value_source(path)
+
+
 def transform(
     *,
     datasource: DataSource,

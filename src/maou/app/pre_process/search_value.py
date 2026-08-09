@@ -135,21 +135,36 @@ class SearchValueOption:
     flush_interval: int = 500
 
 
-def _feather_paths(path: Path) -> list[Path]:
-    """ファイルならそれ自身，ディレクトリなら配下の `.feather` を列挙する．
+#: 探索値のディレクトリ指定で拾う拡張子．
+#:
+#: 書き出しは `.feather` だが，Arrow IPC を `.arrow` で書いた古い出力や手で
+#: 組んだ入力もあり得る．**拾えなかったファイルは無言で部分適用になる**ので，
+#: 実際に読める形式は拾っておく．`_write` の中間ファイル (`*.feather.tmp`) は
+#: どちらにも一致しない．
+SEARCH_VALUE_SUFFIXES: tuple[str, ...] = (".feather", ".arrow")
+
+
+def _feather_paths(
+    path: Path, suffixes: tuple[str, ...] = (".feather",)
+) -> list[Path]:
+    """ファイルならそれ自身，ディレクトリなら配下の該当ファイルを列挙する．
 
     パス指定オプションはこのプロジェクト全体でディレクトリを受け付けるので，
     探索値の入出力も同じ規約に揃える．
 
     Args:
         path: ディレクトリまたは単一ファイル．
+        suffixes: ディレクトリ配下で拾う拡張子．
 
     Returns:
-        `.feather` のパス一覧 (パス順で安定)．
+        該当パスの一覧 (パス順で安定)．
     """
     if path.is_file():
         return [path]
-    return sorted(path.glob("**/*.feather"))
+    found: list[Path] = []
+    for suffix in suffixes:
+        found.extend(path.glob(f"**/*{suffix}"))
+    return sorted(found)
 
 
 def _hcpe_paths(
@@ -260,9 +275,9 @@ def _check_search_value_schema(
             f"(its columns are {', '.join(schema) or '<none>'}). "
             "--search-value-path takes the output of "
             "`maou utility search-values`; when it is a directory, every "
-            "*.feather under it must be such an output -- point it at the "
-            "search value directory, not at the HCPE directory the values "
-            "were searched from."
+            f"{'/'.join(SEARCH_VALUE_SUFFIXES)} under it must be such an "
+            "output -- point it at the search value directory, not at the "
+            "HCPE directory the values were searched from."
         )
     for (
         column,
@@ -278,33 +293,31 @@ def _check_search_value_schema(
             )
 
 
-def load_search_values(path: Path) -> pl.DataFrame:
-    """``--search-value-path`` を読み，前処理が使う 2 列の表にまとめる．
+def validate_search_value_source(path: Path) -> list[Path]:
+    """``--search-value-path`` が読める形かを**データを読まずに**検査する．
 
-    ディレクトリを渡すと配下の `.feather` を全て union する
-    (行方向の連結．重複 id は `apply_search_values` がパス順で後勝ちに解決する)．
-
-    **検査は読み込みより先に全ファイル分をまとめて行う．** 前処理での探索値
-    適用は HCPE 変換と集約が終わった後に走るので，ここで弾かないと不備が
-    数時間後に判明する．スキーマ検査は IPC のフッタしか読まないので，
-    先に全部見ておく方が安い．
+    スキーマ検査は IPC のフッタしか触らないので，実行の一番手前で全ファイル
+    分をまとめて呼べる．前処理の本体はここを通ってから，入力のダウンロードや
+    リサイズといった高価な準備に進む．
 
     Args:
-        path: ディレクトリまたは単一の `.feather`．
+        path: ディレクトリまたは単一ファイル．
 
     Returns:
-        `SEARCH_VALUE_REQUIRED_SCHEMA` の DataFrame．
+        検査を通ったパスの一覧 (パス順)．
 
     Raises:
-        ValueError: ディレクトリ配下に `.feather` が無い，feather として
+        ValueError: ディレクトリ配下に対象ファイルが無い，Arrow IPC として
             読めない，前処理に必要な列が無い，または型が使えない場合．
     """
-    paths = _feather_paths(path)
+    paths = _feather_paths(path, SEARCH_VALUE_SUFFIXES)
     if not paths:
         raise ValueError(
-            f"{path} contains no .feather file. --search-value-path takes "
-            "the output of `maou utility search-values`, either the file "
-            "itself or a directory containing one or more of them."
+            f"{path} contains no "
+            f"{' or '.join(SEARCH_VALUE_SUFFIXES)} file. "
+            "--search-value-path takes the output of "
+            "`maou utility search-values`, either the file itself or a "
+            "directory containing one or more of them."
         )
 
     for p in paths:
@@ -315,6 +328,29 @@ def load_search_values(path: Path) -> pl.DataFrame:
                 f"{p} could not be read as a feather (Arrow IPC) file: {exc}"
             ) from exc
         _check_search_value_schema(p, dict(schema))
+    return paths
+
+
+def load_search_values(path: Path) -> pl.DataFrame:
+    """``--search-value-path`` を読み，前処理が使う 2 列の表にまとめる．
+
+    ディレクトリを渡すと配下の対象ファイルを全て union する (行方向の連結)．
+
+    **重複 id はここで 1 回だけ解決する** (パス順で後勝ち)．resume を重ねた
+    出力が同じディレクトリに並ぶと重複は普通に起こるが，`apply_search_values`
+    は出力チャンクごとに呼ばれるので，そちらに任せると union 全体の重複排除と
+    同一の警告をチャンク数だけ繰り返すことになる．
+
+    Args:
+        path: ディレクトリまたは単一ファイル．
+
+    Returns:
+        `SEARCH_VALUE_REQUIRED_SCHEMA` の DataFrame (id で一意)．
+
+    Raises:
+        ValueError: `validate_search_value_source` と同じ条件．
+    """
+    paths = validate_search_value_source(path)
 
     columns = list(SEARCH_VALUE_REQUIRED_SCHEMA)
     frames: list[pl.DataFrame] = []
@@ -332,16 +368,30 @@ def load_search_values(path: Path) -> pl.DataFrame:
                 f": {exc}"
             ) from exc
 
-    values = (
+    unioned = (
         frames[0]
         if len(frames) == 1
         else pl.concat(frames, how="vertical")
     )
+    # maintain_order: 既定の unique は行順を保たない．join は左の順序で
+    # 出るので前処理出力は変わらないが，ここが実行ごとに入れ替わると
+    # 「パス順で後勝ち」が結果から確かめられなくなる．並べ直しは union 1 回分
+    values = unioned.unique(
+        subset=["id"], keep="last", maintain_order=True
+    )
+    if len(values) != len(unioned):
+        logger.warning(
+            "dropped %d duplicate id(s) while unioning search values; "
+            "kept the occurrence from the last file in path order",
+            len(unioned) - len(values),
+        )
+    # 拾えなかったファイルは無言の部分適用になるので，何を読んだか残す
     logger.info(
-        "Loaded %d search values from %d file(s) under %s",
+        "Loaded %d search values from %d file(s) under %s: %s",
         len(values),
         len(paths),
         path,
+        ", ".join(p.name for p in paths),
     )
     if values.is_empty():
         logger.warning(
@@ -664,6 +714,19 @@ class SearchValueCollector:
                 または出力が既にあるのにどちらも指定されていない場合．
         """
         from maou._rust.maou_search import SearchEngine
+
+        if option.output_path.suffix not in SEARCH_VALUE_SUFFIXES:
+            # `pre-process --search-value-path` にディレクトリを渡すと
+            # 配下をこの拡張子で拾う．別の名前で書くと，そのファイルだけ
+            # 無言で飛ばされて部分適用になる (数日分の GPU 時間が
+            # エラーも警告も無く消える)
+            raise ValueError(
+                f"--output-path must end in "
+                f"{' or '.join(SEARCH_VALUE_SUFFIXES)}, got "
+                f"{option.output_path}. `pre-process --search-value-path` "
+                "collects a directory by those suffixes, so any other name "
+                "is silently skipped there."
+            )
 
         if option.resume and option.overwrite:
             # 「続きから」と「作り直し」は両立しない．暗黙の優先順位を持たせると
