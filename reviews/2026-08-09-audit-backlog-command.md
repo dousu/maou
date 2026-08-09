@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 538f53b
 date: 2026-08-09
 target:
   - CLAUDE.md
