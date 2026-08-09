@@ -106,6 +106,59 @@ def _build_simple_tree() -> tuple[pl.DataFrame, pl.DataFrame]:
     return nodes, edges
 
 
+def _build_broken_chain_tree() -> tuple[
+    pl.DataFrame, pl.DataFrame
+]:
+    """親チェーンが壊れた枝を含むグラフを構築する．
+
+    ``_build_simple_tree()`` に 2 種類の壊れ方を足す．
+
+    - 500 (depth=1): 入力エッジが一本もない孤児
+    - 600 (depth=2): 入力エッジはあるが親 400 も depth=2 で，
+      depth-1 に親がいない
+
+    ビルダはこの形を出力しないので，実運用では到達しない．
+    """
+    nodes, edges = _build_simple_tree()
+    extra_nodes = _make_nodes(
+        [
+            {
+                "position_hash": 500,
+                "result_value": 0.50,
+                "best_move_win_rate": 0.51,
+                "num_branches": 0,
+                "depth": 1,
+                "is_depth_cutoff": False,
+            },
+            {
+                "position_hash": 600,
+                "result_value": 0.49,
+                "best_move_win_rate": 0.49,
+                "num_branches": 0,
+                "depth": 2,
+                "is_depth_cutoff": False,
+            },
+        ]
+    )
+    extra_edges = _make_edges(
+        [
+            {
+                "parent_hash": 400,
+                "child_hash": 600,
+                "move16": 1003,
+                "move_label": 13,
+                "probability": 0.5,
+                "win_rate": 0.49,
+                "is_leaf": False,
+            },
+        ]
+    )
+    return (
+        pl.concat([nodes, extra_nodes]),
+        pl.concat([edges, extra_edges]),
+    )
+
+
 class TestGetSubtree:
     """get_subgraph のテスト."""
 
@@ -216,6 +269,58 @@ class TestGetPathToRoot:
         query = GameGraphQuery(nodes, edges)
         path = query.get_path_to_root(400)
         assert path == [100, 200, 400]
+
+    def test_missing_node_returns_empty(self) -> None:
+        """グラフにないノードは例外でなく空リストを返す."""
+        nodes, edges = _build_simple_tree()
+        query = GameGraphQuery(nodes, edges)
+        assert query.get_path_to_root(999) == []
+
+    def test_orphan_node_raises(self) -> None:
+        """depth>0 なのに入力エッジがないノードは例外."""
+        nodes, edges = _build_broken_chain_tree()
+        query = GameGraphQuery(nodes, edges)
+        with pytest.raises(
+            ValueError, match="no incoming edge"
+        ):
+            query.get_path_to_root(500)
+
+    def test_parent_at_wrong_depth_raises(self) -> None:
+        """親が depth-1 にいないノードは例外."""
+        nodes, edges = _build_broken_chain_tree()
+        query = GameGraphQuery(nodes, edges)
+        with pytest.raises(
+            ValueError, match="no parent at depth 1"
+        ):
+            query.get_path_to_root(600)
+
+    def test_never_returns_partial_path(self) -> None:
+        """壊れたチェーンで先頭がルートでないパスを返さない.
+
+        修正前は break して部分パスを reversed で返していた
+        ため，``path[0]`` がルート(depth 0)でないリストが
+        呼び出し側に届いていた．
+        """
+        nodes, edges = _build_broken_chain_tree()
+        query = GameGraphQuery(nodes, edges)
+        for broken in (500, 600):
+            with pytest.raises(ValueError):
+                query.get_path_to_root(broken)
+
+    def test_broken_chain_not_cached(self) -> None:
+        """例外時に部分パスをキャッシュしない."""
+        nodes, edges = _build_broken_chain_tree()
+        query = GameGraphQuery(nodes, edges)
+        for _ in range(2):
+            with pytest.raises(ValueError):
+                query.get_path_to_root(600)
+        assert 600 not in query._path_cache
+
+    def test_intact_chain_unaffected(self) -> None:
+        """壊れた枝が同居していても健全な枝は従来通り."""
+        nodes, edges = _build_broken_chain_tree()
+        query = GameGraphQuery(nodes, edges)
+        assert query.get_path_to_root(400) == [100, 200, 400]
 
 
 class TestGetEdgeBetween:
