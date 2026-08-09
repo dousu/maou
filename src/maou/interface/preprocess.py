@@ -201,6 +201,31 @@ def resize_input_files(
     return ok_files
 
 
+def validate_search_value_path(path: Path | None) -> None:
+    """``--search-value-path`` を実行の最初に検査する．
+
+    `transform` の中で検査すると，クラウド入力のダウンロードや
+    `resize_input_files` による入力コーパスの書き直しを済ませた後になる．
+    パスの打ち間違い 1 つでその 1 往復を捨てることになるので，
+    **どの入力にも触る前に**呼べる形で切り出してある．
+
+    データは読まず，Arrow IPC のフッタからスキーマだけを見る．
+
+    Args:
+        path: ``--search-value-path`` の値．``None`` なら何もしない．
+
+    Raises:
+        ValueError: 探索値として読めない場合．
+    """
+    if path is None:
+        return
+    from maou.app.pre_process.search_value import (
+        validate_search_value_source,
+    )
+
+    validate_search_value_source(path)
+
+
 def transform(
     *,
     datasource: DataSource,
@@ -239,13 +264,17 @@ def transform(
             win/loss outcome instead, which is 0.0/1.0 (0.5 for a draw)
             when the position occurred once. Ignored for positions
             excluded via ``drop_below_threshold``.
-        search_value_path: Output of ``maou utility search-values``. When
-            given, ``resultValue`` is replaced by the search value for the
-            positions it covers. A game result is constant across the ~110
-            positions of one game, so recalling which game a position came
-            from fits the training set without transferring to unseen games;
-            search values differ position by position. Positions absent from
-            the file keep their game-result value.
+        search_value_path: Output of ``maou utility search-values`` -- a
+            single ``.feather`` or a directory of them, whose contents are
+            unioned. When given, ``resultValue`` is replaced by the search
+            value for the positions it covers. A game result is constant
+            across the ~110 positions of one game, so recalling which game a
+            position came from fits the training set without transferring to
+            unseen games; search values differ position by position.
+            Positions absent from the input keep their game-result value.
+            An unreadable file, or one without a usable ``id`` /
+            ``searchWinRate``, raises ``ValueError`` before any conversion
+            work starts.
         drop_below_threshold: If True, positions with occurrence count below
             ``position_count_threshold`` are excluded entirely from the
             output instead of receiving a fallback value. (default: False)

@@ -187,12 +187,19 @@ class PreProcess:
                 ``bestMoveWinRate`` の双方に適用される．
             drop_below_threshold: True の場合，出現回数が
                 position_count_threshold 未満の局面を出力から完全に除外する．
-            search_value_path: ``maou utility search-values`` の出力．
+            search_value_path: ``maou utility search-values`` の出力
+                (単一 `.feather` またはそれらを含むディレクトリ)．
                 指定すると該当局面の ``resultValue`` を対局結果由来の値から
                 **探索値**へ差し替える．対局結果は 1 対局の全局面で同じ値に
                 なるため「どの対局か」を思い出す近道が成立するが，探索値は
                 局面ごとに異なるのでその近道が効かなくなる．
                 出力に無い局面は対局結果由来のまま残るので部分適用できる．
+                ディレクトリなら配下の `.feather` を union する．
+                読めない・スキーマが合わないファイルがあれば
+                **変換を始める前に** ``ValueError`` で落ちる．
+
+        Raises:
+            ValueError: ``search_value_path`` が探索値として読めない場合．
         """
         self.__feature_store = feature_store
         self.__datasource = datasource
@@ -208,6 +215,17 @@ class PreProcess:
         self.__search_values: pl.DataFrame | None = None
         self.__search_values_applied = 0
         self.intermediate_store = None
+        if search_value_path is not None:
+            # **変換を始める前**に読んで検査する．差し替え自体は変換と集約が
+            # 終わってからでないと走らないので，遅延ロードのままだと不備が
+            # 数時間後に判明し，その実行が丸ごと無駄になる．
+            from maou.app.pre_process.search_value import (
+                load_search_values,
+            )
+
+            self.__search_values = load_search_values(
+                search_value_path
+            )
 
     def _apply_search_values(
         self, df: pl.DataFrame
@@ -222,24 +240,12 @@ class PreProcess:
         Returns:
             差し替え後の DataFrame (未指定なら入力をそのまま返す)．
         """
-        # polars は module 冒頭で import しない方針に合わせる
-        import polars as pl
-
         from maou.app.pre_process.search_value import (
             apply_search_values,
         )
 
-        if self.__search_value_path is None:
-            return df
         if self.__search_values is None:
-            self.__search_values = pl.read_ipc(
-                self.__search_value_path, memory_map=False
-            )
-            self.logger.info(
-                "Loaded %d search values from %s",
-                len(self.__search_values),
-                self.__search_value_path,
-            )
+            return df
         replaced, applied = apply_search_values(
             df, self.__search_values
         )
