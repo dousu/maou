@@ -1,6 +1,6 @@
 ---
-status: pending          # pending | approved | applied | rejected
-applied_in:
+status: applied          # pending | approved | applied | rejected
+applied_in: 843344b
 date: 2026-08-09
 target: [docs/architecture.md, docs/commands/visualize.md]
 risk: low
