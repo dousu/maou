@@ -323,14 +323,10 @@ class TruncatedStageModel(torch.nn.Module):
 
         if self._is_resnet:
             # ResNet: Pool + Linear 投射 (次元変化に対応)
-            backbone_in_ch = (
-                backbone._embedding_channels
-                + backbone._hand_projection_dim
-            )
             truncated_out_ch = self._compute_output_channels(
                 self.partial_backbone,
-                backbone_in_ch,
-                backbone._board_size,
+                backbone.backbone_input_channels,
+                backbone.board_size,
             )
             self.projection_pool = nn.AdaptiveAvgPool2d((1, 1))
             self.projection_linear = nn.Linear(
@@ -396,17 +392,7 @@ class TruncatedStageModel(torch.nn.Module):
         Returns:
             (logits, dummy_value) のタプル
         """
-        board_tensor, hand_tensor = (
-            self.backbone._separate_inputs(inputs)
-        )
-        embedded = self.backbone._prepare_inputs(board_tensor)
-
-        if self.backbone._hand_projection is not None:
-            combined = self.backbone._combine_board_and_hand(
-                embedded, hand_tensor
-            )
-        else:
-            combined = embedded
+        combined = self.backbone.embed_inputs(inputs)
 
         # 全アーキテクチャ共通: 前処理 + truncated blocks
         preprocessed = (

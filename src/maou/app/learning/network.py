@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal, TypeAlias
 
 import torch
@@ -101,6 +101,15 @@ class HeadlessNetwork(nn.Module):
                 raise ValueError(msg)
 
             expansion = getattr(block, "expansion", 1)
+            # プーリングはバックボーンの forward_features が行う．
+            # self.pool は同じモジュールを指し続けるので freeze 処理
+            # からの参照は変わらない (パラメータを持たないため
+            # state_dict のキーも増えない)．
+            self.pool: nn.Module = (
+                pooling
+                if pooling is not None
+                else nn.AdaptiveAvgPool2d((1, 1))
+            )
             self.backbone: (
                 DomainResNet | ShogiMLPMixer | VisionTransformer
             ) = DomainResNet(
@@ -109,11 +118,7 @@ class HeadlessNetwork(nn.Module):
                 layers=list(layers),
                 strides=list(strides),
                 list_out_channels=list(out_channels),
-            )
-            self.pool: nn.Module = (
-                pooling
-                if pooling is not None
-                else nn.AdaptiveAvgPool2d((1, 1))
+                pooling=self.pool,
             )
             self._embedding_dim = out_channels[-1] * expansion
         elif architecture == "mlp-mixer":
@@ -155,37 +160,54 @@ class HeadlessNetwork(nn.Module):
         """持ち駒射影の次元数を返す．"""
         return self._hand_projection_dim
 
+    @property
+    def backbone_input_channels(self) -> int:
+        """バックボーンへ入力するチャンネル数を返す．
+
+        盤面埋め込みと持ち駒射影を結合した後のチャンネル数であり，
+        バックボーンの一部だけを構成する呼び出し側が必要とする．
+        """
+        return (
+            self._embedding_channels + self._hand_projection_dim
+        )
+
+    @property
+    def board_size(self) -> tuple[int, int]:
+        """入力盤面の (高さ, 幅) を返す．"""
+        return self._board_size
+
+    def embed_inputs(self, x: ModelInputs) -> torch.Tensor:
+        """Return the backbone input tensor built from raw model inputs.
+
+        盤面の埋め込みと持ち駒射影の結合までを行い，バックボーンに
+        渡せる形にしたテンソルを返す．バックボーンの一部だけを走らせる
+        呼び出し側 (段階学習の truncated model など) がこの前処理を
+        自前で書き直さずに済むよう公開している．
+
+        Args:
+            x: 盤面テンソル，または (盤面, 持ち駒) のシーケンス
+
+        Returns:
+            バックボーン入力テンソル
+        """
+        board_tensor, hand_tensor = self._separate_inputs(x)
+        embedded_board = self._prepare_inputs(board_tensor)
+
+        if self._hand_projection is not None:
+            return self._combine_board_and_hand(
+                embedded_board, hand_tensor
+            )
+        return embedded_board
+
     def forward_features(self, x: ModelInputs) -> torch.Tensor:
         """Return pooled convolutional features from the shared backbone.
 
         Args:
             x: 盤面テンソル，または (盤面, 持ち駒) のシーケンス
         """
-        board_tensor, hand_tensor = self._separate_inputs(x)
-        embedded_board = self._prepare_inputs(board_tensor)
-
-        if self._hand_projection is not None:
-            combined = self._combine_board_and_hand(
-                embedded_board, hand_tensor
-            )
-        else:
-            combined = embedded_board
-
-        if self.architecture == "resnet":
-            features = self.backbone(combined)
-            pooled = self.pool(features)
-            return torch.flatten(pooled, 1)
-
-        backbone_forward = getattr(
-            self.backbone, "forward_features", None
+        return self.backbone.forward_features(
+            self.embed_inputs(x)
         )
-        if backbone_forward is None:
-            msg = "Configured backbone does not implement forward_features."
-            raise RuntimeError(msg)
-        forward_fn: Callable[[torch.Tensor], torch.Tensor] = (
-            backbone_forward
-        )
-        return forward_fn(combined)
 
     def forward(
         self, x: ModelInputs
