@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 3f3b5b7c539455753a9242fd51f21e8d1bdd5b0f
 date: 2026-08-09
 target: [docs/commands/pre_process.md, docs/commands/utility_search_values.md]
 risk: low
