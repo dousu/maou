@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: b5be6b8
 date: 2026-08-09
 target:
   - docs/rust-backend.md
