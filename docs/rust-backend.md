@@ -169,15 +169,27 @@ sccache --zero-stats
 
 The following optimizations are automatically applied:
 
-**1. Environment Variables (scripts/dev-init.sh):**
-```bash
-export CARGO_BUILD_JOBS=1              # Single parallel job
-export RUSTFLAGS="-C codegen-units=1 -C incremental=1"  # Sequential compilation
+**1. 並列度 (scripts/dev-init.sh):**
+`scripts/dev-init.sh` は user cargo config
+(`$CARGO_HOME/config.toml`) に以下を書く:
+```toml
+[build]
+jobs = 1              # メモリ制約環境向けに直列化
 ```
+リポジトリの `.cargo/config.toml` は **`jobs` を設定しない** (cargo 既定
+= CPU 数)．tracked config に書くと潤沢な環境にも一律に効いてしまうため，
+絞るのは環境ごとの判断として `dev-init.sh` の責務にしている．
+
+並列度はビルド時間の**最大のレバー**で，プロファイル選択より桁で影響が
+大きい (実測: py-ext コールドビルドが `jobs=1` で 37分47秒，`jobs=4` で
+10分09秒 = 3.7倍)．代償はピーク RSS で，3.8GB → 7.2GB．
+8GB 環境では `dev-init.sh` 経由の `jobs = 1` が必要．
 
 **2. Build Profiles (Cargo.toml):**
-- `codegen-units = 1` for all profiles (dev, release, mem-opt)
-- Thin LTO (Link-Time Optimization) for smaller binaries
+- `codegen-units`: `dev` は 16 (並列 codegen でピークメモリを下げる)，
+  `release` / `mem-opt` / `py-ext` は 1 (メモリ優先)．
+  `dev-init.sh` は user config で `release` / `py-ext` も 16 にする
+- Thin LTO は `release` / `mem-opt` のみ．`py-ext` は反復ビルドのため無効
 - Sequential compilation prioritizes memory over build speed
 
 **3. Minimal Feature Flags:**
@@ -200,17 +212,35 @@ export RUSTFLAGS="-C codegen-units=1 -C incremental=1"  # Sequential compilation
 
 ### Build Profiles
 
-**Development (default):**
+**Python 拡張 (既定):**
 ```bash
-uv run maturin develop  # Uses [profile.dev]
-# opt-level = 0, codegen-units = 1, incremental = true
+uv run maturin develop  # Uses [profile.py-ext]
+# release 継承 + opt-level = 3, lto = false,
+# debug-assertions = true, overflow-checks = true
 ```
+明示ビルドと `uv run` の暗黙リビルドが同じプロファイルを使うので，
+最適化拡張が別プロファイルの拡張に差し替わることはない．
+`lto = false` は反復ビルドのためで，thin LTO は cdylib を再リンクする
+たびに依存グラフ全体をやり直し，キャッシュできない (実測: 再ビルドごとに
+約 127秒 の固定費)．`debug-assertions`/`overflow-checks` は
+`rust/maou_rust` に `#[test]` が無く Python 経由が唯一の実行経路である
+ため有効にしている．
 
-**Production (optimized):**
+**出荷 wheel:**
 ```bash
 uv run maturin develop --release  # Uses [profile.release]
 # opt-level = 3, codegen-units = 1, lto = "thin"
 ```
+CI の wheel ビルドはこちら (`--release` を明示)．
+**開発ループでは付けないこと** — 反復ビルドが 6秒 → 130秒 になる．
+
+**cargo 直接 (Rust 単体テスト):**
+```bash
+cargo test -p maou_shogi  # Uses [profile.dev]
+# opt-level = 0, codegen-units = 16, incremental = false
+```
+`[tool.maturin] profile` は maturin 経由のビルドにしか効かない．
+`cargo` を直接叩く場合は従来どおり dev/release が選ばれる．
 
 **Balanced (memory-optimized):**
 ```bash
@@ -533,10 +563,16 @@ let report = solve_tsume_report_with_timeout(
 
 #### 性能計測時の注意
 
-`uv run maturin develop` は既定で **dev プロファイル** (`pyproject.toml` の
-`[tool.maturin] profile`) でビルドされ，release 比 ~6 倍遅い．Python 経由で
-ソルバーの性能を測る場合は `uv run maturin develop --release` でビルドし直すこと
-(配布 wheel は CI が `--release` でビルドするため影響しない)．
+`uv run maturin develop` は既定で **py-ext プロファイル**
+(`pyproject.toml` の `[tool.maturin] profile`) でビルドされ，
+`opt-level = 3` なので Python 経由の性能計測にそのまま使える
+(2026-08-09 以前の既定は dev で release 比 ~6 倍遅く，計測前に
+`--release` での再ビルドが必要だった)．
+
+ただし py-ext は `debug-assertions` / `overflow-checks` を有効にしている
+ため，出荷 wheel と完全に同じ数値にはならない．dfpn のノード/秒のように
+絶対値を出荷構成と揃えたい場合のみ `--release` を使う．
+**開発ループでは付けないこと** — 反復ビルドに約 127秒 の固定費が乗る．
 
 ### cshogi 互換性に関する設計判断
 

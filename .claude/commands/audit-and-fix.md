@@ -112,14 +112,26 @@ report:
   likely to be lost, and it will never surface if you only look up the
   row you were asked about. Name them even when you are not resuming them.
 - every `blocked` row and its blocker.
-- the most recent record file (largest filename date), skimmed for its
-  Deferred section — that is where the previous session left findings
-  addressed to whoever comes next.
-- **`coverage.md`'s Out-of-scope backlog**, in full. Any row whose target
-  falls inside `<path>` is **in scope for this run** — fold it in and say
-  so. Those rows are findings an earlier audit confirmed but was not
-  allowed to fix; picking them up here is the whole point of the backlog,
-  and skipping them strands work that is already diagnosed.
+- **`coverage.md`'s § "Open findings backlog"**, in full — **both** the
+  Deferred backlog and the Out-of-scope backlog tables. Any row whose
+  target falls inside `<path>` is **in scope for this run** — fold it in
+  and say so. Those rows are findings an earlier audit confirmed but was
+  not allowed or not ready to fix; picking them up here is the whole point
+  of the backlog, and skipping them strands work that is already diagnosed.
+
+**Do not gather open work from the record files.** A record is an
+immutable account of one run at one time — its Deferred section stays
+true forever, including after the finding ships. Treating it as a worklist
+re-surfaces resolved findings on every run with no way to remove them.
+`coverage.md` is the authority on what is open (a row is deleted when the
+finding is consumed); records are the authority on what happened. Opening
+a record to recover the full reasoning behind a row you are about to act
+on is fine and often useful — rows are condensed. Opening it to discover
+work is the error.
+
+The one legitimate exception is resuming your *own* unfinished path
+(0c, `in-progress`), where the record holds the resume point and the
+triage of the run still in flight.
 
 **0c. Resolve the target.**
 
@@ -133,11 +145,12 @@ If `<path>` was given:
   git log --oneline <last_sha>..HEAD -- <path>
   ```
   No commits → say so and ask whether a re-audit is really wanted.
-  Commits since → report how many and re-audit, treating the record's
-  Deferred section as already-known findings.
-  Either way, read the record's Deferred section before starting; a
-  completed audit's deferred items are the highest-value context for the
-  next one.
+  Commits since → report how many and re-audit.
+  Either way, the already-known findings for this path are its rows in
+  `coverage.md`'s backlog tables (0b) — those are current, because they are
+  deleted when consumed. The record's Deferred section is the *original
+  reasoning* behind those rows and is worth reading for depth, but it is
+  not the list of what is still open.
 - **`blocked`** → surface the blocker and ask how to proceed. Never retry
   a blocked path silently.
 - **no row** → fresh path.
@@ -420,14 +433,28 @@ leave `status: in-progress` with a sharpened resume point otherwise.
 Update the `audits/coverage.md` row with status, level, last SHA, record
 link, and open-item count.
 
-**Also update `coverage.md`'s Out-of-scope backlog:**
-- **Append** a row for every out-of-scope finding this run made — with the
-  record that found it, the path that should fix it, and enough of the
-  finding to act on without reopening the record. Writing it only into the
-  run's record buries it where no other audit will look.
+**Also update `coverage.md`'s § "Open findings backlog" — both tables.**
+This is what makes a finding survive; the record alone does not, because
+records are never read as a worklist (0b).
+
+- **Append a row for every finding this run leaves open**, in the matching
+  table: **Deferred backlog** for findings confirmed *inside* `<path>` but
+  not fixed, **Out-of-scope backlog** for findings *outside* it. Each row
+  carries the record that found it, the path that should fix it, and enough
+  of the finding to act on without reopening the record — including *why*
+  it was not fixed, since that is what the next run must decide.
+  A deferred finding written only into the record's Deferred section is
+  invisible to every future run: nothing reads it. Appending the row is not
+  bookkeeping, it is the handoff.
 - **Delete** the rows this run resolved (including any it folded in at
-  step 0b). The backlog is a worklist, not an archive — the resolving
-  record is the durable account.
+  step 0b), from whichever table held them. Do not delete a row that was
+  merely re-triaged — sharpen its text instead.
+- Keep the row's `Open items` count in the main table consistent with the
+  number of backlog rows that name this path.
+
+The record's own Deferred section is still written in full — it is the
+durable reasoning, and the backlog row is its condensed, deletable index
+entry. Both, not one.
 
 Commit both:
 ```

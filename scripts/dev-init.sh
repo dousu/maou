@@ -59,6 +59,16 @@ incremental = false
 lto = false
 incremental = true
 codegen-units = 16
+
+# py-ext は Python 拡張の既定プロファイル (root Cargo.toml で release を
+# 継承)．config の [profile.release] override が継承先へ伝播するかは
+# cargo の実装依存なので，メモリ制約環境向けの値をここで明示する．
+# これを省くと DevContainer では codegen-units = 1 のままピーク RSS が
+# 増え，今日の release より重くなる．
+[profile.py-ext]
+lto = false
+incremental = true
+codegen-units = 16
 CARGO_CONF
     echo "Configured $CARGO_USER_CONFIG for dev environment"
 fi
@@ -67,9 +77,9 @@ echo "Memory-optimized Rust build settings (via $CARGO_USER_CONFIG):"
 echo "  target-dir = /tmp/cargo-target"
 echo "  jobs = 1"
 echo "  rustc-wrapper = sccache"
-echo "  lto = false (release)"
-echo "  incremental = false (dev), true (release)"
-echo "  codegen-units = 16 (dev), 16 (release)"
+echo "  lto = false (release, py-ext)"
+echo "  incremental = false (dev), true (release, py-ext)"
+echo "  codegen-units = 16 (dev, release, py-ext)"
 
 # Install rust-analyzer for Serena LSP integration
 echo "Installing rust-analyzer..."

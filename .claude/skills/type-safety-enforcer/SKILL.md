@@ -11,7 +11,7 @@ Enforces strict type safety requirements and documentation standards for the Mao
 
 **Type hints**: Required for ALL functions, methods, and class attributes
 **Docstrings**: Required for ALL public APIs
-**Line length**: 88 characters maximum
+**Line length**: `ruff format` が 64 桁で整形する (`[tool.ruff] line-length = 64`)．`E501` は ruff の既定集合に含まれないのでハードな上限チェックは無く，コメント・文字列・URL は超過しうる (詳細: `docs/code-quality.md`)
 **No exceptions**: Type safety is non-negotiable
 
 ## Type Checking with mypy

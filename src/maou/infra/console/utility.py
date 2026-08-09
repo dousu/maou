@@ -486,13 +486,23 @@ def benchmark_dataloader(
 )
 @click.option(
     "--stage12-lr-scheduler",
+    # 正準キーと表示名の両方を受理する
+    # (normalize_lr_scheduler_name がどちらも解決するため)．
+    # ハードコードした一覧は別名表から乖離しうるので
+    # SUPPORTED_LR_SCHEDULERS から導出する．
     type=click.Choice(
-        ["warmup_cosine_decay", "cosine_annealing", "step"],
+        [
+            *learn.SUPPORTED_LR_SCHEDULERS,
+            *learn.SUPPORTED_LR_SCHEDULERS.values(),
+        ],
         case_sensitive=False,
     ),
     default=None,
     required=False,
-    help="Learning rate scheduler for Stage 1/2 benchmark.",
+    help=(
+        "Learning rate scheduler for Stage 1/2 benchmark."
+        " Defaults to --lr-scheduler when omitted."
+    ),
 )
 @click.option(
     "--stage12-compilation/--no-stage12-compilation",

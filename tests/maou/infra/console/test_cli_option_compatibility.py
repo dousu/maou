@@ -12,6 +12,7 @@ import click
 import pytest
 
 from maou.infra.console import learn_model, utility
+from maou.interface.learn import normalize_lr_scheduler_name
 
 
 def get_command_options(command: click.Command) -> set[str]:
@@ -342,6 +343,53 @@ def test_input_cache_mode_has_mmap_deprecation(
     assert "'mmap' is deprecated" in module_source, (
         f"{name} のモジュールに mmap→file の deprecation warning ロジックがありません"
     )
+
+
+# ------------------------------------------------------------------
+# --stage12-lr-scheduler の一貫性テスト
+# ------------------------------------------------------------------
+
+
+def _get_stage12_lr_scheduler_commands() -> list[
+    tuple[str, click.Command]
+]:
+    """--stage12-lr-scheduler を持つ全コマンドを取得する．"""
+    return [
+        ("learn-model", learn_model.learn_model),
+        ("benchmark-training", utility.benchmark_training),
+    ]
+
+
+@pytest.mark.parametrize(
+    "name,command",
+    _get_stage12_lr_scheduler_commands(),
+    ids=[c[0] for c in _get_stage12_lr_scheduler_commands()],
+)
+def test_stage12_lr_scheduler_choices_are_all_resolvable(
+    name: str, command: click.Command
+) -> None:
+    """広告した選択肢が全て正規化を通ることを確認する．
+
+    回帰テスト: benchmark-training は
+    ``["warmup_cosine_decay", "cosine_annealing", "step"]`` を
+    ハードコードしていたが，別名表に無い ``cosine_annealing`` /
+    ``step`` は ``normalize_lr_scheduler_name`` で ValueError になり，
+    CLI が決して動かない選択肢を2つ広告していた．
+    """
+    option = _find_option(command, "--stage12-lr-scheduler")
+    assert option is not None, (
+        f"{name} に --stage12-lr-scheduler オプションがありません"
+    )
+    assert isinstance(option.type, click.Choice)
+    for choice in option.type.choices:
+        # 'auto'/'none' は learn-model 側で解釈される制御値であり，
+        # スケジューラ名として正規化されない
+        if choice in ("auto", "none"):
+            continue
+        assert normalize_lr_scheduler_name(choice), (
+            f"{name} の --stage12-lr-scheduler が"
+            f"解決不能な選択肢 {choice!r} を広告しています"
+        )
 
 
 def test_learn_model_removed_options_not_in_help() -> None:

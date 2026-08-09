@@ -123,6 +123,14 @@ Recorded for future `/audit-and-fix` runs; **not** fixed here.
    「先手中飛車 / 振り飛車」. The sibling `export_sfen_path` (line 738)
    *does* branch on `_initial_sfen`, confirming the omission. Related to
    deferred item 2 above.
+   **Correction** (2026-08-09, `cc10790`): the fix suggested above (branch
+   on `_initial_sfen` like the sibling) would have disabled 定跡 display
+   entirely. `build_game_graph.py:184-189` resolves 平手 to a concrete
+   SFEN (`Board().get_sfen()`) before writing `metadata.json`, so
+   `_initial_sfen` is **never `None`** on the production path — the
+   sibling's `is not None` branch always takes the `position sfen` arm.
+   The shipped fix compares the board/turn/hand SFEN fields against
+   平手 instead.
 2. `/audit-and-fix src/maou/app/game_graph` —
    `query.py:184-194` `GameGraphQuery.get_path_to_root` `break`s out of a
    broken parent chain and still returns the partial path reversed, so
@@ -135,6 +143,11 @@ Recorded for future `/audit-and-fix` runs; **not** fixed here.
    `docs/code-quality.md:96-100` documents 64 correctly, noting the old
    88 lapsed with flake8's removal on 2026-08-04. The skill file is
    stale and agents follow it. Needs its own `reviews/` proposal.
+   **Correction** (2026-08-09, `3600b32`): this finding was incomplete —
+   the same 88 桁 staleness is also in
+   `.claude/skills/qa-pipeline-automation/SKILL.md` (3 places), which this
+   record did not mention. A reader acting only on the row above would
+   have left the sibling skill stale.
 4. `openings.py` is entirely undocumented — no mention of
    `OpeningDatabase`, `find_opening`, or any of the 9 opening names
    anywhere under `docs/`, `CLAUDE.md`, `AGENTS.md`, `README.md`.

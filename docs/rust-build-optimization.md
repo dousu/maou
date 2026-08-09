@@ -111,8 +111,10 @@ main ブランチへの push をトリガーに wheel をビルドし，GitHub R
   無い (`.pyd` 44.5MB / wheel 13.8MB)．workflow は
   `.github/workflows/build-wheel-windows.yml` に**休眠** (手動実行のみ) で
   置いてある．
-- **`--release` は既定では付かない** (`[tool.maturin] profile = "dev"` の
-  ため省くと debug ビルド)．features は `[tool.maturin] features` が
+- **`--release` は既定では付かない** (`[tool.maturin] profile = "py-ext"`)．
+  py-ext は `opt-level = 3` なので省いても debug ビルドにはならないが，
+  thin LTO は無効なので出荷 wheel とは別物．workflow は `--release` を
+  明示している．features は `[tool.maturin] features` が
   `pyo3/extension-module,onnx` を既定に含むので **maturin 経由なら省いてよい**
   (workflow は何でビルドされるかをファイル内で読み取れるよう明示している)．
   `cargo` を直接叩く場合は `pyproject.toml` を読まないため従来どおり

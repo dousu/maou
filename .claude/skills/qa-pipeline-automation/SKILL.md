@@ -19,7 +19,7 @@ uv run ruff format src/ && uv run ruff check src/ --fix && uv run mypy src/ && u
 Execute these steps sequentially:
 
 ### 1. Code Formatting
-Normalize code style to 88-character line limit:
+Normalize code style to the configured line limit (64):
 ```bash
 uv run ruff format src/
 ```
@@ -52,7 +52,7 @@ uv run pytest --cov=src/maou
 ## Success Criteria
 
 All of the following must pass:
-- ✓ Code formatted to 88 characters
+- ✓ Code formatted to 64 characters
 - ✓ Zero ruff violations
 - ✓ Type checking passes with zero errors
 - ✓ All tests pass
@@ -61,7 +61,7 @@ All of the following must pass:
 ## What This Validates
 
 **Type Safety**: All functions must have type hints
-**Code Style**: 88-character line limit enforced
+**Code Style**: 64-character line limit (`ruff format`; ハードな `E501` チェックは無い)
 **Clean Architecture**: Dependency flow maintained (infra → interface → app → domain)
 **Test Coverage**: New features and bug fixes have tests
 **Documentation**: Public APIs have docstrings

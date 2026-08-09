@@ -67,3 +67,31 @@ inherits = "release"
 opt-level = 2  # Moderate optimization
 codegen-units = 1
 lto = "thin"
+
+# Python 拡張の既定プロファイル (`[tool.maturin] profile`).
+#
+# 目的は **明示ビルドと暗黙ビルドのプロファイルを一致させること**．
+# 以前は maturin 既定が dev だったため，`uv run maturin develop --release`
+# で入れた release 拡張が，その後の任意の `uv run` による暗黙リビルドで
+# debug 拡張に黙って差し替えられていた．同種の暗黙上書きは onnx feature
+# でも一度踏んでいる (pyproject.toml の [tool.maturin] コメント参照)．
+#
+# release をそのまま使わない理由:
+# - `lto = "thin"` はコールドビルド時間の主要因で，出荷 wheel 向けの
+#   最適化．Python テストを現実的な速度で回す目的には不要．
+# - release は `debug-assertions` / `overflow-checks` を落とす．
+#   `rust/maou_rust` (PyO3 バインディング) には `#[test]` が存在せず，
+#   Python 経由でしか実行されないため，ここを落とすと FFI 境界の
+#   overflow 検査カバレッジが**無くなる** (代替が無い)．
+#   dev で twox-hash だけ overflow-checks を切っている事実
+#   (上の [profile.dev.package.twox-hash]) が，検査が現に効いていた証拠．
+#
+# `codegen-units = 1` は release から継承する．上げればビルドは速くなるが
+# ピーク RSS が増え，8GB DevContainer で dfpn テストが OOM → SIGTERM に
+# なった履歴があるため据え置く．
+[profile.py-ext]
+inherits = "release"
+opt-level = 3
+lto = false  # コールドビルド時間の主要因を落とす
+debug-assertions = true  # Python 経由が maou_rust の唯一の実行経路
+overflow-checks = true  # 同上. FFI 境界の index/長さ計算を守る
