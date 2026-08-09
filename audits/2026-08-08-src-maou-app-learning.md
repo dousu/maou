@@ -446,3 +446,20 @@ Stage 2 へ渡し，`stage_component_factory.py:196-216` で実際に使われ�
 `getattr` プローブの位置を `network.py:179-188` としているが，
 `src/maou/domain/model/network.py` は存在しない．実体は
 `src/maou/app/learning/network.py` の同じ行番号だった (偶然一致)．
+
+**Deferred 1 の示唆した修正が使う入力が誤り** (2026-08-09, `ff5bbaa`)．
+「正確な件数には `num_workers` が要る」としているが，そこで渡すべき値を
+特定していない．素直に読むと呼び出し側の `dataloader_workers` を
+`StreamingStage2Dataset` へ渡す形になり，それは**誤り**である —
+`DataLoaderFactory.create_streaming_dataloaders()` が
+`_clamp_workers()` でファイル数とメモリ由来の上限によりワーカー数を
+切り下げる (`setup.py:474-476`) ため，切り下げが起きた実行では
+バッチ数を読み違える (24 ファイル / 100 行 / batch 64，要求 20・実効 2
+の場合，正解 40 に対し 48 を返す)．参照すべきは DataLoader 構築後の
+`train_dataloader.num_workers` である．
+
+またこの項目は「seed 依存だから設計判断が必要」として保留されていたが，
+seed に依存するのは各結合グループの**行数合計**だけで，shard あたりの
+ファイル数とグループの区切り方はシャッフルによらず一定である．
+したがって `__iter__` の構造を再現する修正は判断待ちにする必要が
+なかった (`51eadfa` で適用済み)．

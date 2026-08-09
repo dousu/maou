@@ -17,6 +17,7 @@ from maou.app.learning.streaming_dataset import (
     StreamingKifDataset,
     StreamingStage1Dataset,
     StreamingStage2Dataset,
+    _compute_concat_total_batches,
     _compute_total_batches,
     _resolve_worker_files,
 )
@@ -646,7 +647,12 @@ class TestStreamingStage2Dataset:
         assert total == 10
 
     def test_len(self) -> None:
-        """__len__ returns correct batch count (per-file ceil sum)."""
+        """__len__ counts concat groups, not files.
+
+        ``__iter__`` は ``_FILES_PER_CONCAT`` 個までのファイルを結合
+        してからバッチ化するので，端数バッチはファイルごとではなく
+        結合グループごとにしか出ない．
+        """
         source = FakeStage2Source(n_files=3, rows_per_file=10)
         dataset = StreamingStage2Dataset(
             streaming_source=source,
@@ -654,8 +660,51 @@ class TestStreamingStage2Dataset:
             shuffle=False,
             seed=42,
         )
-        # Per-file: ceil(10/7) * 3 = 2 * 3 = 6
-        assert len(dataset) == 6
+        # 3 files < _FILES_PER_CONCAT なので 1 グループ:
+        # ceil(30 / 7) = 5．ファイル単位で数えると
+        # ceil(10/7) * 3 = 6 で過大評価になる．
+        assert len(dataset) == 5
+
+    def test_len_matches_actual_iteration(self) -> None:
+        """__len__ は実際に yield されるバッチ数と一致する．
+
+        これが崩れると ``steps_per_epoch`` 経由で LR スケジューラの
+        総ステップ数がずれる (cosine decay が下がりきらない)．
+        """
+        for n_files, rows, batch in [
+            (3, 10, 7),
+            (1, 10, 4),
+            (5, 33, 16),
+            (12, 10, 7),
+        ]:
+            source = FakeStage2Source(
+                n_files=n_files, rows_per_file=rows
+            )
+            dataset = StreamingStage2Dataset(
+                streaming_source=source,
+                batch_size=batch,
+                shuffle=False,
+                seed=42,
+            )
+            assert len(dataset) == len(list(dataset)), (
+                f"n_files={n_files} rows={rows} batch={batch}"
+            )
+
+    def test_set_num_workers_changes_len(self) -> None:
+        """ワーカー数を上げると端数グループが増えてバッチ数が増える．"""
+        source = FakeStage2Source(n_files=20, rows_per_file=100)
+        dataset = StreamingStage2Dataset(
+            streaming_source=source,
+            batch_size=64,
+            shuffle=False,
+            seed=42,
+        )
+        # 1 shard: 2 グループ (10, 10) → ceil(1000/64) * 2 = 32
+        assert len(dataset) == 32
+
+        # 20 workers: 各 shard 1 ファイル → ceil(100/64) * 20 = 40
+        dataset.set_num_workers(20)
+        assert len(dataset) == 40
 
     def test_set_epoch(self) -> None:
         """Different epochs produce different orders."""
@@ -1118,6 +1167,98 @@ class TestComputeTotalBatches:
             )
             == 3
         )
+
+
+class TestComputeConcatTotalBatches:
+    """_compute_concat_total_batches ヘルパー関数のテスト."""
+
+    def test_group_is_ceiled_once_not_per_file(self) -> None:
+        """結合グループごとに 1 回だけ ceil される."""
+        # 1 グループ (3 ファイル) → ceil(30/7) = 5
+        assert (
+            _compute_concat_total_batches(
+                [10, 10, 10], batch_size=7, num_workers=0
+            )
+            == 5
+        )
+
+    def test_group_boundary_at_group_size(self) -> None:
+        """group_size を超えると新しいグループになる."""
+        # 12 ファイル → グループ (10, 2)
+        # ceil(100/7) + ceil(20/7) = 15 + 3 = 18
+        assert (
+            _compute_concat_total_batches(
+                [10] * 12, batch_size=7, num_workers=0
+            )
+            == 18
+        )
+
+    def test_workers_shard_round_robin(self) -> None:
+        """worker 数だけ shard に分かれ，端数グループが shard ごとに出る."""
+        # 20 ファイル x 100 行, batch=64
+        # 1 shard: グループ (10, 10) → ceil(1000/64) * 2 = 32
+        assert (
+            _compute_concat_total_batches(
+                [100] * 20, batch_size=64, num_workers=0
+            )
+            == 32
+        )
+        # 2 shards: 各 10 ファイル → ceil(1000/64) * 2 = 32
+        assert (
+            _compute_concat_total_batches(
+                [100] * 20, batch_size=64, num_workers=2
+            )
+            == 32
+        )
+        # 20 shards: 各 1 ファイル → ceil(100/64) * 20 = 40
+        assert (
+            _compute_concat_total_batches(
+                [100] * 20, batch_size=64, num_workers=20
+            )
+            == 40
+        )
+
+    def test_more_workers_than_files(self) -> None:
+        """ファイル数より worker 数が多い場合，空 shard は 0 を足す."""
+        assert (
+            _compute_concat_total_batches(
+                [100, 100], batch_size=64, num_workers=8
+            )
+            == 4
+        )
+
+    def test_empty(self) -> None:
+        """ファイルなしの場合."""
+        assert (
+            _compute_concat_total_batches(
+                [], batch_size=100, num_workers=4
+            )
+            == 0
+        )
+
+    def test_zero_row_file(self) -> None:
+        """0 行ファイルはバッチを生まない."""
+        assert (
+            _compute_concat_total_batches(
+                [0, 0], batch_size=100, num_workers=0
+            )
+            == 0
+        )
+
+    def test_shard_round_robin_matches_resolve_worker_files(
+        self,
+    ) -> None:
+        """shard の切り方が _resolve_worker_files と同じ規則である."""
+        row_counts = [10, 20, 30, 40, 50]
+        n_workers = 2
+        for worker_id in range(n_workers):
+            # _resolve_worker_files は i % n_workers == worker_id
+            expected = [
+                n
+                for i, n in enumerate(row_counts)
+                if i % n_workers == worker_id
+            ]
+            assert row_counts[worker_id::n_workers] == expected
 
 
 # ============================================================================

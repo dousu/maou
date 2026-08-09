@@ -120,8 +120,21 @@ class OpeningDatabase:
         最長一致(longest prefix match)で照合し，
         最も具体的なパターンを返す．
 
+        Important:
+            **前提条件**: ``moves`` は平手初期局面から始まる手順で
+            なければならない．``_DEFAULT_OPENINGS`` の全エントリが
+            平手初期局面基準で定義されているためである．
+            本メソッドはこの前提を検査しない (手順だけからは
+            開始局面が分からない)．中盤局面などを起点とする手順を
+            渡すと，偶然の前方一致で無関係な定跡名が返る．
+
+            呼び出し側が起点が平手であることを保証すること．
+            interface 層では
+            ``game_graph_visualization.py`` の ``_root_is_startpos()``
+            がグラフの根の SFEN を平手と比較してこれを担保している．
+
         Args:
-            moves: USI形式の指し手列(ルートからの手順)
+            moves: USI形式の指し手列(平手初期局面からの手順)
 
         Returns:
             一致した定跡の情報．見つからない場合None．
