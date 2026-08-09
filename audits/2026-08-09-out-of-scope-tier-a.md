@@ -3,9 +3,9 @@ path: src/maou/infra/console, src/maou/interface, .claude/skills
 kind: backlog
 scope: other
 level: high
-status: in-progress
+status: done
 started: 2026-08-09
-last_sha: e0fa91d
+last_sha: b38b36c
 ---
 
 # Audit — out-of-scope backlog, Tier A
@@ -21,27 +21,10 @@ motivating example であり，同コマンドはこの run で判明した3つ�
 
 ## Resume point
 
-**残っているのは pytest の実行のみ．** 他のステップは完了している．
+_(complete — no resume point)_
 
-このコンテナでは `maou._rust` が未ビルドで，
-`src/maou/interface/game_graph_visualization.py` →
-`maou.domain.board.shogi` → `maou._rust.maou_shogi` の依存があるため，
-テストを走らせるには先に `maturin develop --release` が必要
-(前 run の計測で約 24m34s)．本 run 中に起動したが，セッション終了までに
-完了しなかった．
-
-次のセッションでやること:
-
-```bash
-uv sync --extra cpu --no-install-project      # 済んでいれば不要
-.venv/bin/python -m maturin develop --release # 約 25 分
-.venv/bin/python -m pytest \
-  tests/maou/interface/test_game_graph_visualization.py \
-  tests/maou/infra/console/test_cli_option_compatibility.py -q
-```
-
-期待値: 追加した回帰テスト 8件を含めて全 pass．失敗したら fix-forward
-(コード修正は既に push 済み)．
+消化した3件は全て resolved．QA は下の Environment notes の通り
+**全て実行済みで pass**．
 
 ## Consumed
 
@@ -180,19 +163,34 @@ T1 / T2 は空になった．
 
 ## Environment notes
 
-**QA 状況 (正直な記録).**
+**QA 状況．**
 
 | チェック | 結果 |
 |---|---|
-| `ruff format` | 変更ファイルで pass |
-| `ruff check` | 変更ファイルで pass |
-| `mypy` | 変更 src 2ファイルで pass |
-| `pytest` | **未実行** — Resume point を参照 |
+| `ruff format --check src/ tests/` | **pass** (285 files) |
+| `ruff check src/ tests/` | **pass** |
+| `mypy src/` | **pass** (134 files) |
+| `pytest` 対象2ファイル | **56 passed** |
+| `pytest tests/maou/{infra/console,interface,domain/game_graph}` | **363 passed, 3 skipped** |
+| `pytest` 全体 | **1725 passed, 54 skipped** (100.6s) |
+
+**回帰テストの非空虚性を実証済み** (修正を無効化して失敗を確認し復元):
+
+- A2: `_root_is_startpos()` ガードを削除すると
+  `test_middlegame_root_does_not_match` と
+  `test_gote_root_does_not_match` が失敗する．同時に
+  `test_startpos_root_matches_opening` /
+  `test_resolved_startpos_sfen_still_matches` は**通り続ける**ので，
+  修正が過剰抑制していないことも同時に確認できる．
+- A1: `click.Choice` を元のハードコード一覧に戻すと
+  `test_stage12_lr_scheduler_choices_are_all_resolvable[benchmark-training]`
+  が失敗し，`ValueError: Unsupported learning rate scheduler` を再現する．
 
 `uv run` はこのコンテナで使用不可 (前 run と同じ理由)．
 `uv sync --extra cpu --no-install-project` は成功したが，
-`maou._rust` は含まれないため `maturin develop --release` が必要で，
-本 run 中に完了しなかった．QA は `.venv` のツールを直接叩いて実施した．
+`maou._rust` は含まれないため `maturin develop --release` が必要だった
+(**31m05s**; `patchelf` 未インストールの rpath 警告は無害)．
+QA は `.venv` のツールを直接叩いて実施した．
 
 `.git/hooks/pre-commit` はこのコンテナに**未インストール**なので
 commit ではフックが走っていない．`uv run` ベースのフック
