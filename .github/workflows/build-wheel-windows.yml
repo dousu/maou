@@ -45,8 +45,11 @@ jobs:
         with:
           target: x86_64-pc-windows-msvc
           sccache: "true"
-          # 既定の profile は dev (pyproject.toml [tool.maturin]) なので
-          # --release を明示する．features は pyproject の既定
+          # 既定の profile は py-ext (pyproject.toml [tool.maturin]) で，
+          # 開発時のビルド時間を優先して LTO を切り debug-assertions /
+          # overflow-checks を有効にしている．出荷 wheel はその逆を望むので
+          # --release を明示する (thin LTO 有効・assertion 無効)．
+          # features は pyproject の既定
           # (pyo3/extension-module + onnx) と同じものを明示指定している —
           # この workflow が何でビルドされるかをファイル内で読み取れるように
           # するため．cuda/tensorrt は付けない (Windows は CPU 実行のみ)

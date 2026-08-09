@@ -131,7 +131,11 @@ binding = "pyo3"
 # 「this build has no onnx feature」で実行時に落ちる (2026-07-29 に踏んだ)．
 # cuda/tensorrt は HW 依存なので既定に入れない (実行時 opt-in のまま)．
 features = ["pyo3/extension-module", "onnx"]
-profile = "dev"
+# py-ext は release 継承 + LTO 無効 + debug-assertions/overflow-checks 有効
+# (定義と理由は root Cargo.toml)．ここを dev に戻すと，明示ビルドと
+# `uv run` の暗黙リビルドでプロファイルが食い違い，最適化拡張が黙って
+# debug 拡張に差し替えられる状態に戻る．
+profile = "py-ext"
 
 [dependency-groups]
 dev = [
