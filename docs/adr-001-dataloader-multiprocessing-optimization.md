@@ -138,6 +138,13 @@ for batch in dataloader:
     # 学習処理...
 ```
 
+> **注 (2026-08-09)**: 上のコード例は当時の targets タプルである．
+> 現在 `legal_move_mask` はどのデータ経路も供給せず，targets は
+> `(labels_policy, labels_value, move_win_rate)` (3 要素目は省略可)
+> になっている．経緯は [loss-functions.md](loss-functions.md) の
+> 「合法手マスキング」節を参照．本 ADR の主題である
+> DataLoader/GPU 転送の決定自体は有効である．
+
 ### 5. グローバルワーカー初期化関数の実装
 
 **Pickle化エラーを解決するためグローバル関数として定義**
