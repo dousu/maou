@@ -1077,3 +1077,102 @@ def test_streaming_dataloaders_pin_memory_passthrough() -> None:
     # pin_memory=True がそのまま渡される
     assert train_loader.pin_memory is True
     assert val_loader.pin_memory is True
+
+
+def test_sample_for_size_estimate_passes_small_lists_through() -> (
+    None
+):
+    """上限以下ならそのまま返す．"""
+    from maou.app.learning.setup import (
+        _SIZE_SAMPLE_LIMIT,
+        _sample_for_size_estimate,
+    )
+
+    paths = [
+        Path(f"{i}.feather") for i in range(_SIZE_SAMPLE_LIMIT)
+    ]
+    assert _sample_for_size_estimate(paths) == paths
+
+
+def test_sample_for_size_estimate_is_evenly_spread() -> None:
+    """上限を超える場合は等間隔に間引き，先頭に偏らない．"""
+    from maou.app.learning.setup import (
+        _SIZE_SAMPLE_LIMIT,
+        _sample_for_size_estimate,
+    )
+
+    total = _SIZE_SAMPLE_LIMIT * 4
+    paths = [Path(f"{i}.feather") for i in range(total)]
+
+    sample = _sample_for_size_estimate(paths)
+
+    assert len(sample) == _SIZE_SAMPLE_LIMIT
+    assert len(set(sample)) == _SIZE_SAMPLE_LIMIT
+    indices = [int(p.stem) for p in sample]
+    assert indices == sorted(indices)
+    # 末尾 1/4 からも採れている(先頭だけを見ていない)．
+    assert max(indices) >= total * 3 // 4
+
+
+def test_estimate_per_worker_mb_bounds_stat_calls() -> None:
+    """全ファイルを stat() しない．
+
+    平均サイズ1つを得るためだけに学習開始前の同期パスで
+    数万ファイルを stat() していた．
+    """
+    from maou.app.learning.setup import (
+        _SIZE_SAMPLE_LIMIT,
+        _estimate_per_worker_mb,
+    )
+
+    logger = logging.getLogger("test_per_worker")
+    total = _SIZE_SAMPLE_LIMIT * 4
+    paths = [_make_fake_path(100.0) for _ in range(total)]
+
+    result = _estimate_per_worker_mb(paths, logger)
+
+    stat_calls = sum(fp.stat.call_count for fp in paths)
+    assert stat_calls <= _SIZE_SAMPLE_LIMIT
+    # サンプリングしても推定値は変わらない(全ファイル同サイズ)．
+    assert result == pytest.approx(800.0, rel=1e-3)
+
+
+def test_model_factory_uses_network_defaults() -> None:
+    """ModelFactory はネットワーク側の既定値を再掲しない．
+
+    バックボーン形状を setup 側で書き直すと，ネットワークの既定を
+    変更したときに片方だけ古い値が残る．
+    """
+    from maou.app.learning.network import (
+        DEFAULT_HAND_PROJECTION_DIM,
+        HeadlessNetwork,
+        Network,
+    )
+
+    device = torch.device("cpu")
+
+    created_model = ModelFactory.create_shogi_model(device)
+    reference_model = Network(
+        hand_projection_dim=DEFAULT_HAND_PROJECTION_DIM
+    )
+    assert {
+        name: tuple(param.shape)
+        for name, param in created_model.state_dict().items()
+    } == {
+        name: tuple(param.shape)
+        for name, param in reference_model.state_dict().items()
+    }
+
+    created_backbone = ModelFactory.create_shogi_backbone(
+        device
+    )
+    reference_backbone = HeadlessNetwork(
+        hand_projection_dim=DEFAULT_HAND_PROJECTION_DIM
+    )
+    assert {
+        name: tuple(param.shape)
+        for name, param in created_backbone.state_dict().items()
+    } == {
+        name: tuple(param.shape)
+        for name, param in reference_backbone.state_dict().items()
+    }

@@ -413,15 +413,29 @@ class ValidationCallback(BaseCallback):
                     context.legal_move_mask,
                 )
             )
+            policy_batch_size = int(policy_targets.size(0))
+            # 同一 logits に対する log_softmax と topk はバッチ内で
+            # 一度だけ計算し，各指標へ使い回す (log_softmax は CE 2種
+            # と expected_win_rate の3箇所，topk は top5 精度と F1 の
+            # 2箇所で必要になる)．
+            policy_logits = context.outputs_policy.detach()
+            policy_log_probs = torch.log_softmax(
+                policy_logits, dim=1
+            )
+            policy_topk = min(5, int(policy_logits.size(1)))
+            policy_top_indices: torch.Tensor | None = None
+            if policy_batch_size > 0 and policy_topk > 0:
+                policy_top_indices = torch.topk(
+                    policy_logits, k=policy_topk, dim=1
+                ).indices
             self._policy_cross_entropy_sum += (
-                self._policy_cross_entropy_gpu(
-                    context.outputs_policy, policy_targets
+                self._cross_entropy_from_log_probs(
+                    policy_log_probs, policy_targets
                 )
             )
             self._policy_empty_target_count += (
                 policy_targets.sum(dim=1) <= 0
             ).sum()
-            policy_batch_size = int(policy_targets.size(0))
             value_batch_size = int(context.labels_value.numel())
             self._value_brier_score_sum += (
                 self._value_brier_score_gpu(
@@ -434,6 +448,7 @@ class ValidationCallback(BaseCallback):
                 self._compute_policy_top5_accuracy_stats_gpu(
                     logits=context.outputs_policy,
                     targets=policy_targets,
+                    prediction_top_indices=policy_top_indices,
                 )
             )
             self._policy_top5_ratio_sum += ratio_sum_t
@@ -443,6 +458,7 @@ class ValidationCallback(BaseCallback):
                 self._compute_policy_f1_components_gpu(
                     logits=context.outputs_policy,
                     targets=policy_targets,
+                    prediction_top_indices=policy_top_indices,
                 )
             )
             self._policy_f1_tp += tp_t
@@ -498,8 +514,9 @@ class ValidationCallback(BaseCallback):
                             )
                         )
                         self._policy_move_label_ce_sum += (
-                            self._policy_cross_entropy_gpu(
-                                logits, move_label_targets
+                            self._cross_entropy_from_log_probs(
+                                policy_log_probs,
+                                move_label_targets,
                             )
                         )
                         self.policy_move_label_ce_count += (
@@ -508,8 +525,7 @@ class ValidationCallback(BaseCallback):
 
                     # policy_expected_win_rate: Σ softmax(logits)[i] × moveWinRate[i]
                     # log_softmax + exp で softmax を得る(数値安定性のため)
-                    log_probs = torch.log_softmax(logits, dim=1)
-                    probs = log_probs.exp()
+                    probs = policy_log_probs.exp()
                     expected_wr = (probs * win_rate).sum(dim=1)
                     self._policy_expected_win_rate_sum += (
                         expected_wr.sum()
@@ -633,19 +649,22 @@ class ValidationCallback(BaseCallback):
         self.policy_move_label_ce_count = 0
         self.move_win_rate_sample_count = 0
 
-    def _policy_cross_entropy_gpu(
+    def _cross_entropy_from_log_probs(
         self,
-        logits: torch.Tensor,
+        log_probs: torch.Tensor,
         target_distribution: torch.Tensor,
     ) -> torch.Tensor:
-        """Calculate total cross entropy as a GPU tensor (no sync)."""
-        if logits.ndim != 2 or target_distribution.ndim != 2:
+        """Calculate total cross entropy as a GPU tensor (no sync).
+
+        ``log_probs`` は呼び出し側でバッチにつき一度だけ計算した
+        ``log_softmax(logits)`` を受け取る．同じ logits に対する
+        指標が複数あるため，ここで計算し直さない．
+        """
+        if log_probs.ndim != 2 or target_distribution.ndim != 2:
             raise ValueError(
                 "Tensors y and t must be 2-dimensional."
             )
-        logits_detached = logits.detach()
         targets_detached = target_distribution.detach()
-        log_probs = torch.log_softmax(logits_detached, dim=1)
         cross_entropy = -torch.sum(
             targets_detached * log_probs, dim=1
         )
@@ -662,9 +681,21 @@ class ValidationCallback(BaseCallback):
         return torch.sum(squared_error)
 
     def _compute_policy_top5_accuracy_stats_gpu(
-        self, *, logits: torch.Tensor, targets: torch.Tensor
+        self,
+        *,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        prediction_top_indices: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, int]:
-        """Return cumulative ratio sum as GPU tensor and sample count."""
+        """Return cumulative ratio sum as GPU tensor and sample count.
+
+        Args:
+            logits: 方策のロジット．
+            targets: 正規化済みの方策ターゲット分布．
+            prediction_top_indices: ``topk(logits)`` の結果．
+                F1 の計算と共通なので呼び出し側で使い回せる．
+                None のときはこの場で計算する．
+        """
         if logits.ndim != 2 or targets.ndim != 2:
             raise ValueError(
                 "Tensors logits and targets must be 2-dimensional."
@@ -704,11 +735,12 @@ class ValidationCallback(BaseCallback):
             dim=1,
         ).indices
 
-        prediction_top_indices = torch.topk(
-            logits_detached,
-            k=topk_pred,
-            dim=1,
-        ).indices
+        if prediction_top_indices is None:
+            prediction_top_indices = torch.topk(
+                logits_detached,
+                k=topk_pred,
+                dim=1,
+            ).indices
 
         current_topk = torch.minimum(
             effective_label_topk,
@@ -762,9 +794,20 @@ class ValidationCallback(BaseCallback):
         return torch.sum(ratios), batch_size
 
     def _compute_policy_f1_components_gpu(
-        self, *, logits: torch.Tensor, targets: torch.Tensor
+        self,
+        *,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        prediction_top_indices: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Compute F1 score components as GPU tensors (no sync).
+
+        Args:
+            logits: 方策のロジット．
+            targets: 正規化済みの方策ターゲット分布．
+            prediction_top_indices: ``topk(logits)`` の結果．
+                top5 精度の計算と共通なので呼び出し側で使い回せる．
+                None のときはこの場で計算する．
 
         Returns:
             Tuple of (total_tp, total_fp, total_fn) as long tensors on GPU.
@@ -791,11 +834,12 @@ class ValidationCallback(BaseCallback):
         positive_mask = targets_detached > 0
         positive_counts = torch.sum(positive_mask, dim=1)
 
-        prediction_top_indices = torch.topk(
-            logits_detached,
-            k=topk_pred,
-            dim=1,
-        ).indices
+        if prediction_top_indices is None:
+            prediction_top_indices = torch.topk(
+                logits_detached,
+                k=topk_pred,
+                dim=1,
+            ).indices
 
         pred_one_hot = torch.zeros_like(targets_detached)
         pred_one_hot.scatter_(1, prediction_top_indices, 1.0)

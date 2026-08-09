@@ -7,6 +7,7 @@ The :class:`ShogiMLPMixer` expects input tensors of shape
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal, overload
 
 import torch
 import torch.nn.functional as F
@@ -156,6 +157,24 @@ class ShogiMLPMixer(nn.Module):
         x = x.view(batch_size, channels, tokens)
         return x.transpose(1, 2)
 
+    @overload
+    def forward_features(
+        self,
+        x: torch.Tensor,
+        token_mask: torch.Tensor | None = None,
+        *,
+        return_tokens: Literal[False] = False,
+    ) -> torch.Tensor: ...
+
+    @overload
+    def forward_features(
+        self,
+        x: torch.Tensor,
+        token_mask: torch.Tensor | None = None,
+        *,
+        return_tokens: Literal[True],
+    ) -> tuple[torch.Tensor, torch.Tensor]: ...
+
     def forward_features(
         self,
         x: torch.Tensor,
@@ -163,7 +182,12 @@ class ShogiMLPMixer(nn.Module):
         *,
         return_tokens: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        """Return pooled token features prior to the classifier head."""
+        """Return pooled token features prior to the classifier head.
+
+        ``return_tokens=False`` のとき ``Tensor`` を返すことを
+        overload で明示する．これにより ``FreezableBackbone`` の
+        ``forward_features(x) -> Tensor`` を満たす．
+        """
 
         tokens = self._flatten_tokens(x)
         tokens = self.input_norm(tokens)

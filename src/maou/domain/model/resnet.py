@@ -161,9 +161,17 @@ class ResNet(nn.Module):
         layers: list[int],
         strides: list[_size_2_t],
         list_out_channels: list[int],
+        pooling: nn.Module | None = None,
     ):
         super().__init__()
         self.block_in_channels = in_channels
+        # forward_features が返す特徴ベクトルを作るプーリング．
+        # 呼び出し側が差し替えられるよう引数で受け取る．
+        self.pooling: nn.Module = (
+            pooling
+            if pooling is not None
+            else nn.AdaptiveAvgPool2d((1, 1))
+        )
 
         # 各層を構築
         # stride=2で空間サイズ縮小
@@ -288,3 +296,19 @@ class ResNet(nn.Module):
             入力テンソルをそのまま返す
         """
         return x
+
+    def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        """プーリング済みの特徴ベクトルを返す．
+
+        ViT / MLP-Mixer の同名メソッドと意味を揃えるため，
+        残差ブロック出力の特徴マップをプーリングして平坦化する．
+
+        Args:
+            x: バックボーン入力テンソル (batch, channels, H, W)
+
+        Returns:
+            (batch, embedding_dim) の特徴ベクトル
+        """
+        features = self.forward(x)
+        pooled = self.pooling(features)
+        return torch.flatten(pooled, 1)

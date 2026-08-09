@@ -26,14 +26,10 @@ except (
 
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.network import (
-    BOARD_EMBEDDING_DIM,
-    DEFAULT_BOARD_VOCAB_SIZE,
     BackboneArchitecture,
     HeadlessNetwork,
     Network,
 )
-from maou.domain.model.resnet import BottleneckBlock
-from maou.domain.move.label import MOVE_LABELS_NUM
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +208,35 @@ _WORKER_MEMORY_BUDGET_FRACTION: float = 0.4
 _FALLBACK_PER_WORKER_MB: float = 200.0
 """ファイルサイズ情報が利用できない場合のデフォルト値．"""
 
+_SIZE_SAMPLE_LIMIT: int = 64
+"""平均ファイルサイズの推定に使う stat() の最大回数．
+
+用途は DataLoader ワーカー数を決めるための平均サイズ1つだけであり，
+学習開始前の同期パスで数万ファイルを stat() する価値はない．
+先頭に偏らないよう等間隔サンプリングする．
+"""
+
+
+def _sample_for_size_estimate(
+    file_paths: list[Path],
+) -> list[Path]:
+    """サイズ推定用に等間隔でファイルを間引く．
+
+    Args:
+        file_paths: データファイルパスのリスト
+
+    Returns:
+        高々 ``_SIZE_SAMPLE_LIMIT`` 件の等間隔サンプル
+    """
+    total = len(file_paths)
+    if total <= _SIZE_SAMPLE_LIMIT:
+        return file_paths
+    step = total / _SIZE_SAMPLE_LIMIT
+    return [
+        file_paths[int(i * step)]
+        for i in range(_SIZE_SAMPLE_LIMIT)
+    ]
+
 
 def _estimate_per_worker_mb(
     file_paths: list[Path] | None,
@@ -223,6 +248,9 @@ def _estimate_per_worker_mb(
     1ワーカーあたりのメモリ使用量を算出する．
     ファイルパスが未指定またはすべて存在しない場合はフォールバック値を返す．
 
+    平均サイズは高々 ``_SIZE_SAMPLE_LIMIT`` 件の等間隔サンプルから
+    求める (全ファイルを stat() しない)．
+
     Args:
         file_paths: データファイルパスのリスト
         logger: ロガー
@@ -233,8 +261,9 @@ def _estimate_per_worker_mb(
     if not file_paths:
         return _FALLBACK_PER_WORKER_MB
 
+    sampled = _sample_for_size_estimate(file_paths)
     file_sizes = []
-    for fp in file_paths:
+    for fp in sampled:
         try:
             file_sizes.append(fp.stat().st_size)
         except OSError:
@@ -260,10 +289,12 @@ def _estimate_per_worker_mb(
 
     logger.info(
         "Dynamic per_worker_mb=%.0f "
-        "(avg_file=%.1fMB, files=%d/%d accessible)",
+        "(avg_file=%.1fMB, files=%d/%d accessible "
+        "of %d total)",
         per_worker_mb,
         avg_compressed_mb,
         len(file_sizes),
+        len(sampled),
         len(file_paths),
     )
 
@@ -718,16 +749,13 @@ class ModelFactory:
         if hand_projection_dim is None:
             hand_projection_dim = DEFAULT_HAND_PROJECTION_DIM
 
+        # board_vocab_size / embedding_dim / board_size / block /
+        # layers / strides / out_channels は HeadlessNetwork の既定値
+        # をそのまま使う．ここで再掲するとネットワーク側の既定を
+        # 変更したときに片方だけ古い値が残る．
         backbone = HeadlessNetwork(
-            board_vocab_size=DEFAULT_BOARD_VOCAB_SIZE,
-            embedding_dim=BOARD_EMBEDDING_DIM,
             hand_projection_dim=hand_projection_dim,
-            board_size=(9, 9),
             architecture=architecture,
-            block=BottleneckBlock,
-            layers=(2, 2, 2, 2),
-            strides=(1, 2, 2, 2),
-            out_channels=(64, 128, 256, 512),
             architecture_config=architecture_config,
         )
 
@@ -757,17 +785,11 @@ class ModelFactory:
         if hand_projection_dim is None:
             hand_projection_dim = DEFAULT_HAND_PROJECTION_DIM
 
+        # num_policy_classes 以下のバックボーン形状は Network の
+        # 既定値をそのまま使う (create_shogi_backbone と同じ理由)．
         model = Network(
-            num_policy_classes=MOVE_LABELS_NUM,
-            board_vocab_size=DEFAULT_BOARD_VOCAB_SIZE,
-            embedding_dim=BOARD_EMBEDDING_DIM,
             hand_projection_dim=hand_projection_dim,
-            board_size=(9, 9),
             architecture=architecture,
-            block=BottleneckBlock,
-            layers=(2, 2, 2, 2),
-            strides=(1, 2, 2, 2),
-            out_channels=(64, 128, 256, 512),
             architecture_config=architecture_config,
         )
 

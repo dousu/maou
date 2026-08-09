@@ -315,3 +315,66 @@ class TestValidateInputsTracingGuard:
 
         with pytest.raises(ValueError, match="board size"):
             model._validate_inputs(wrong_size_input)
+
+
+def test_embed_inputs_matches_backbone_input() -> None:
+    """embed_inputs はバックボーンへ渡す直前のテンソルを返す．
+
+    段階学習の truncated model がこの前処理を private メソッド
+    呼び出しで書き直していたため公開した．
+    """
+    net = Network(hand_projection_dim=4)
+    board = torch.zeros((2, 9, 9), dtype=torch.long)
+    hand = torch.zeros((2, 14), dtype=torch.float32)
+
+    combined = net.embed_inputs((board, hand))
+
+    assert combined.shape == (
+        2,
+        net.backbone_input_channels,
+        *net.board_size,
+    )
+    # forward_features はこの出力をそのままバックボーンへ渡す．
+    expected = net.backbone.forward_features(combined)
+    assert torch.equal(
+        net.forward_features((board, hand)), expected
+    )
+
+
+def test_backbone_input_channels_is_derived() -> None:
+    """backbone_input_channels は盤面埋め込み次元と持ち駒射影の和．"""
+    from maou.app.learning.network import BOARD_EMBEDDING_DIM
+
+    net = Network(hand_projection_dim=4)
+
+    assert (
+        net.backbone_input_channels == BOARD_EMBEDDING_DIM + 4
+    )
+    assert net.hand_projection_dim == 4
+    assert net.board_size == (9, 9)
+
+
+def test_custom_pooling_is_still_applied_for_resnet() -> None:
+    """pooling 引数は ResNet バックボーンへ渡っても生きている．
+
+    プーリングの持ち主を移す変更で，この拡張ポイントが黙って
+    死ぬのを防ぐ．
+    """
+    calls: list[torch.Tensor] = []
+
+    class RecordingPool(torch.nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            calls.append(x)
+            return torch.nn.functional.adaptive_avg_pool2d(
+                x, (1, 1)
+            )
+
+    pool = RecordingPool()
+    net = Network(architecture="resnet", pooling=pool)
+    board = torch.zeros((2, 9, 9), dtype=torch.long)
+    hand = torch.zeros((2, 14), dtype=torch.float32)
+
+    net.forward_features((board, hand))
+
+    assert len(calls) == 1
+    assert net.pool is pool
