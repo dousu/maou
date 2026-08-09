@@ -1,7 +1,9 @@
 # audits/
 
-Cross-session coverage record for the repo-wide audit driven by
-`/audit-and-fix` (`.claude/commands/audit-and-fix.md`).
+Cross-session coverage record for the repo-wide audit, driven by
+`/audit-and-fix` (`.claude/commands/audit-and-fix.md`) for whole paths and
+`/audit-backlog` (`.claude/commands/audit-backlog.md`) for the individual
+findings those runs leave open.
 
 The tree is too large to audit in one session — ~60k lines of Python
 across four layers, 7 Rust crates, and 22 design documents. This
@@ -23,7 +25,8 @@ into the other.
 | Path | Role |
 |---|---|
 | `audits/coverage.md` | The ledger. One row per audited path: status, resume point, open items. Also carries the **out-of-scope backlog**. |
-| `audits/YYYY-MM-DD-<path-slug>.md` | One record per `/audit-and-fix` run. Immutable once the run's status is `done`. |
+| `audits/YYYY-MM-DD-<path-slug>.md` | One record per `/audit-and-fix` run. Immutable once the run's status is `done` — it is an account, never a worklist (see below). |
+| `audits/YYYY-MM-DD-backlog-<slug>.md` | One record per `/audit-backlog` run (`kind: backlog`). Consumes individual findings; gets no main-table row. |
 
 `<path-slug>` is the target path with separators flattened:
 `src/maou/domain/model` → `src-maou-domain-model`.
@@ -57,6 +60,53 @@ and enough of the finding to act on without reopening the record.
 - **When an item is resolved**, delete its row. The resolving audit's
   record is the durable account; the backlog is a worklist, not an
   archive. Do not delete a row that was merely re-triaged elsewhere.
+
+## Deferred findings
+
+A record's `## Deferred` section holds findings the audit **confirmed but
+deliberately did not fix** — ambiguous, cross-layer, or needing a
+decision. A deferred finding is a diagnosis with the fix withheld pending
+a decision, **not** a decision never to fix it.
+
+Deferred findings therefore get a row in `coverage.md`'s **Deferred
+backlog**, exactly as out-of-scope findings get one in the Out-of-scope
+backlog. The retrieval argument above applies to both classes in full:
+what is written only into a record is visible only to whoever opens that
+record.
+
+`coverage.md` is the authority on **what is open**; records are the
+authority on **what happened**. The row is the condensed, deletable index
+entry; the record's Deferred section is the durable reasoning behind it.
+Both are written, and only the row is ever deleted.
+
+## Records are accounts, not worklists
+
+A `done` record is the account of one run at one time. Its Deferred
+section says "as of that run, this was deferred" — and that stays true
+forever, **including after the finding has shipped**.
+
+That is why no command reads a record to decide what work remains. Doing
+so would re-surface every resolved finding on every run, with no way to
+remove it: a record cannot be "cleared" without destroying the account,
+so the list would only ever grow. Deleting a row from `coverage.md` is
+what marks a finding consumed, and it is the only mechanism that does.
+
+So a record is **never amended to carry state**: no `RESOLVED` markers,
+no moving an item from Deferred into Applied, no renumbering. Commit
+`916e874` did move a deferred item into Applied — that predates the
+Deferred backlog, when the record was the only place to record it, and it
+is not the pattern to follow now.
+
+The one narrow exception is a **correction**: when a later run proves a
+record's diagnosis or proposed fix *wrong*, append a short note saying
+so, because an uncorrected record actively misleads the next reader. A
+correction states what the record got wrong, never whether the work is
+done:
+
+```markdown
+   **Correction** (YYYY-MM-DD, `<sha>`): the fix suggested above would
+   have <consequence>, because <what the record missed>.
+```
 
 ## Status vocabulary
 
@@ -131,8 +181,8 @@ resume is here.
    reported, *including paths other than the one being audited* — a
    half-finished path left by an earlier session is the thing most likely
    to be lost, and it never surfaces if only the requested row is checked.
-   The most recent record file is skimmed for its Deferred and
-   Out-of-scope sections.
+   Open findings come from `coverage.md`'s two backlog tables, **not** from
+   the record files (see "Records are accounts, not worklists").
 3. **Claim before working.** The `in-progress` row and record are written
    and committed *before* the audit starts, not after. A session that dies
    mid-run then still leaves a resume point, and a concurrent session sees
@@ -143,7 +193,9 @@ resume is here.
    makes an interrupted run resumable.
 5. **Staleness is decided concretely.** For a `done` row,
    `git log <last_sha>..HEAD -- <path>` answers whether a re-audit is
-   warranted. A `done` row's Deferred section is read before any re-audit.
+   warranted. What is still open for that path is its rows in the backlog
+   tables; the record's Deferred section is worth reading for the *reasoning*
+   behind those rows, but it is not the list of what remains.
 6. `blocked` rows surface to the user; they are not silently retried.
 
 Running `/audit-and-fix` with **no path** is the intended way to open a

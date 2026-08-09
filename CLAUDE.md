@@ -83,9 +83,11 @@ Full spec: [docs/memory-architecture.md](docs/memory-architecture.md).
 | `~/.claude/.../memory/` (auto-memory) | `feedback_*.md` process rules ONLY (advisory). NOT campaign state; no new `project_*.md`. | n/a (per-machine) |
 | `audits/coverage.md` | Repo-wide audit ledger: per-path status, resume point, open items. | yes |
 | `audits/YYYY-MM-DD-<path-slug>.md` | One record per `/audit-and-fix` run. | yes |
+| `audits/YYYY-MM-DD-backlog-<slug>.md` | One record per `/audit-backlog` run (`kind: backlog`). Consumes individual deferred / out-of-scope findings; does **not** earn a main-table row. | yes |
 | `.claude/commands/checkpoint-context.md` | Writer of campaign working memory (`worklog/`, `scratchpad/`). | yes |
 | `.claude/commands/resume-context.md` | Read-only resume. | yes |
-| `.claude/commands/audit-and-fix.md` | Writer of `audits/`. | yes |
+| `.claude/commands/audit-and-fix.md` | Writer of `audits/` (path 単位の監査). | yes |
+| `.claude/commands/audit-backlog.md` | Writer of `audits/` (deferred / out-of-scope の個別消化). | yes |
 
 ### MUST rules
 
@@ -126,11 +128,24 @@ Full spec: [docs/memory-architecture.md](docs/memory-architecture.md).
 - MUST surface `compass.md` § 🚫 VETOES and § 🚦 TRIPWIRES FIRST and
   verbatim (Confirmed-binding) at `/resume-context`, and commit every
   `reviews/` `status:` transition immediately (audit trail).
-- MUST record every `/audit-and-fix` run in `audits/` (ledger row +
-  record file) and commit it — `audits/` is the only cross-session record
-  of repo-wide audit coverage, and unlike `scratchpad/` it survives
-  container reclamation. An interrupted run MUST still write its resume
-  point before the session ends.
+- MUST record every `/audit-and-fix` **and `/audit-backlog`** run in
+  `audits/` and commit it — `/audit-and-fix` writes a ledger row + record
+  file; `/audit-backlog` writes a `kind: backlog` record and MUST NOT
+  write a main-table row (a row there claims the whole path was audited).
+  `audits/` is the only cross-session record of repo-wide audit coverage,
+  and unlike `scratchpad/` it survives container reclamation. An
+  interrupted run MUST still write its resume point before the session
+  ends.
+- MUST treat `audits/coverage.md` § "Open findings backlog" as the **only**
+  live worklist of open findings, deferred and out-of-scope alike:
+  `/audit-and-fix` MUST append a row for every finding it leaves open, and
+  a run that resolves one MUST delete its row. MUST NOT read a record's
+  `## Deferred` / `## Out of scope` section to decide what work remains —
+  a record is an immutable account whose Deferred section stays true after
+  the finding ships, so treating it as a worklist re-surfaces resolved
+  findings forever. MUST NOT amend a record to carry state (no `RESOLVED`
+  markers, no Deferred→Applied moves, no renumbering); a **correction** of
+  a wrong diagnosis is the only permitted amendment.
 - MUST keep `audits/` independent of the campaign memory (`worklog/` /
   `scratchpad/compass.md`). The campaign layer tracks one
   stable-environment measurement campaign; `audits/` tracks traversal of

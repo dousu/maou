@@ -189,6 +189,23 @@ done:
 ```
 ```
 
+### 6. audits/README.md — 適用時に判明した3箇所 (提案文面外)
+
+承認後の適用中に，**§4/§5 を入れると同一ファイル内で自己矛盾する箇所**が
+3つあることが判明した．提案の文面には含まれていなかったが，放置すると
+README がどちらの規約に従うべきか読者に判断させることになり，
+矛盾を残す方が個別の追加編集より害が大きいため，同時に直した．
+事後記録として明記する:
+
+| 行 | 矛盾 | 対応 |
+|---|---|---|
+| 3-4 | 「driven by `/audit-and-fix`」のみ | `/audit-backlog` を並記 |
+| Protocol 2 | 「The most recent record file is skimmed for its Deferred and Out-of-scope sections」— §5 が禁じた読み方そのもの | open findings は `coverage.md` の2表から取る旨に差し替え |
+| Protocol 5 | 「A `done` row's Deferred section is read before any re-audit」— 同上 | 開いている項目は backlog 行，record は理由づけの参照先，と区別 |
+
+いずれも §5 で新設した規約に既存記述を追随させたもので，新しい規約を
+追加したものではない．
+
 ## Motivation
 
 `audits/` は container reclamation を越える唯一の監査記録なので，
