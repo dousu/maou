@@ -62,6 +62,24 @@ class TestOpeningDatabase:
         assert result is not None
         assert result.name == "矢倉"
 
+    def test_origin_precondition_is_not_enforced_here(
+        self,
+    ) -> None:
+        """平手起点という前提条件はドメイン側では検査しない．
+
+        ``find_opening`` は手順の前方一致だけを見るので，起点が
+        平手でなくても一致すれば定跡名を返す．起点の検査は
+        interface 層の ``_root_is_startpos()``
+        (``game_graph_visualization.py``) が担う，という設計を固定
+        する．ここに二重のガードを入れないこと．
+        """
+        db = OpeningDatabase()
+        # 中盤局面から指された「5g5f」でも先手中飛車として一致する．
+        # 手順だけからは起点が分からないため，これは仕様どおり．
+        result = db.find_opening(["5g5f"])
+        assert result is not None
+        assert result.name == "先手中飛車"
+
 
 class TestOpeningInfo:
     """OpeningInfo のテスト．"""
