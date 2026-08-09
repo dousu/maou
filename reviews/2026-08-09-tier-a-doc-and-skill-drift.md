@@ -1,5 +1,6 @@
 ---
-status: pending
+status: applied
+applied_in: 3600b32
 date: 2026-08-09
 target:
   - docs/commands/utility_benchmark_training.md
