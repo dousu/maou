@@ -1,5 +1,5 @@
 ---
-description: Audit one path (source module, Rust crate, or doc tree) for correctness bugs, simplification opportunities, and documentation drift — then APPLY the code fixes, bump the version, and commit. Documentation drift is never edited silently: it is filed as a reviews/ proposal and reconciled with the user in the same run, then applied on approval. Records coverage in audits/ so a path can be resumed across sessions.
+description: Audit one path (source module, Rust crate, or doc tree) for correctness bugs, simplification opportunities, cross-module inconsistency (the same shape implemented differently elsewhere, and cross-CLI data-pipeline edges), and documentation drift — then APPLY the code fixes, bump the version, and commit. Documentation drift is never edited silently: it is filed as a reviews/ proposal and reconciled with the user in the same run, then applied on approval. Records coverage in audits/ so a path can be resumed across sessions.
 argument-hint: [path-or-crate | omit to resume from the audits/ ledger] [effort-level: low|medium|high|max, default medium]
 ---
 
@@ -85,6 +85,13 @@ for when the user does not want to decide now, not the normal path.
   `<path>`, record it for a future `/audit-and-fix <that-path>` run rather
   than fixing it inline. Scope creep is what makes these units
   unresumable.
+- **Scope binds the fix, not the search.** The constraint above is about
+  *where edits land*, and it has been read too narrowly: a path audit that
+  only ever *reads* files under `<path>` cannot see any defect that lives
+  in the relation between two modules. Step 2.5 deliberately reads outside
+  `<path>` and is expected to. What it finds outside is recorded in the
+  Out-of-scope backlog and left unfixed — that is the constraint honoured,
+  not violated.
 
 ## Steps
 
@@ -247,6 +254,130 @@ path-wide bug hunt.
 Record in step 9 which files the pass actually covered. "Ran /simplify"
 is not evidence the path was covered; a run that reviewed only the step 1
 diff must be reported as **not done**, not as a clean pass.
+
+### 2.5. Cross-module consistency sweep — look outward
+
+**Why this step exists.** Steps 1–2 are path-scoped by construction:
+`/code-review` and `/simplify` read the files under `<path>` and judge
+each on its own terms. A defect that lives *in the relation between two
+modules* is invisible to them, because **each copy is locally
+reasonable**. Nothing is wrong with any one file; the defect is that two
+files disagree. No path-scoped pass can see a relation whose other end is
+outside the path, so without this step the tree accumulates divergence
+that every audit individually approves.
+
+This is the only step that reads outside `<path>` on purpose. Everything
+it finds outside is recorded and **not fixed** (see the hard constraint
+"Scope binds the fix, not the search").
+
+**2.5a. Derive the sweep keys from the path itself.** Never from a list
+written here. For each file under `<path>`, name the *shapes* it
+implements — behaviours a user could observe identically from more than
+one command or module. *Examples, not exhaustive:*
+
+- an input path (file **or** directory) turned into a concrete list of
+  files: suffix filtering, recursion, sorting, dedup, empty-input handling
+- an output path turned into a writable target: `mkdir` parents,
+  suffix appending, directory-vs-file, overwrite / resume / clobber policy
+- a schema, `array_type`, compression, chunk size, or partition key chosen
+- a cloud backend (BigQuery / GCS / S3) selected, validated, and wired,
+  and what happens when its optional dependency is missing
+- a CLI option mapped to an app-layer option object, and its `--help`
+  wording, flag spelling, and default
+- an error raised for a user mistake: exception type, message language,
+  whether it reaches the user as a clean message or a traceback
+- logging, progress reporting, retry, and resume policy
+
+The rule that supersedes the list: **any behaviour reachable from two
+different entry points is a sweep key.** If `<path>` has none — a pure
+domain module with no I/O and no CLI surface — say so in step 9 and skip
+to step 3. That is a legitimate result and stops the next run re-deriving
+it.
+
+**2.5b. Sweep the repo for the other implementations.** Delegate to an
+`Explore` agent (Code Exploration Policy). For each key, ask for *every*
+site in `src/` and `rust/` implementing that shape, with `file:line` and
+its **exact semantics** — not "similar code here", but what each site
+actually does differently.
+
+**2.5c. Judge by semantics, not by similarity.** This is where the step
+earns or wastes its cost. For each set of sites, write the semantic diff,
+then classify:
+
+- **Divergent semantics, one user-facing concept** — the valuable class,
+  and usually a **bug**, not a style issue. Two commands that both accept
+  `--input-path` and disagree about which files that means is a defect in
+  the product.
+- **Identical semantics, separate code** — real duplication, low severity,
+  a refactor candidate. Rank it below the above.
+- **Deliberately divergent** — not a finding. Record *why* in step 9.
+  An unexplained "we looked, it was fine" gets re-derived every run.
+
+**2.5d. Look for the helper before proposing one.** The highest-value
+finding in this class is *a shared helper already exists and only some
+callers use it* — or none do. Search for the existing abstraction first;
+a proposal to extract something the repo already has is worse than the
+duplication it replaces.
+
+> **Worked example (verified 2026-08-10, `733ff31`).** `common.py:164`
+> defines `validate_cloud_provider_exclusivity(...)`, exported in
+> `__all__`. It has **zero call sites**. The same check is hand-written
+> four times — `hcpe_convert.py:183`, `pre_process.py:363` and `:504`,
+> `utility.py:1163` — and the messages have already drifted apart
+> ("Cannot use multiple cloud providers simultaneously." vs "…for input
+> simultaneously." vs "…for output simultaneously."), which is exactly the
+> drift the helper was written to prevent. Auditing any one of those four
+> paths finds nothing: each copy is correct in isolation. Only the sweep
+> sees it.
+>
+> The same sweep over input-path handling found `collect_files`
+> (`path_utils.py:31`, `ext in f.suffixes`, unsorted, silent on empty) used
+> at 13 call sites that each re-decide `ext`, sorting, and empty-input
+> policy ad hoc — plus four independent re-globs that bypass it
+> (`search_value.py:166`, `search_value_interface.py:83`,
+> `stage2_data_generation.py:90`). Their file sets genuinely differ:
+> `ext in f.suffixes` matches `data.feather.bak`, `glob("**/*.feather")`
+> does not.
+
+**2.5e. Pipeline lens — cross-command dataflow.** Run this lens when
+anything under `<path>` reads or writes a **persisted artifact** (a file
+format, a table, a checkpoint) or defines a CLI command that does. Derive
+that from the code, not from a list of commands.
+
+The unit here is not a module but an **edge**: producer → artifact →
+consumer. Ask:
+
+1. **Round-trip.** Is an artifact written by one command and immediately
+   re-read and re-transformed by the next, in a way that could be done
+   once upstream?
+2. **Recomputation.** Is a value computed in stage N recomputed in stage
+   N+1 instead of persisted — or persisted and never read?
+3. **Schema agreement.** Do producer and consumer import one schema
+   definition, or restate the columns? Do the variants of that schema
+   agree with each other?
+4. **Format and sizing consistency.** Same codec, chunking, and partition
+   policy across producers of comparable artifacts? Do the knobs that
+   control them share a name and a constant, or are they unrelated numbers
+   with the same spelling?
+5. **Materialization.** Is an intermediate written that no consumer reads,
+   or a full materialization forced where a streaming path exists?
+6. **Re-run semantics.** If a stage is re-run over an existing output, does
+   it clobber, append, resume, or refuse — and do sibling commands agree?
+7. **Option-surface parity.** One knob, one spelling, across every command
+   that exposes it; and a knob missing from a command that needs it.
+
+If a document describing the pipeline graph exists (discover it via
+CLAUDE.md's Documentation Links table and `docs/design/*/index.md`), read
+it first — it is the cheapest way to know which edges touch `<path>` —
+and then **verify it against the code**, treating any drift as a step 4
+finding. If no such document exists, or it omits an edge that `<path>`
+sits on, that gap is itself a finding for step 8.
+
+**2.5f. Route the results.** Findings entirely inside `<path>` go through
+normal step 1 triage (apply or defer). Findings that name even one site
+outside `<path>` are **out of scope** — record them in step 9 with *every*
+participating `file:line` and the semantic diff, because the next run
+cannot re-derive that cheaply from a one-line summary.
 
 ### 3. Applicable project validators
 
@@ -456,6 +587,19 @@ The record's own Deferred section is still written in full — it is the
 durable reasoning, and the backlog row is its condensed, deletable index
 entry. Both, not one.
 
+**Record the step 2.5 sweep, including what came back clean.** In the
+record, name the sweep keys derived in 2.5a, and for each one either the
+finding or "consistent — <the shared helper or convention they all
+follow>". A key that was swept and found clean is a result worth keeping:
+without it the next audit of a neighbouring path re-runs the same
+`Explore` sweep to reach the same conclusion. Deliberate divergences (2.5c)
+are recorded here with their justification, for the same reason.
+
+Sweep findings that name a site outside `<path>` get an **Out-of-scope
+backlog row** like any other, and the row must carry every participating
+`file:line` plus the semantic diff — a row saying "duplicated glob logic"
+sends the next run back to square one.
+
 Commit both:
 ```
 docs(audits): record audit of <path>
@@ -474,6 +618,11 @@ Print a compact summary (~12 lines):
 - Target path, effort level, **scope classes found** (flag any skipped)
 - Bugs: found / fixed / **deferred** (with `file:line` for each deferred)
 - Simplifications applied (count)
+- Cross-module sweep (step 2.5): keys swept, how many came back
+  consistent, and each divergence found — flagged **divergent semantics**
+  (a bug) or **duplication** (a refactor candidate). Say "pipeline lens:
+  not applicable — no persisted artifact under `<path>`" when it was
+  skipped, rather than omitting the line
 - Validators run (step 3) and what each found
 - Doc drift: N stale, M wrong → `reviews/<file>` **and its resolved
   status** (applied `<sha>` / rejected / deferred-pending), or "docs
@@ -521,6 +670,15 @@ derive-never-enumerate property:
 - **New durable-doc location** — verify the routing-rule *test* still
   classifies it correctly before adding it to the table; if the test
   works, the table needs no edit.
+- **New CLI command, artifact format, or pipeline stage** — nothing to do
+  in step 2.5: its keys are derived from the code at run time. But a new
+  producer/consumer edge belongs in the pipeline document (2.5e), and a
+  document that omits it is a step 4 drift finding, not a reason to edit
+  this command.
+- **New shared helper** — nothing to do. 2.5d looks for existing
+  abstractions by searching, not by consulting a roster. If you find
+  yourself wanting to list the helpers here, that is the signal the list
+  would rot; the sweep is what keeps it current.
 
 ## Usage
 
@@ -529,3 +687,13 @@ derive-never-enumerate property:
 - `/audit-and-fix rust/maou_shogi max` — thorough crate-level pass.
 - `/audit-and-fix docs/design/tsume-solver` — doc-accuracy pass only;
   produces a `reviews/` proposal, no direct edits, no version bump.
+
+Step 2.5 scales with the effort level: at `low`, sweep only the keys for
+which a shared helper demonstrably already exists (2.5d) — the cheapest
+and highest-yield subset. At `high`/`max`, sweep every key from 2.5a and
+run the pipeline lens over every edge `<path>` touches. `medium` sits
+between: sweep the I/O and option-surface keys, skip the pipeline lens
+unless `<path>` defines a CLI command.
+
+`src/maou/infra/console` and `src/maou/interface` are where the sweep pays
+back most, because that is where one concept is spelled once per command.
