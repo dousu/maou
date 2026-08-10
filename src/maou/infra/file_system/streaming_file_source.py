@@ -260,7 +260,7 @@ def scan_row_count(file_path: Path) -> int:
         ファイル内の行数
     """
     if is_arrow_ipc_file_format(file_path):
-        # File形式: メタデータのみ読み（高速）
+        # File形式: メタデータのみ読み(高速)
         lf = pl.scan_ipc(file_path)
         return lf.select(pl.len()).collect().item()
     else:
