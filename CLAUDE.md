@@ -283,6 +283,7 @@ cargo test --release -p maou_shogi -- --ignored --nocapture       # #[ignore] �
 | 詰将棋ソルバー設計 | [docs/design/tsume-solver/](docs/design/tsume-solver/index.md) |
 | 1局面探索エンジン設計 | [docs/design/position-search/](docs/design/position-search/index.md) |
 | 教師信号の質 (policy/value 改善) | [docs/design/training-quality/](docs/design/training-quality/index.md) |
+| CLI 間データパイプライン | [docs/design/data-pipeline/](docs/design/data-pipeline/index.md) |
 | Performance | [docs/performance.md](docs/performance.md) |
 | LR Tuning | [docs/learning-rate-tuning.md](docs/learning-rate-tuning.md) |
 | Git Workflow | [docs/git-workflow.md](docs/git-workflow.md) |

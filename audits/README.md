@@ -151,6 +151,12 @@ which files or sub-paths under <path> are already covered. Written for a
 reader with no memory of the session — "step 4, remaining: loss/, move/"
 not "continue where I left off".>
 
+## Cross-module sweep
+<step 2.5 で導出した sweep key と，各 key の結果．finding だけでなく
+**clean だった key も書く** — 「調べて一貫していた」は次の隣接 path 監査が
+同じ Explore sweep を再実行しないための結果である．意図的な分岐は理由と
+ともにここに記録する．>
+
 ## Applied
 <Code fixes made, with file:line and commit SHA.>
 
