@@ -279,6 +279,26 @@ rather than a path audit. Body:
   `coverage.md`'s backlog too, or it is lost.
 - **Environment notes** — what could not be run here, and why.
 
+**5d. Reconcile findings to rows before committing (MUST).** Same closing
+check as `/audit-and-fix` step 9x, and it applies here for the same
+reason: 5c tells you to *append* new out-of-scope items but never makes
+you verify the mapping is total. Assign every item this run touched, and
+every new finding it noticed, exactly one disposition — **resolved** (row
+deleted, fix committed) / **re-triaged** (row kept, text sharpened) /
+**new row** (id) / **not a finding** (reason). An item you cannot assign
+is the defect the check exists to catch.
+
+The two failure modes named in step 9x apply verbatim: consolidating
+several findings into one readable row drops the ones the merged prose
+stops naming, and **this record's prose sections are not a worklist** —
+`/audit-backlog` and `/audit-and-fix` both gather work from
+`coverage.md` and only from there, so a finding written only into
+`## Re-triaged` or `## Out of scope` here is invisible to every future
+run. Read 9x for the full rationale and the worked example rather than a
+copy of it; a copy would drift.
+
+Print the reconciliation as an equation in step 6, not as an assurance.
+
 Link the record from `coverage.md` under the backlog table so a future run
 can find the account of a row that is no longer there. Then commit:
 ```
@@ -298,6 +318,9 @@ Compact summary:
 - Re-triaged / rejected, with the reason
 - Doc drift → `reviews/<file>` and its status
 - QA: what ran, what passed, what was blocked and why
+- **Reconciliation (5d)**: `<items touched + new findings> = <resolved> +
+  <re-triaged> + <new rows> + <not-a-finding>`, printed as the equation.
+  Backlog rows before → after, so the ledger's movement is visible
 - Version bump(s), old → new, which manifest
 - Ledger: rows deleted (which table), rows added by 1d's repair, any
   record correction from 5b, new record path

@@ -600,6 +600,56 @@ backlog row** like any other, and the row must carry every participating
 `file:line` plus the semantic diff — a row saying "duplicated glob logic"
 sends the next run back to square one.
 
+**9x. Reconcile findings to rows — the closing check (MUST).**
+
+Everything above tells you to *append* rows. Nothing so far makes you
+check that the mapping is **total**, and that gap is how findings die.
+Before committing, build the run's finding ledger and assign every entry
+exactly one disposition:
+
+| Disposition | Evidence required |
+|---|---|
+| **Applied** | commit SHA |
+| **Deferred** | the backlog row id that carries it |
+| **Out of scope** | the backlog row id that carries it |
+| **Not a finding** | the reason — `DELIBERATE` per 2.5c, refuted, or already fixed |
+
+The ledger's inputs are every finding produced by steps 1, 2, 2.5, 3 and
+4 — including the ones you judged minor. **A finding you cannot assign a
+disposition to is the defect this check exists to catch.** Fix it by
+writing the row, not by deciding it was too small to matter.
+
+Two failure modes make this check non-optional, and both have happened:
+
+- **Consolidation silently drops findings.** Merging several findings
+  into one readable row is allowed — but only if the row **names every
+  merged finding's `file:line`**. If the merged prose loses one, split it
+  back out. A row is cheap and deletable; a dropped finding is permanent,
+  because nothing else will ever surface it.
+- **The record's prose sections are not a worklist.** `## Cross-module
+  sweep` exists to record *clean* keys and deliberate divergences, and
+  `/audit-backlog` never reads it — by design, since records are
+  immutable accounts (0b). An **open** finding written only there is
+  invisible forever. The same applies to any narrative aside anywhere in
+  the record.
+
+> **Worked example (2026-08-10, audit of `src/maou/infra/file_system`).**
+> That run consolidated step 2's ~17 findings into 11 deferred rows and
+> wrote "すべて backlog に行あり" in the record. It was false: the
+> unreachable-numpy-converter hazard, the `__getitem__` hot path, the
+> `get_items` non-batching and several cleanups had no row, and the
+> "partially written file that still ends in `.feather`" class existed
+> only in the sweep section. All of it was unreachable from
+> `/audit-backlog`. A user asking "are you sure nothing was missed?"
+> found it — the run could not, because it never checked. Rows D12–D15
+> closed the gap after the fact.
+
+Report the reconciliation totals in step 10. If the check turns up
+findings with no row, add them **before** committing; if the record
+already made a totality claim that turns out false, append a
+`**Correction**` per `audits/README.md` rather than editing the claim
+away.
+
 Commit both:
 ```
 docs(audits): record audit of <path>
@@ -633,6 +683,11 @@ Print a compact summary (~12 lines):
 - Ledger: `audits/coverage.md` row status for this path
 - Out-of-scope: N appended to the backlog, M folded in from it and
   resolved
+- **Reconciliation (9x)**: `<total findings> = <applied> + <deferred
+  rows> + <out-of-scope rows> + <not-a-finding>`, and the arithmetic must
+  balance. Print it as the equation, not as a claim that it balances —
+  "all findings recorded" is exactly the sentence that was false the last
+  time this went wrong
 
 ### 11. Handoff
 
