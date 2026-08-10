@@ -123,12 +123,19 @@ class StreamingFileSource:
         if self._row_counts is not None:
             return
 
-        self._total_rows = 0
-        self._row_counts = []
+        # スキャン完了後にまとめて代入する．ループ中に代入すると，
+        # 途中で scan_row_count が例外を投げたときに打ち切られた
+        # カウントが memo (`_row_counts is not None`) として残り，
+        # 以降 total_rows が過少申告され steps_per_epoch が狂う．
+        row_counts: list[int] = []
+        total_rows = 0
         for fp in self._file_paths:
             row_count = scan_row_count(fp)
-            self._row_counts.append(row_count)
-            self._total_rows += row_count
+            row_counts.append(row_count)
+            total_rows += row_count
+
+        self._row_counts = row_counts
+        self._total_rows = total_rows
 
         logger.info(
             "StreamingFileSource scanned: "
