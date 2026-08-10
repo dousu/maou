@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 8c13fa9
 date: 2026-08-10
 target:
   - docs/design/data-pipeline/index.md
