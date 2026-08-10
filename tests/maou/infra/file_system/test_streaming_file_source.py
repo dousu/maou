@@ -500,3 +500,53 @@ class TestLazyInitialization:
         _ = source.total_rows  # 2回目
         # 同じオブジェクト参照であること（再スキャンされていない）
         assert source._row_counts is row_counts_ref
+
+    def test_failed_scan_does_not_cache_partial_counts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """スキャン途中の例外で打ち切られたカウントを memo しない．
+
+        回帰: 以前は ``self._row_counts = []`` をループ前に代入して
+        いたため，途中で ``scan_row_count`` が例外を投げると打ち切ら
+        れたリストが memo (``_row_counts is not None``) として残り，
+        以降 ``total_rows`` が過少申告され steps_per_epoch が狂った．
+        """
+        file_paths = _create_preprocessing_files(
+            tmp_path, file_count=3, rows_per_file=5
+        )
+        source = StreamingFileSource(
+            file_paths=file_paths,
+            array_type="preprocessing",
+        )
+
+        real_scan = scan_row_count
+        calls: list[Path] = []
+
+        def flaky_scan(path: Path) -> int:
+            calls.append(path)
+            if len(calls) == 2:
+                raise OSError("simulated corrupt file")
+            return real_scan(path)
+
+        monkeypatch.setattr(
+            "maou.infra.file_system.streaming_file_source"
+            ".scan_row_count",
+            flaky_scan,
+        )
+
+        with pytest.raises(OSError, match="simulated"):
+            _ = source.total_rows
+
+        # 打ち切られた状態が memo されていないこと
+        assert source._row_counts is None
+        assert source._total_rows is None
+
+        # スキャンが回復すれば正しい合計が得られること
+        monkeypatch.setattr(
+            "maou.infra.file_system.streaming_file_source"
+            ".scan_row_count",
+            real_scan,
+        )
+        assert source.total_rows == 15

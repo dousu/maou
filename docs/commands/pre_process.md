@@ -17,7 +17,7 @@
 
 | Source | Required flags | Notes |
 | --- | --- | --- |
-| Local filesystem | `--input-path PATH` (file or directory), optional `--input-file-packed` | Walks recursively via `FileSystem.collect_files` and decodes bit-packed numpy payloads when requested.【F:src/maou/infra/console/pre_process.py†L16-L66】 |
+| Local filesystem | `--input-path PATH` (file or directory) | Walks recursively via `FileSystem.collect_files`, which returns a **sorted** list and skips cloud-download temp artifacts (`.gstmp`/`.tmp`/`.partial`/`.crc`). `--input-file-packed` is accepted but deprecated and has no effect.【F:src/maou/infra/console/pre_process.py†L16-L66】【F:src/maou/infra/file_system/path_utils.py†L31-L90】 |
 | BigQuery | `--input-dataset-id` + `--input-table-name` | Streams HCPE rows with configurable batch size, cache limits, clustering, and partition hints. Requires the `gcp` optional extra.【F:src/maou/infra/console/pre_process.py†L66-L200】 |
 | GCS | `--input-gcs` + `--input-bucket-name` + `--input-prefix` + `--input-data-name` + `--input-local-cache-dir` | Downloads `.npy` shards tagged `array_type="hcpe"`. Supports worker counts, bundling (`--input-enable-bundling`, `--input-bundle-size-gb`), and optional local caching.【F:src/maou/infra/console/pre_process.py†L200-L360】 |
 | S3 | `--input-s3` + bucket metadata | Mirrors the GCS contract using `S3DataSource`. Requires the `aws` optional extra.【F:src/maou/infra/console/pre_process.py†L318-L360】 |

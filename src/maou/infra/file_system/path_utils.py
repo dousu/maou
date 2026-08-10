@@ -37,20 +37,34 @@ def collect_files(
     (``.gstmp`` など，[`_TEMP_ARTIFACT_SUFFIXES`] 参照) を除外する
     (不完全なファイルをデータとして読むと壊れるため)．
 
+    拡張子は **末尾の拡張子のみ** で判定する (``f.suffix == ext``)．
+    ``ext in f.suffixes`` (拡張子リストへの含有) で判定すると
+    ``train.feather.bak`` が ``ext=".feather"`` に一致してしまい，
+    読み込み側 (:class:`FileDataSource.FileManager` は
+    ``file_path.suffix != ".feather"`` で検査する) と食い違って
+    実行時に ``ValueError`` で落ちる．収集側と読み込み側で
+    同じ判定規則を使う．
+
+    ディレクトリ走査の結果は **ソート済み** で返す．呼び出し側には
+    固定 seed で shuffle して train/val を分割するものがある
+    (``file_level_split`` 等) が，``glob`` の順序は scandir 依存で
+    あり，同じディレクトリでもマシンや再同期で変わる．ソートしない
+    限り「seed を固定すれば分割は再現する」が成り立たない．
+
     Args:
         p: ファイルまたはディレクトリのパス
         ext: フィルタする拡張子(例: ".feather")．
             ``None`` の場合は(一時ファイルを除く)全ファイルを返す．
 
     Returns:
-        マッチしたファイルパスのリスト
+        マッチしたファイルパスのリスト(ディレクトリ走査時はソート済み)
 
     Raises:
         ValueError: パスがファイルでもディレクトリでもない場合，
             または拡張子が一致しないファイルが指定された場合
     """
     if p.is_file():
-        if ext is not None and ext not in p.suffixes:
+        if ext is not None and p.suffix != ext:
             msg = (
                 f"ファイルは {ext} 形式で"
                 f"なければなりません: {p}"
@@ -58,13 +72,13 @@ def collect_files(
             raise ValueError(msg)
         return [p]
     elif p.is_dir():
-        return [
+        return sorted(
             f
             for f in p.glob("**/*")
             if f.is_file()
-            and (ext is None or ext in f.suffixes)
+            and (ext is None or f.suffix == ext)
             and not _is_temp_artifact(f)
-        ]
+        )
     else:
         msg = (
             f"パスがファイルでもディレクトリでもありません: {p}"

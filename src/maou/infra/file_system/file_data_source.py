@@ -192,9 +192,16 @@ class FileDataSource(
             test_ratio: float = 0.25,
             seed: float | str | bytes | bytearray | None = None,
         ) -> tuple:
-            if seed is not None:
-                random.seed(seed)
-            random.shuffle(data)
+            # モジュールグローバルの random.seed() を呼ぶと，同一
+            # プロセス内の無関係な乱数消費者まで巻き添えにする．
+            # random.Random(seed) は同じ Mersenne Twister を同じ
+            # seed で初期化するため，分割結果は従来と一致する．
+            rng = (
+                random.Random(seed)
+                if seed is not None
+                else random
+            )
+            rng.shuffle(data)
             split_idx = int(float(len(data)) * (1 - test_ratio))
             return data[:split_idx], data[split_idx:]
 
@@ -236,7 +243,7 @@ class FileDataSource(
             Args:
                 file_paths (list[Path]): .featherファイルのリスト
                 array_type (Literal["hcpe", "preprocessing", "stage1", "stage2"]): データのタイプ
-                bit_pack (bool): 未使用（後方互換性のために保持）
+                bit_pack (bool): 未使用(後方互換性のために保持)
                 cache_mode (CacheMode): キャッシュモード ("file" または "memory")
             """
             self.file_paths = file_paths
@@ -267,7 +274,7 @@ class FileDataSource(
             )
             # 最適化: 最後にアクセスしたファイルインデックスをキャッシュ
             self._last_file_idx = 0
-            # 最適化: cache_mode="memory"の場合、全ファイルを結合した単一配列
+            # 最適化: cache_mode="memory"の場合，全ファイルを結合した単一配列
             self._concatenated_array: np.ndarray | None = None
             self._concatenated_columnar: (
                 ColumnarBatch | None
@@ -418,7 +425,7 @@ class FileDataSource(
             self.total_rows = self.cum_lengths[-1]
             self.total_pages = len(self.cum_lengths) - 1
 
-            # cache_mode="memory"の場合、全ファイルを単一配列に結合
+            # cache_mode="memory"の場合，全ファイルを単一配列に結合
             if (
                 self.cache_mode == "memory"
                 and self.total_pages > 1
@@ -799,8 +806,16 @@ class FileDataSource(
             file_manager (FileManager | None): FileManager
             indicies (list[int] | np.ndarray | None): 選択可能なインデックス
             array_type (Literal["hcpe", "preprocessing", "stage1", "stage2"] | None): 配列のタイプ
-            bit_pack (bool): ビットパッキングを使用するかどうか
-            cache_mode (CacheMode): キャッシュモード ("file" または "memory")
+            bit_pack (bool): 未使用(後方互換性のために保持)．
+                値に関わらず挙動は変わらない．``FileManager`` へ渡されるが
+                そこでも参照されない (:meth:`FileManager.__init__` 参照)．
+                なお既定値がここでは ``True``，
+                ``FileDataSourceSpliter.__init__`` では ``False`` と
+                食い違っているが，無視される引数なので観測可能な差はない．
+            cache_mode (CacheMode): キャッシュモード ("file" または "memory")．
+                いずれのモードでも初期化時に全ファイルをメモリへ読み込む．
+                差は「ファイルごとの配列を保持」か
+                「単一配列へ結合」かであり，常駐量の差ではない．
         """
         if file_manager is None:
             if (
@@ -840,10 +855,10 @@ class FileDataSource(
         """複数のインデックスのレコードをバッチで取得する．
 
         Args:
-            indices: 取得するインデックスのリスト（FileDataSourceのインデックス空間）
+            indices: 取得するインデックスのリスト(FileDataSourceのインデックス空間)
 
         Returns:
-            レコードのリスト（入力のインデックス順）
+            レコードのリスト(入力のインデックス順)
         """
         # FileDataSourceのインデックスをFileManagerのグローバルインデックスに変換
         global_indices = [self.indicies[idx] for idx in indices]

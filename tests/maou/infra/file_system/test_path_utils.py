@@ -106,3 +106,59 @@ class TestCollectFiles:
 
         result = collect_files(tmp_path, ext=".feather")
         assert result == [good]
+
+    def test_directory_result_is_sorted(
+        self, tmp_path: Path
+    ) -> None:
+        """ディレクトリ走査の結果はソート済みで返る．
+
+        呼び出し側は固定 seed で shuffle して train/val を分割する
+        ため，順序が scandir 依存だと「seed を固定すれば分割が再現
+        する」が成り立たない (回帰: path_utils.py の未ソート glob)．
+        """
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        for name in ("c.feather", "a.feather", "b.feather"):
+            (tmp_path / name).touch()
+        (sub / "d.feather").touch()
+
+        result = collect_files(tmp_path, ext=".feather")
+        assert result == sorted(result), (
+            f"ソートされていない: {result}"
+        )
+        assert [p.name for p in result] == [
+            "a.feather",
+            "b.feather",
+            "c.feather",
+            "d.feather",
+        ]
+
+    def test_directory_matches_trailing_suffix_only(
+        self, tmp_path: Path
+    ) -> None:
+        """``a.feather.bak`` は ``ext='.feather'`` に一致しない．
+
+        回帰: 以前は ``ext in f.suffixes`` で判定していたため
+        ``a.feather.bak`` を収集してしまい，読み込み側の
+        ``file_path.suffix != ".feather"`` 検査で実行時に落ちていた．
+        """
+        good = tmp_path / "a.feather"
+        good.touch()
+        (tmp_path / "a.feather.bak").touch()
+
+        result = collect_files(tmp_path, ext=".feather")
+        assert result == [good]
+
+    def test_single_file_trailing_suffix_mismatch_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """単一ファイル指定でも末尾拡張子で判定する．
+
+        収集側と読み込み側の判定規則を揃えた結果，
+        ``a.feather.bak`` は収集時点で弾かれる (以前は通過し，
+        後段の FileManager で落ちていた)．
+        """
+        f = tmp_path / "a.feather.bak"
+        f.touch()
+        with pytest.raises(ValueError, match="feather"):
+            collect_files(f, ext=".feather")
