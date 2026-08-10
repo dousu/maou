@@ -97,6 +97,14 @@ no moving an item from Deferred into Applied, no renumbering. Commit
 Deferred backlog, when the record was the only place to record it, and it
 is not the pattern to follow now.
 
+**これは特定の節ではなく record 全体の性質である．** Deferred 節だけ
+でなく，`## Cross-module sweep`，`## Out of scope`，および本文中の
+どんな余談についても同じく当てはまる．どのコマンドも open work を
+`coverage.md` の2表からのみ収集するので，**行を持たない finding は
+どこに書かれていても存在しないのと同じ**である．節を新設するときは
+「ここに書けば記録されたことになる」と読まれないか必ず確認すること —
+2026-08-10 に `## Cross-module sweep` でこれが実際に起きた．
+
 The one narrow exception is a **correction**: when a later run proves a
 record's diagnosis or proposed fix *wrong*, append a short note saying
 so, because an uncorrected record actively misleads the next reader. A
@@ -155,7 +163,13 @@ not "continue where I left off".>
 <step 2.5 で導出した sweep key と，各 key の結果．finding だけでなく
 **clean だった key も書く** — 「調べて一貫していた」は次の隣接 path 監査が
 同じ Explore sweep を再実行しないための結果である．意図的な分岐は理由と
-ともにここに記録する．>
+ともにここに記録する．
+
+**この節は worklist ではない．** ここに書ける「結果」は clean な key と
+意図的な分岐 — つまり **これ以上やることがないもの** だけである．
+open な finding をここに書いても `coverage.md` に行がなければ
+`/audit-backlog` からは見えない．finding は必ず backlog 行を持たせ，
+この節にはその要約と参照だけを書くこと．>
 
 ## Applied
 <Code fixes made, with file:line and commit SHA.>
