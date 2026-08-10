@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: d47affe
 date: 2026-08-10
 target:
   - audits/README.md
