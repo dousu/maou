@@ -110,7 +110,30 @@ step 2.5a で `<path>` のコードから導出した sweep key は7つ．
 
 ## Deferred
 
-`<path>` 内で確認したが適用しなかったもの．**すべて backlog に行あり．**
+`<path>` 内で確認したが適用しなかったもの．
+
+**Correction** (2026-08-10, `7ec3933` 時点): 本節の冒頭は当初
+「**すべて backlog に行あり**」と書いていたが，**これは誤りだった**．
+step 2 (`/simplify`) が返した約17件を D1-D11 に**統合**する過程で，
+以下が行を持たないまま落ちていた — `/audit-backlog` は
+`coverage.md` の2表**だけ**を読むので，これらは永久に不可視だった:
+
+- 到達不能な numpy converter 群と `else` 欠落による desync ハザード
+- 入れ子 `try/except` の再ラップ，進捗記録の二重計算，派生状態の重複
+- `streaming_file_source.py:81-93` の恒真な第2検証，`log_level` の間接
+- `__getitem__` のホットパスコスト，`get_items` の非バッチ化，
+  `_STRUCTURED_DTYPES` と `data_schema.get_dtype` の重複
+- `_scan_row_counts` の共有化，`preprocess.DataSource` ABC の除去
+
+さらに，**§ Cross-module sweep に書いた「`.feather` で終わる中途書き込み
+ファイルを誰も守っていない」も行がなかった** — あの節は clean な key を
+記録する場所であって worklist ではないため，同じ理由で不可視だった．
+
+いずれも `coverage.md` の Deferred backlog に **D12-D15** として追加済み．
+本節の D1-D11 の記述自体は正しく，取り消しではない．
+
+**教訓 (統合は行を消す)**: finding を1行にまとめると読みやすくなるが，
+まとめきれなかった分が黙って消える．行数を惜しむべきではない．
 
 - **D1. `moveWinRate` が structured record に載らない (最重要).**
   `domain/data/schema.py:136` の `get_preprocessing_dtype()` に
