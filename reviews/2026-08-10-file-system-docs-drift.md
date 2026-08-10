@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 1c6a442
 date: 2026-08-10
 target:
   - docs/commands/utility_benchmark_dataloader.md

@@ -17,7 +17,7 @@ work remains.
 |---|---|---|---|---|---|---|
 | `src/maou/domain/game_graph` | python | done | high | `2686689` | [2026-08-08](2026-08-08-src-maou-domain-game-graph.md) | 0 |
 | `src/maou/app/learning` | python | done | high | `52d9bd2` | [2026-08-08](2026-08-08-src-maou-app-learning.md) | 6 deferred |
-| `src/maou/infra/file_system` | python | done | high | `da6044e` | [2026-08-10](2026-08-10-src-maou-infra-file-system.md) | 11 deferred |
+| `src/maou/infra/file_system` | python | done | high | `1c6a442` | [2026-08-10](2026-08-10-src-maou-infra-file-system.md) | 11 deferred |
 
 ## Blocked
 
@@ -101,4 +101,5 @@ therefore not allowed to fix.
 | [2026-08-10 infra/file_system](2026-08-10-src-maou-infra-file-system.md) O7 | `rust/maou_io` + `rust/maou_index` | Arrow IPC 形式判定の fallback 方向が Python と Rust で逆．Python (`streaming_file_source.py:230-247`, `domain/data/dataframe_io.py:19,35`) は「File か?」を問い既定 Stream，Rust (`rust/maou_io/src/arrow_io.rs:71-92`) は「Stream か?」を問い既定 File → Arrow 0.15 以前の Stream ファイルは `scan_row_count` が成功し `load_feather` が footer エラーで失敗する．さらに `rust/maou_index/src/index.rs:205-217` は**判定なし**で常に File 前提なので，Stream 形式 `.feather` は他の全経路で読めるのに visualize の索引構築だけ失敗する．**Rust 側を触るので該当 crate の `Cargo.toml` バージョン bump が要る．** |
 | [2026-08-10 infra/file_system](2026-08-10-src-maou-infra-file-system.md) O8 | `src/maou/interface` | `preprocess.py:181` の `len(pl.scan_ipc(fp).collect())` が**全列を実体化**する (`scan_row_count` は `select(pl.len())`)．1496幅のリスト列を持つ preprocessing ではメタデータ読みと全ロードの差．さらに `:186` の裸の `except Exception:` が Stream 形式ファイルの失敗を飲み込み，`ok_files` 扱いで `chunk_input_files` から黙って漏れる． |
 | [2026-08-10 infra/file_system](2026-08-10-src-maou-infra-file-system.md) O9 | `src/maou/infra/bigquery` | `bq_data_source.py:222-243` — `sample_ratio` 指定時，`total_rows` は `TABLESAMPLE` 付き `COUNT(*)` から得るが `__fetch_from_bigquery`(`:405-420`) はページごとに**別々に引き直す** `TABLESAMPLE` を発行する．同じ行集合とは限らず件数も一致しないため `indicies` の範囲 (`:652-655`) と `get_page` が返せる実体がずれる．ファイル系ソースは常に厳密．`:235` の `num_rows` はテーブルメタデータでストリーミング挿入に遅れる． |
+| [2026-08-10 infra/file_system](2026-08-10-src-maou-infra-file-system.md) O11 | `docs/commands/pre_process.md` (fix と一緒に `src/maou/app/pre_process` 監査で) | **`pre_process.md` が pre-process の出力を `.npy` シャードと説明している**が，実際は `transformed_chunk{NNNN}.feather` (Arrow IPC / `hcpe_transform.py:263,574`)．該当箇所 `:6`, `:22`, `:32`, `:34`, `:66`, `:90`．`docs/adr-004-arrow-ipc-migration.md` の移行から漏れた記述．**本 run では直していない**: 2026-08-10 の承認済み提案 (`1c6a442`) は `infra/file_system` を説明する主張だけを対象にしており，これは pre-process 自身の出力形式についての別のドリフト．durable doc なので `reviews/` 提案 + 承認が必要． |
 | [2026-08-10 infra/file_system](2026-08-10-src-maou-infra-file-system.md) O10 | `src/maou/domain/data` | `dataframe_io.py:19,35` が Arrow マジック定数と File/Stream 判定を再定義．`streaming_file_source.py:230,233` と同値・同幅・同 fallback で **IDENTICAL**，入力型が `bytes` と `Path` で違うだけ．低優先の重複だが，O7 で fallback 方針を触るなら同時に片付ける対象． |

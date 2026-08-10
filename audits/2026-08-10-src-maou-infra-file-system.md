@@ -4,7 +4,7 @@ scope: python
 level: high
 status: done
 started: 2026-08-10
-last_sha: da6044e
+last_sha: 1c6a442
 ---
 
 # Audit — src/maou/infra/file_system
@@ -197,7 +197,8 @@ step 2.5a で `<path>` のコードから導出した sweep key は7つ．
 ## Doc findings
 
 **3 stale + 3 wrong** → `reviews/2026-08-10-file-system-docs-drift.md`
-(`status: pending`，`da6044e` でコミット，本 run では未承認)．
+(`da6044e` で提案，**本 run で承認・適用** → `status: applied`,
+`applied_in: 1c6a442`)．
 
 - `.npy` と書かれているが Arrow IPC (`utility_benchmark_dataloader.md:19`,
   `utility_benchmark_training.md:30`)
