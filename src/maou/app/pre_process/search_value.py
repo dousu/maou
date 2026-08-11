@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import shutil
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,7 +78,8 @@ class SearchValueOption:
 
     Attributes:
         input_path: HCPE (`.feather`) を含むディレクトリまたはファイル．
-        output_path: 出力する feather のパス．
+        output_path: シャード (`part_NNNNNNNN.feather`) を書き出す
+            ディレクトリ．flush ごとに 1 枚増える．
         model_path: ONNX モデルのパス．None なら mock 評価器 (API 検証用)．
         min_ply: この手数以上の局面のみ対象にする．記憶は中終盤に集中する
             ので既定は 60．
@@ -102,10 +105,16 @@ class SearchValueOption:
         tensorrt: TensorRT Execution Provider を使うか．
         trt_engine_cache_dir: TensorRT エンジンキャッシュ保存先．
         resume: 出力が既にあるとき，未計算の局面だけを追加で探索する．
-        overwrite: 出力が既にあっても破棄して作り直す．``resume`` と
+        overwrite: 出力ディレクトリを削除して作り直す．``resume`` と
             どちらも指定しなければ既存出力があるとエラーにする．
         flush_interval: 途中結果を書き出す局面数の間隔．中断しても
             ここまでの結果が残り ``resume`` で再開できる．
+        shard_rows: 確定シャード 1 枚に収める目標行数．flush は小さな
+            ``pending_*.feather`` を足すだけで，累積がこの行数に達したら
+            1 枚の ``part_*.feather`` へまとめて pending を消す．
+            **1 行あたり実測 19.4 B** なので 5,000,000 行 ≒ 97MB．
+            大きくするほどファイル数は減るが，中断時に pending として
+            残る量も増える．
     """
 
     input_path: Path
@@ -133,6 +142,7 @@ class SearchValueOption:
     resume: bool = False
     overwrite: bool = False
     flush_interval: int = 500
+    shard_rows: int = 5_000_000
 
 
 #: 探索値のディレクトリ指定で拾う拡張子．
@@ -142,6 +152,97 @@ class SearchValueOption:
 #: 実際に読める形式は拾っておく．`_write` の中間ファイル (`*.feather.tmp`) は
 #: どちらにも一致しない．
 SEARCH_VALUE_SUFFIXES: tuple[str, ...] = (".feather", ".arrow")
+
+#: 確定シャードのファイル名 (`--output-path` 配下)．
+#:
+#: 桁を固定するのは，`_feather_paths` の `sorted()` が**辞書順**だからである．
+#: `part_10.feather` が `part_2.feather` より前に来ると「パス順で後勝ち」の
+#: 重複解決が探索順とずれ，**古い値が新しい値を上書きする**．
+SHARD_FORMAT: str = "part_{index:08d}.feather"
+
+#: 未確定シャードのファイル名 (flush ごとに 1 枚，確定時にまとめて消える)．
+#:
+#: `part_` < `pending_` という辞書順が，そのまま「確定 → 未確定」の順序に
+#: なる．未確定分は常に後に読まれるので「後勝ち」の向きが正しくなる．
+PENDING_FORMAT: str = "pending_{index:08d}.feather"
+
+SHARD_PATTERN: re.Pattern[str] = re.compile(
+    r"^part_(\d{8})\.feather$"
+)
+PENDING_PATTERN: re.Pattern[str] = re.compile(
+    r"^pending_(\d{8})\.feather$"
+)
+
+
+def _indexed(
+    path: Path, pattern: re.Pattern[str]
+) -> int | None:
+    """ファイル名から連番を取り出す (該当しなければ None)．
+
+    Args:
+        path: 判定するパス．
+        pattern: 連番を 1 つ捕獲する正規表現．
+
+    Returns:
+        連番．該当しなければ None．
+    """
+    matched = pattern.match(path.name)
+    return int(matched.group(1)) if matched else None
+
+
+def _next_index(
+    output_dir: Path, pattern: re.Pattern[str]
+) -> int:
+    """次に書く連番を返す．
+
+    resume では既存の続きから振る．**個数ではなく最大値の次を取る**: 途中を
+    手で消した運用でも既存を上書きしない．
+
+    Args:
+        output_dir: 出力ディレクトリ．
+        pattern: 対象のファイル名パターン．
+
+    Returns:
+        次の連番 (既存が無ければ 1)．
+    """
+    if not output_dir.is_dir():
+        return 1
+    indices = [
+        i
+        for i in (
+            _indexed(p, pattern) for p in output_dir.iterdir()
+        )
+        if i is not None
+    ]
+    return max(indices, default=0) + 1
+
+
+def _ordered_value_paths(paths: Sequence[Path]) -> list[Path]:
+    """探索値ファイルを「古い → 新しい」順に並べる．
+
+    重複 id は後勝ちで解決するので，**並び順がそのまま新旧の判定になる**．
+    素の辞書順では旧形式の単一ファイル (`search_values.feather` など) が
+    `part_*` より後ろに来てしまい，移行直後に**旧い値が新しいシャードを
+    上書きする**．明示的に「旧形式 → 確定シャード → 未確定シャード」の順にする．
+
+    Args:
+        paths: 並べ替える対象．
+
+    Returns:
+        古い順に並べたパス．
+    """
+
+    def key(p: Path) -> tuple[int, int, str]:
+        part = _indexed(p, SHARD_PATTERN)
+        if part is not None:
+            return (1, part, p.name)
+        pending = _indexed(p, PENDING_PATTERN)
+        if pending is not None:
+            return (2, pending, p.name)
+        # 旧形式や手で置いたファイル．連番が無いので名前順で安定させる
+        return (0, 0, str(p))
+
+    return sorted(paths, key=key)
 
 
 def _feather_paths(
@@ -167,17 +268,49 @@ def _feather_paths(
     return sorted(found)
 
 
+def _collect_feather_paths(
+    paths: Sequence[Path],
+    suffixes: tuple[str, ...] = (".feather",),
+) -> list[Path]:
+    """複数の入力パスを列挙して重複を畳む．
+
+    `--search-value-path` は複数回指定できる．同じディレクトリを 2 回渡したり，
+    ディレクトリとその配下のファイルを両方渡したりすると同じファイルが 2 度
+    現れるが，**探索値の重複は前処理の join で行を増やしかねない**ので入口で
+    畳んでおく (`load_search_values` の id 一意化より手前で効かせる)．
+
+    Args:
+        paths: ディレクトリまたはファイルの一覧．
+        suffixes: ディレクトリ配下で拾う拡張子．
+
+    Returns:
+        実体で重複排除したパス一覧 (与えられた順序を保つ)．
+    """
+    seen: set[Path] = set()
+    found: list[Path] = []
+    for path in paths:
+        for p in _feather_paths(path, suffixes):
+            resolved = p.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            found.append(p)
+    return found
+
+
 def _hcpe_paths(
     input_path: Path, exclude: Path | None = None
 ) -> list[Path]:
     """入力パス配下の HCPE feather を列挙する．
 
-    `exclude` は出力ファイルを想定している．出力を入力ディレクトリ配下へ
-    置く運用はあり得るが，それを HCPE として読むと `hcp` カラムが無くて落ちる．
+    `exclude` は出力先を想定している．出力を入力ディレクトリ配下へ置く運用は
+    あり得るが，それを HCPE として読むと `hcp` カラムが無くて落ちる．
+    **出力はシャードのディレクトリなので，配下を丸ごと外す**必要がある
+    (単一パス比較では `part_0001.feather` を HCPE として読んでしまう)．
 
     Args:
         input_path: ディレクトリまたは単一ファイル．
-        exclude: 列挙から外すパス (出力ファイル)．
+        exclude: 列挙から外すパス．ディレクトリならその配下すべて．
 
     Returns:
         `.feather` のパス一覧 (安定した順序)．
@@ -186,7 +319,12 @@ def _hcpe_paths(
     if exclude is None:
         return paths
     skipped = exclude.resolve()
-    return [p for p in paths if p.resolve() != skipped]
+    return [
+        p
+        for p in paths
+        if p.resolve() != skipped
+        and skipped not in p.resolve().parents
+    ]
 
 
 def _ply_of(record_id: str) -> int:
@@ -293,7 +431,9 @@ def _check_search_value_schema(
             )
 
 
-def validate_search_value_source(path: Path) -> list[Path]:
+def validate_search_value_source(
+    paths: Sequence[Path],
+) -> list[Path]:
     """``--search-value-path`` が読める形かを**データを読まずに**検査する．
 
     スキーマ検査は IPC のフッタしか触らないので，実行の一番手前で全ファイル
@@ -301,26 +441,28 @@ def validate_search_value_source(path: Path) -> list[Path]:
     リサイズといった高価な準備に進む．
 
     Args:
-        path: ディレクトリまたは単一ファイル．
+        paths: ディレクトリまたはファイルの一覧 (`--search-value-path` は
+            複数回指定できる)．
 
     Returns:
-        検査を通ったパスの一覧 (パス順)．
+        検査を通ったパスの一覧 (与えられた順序，重複排除済み)．
 
     Raises:
-        ValueError: ディレクトリ配下に対象ファイルが無い，Arrow IPC として
-            読めない，前処理に必要な列が無い，または型が使えない場合．
+        ValueError: 対象ファイルが 1 つも無い，Arrow IPC として読めない，
+            前処理に必要な列が無い，または型が使えない場合．
     """
-    paths = _feather_paths(path, SEARCH_VALUE_SUFFIXES)
-    if not paths:
+    found = _collect_feather_paths(paths, SEARCH_VALUE_SUFFIXES)
+    if not found:
+        given = ", ".join(str(p) for p in paths) or "(none)"
         raise ValueError(
-            f"{path} contains no "
+            f"{given} contains no "
             f"{' or '.join(SEARCH_VALUE_SUFFIXES)} file. "
             "--search-value-path takes the output of "
-            "`maou utility search-values`, either the file itself or a "
-            "directory containing one or more of them."
+            "`maou utility search-values`: the shard directory, a single "
+            "file, or any mix of them (the option can be repeated)."
         )
 
-    for p in paths:
+    for p in found:
         try:
             schema = pl.scan_ipc(p).collect_schema()
         except Exception as exc:
@@ -328,13 +470,17 @@ def validate_search_value_source(path: Path) -> list[Path]:
                 f"{p} could not be read as a feather (Arrow IPC) file: {exc}"
             ) from exc
         _check_search_value_schema(p, dict(schema))
-    return paths
+    return found
 
 
-def load_search_values(path: Path) -> pl.DataFrame:
+def load_search_values(paths: Sequence[Path]) -> pl.DataFrame:
     """``--search-value-path`` を読み，前処理が使う 2 列の表にまとめる．
 
     ディレクトリを渡すと配下の対象ファイルを全て union する (行方向の連結)．
+    シャード出力 (`part_NNNNNNNN.feather`) はそのままディレクトリを渡せばよい．
+
+    読み出しは **Rust バックエンド** ([`load_generic_df`]) を通す．書き出し側も
+    Rust なので，Arrow IPC の File/Stream 判定を書き手と読み手で揃えられる．
 
     **重複 id はここで 1 回だけ解決する** (パス順で後勝ち)．resume を重ねた
     出力が同じディレクトリに並ぶと重複は普通に起こるが，`apply_search_values`
@@ -342,7 +488,7 @@ def load_search_values(path: Path) -> pl.DataFrame:
     同一の警告をチャンク数だけ繰り返すことになる．
 
     Args:
-        path: ディレクトリまたは単一ファイル．
+        paths: ディレクトリまたはファイルの一覧．
 
     Returns:
         `SEARCH_VALUE_REQUIRED_SCHEMA` の DataFrame (id で一意)．
@@ -350,16 +496,21 @@ def load_search_values(path: Path) -> pl.DataFrame:
     Raises:
         ValueError: `validate_search_value_source` と同じ条件．
     """
-    paths = validate_search_value_source(path)
+    from maou.domain.data.rust_io import load_generic_df
+
+    found = validate_search_value_source(paths)
 
     columns = list(SEARCH_VALUE_REQUIRED_SCHEMA)
     frames: list[pl.DataFrame] = []
-    for p in paths:
+    for p in found:
         try:
+            # 列射影は Rust 側に無いので読んでから落とす．診断列 (playouts /
+            # stop / elapsedMs) の構成が違うファイル同士でも，ここで必要 2 列へ
+            # 揃うので union できる．
             frames.append(
-                pl.read_ipc(
-                    p, columns=columns, memory_map=False
-                ).cast(SEARCH_VALUE_REQUIRED_SCHEMA)  # type: ignore[arg-type]
+                load_generic_df(p)
+                .select(columns)
+                .cast(SEARCH_VALUE_REQUIRED_SCHEMA)  # type: ignore[arg-type]
             )
         except Exception as exc:
             raise ValueError(
@@ -386,18 +537,19 @@ def load_search_values(path: Path) -> pl.DataFrame:
             len(unioned) - len(values),
         )
     # 拾えなかったファイルは無言の部分適用になるので，何を読んだか残す
+    given = ", ".join(str(p) for p in paths)
     logger.info(
         "Loaded %d search values from %d file(s) under %s: %s",
         len(values),
-        len(paths),
-        path,
-        ", ".join(p.name for p in paths),
+        len(found),
+        given,
+        ", ".join(p.name for p in found),
     )
     if values.is_empty():
         logger.warning(
             "%s holds no search value; every resultValue will keep its "
             "game-result value",
-            path,
+            given,
         )
     return values
 
@@ -576,18 +728,37 @@ class SearchValueCollector:
         Returns:
             既存の出力 (無ければ空の DataFrame)．
         """
-        if option.resume and option.output_path.exists():
-            done = _with_current_schema(
-                pl.read_ipc(
-                    option.output_path, memory_map=False
-                )
+        empty = pl.DataFrame(schema=SEARCH_VALUE_SCHEMA)
+        if not option.resume or not option.output_path.exists():
+            return empty
+
+        from maou.domain.data.rust_io import load_generic_df
+
+        paths = _ordered_value_paths(
+            _feather_paths(
+                option.output_path, SEARCH_VALUE_SUFFIXES
             )
-            self.logger.info(
-                "Resuming: %d positions already searched",
-                len(done),
-            )
-            return done
-        return pl.DataFrame(schema=SEARCH_VALUE_SCHEMA)
+        )
+        if not paths:
+            return empty
+        # 旧形式 (単一ファイル) をディレクトリへ移した運用も拾えるよう，
+        # シャード名に限らず配下の feather を全て読む．
+        frames = [
+            _with_current_schema(load_generic_df(p))
+            for p in paths
+        ]
+        done = (
+            frames[0]
+            if len(frames) == 1
+            else pl.concat(frames, how="vertical")
+        )
+        done = done.unique(subset=["id"], keep="last")
+        self.logger.info(
+            "Resuming: %d positions already searched in %d shard(s)",
+            len(done),
+            len(paths),
+        )
+        return done
 
     def _read_hashes(
         self, path: Path
@@ -715,17 +886,15 @@ class SearchValueCollector:
         """
         from maou._rust.maou_search import SearchEngine
 
-        if option.output_path.suffix not in SEARCH_VALUE_SUFFIXES:
-            # `pre-process --search-value-path` にディレクトリを渡すと
-            # 配下をこの拡張子で拾う．別の名前で書くと，そのファイルだけ
-            # 無言で飛ばされて部分適用になる (数日分の GPU 時間が
-            # エラーも警告も無く消える)
+        if option.output_path.is_file():
+            # 旧形式 (単一ファイル) を黙ってディレクトリ扱いすると，既存の
+            # 数日分をどう扱ったのか利用者から見えない．移行の手順を明示する
             raise ValueError(
-                f"--output-path must end in "
-                f"{' or '.join(SEARCH_VALUE_SUFFIXES)}, got "
-                f"{option.output_path}. `pre-process --search-value-path` "
-                "collects a directory by those suffixes, so any other name "
-                "is silently skipped there."
+                f"--output-path is now a directory of shards, but "
+                f"{option.output_path} is a file. Create a directory and "
+                f"move the old output into it "
+                f"(`mkdir -p DIR && mv {option.output_path} DIR/`), then "
+                "pass DIR with --resume; every feather under it is read."
             )
 
         if option.resume and option.overwrite:
@@ -737,20 +906,85 @@ class SearchValueCollector:
                 "every following run."
             )
 
+        existing = _feather_paths(
+            option.output_path, SEARCH_VALUE_SUFFIXES
+        )
         if (
-            option.output_path.exists()
+            existing
             and not option.resume
             and not option.overwrite
         ):
             # 出力は数日分の GPU 時間そのものなので黙って捨てさせない
             raise ValueError(
-                f"{option.output_path} already exists. Pass --resume to "
-                "continue accumulating into it (already-searched positions "
-                "are skipped), or --overwrite to discard it and start over."
+                f"{option.output_path} already holds {len(existing)} "
+                "search value file(s). Pass --resume to continue "
+                "accumulating into it (already-searched positions are "
+                "skipped), or --overwrite to discard it and start over."
             )
+
+        if option.overwrite and option.output_path.exists():
+            # シャードは複数ファイルなので，作り直しはディレクトリごと消す．
+            # 残骸が 1 枚でも生き残ると，次の resume が古い値を拾う
+            self.logger.info(
+                "Discarding %d existing search value file(s) in %s",
+                len(existing),
+                option.output_path,
+            )
+            shutil.rmtree(option.output_path)
 
         done = self._load_done(option)
         selected = self._scan_targets(option, done)
+
+        # **前回の実行が残した未確定シャードを引き継ぐ．** ここを空で始めると
+        # 前回の pending が永久に確定されず，蓄積カウンタも実行ごとに 0 へ戻る
+        # ため，中断を繰り返すほど小さなファイルが溜まり続ける．
+        shard_index = _next_index(
+            option.output_path, SHARD_PATTERN
+        )
+        pending_index = _next_index(
+            option.output_path, PENDING_PATTERN
+        )
+        pending_paths = [
+            p
+            for p in _ordered_value_paths(
+                _feather_paths(
+                    option.output_path, SEARCH_VALUE_SUFFIXES
+                )
+            )
+            if _indexed(p, PENDING_PATTERN) is not None
+        ]
+        carry = self._read_pending(pending_paths)
+        empty_frame = pl.DataFrame(schema=SEARCH_VALUE_SCHEMA)
+
+        def compact(
+            extra: pl.DataFrame, *, quiet: bool
+        ) -> None:
+            """引き継ぎ分 + `extra` を 1 枚の確定シャードにまとめる．"""
+            nonlocal shard_index, pending_paths, carry
+            if carry.is_empty():
+                frame = extra
+            elif extra.is_empty():
+                frame = carry
+            else:
+                frame = pl.concat(
+                    [carry, extra], how="vertical"
+                )
+            if frame.is_empty():
+                return
+            self._write_value_file(
+                frame,
+                option.output_path,
+                SHARD_FORMAT.format(index=shard_index),
+                quiet=quiet,
+            )
+            # **確定シャードを書いてから pending を消す**．逆順だと間で落ちた
+            # ときに行が失われる．この順なら重複が残るだけで，読み手の
+            # id 一意化が吸収する
+            for path in pending_paths:
+                path.unlink(missing_ok=True)
+            pending_paths = []
+            carry = empty_frame
+            shard_index += 1
 
         self.logger.info(
             "Searching %d positions (min_ply=%d, playouts=%d)",
@@ -759,7 +993,10 @@ class SearchValueCollector:
             option.max_playouts,
         )
         if not len(selected):
-            self._write(done, option.output_path)
+            # 探索するものは無いが，**前回の pending は確定させる**．
+            # そうしないと「resume したのに小さいファイルが残ったまま」に
+            # なり，何度 resume しても片付かない
+            compact(empty_frame, quiet=False)
             return {
                 "searched": "0",
                 "total": str(len(done)),
@@ -789,6 +1026,59 @@ class SearchValueCollector:
         playouts: list[int] = []
         stops: list[str] = []
         elapsed: list[int] = []
+        # 2 段構え．flush は小さな `pending_*` を足すだけで既存には触れず
+        # (クラッシュ保護は flush_interval 粒度のまま)，累積が `shard_rows` に
+        # 達したら**メモリ上の行から** `part_*` を 1 枚書いて pending を消す．
+        # 各行はちょうど 2 回書かれるだけなので総 I/O は行数に比例する．
+        # 「毎回 現在のシャードを書き直す」方式はシャードを大きくするほど
+        # 二乗で重くなる (300MB シャード / 18.7M 行で約 10 時間) ので採らない．
+        shard_start = 0
+        written = 0
+
+        def _slice(lo: int, hi: int) -> pl.DataFrame:
+            return _frame(
+                ids[lo:hi],
+                win_rates[lo:hi],
+                playouts[lo:hi],
+                stops[lo:hi],
+                elapsed[lo:hi],
+            )
+
+        def flush(*, final: bool) -> None:
+            """未書き出し行を pending にし，貯まっていれば確定させる．
+
+            **実行の終わりでは目標行数に届かなくても確定させる** (`final`)．
+            端数を pending のまま残して次回に育てさせる案もあるが，
+            `--resume` のたびに `--shard-rows` が同じとは限らず，値が変われば
+            「既存の確定シャードも分割し直すのか」という決着のつかない問題に
+            なる．実行ごとに閉じておけばその問いが発生しない．
+            代償として**1 回の実行につき最低 1 枚**の確定シャードができる．
+            """
+            nonlocal pending_index, shard_start, written
+            if len(ids) > written:
+                pending_paths.append(
+                    self._write_value_file(
+                        _slice(written, len(ids)),
+                        option.output_path,
+                        PENDING_FORMAT.format(
+                            index=pending_index
+                        ),
+                        quiet=True,
+                    )
+                )
+                pending_index += 1
+                written = len(ids)
+            # 引き継いだ未確定分も 1 枚の目標行数に数える
+            outstanding = len(carry) + written - shard_start
+            if outstanding <= 0:
+                return
+            if not final and outstanding < option.shard_rows:
+                return
+            compact(
+                _slice(shard_start, written), quiet=not final
+            )
+            shard_start = written
+
         progress = tqdm(
             self._iter_targets(option, selected),
             total=len(selected),
@@ -818,20 +1108,7 @@ class SearchValueCollector:
             # 途中経過を落とさない: 実運用では数十万局面を数日かけて回すので，
             # 最後にしか書かないと中断で全損する (--resume はここに依存する)
             if n % option.flush_interval == 0:
-                self._write(
-                    _merge(
-                        done,
-                        _frame(
-                            ids,
-                            win_rates,
-                            playouts,
-                            stops,
-                            elapsed,
-                        ),
-                    ),
-                    option.output_path,
-                    quiet=True,
-                )
+                flush(final=False)
                 progress.set_postfix(
                     mean_wr=f"{np.mean(win_rates):.3f}",
                     ms=f"{np.mean(elapsed):.0f}",
@@ -839,9 +1116,12 @@ class SearchValueCollector:
                 )
         progress.close()
 
+        flush(final=True)
+
         fresh = _frame(ids, win_rates, playouts, stops, elapsed)
+        # `merged` は集計にしか使わない (書き出しはシャード済み)．`_merge` は
+        # id 重複を最後の防波堤として潰すので，件数の整合もここで取れる．
         merged = _merge(done, fresh)
-        self._write(merged, option.output_path)
         return {
             "searched": str(len(fresh)),
             "total": str(len(merged)),
@@ -850,27 +1130,78 @@ class SearchValueCollector:
             "output": str(option.output_path),
         }
 
-    def _write(
-        self,
-        df: pl.DataFrame,
-        path: Path,
-        *,
-        quiet: bool = False,
-    ) -> None:
-        """結果を feather へ書き出す．
+    def _read_pending(
+        self, paths: Sequence[Path]
+    ) -> pl.DataFrame:
+        """未確定シャードを読み，次の確定に持ち越す行として返す．
+
+        `--resume` で前回の pending を引き継ぐために要る．引き継がないと
+        前回の未確定分が確定されないまま残り，中断のたびにファイルが増える．
 
         Args:
-            df: 書き出す DataFrame．
-            path: 出力先．
-            quiet: 途中フラッシュではログを出さない．
+            paths: 未確定シャードのパス (古い順)．
+
+        Returns:
+            `SEARCH_VALUE_SCHEMA` の DataFrame (無ければ空)．
         """
-        path.parent.mkdir(parents=True, exist_ok=True)
+        empty = pl.DataFrame(schema=SEARCH_VALUE_SCHEMA)
+        if not paths:
+            return empty
+        from maou.domain.data.rust_io import load_generic_df
+
+        frames = [
+            _with_current_schema(load_generic_df(p))
+            for p in paths
+        ]
+        carry = (
+            frames[0]
+            if len(frames) == 1
+            else pl.concat(frames, how="vertical")
+        )
+        self.logger.info(
+            "Carrying over %d row(s) from %d unfinished shard(s)",
+            len(carry),
+            len(paths),
+        )
+        return carry
+
+    def _write_value_file(
+        self,
+        df: pl.DataFrame,
+        output_dir: Path,
+        name: str,
+        *,
+        quiet: bool = False,
+    ) -> Path:
+        """**新規行だけ**を 1 枚のシャードとして書き出す．
+
+        累積全体を毎回書き直すと書き込み量が行数の二乗で伸びる (実測: 1.25M 行
+        で 1 回 76ms，flush 間隔 500 局面なら 18.7M 行の運用で合計 6 時間近く)．
+        シャードなら 1 回のコストが flush 間隔ぶんで一定になる．読み手
+        (`load_search_values` / `_load_done`) はディレクトリを union するので，
+        分割されていても意味は変わらない．
+
+        Args:
+            df: 書き出す新規行．
+            output_dir: 出力ディレクトリ．
+            name: 書き出すファイル名 (`part_*` / `pending_*`)．
+            quiet: 途中フラッシュではログを出さない．
+
+        Returns:
+            書き出したシャードのパス．
+        """
+        from maou.domain.data.rust_io import save_generic_df
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / name
         # 途中フラッシュはクラッシュと同時に起こりうる．直接書くと壊れた
-        # ファイルが残り，数日分の探索が resume 不能になる
+        # ファイルが残り，数日分の探索が resume 不能になる．**中間名は
+        # `.feather` で終わらせない** — 読み手が拾ってしまう
         tmp = path.with_name(path.name + ".tmp")
-        df.write_ipc(tmp, compression="lz4")
+        save_generic_df(df, tmp)
         os.replace(tmp, path)
         if not quiet:
             self.logger.info(
                 "Wrote %d search values to %s", len(df), path
             )
+        return path

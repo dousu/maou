@@ -15,11 +15,15 @@ import pytest
 
 from maou.app.pre_process.hcpe_transform import DataSource
 from maou.app.pre_process.search_value import (
+    PENDING_PATTERN,
     SEARCH_VALUE_REQUIRED_SCHEMA,
     SEARCH_VALUE_SCHEMA,
+    SHARD_PATTERN,
     SearchValueCollector,
     SearchValueOption,
     _merge,
+    _next_index,
+    _ordered_value_paths,
     _ply_of,
     _with_current_schema,
     apply_search_values,
@@ -256,17 +260,27 @@ class TestOverwriteGuard:
         base.update(kw)
         return SearchValueOption(**base)  # type: ignore[arg-type]
 
+    def _seeded(self, tmp_path: Path) -> Path:
+        """シャードが 1 枚ある出力ディレクトリを作る．"""
+        out = tmp_path / "sv"
+        out.mkdir()
+        _values([1], [0.5]).write_ipc(
+            out / "part_00000001.feather"
+        )
+        return out
+
     def test_raises_when_output_exists(
         self, tmp_path: Path
     ) -> None:
-        out = tmp_path / "sv.feather"
-        _values([1], [0.5]).write_ipc(out)
-        with pytest.raises(ValueError, match="already exists"):
+        out = self._seeded(tmp_path)
+        with pytest.raises(
+            ValueError,
+            match="already holds 1 search value file",
+        ):
             SearchValueCollector().collect(self._option(out))
 
     def test_resume_is_allowed(self, tmp_path: Path) -> None:
-        out = tmp_path / "sv.feather"
-        _values([1], [0.5]).write_ipc(out)
+        out = self._seeded(tmp_path)
         # 対象 HCPE が無いので探索は 0 件だが，ガードは通る
         result = SearchValueCollector().collect(
             self._option(out, resume=True)
@@ -274,12 +288,15 @@ class TestOverwriteGuard:
         assert result["searched"] == "0"
 
     def test_overwrite_is_allowed(self, tmp_path: Path) -> None:
-        out = tmp_path / "sv.feather"
-        _values([1], [0.5]).write_ipc(out)
+        out = self._seeded(tmp_path)
         result = SearchValueCollector().collect(
             self._option(out, overwrite=True)
         )
         assert result["searched"] == "0"
+        assert not out.exists(), (
+            "--overwrite はシャードを残してはいけない "
+            "(残骸を次の --resume が拾う)"
+        )
 
     def test_resume_and_overwrite_are_mutually_exclusive(
         self, tmp_path: Path
@@ -289,8 +306,7 @@ class TestOverwriteGuard:
         実測では両方を付けると `--overwrite` が黙って無視され，
         作り直したつもりの実行で古い値が残っていた．
         """
-        out = tmp_path / "sv.feather"
-        _values([1], [0.5]).write_ipc(out)
+        out = self._seeded(tmp_path)
         with pytest.raises(
             ValueError, match="mutually exclusive"
         ):
@@ -375,7 +391,7 @@ class TestLoadSearchValues:
         self._write(
             tmp_path / "v.feather", _values([1, 2], [0.4, 0.6])
         )
-        out = load_search_values(tmp_path / "v.feather")
+        out = load_search_values([tmp_path / "v.feather"])
         assert out["id"].to_list() == [1, 2]
         assert out["searchWinRate"].to_list() == pytest.approx(
             [0.4, 0.6], abs=1e-6
@@ -386,7 +402,7 @@ class TestLoadSearchValues:
     ) -> None:
         """診断列は落とす (union をスキーマ差で失敗させないため)．"""
         self._write(tmp_path / "v.feather", _values([1], [0.4]))
-        out = load_search_values(tmp_path / "v.feather")
+        out = load_search_values([tmp_path / "v.feather"])
         assert list(out.columns) == list(
             SEARCH_VALUE_REQUIRED_SCHEMA
         )
@@ -400,7 +416,7 @@ class TestLoadSearchValues:
             tmp_path / "a.feather", _values([1, 2], [0.1, 0.2])
         )
         self._write(tmp_path / "b.feather", _values([3], [0.3]))
-        out = load_search_values(tmp_path)
+        out = load_search_values([tmp_path])
         assert sorted(out["id"].to_list()) == [1, 2, 3]
 
     def test_directory_recurses(self, tmp_path: Path) -> None:
@@ -410,7 +426,7 @@ class TestLoadSearchValues:
             _values([2], [0.2]),
         )
         assert sorted(
-            load_search_values(tmp_path)["id"].to_list()
+            load_search_values([tmp_path])["id"].to_list()
         ) == [1, 2]
 
     def test_directory_ignores_non_feather(
@@ -418,9 +434,9 @@ class TestLoadSearchValues:
     ) -> None:
         self._write(tmp_path / "a.feather", _values([1], [0.1]))
         (tmp_path / "notes.txt").write_text("not a feather")
-        assert load_search_values(tmp_path)["id"].to_list() == [
-            1
-        ]
+        assert load_search_values([tmp_path])[
+            "id"
+        ].to_list() == [1]
 
     def test_unions_across_schema_versions(
         self, tmp_path: Path
@@ -436,7 +452,7 @@ class TestLoadSearchValues:
             tmp_path / "new.feather", _values([2], [0.2])
         )
         assert sorted(
-            load_search_values(tmp_path)["id"].to_list()
+            load_search_values([tmp_path])["id"].to_list()
         ) == [1, 2]
 
     def test_directory_result_is_usable(
@@ -451,7 +467,7 @@ class TestLoadSearchValues:
         )
         out, applied = apply_search_values(
             _pre_df([1, 2, 3], [1.0, 0.0, 1.0]),
-            load_search_values(tmp_path),
+            load_search_values([tmp_path]),
         )
         assert applied == 2
         assert out["resultValue"].to_list() == pytest.approx(
@@ -466,7 +482,7 @@ class TestLoadSearchValues:
         self._write(tmp_path / "b.feather", _values([2], [0.6]))
         out, applied = apply_search_values(
             _pre_df([1, 2], [1.0, 0.0]),
-            load_search_values(tmp_path),
+            load_search_values([tmp_path]),
         )
         assert len(out) == 2
         assert applied == 1
@@ -482,7 +498,7 @@ class TestLoadSearchValues:
         with pytest.raises(
             ValueError, match="no .feather or .arrow file"
         ):
-            load_search_values(tmp_path / "empty")
+            load_search_values([tmp_path / "empty"])
 
     def test_missing_column_raises_naming_the_file(
         self, tmp_path: Path
@@ -500,7 +516,7 @@ class TestLoadSearchValues:
         with pytest.raises(
             ValueError, match="searchWinRate"
         ) as excinfo:
-            load_search_values(tmp_path)
+            load_search_values([tmp_path])
         assert "hcpe.feather" in str(excinfo.value)
 
     def test_unusable_dtype_raises(
@@ -520,7 +536,7 @@ class TestLoadSearchValues:
             ),
         )
         with pytest.raises(ValueError, match="cannot be used"):
-            load_search_values(tmp_path / "v.feather")
+            load_search_values([tmp_path / "v.feather"])
 
     def test_unreadable_file_raises(
         self, tmp_path: Path
@@ -531,7 +547,7 @@ class TestLoadSearchValues:
         with pytest.raises(
             ValueError, match="could not be read"
         ):
-            load_search_values(tmp_path)
+            load_search_values([tmp_path])
 
     def test_checks_every_file_before_reading_any(
         self, tmp_path: Path
@@ -551,7 +567,7 @@ class TestLoadSearchValues:
             pl.DataFrame({"id": [1]}),
         )
         with pytest.raises(ValueError, match="searchWinRate"):
-            load_search_values(tmp_path)
+            load_search_values([tmp_path])
 
 
 class _NoDataSource(DataSource):
@@ -584,7 +600,7 @@ class TestEarlyValidation:
         PreProcess(
             datasource=_NoDataSource(),
             feature_store=None,
-            search_value_path=path,
+            search_value_paths=[path],
         )
 
     def test_rejects_wrong_schema_at_construction(
@@ -638,13 +654,13 @@ class TestDedupHappensOnce:
     def test_load_returns_unique_ids(
         self, tmp_path: Path
     ) -> None:
-        out = load_search_values(self._dir(tmp_path))
+        out = load_search_values([self._dir(tmp_path)])
         assert sorted(out["id"].to_list()) == [1, 2]
 
     def test_load_resolves_last_in_path_order(
         self, tmp_path: Path
     ) -> None:
-        out = load_search_values(self._dir(tmp_path))
+        out = load_search_values([self._dir(tmp_path)])
         got = dict(
             zip(
                 out["id"].to_list(),
@@ -658,7 +674,7 @@ class TestDedupHappensOnce:
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
         """チャンクごとの適用で警告が出ないこと．"""
-        values = load_search_values(self._dir(tmp_path))
+        values = load_search_values([self._dir(tmp_path)])
         caplog.clear()
         with caplog.at_level("WARNING"):
             for _ in range(3):  # チャンク 3 回ぶん
@@ -681,7 +697,7 @@ class TestValidateSearchValueSource:
             )
         assert [
             p.name
-            for p in validate_search_value_source(tmp_path)
+            for p in validate_search_value_source([tmp_path])
         ] == ["a.feather", "b.feather"]
 
     def test_raises_on_bad_schema(self, tmp_path: Path) -> None:
@@ -690,7 +706,7 @@ class TestValidateSearchValueSource:
             tmp_path / "x.feather", compression="lz4"
         )
         with pytest.raises(ValueError, match="searchWinRate"):
-            validate_search_value_source(tmp_path)
+            validate_search_value_source([tmp_path])
 
     def test_picks_up_arrow_files(self, tmp_path: Path) -> None:
         """`.arrow` も拾う．
@@ -704,7 +720,7 @@ class TestValidateSearchValueSource:
         )
         assert [
             p.name
-            for p in validate_search_value_source(tmp_path)
+            for p in validate_search_value_source([tmp_path])
         ] == ["v.arrow"]
 
     def test_ignores_flush_temporaries(
@@ -718,49 +734,158 @@ class TestValidateSearchValueSource:
         (tmp_path / "v.feather.tmp").write_bytes(b"partial")
         assert [
             p.name
-            for p in validate_search_value_source(tmp_path)
+            for p in validate_search_value_source([tmp_path])
         ] == ["v.feather"]
 
 
-class TestOutputPathSuffix:
-    """``search-values --output-path`` の拡張子を生成側で守らせる．
+class TestShardedOutput:
+    """出力はシャードのディレクトリであること．
 
-    別の名前で書くと `pre-process --search-value-path` のディレクトリ
-    指定から無言で漏れる．数日分の GPU 時間がエラーも警告も無く消えるので，
-    書き始める前に弾く．
+    累積全体を毎回書き直す方式は書き込み量が行数の二乗で伸びる (実測 1.25M 行
+    で 1 回 76ms / flush 間隔 500 局面)．flush は `pending_*` を足すだけにし，
+    貯まったら `part_*` へまとめて pending を消す．
     """
 
-    def _option(self, output_path: Path) -> SearchValueOption:
-        return SearchValueOption(
-            input_path=output_path.parent,
-            output_path=output_path,
-        )
+    def _option(
+        self, out: Path, **kw: object
+    ) -> SearchValueOption:
+        base: dict[str, object] = {
+            "input_path": out.parent,
+            "output_path": out,
+        }
+        base.update(kw)
+        return SearchValueOption(**base)  # type: ignore[arg-type]
 
-    def test_rejects_other_suffixes(
+    def test_a_file_output_is_rejected_with_migration_steps(
         self, tmp_path: Path
     ) -> None:
+        """旧形式を黙ってディレクトリ扱いしない．
+
+        数日分の既存出力をどう扱ったのかが利用者から見えなくなる．
+        """
+        old = tmp_path / "search_values.feather"
+        _values([1], [0.5]).write_ipc(old)
         with pytest.raises(
-            ValueError, match="--output-path must end in"
+            ValueError, match="now a directory of shards"
         ):
             SearchValueCollector().collect(
-                self._option(tmp_path / "values.bin")
+                self._option(old, resume=True)
             )
+        assert old.exists(), "エラー時に既存を消してはいけない"
 
-    def test_rejects_before_touching_the_output(
+    def test_resume_reads_a_legacy_file_moved_into_the_dir(
         self, tmp_path: Path
     ) -> None:
-        out = tmp_path / "values.bin"
-        with pytest.raises(ValueError):
-            SearchValueCollector().collect(self._option(out))
-        assert not out.exists()
-
-    @pytest.mark.parametrize("suffix", [".feather", ".arrow"])
-    def test_accepts_collected_suffixes(
-        self, tmp_path: Path, suffix: str
-    ) -> None:
-        """拡張子の検査を通り，別の理由 (入力なし) まで進むこと．"""
-        out = tmp_path / f"values{suffix}"
-        result = SearchValueCollector().collect(
-            self._option(out)
+        """移行手順どおり移せば，旧形式が既探索として効くこと．"""
+        out = tmp_path / "sv"
+        out.mkdir()
+        _values([11, 22], [0.25, 0.75]).write_ipc(
+            out / "search_values.feather"
         )
+        done = SearchValueCollector()._load_done(
+            self._option(out, resume=True)
+        )
+        assert sorted(done["id"].to_list()) == [11, 22]
+
+    def test_resume_unions_legacy_and_shards(
+        self, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "sv"
+        out.mkdir()
+        _values([11], [0.25]).write_ipc(
+            out / "search_values.feather"
+        )
+        _values([22], [0.75]).write_ipc(
+            out / "part_00000001.feather"
+        )
+        done = SearchValueCollector()._load_done(
+            self._option(out, resume=True)
+        )
+        assert sorted(done["id"].to_list()) == [11, 22]
+
+    def test_shard_numbering_continues_from_the_maximum(
+        self, tmp_path: Path
+    ) -> None:
+        """個数でなく最大値の次を取る (途中を消しても既存を潰さない)．"""
+        out = tmp_path / "sv"
+        out.mkdir()
+        (out / "part_00000007.feather").touch()
+        assert _next_index(out, SHARD_PATTERN) == 8
+        assert _next_index(out, PENDING_PATTERN) == 1
+
+    def test_resume_finalises_leftover_pending_shards(
+        self, tmp_path: Path
+    ) -> None:
+        """中断で残った pending が，次の resume で確定シャードにまとまること．
+
+        回帰: `pending_paths` を空で初期化していたため前回の未確定分を
+        引き継がず，(a) 前回の pending が永久に確定されない，(b) 蓄積カウンタが
+        実行ごとに 0 へ戻る，の 2 つが起きていた．中断を繰り返すほど小さな
+        ファイルが溜まり続ける．
+        """
+        out = tmp_path / "sv"
+        out.mkdir()
+        _values([1, 2], [0.1, 0.2]).write_ipc(
+            out / "pending_00000001.feather"
+        )
+        _values([3], [0.3]).write_ipc(
+            out / "pending_00000002.feather"
+        )
+
+        # 入力に HCPE が無いので探索は 0 件．引き継ぎ分だけが確定する
+        result = SearchValueCollector().collect(
+            self._option(out, resume=True)
+        )
+
         assert result["searched"] == "0"
+        assert sorted(p.name for p in out.iterdir()) == [
+            "part_00000001.feather"
+        ], "pending が確定シャードへまとまり，元は消えること"
+        done = SearchValueCollector()._load_done(
+            self._option(out, resume=True)
+        )
+        assert sorted(done["id"].to_list()) == [1, 2, 3]
+
+    def test_a_finished_run_leaves_no_pending(
+        self, tmp_path: Path
+    ) -> None:
+        """目標行数に届かなくても実行の終わりで確定させること．
+
+        端数を pending のまま残す案は採らない: `--resume` のたびに
+        `--shard-rows` が同じとは限らず，値が変われば「既存の確定シャードも
+        分割し直すのか」という決着のつかない問題になる．
+        """
+        out = tmp_path / "sv"
+        out.mkdir()
+        _values([9], [0.9]).write_ipc(
+            out / "pending_00000001.feather"
+        )
+        SearchValueCollector().collect(
+            self._option(out, resume=True, shard_rows=1_000_000)
+        )
+        assert not list(out.glob("pending_*.feather"))
+        assert list(out.glob("part_*.feather"))
+
+    def test_ordering_puts_legacy_first_and_pending_last(
+        self, tmp_path: Path
+    ) -> None:
+        """後勝ちの向きが「旧形式 → 確定 → 未確定」になること．
+
+        素の辞書順では `search_values.feather` が `part_*` より後ろに来て，
+        移行直後に**旧い値が新しいシャードを上書きする**．
+        """
+        names = [
+            "part_00000010.feather",
+            "pending_00000001.feather",
+            "search_values.feather",
+            "part_00000002.feather",
+        ]
+        ordered = _ordered_value_paths(
+            [tmp_path / n for n in names]
+        )
+        assert [p.name for p in ordered] == [
+            "search_values.feather",
+            "part_00000002.feather",
+            "part_00000010.feather",
+            "pending_00000001.feather",
+        ]

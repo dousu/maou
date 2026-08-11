@@ -3,8 +3,8 @@
 ## Overview
 
 floodgate の既存局面をそのまま探索して，**局面ごとの value 教師**を作る．
-出力は `maou pre-process --search-value-path` に渡して `resultValue` を
-差し替える．
+出力は **シャードのディレクトリ** (`part_NNNNNNNN.feather`) で，
+`maou pre-process --search-value-path` に渡して `resultValue` を差し替える．
 
 ### なぜ要るのか
 
@@ -109,25 +109,43 @@ training と validation で教師の意味が違ってよい．検証損失の�
 # (中断したら同じコマンドを再実行する — --resume で続きから貯まる)
 maou utility search-values \
     --input-path hcpe_train/ \
-    --output-path search_values.feather \
+    --output-path search_values/ \
     --model-path model.onnx \
     --min-ply 60 --max-positions 1000000 --playouts 800 \
     --batch-size 64 --tensorrt --cuda --trt-cache-dir trt_cache/ --resume
 
 # training 側の前処理にだけ渡す
 maou pre-process --input-path hcpe_train/ --output-dir pre_train/ \
-    --search-value-path search_values.feather
+    --search-value-path search_values/
+
+# 別々に貯めた出力をまとめて渡すこともできる (--search-value-path は複数指定可)
+maou pre-process --input-path hcpe_train/ --output-dir pre_train/ \
+    --search-value-path search_values/ --search-value-path search_values_g4/
 
 # validation 側は素のまま (対局結果を教師に残す)
 maou pre-process --input-path hcpe_val/ --output-dir pre_val/
 ```
+
+### 旧形式 (単一 feather) からの移行
+
+0.86.0 より前は `--output-path` が単一ファイルだった．ファイルを渡すと
+移行手順付きの**エラー**になるので，ディレクトリへ移してから `--resume` する．
+
+```bash
+mkdir -p search_values/
+mv search_values.feather search_values/
+maou utility search-values --output-path search_values/ --resume ...
+```
+
+`--resume` はシャード名に限らず配下の feather を全部読むので，移した旧ファイルは
+そのまま既探索として効く．新しい行は `part_00000001.feather` から書かれる．
 
 ## CLI options
 
 | Option | Default | Description |
 |---|---|---|
 | `--input-path PATH` | required | HCPE (`.feather`) のディレクトリまたはファイル．再帰的に走査する． |
-| `--output-path PATH` | required | 出力する feather (`id` / `searchWinRate` / `playouts` / `stop`)．拡張子は `.feather` か `.arrow` でなければ**エラー**になる．`pre-process --search-value-path` にディレクトリを渡すとこの拡張子で配下を拾うため，別の名前で書くとそのファイルだけ無言で飛ばされて部分適用になる． |
+| `--output-path PATH` | required | **シャードを書き出すディレクトリ**．確定シャードは `part_NNNNNNNN.feather` (`id` / `searchWinRate` / `playouts` / `stop` / `elapsedMs`)．`--flush-interval` ごとの途中結果は小さな `pending_NNNNNNNN.feather` として足され，`--shard-rows` に達した時点で 1 枚の `part_` へまとめられて消える．**累積全体を書き直さない**ので，1 回の書き込みコストが行数によらず一定になる (旧実装は書き込み量が行数の二乗で伸び，18.7M 行では合計 5.9 時間に達した)．単一ファイルを渡すと移行手順付きの**エラー**になる． |
 | `--model-path PATH` | optional | ONNX モデル．未指定なら決定論的な mock 評価器 (API 検証用．**値に意味は無い**)． |
 | `--min-ply INT` | `60` | この手数以上の局面のみ対象にする．記憶は中終盤に集中し，序盤の局面は多数の対局で共有されて教師が平均化されるので手を入れる必要が無い． |
 | `--max-positions INT` | `0` | 対象局面数の上限 (`0` で無制限)．GPU 予算に合わせる．標本抽出は `--seed` で決まりラベルに依存しない． |
@@ -148,9 +166,10 @@ maou pre-process --input-path hcpe_val/ --output-dir pre_val/
 | `--cuda / --no-cuda` | `False` | CUDA Execution Provider (`onnx-cuda` 付き wheel が必要)． |
 | `--tensorrt / --no-tensorrt` | `False` | TensorRT Execution Provider (`onnx-tensorrt` 付き wheel が必要)． |
 | `--trt-cache-dir PATH` | optional | TensorRT エンジンキャッシュ保存先． |
-| `--flush-interval INT` | `500` | この局面数ごとに途中結果を書き出す．**中断してもそこまでの結果が残り** `--resume` で続きから再開できる．数十万局面を数日かけて回す用途では必須． |
-| `--resume` | `False` | `--output-path` に既にある局面を飛ばして残りを追記する．中断した実行はそのまま再実行できる． |
-| `--overwrite` | `False` | 既存の `--output-path` を破棄して作り直す．`--resume` も `--overwrite` も無いまま既存の出力を指すと**エラー**になる．`--resume` との**同時指定もエラー**． |
+| `--flush-interval INT` | `500` | この局面数ごとに途中結果を書き出す．**中断してもそこまでの結果が残り** `--resume` で続きから再開できる．書き出しは `pending_*.feather` を 1 枚足すだけで，既存には触れない． |
+| `--shard-rows INT` | `5000000` | 確定シャード 1 枚に収める目標行数．**1 行あたり実測 19.4 B** なので既定は約 97MB．大きくするほどファイル数は減るが，中断時に `pending_*` として残る量も増える．なお**実行の終わりでは目標行数に届かなくても確定させる**ので，1 回の実行につき最低 1 枚の `part_` ができる (端数を持ち越さないのは，`--resume` のたびに `--shard-rows` が同じとは限らず，値が変われば「既存の確定シャードも分割し直すのか」という問題になるため)． |
+| `--resume` | `False` | `--output-path` 配下に既にある局面を飛ばして残りを追記する．**前回の実行が残した `pending_*` も引き継いで**次の確定シャードにまとめる．連番は既存の最大値の次から振るので，途中のシャードを手で消しても既存を上書きしない．中断した実行はそのまま再実行できる． |
+| `--overwrite` | `False` | 既存の `--output-path` ディレクトリを削除して作り直す．シャードが 1 枚でも生き残ると次の `--resume` が古い値を拾うため，ディレクトリごと消す．`--resume` も `--overwrite` も無いまま既存の出力を指すと**エラー**になる．`--resume` との**同時指定もエラー**． |
 
 ## 進行状況の確認
 
@@ -200,7 +219,9 @@ GPU によって 2.7 倍ずれる．
 ```bash
 uv run python -c "
 import polars as pl
-d = pl.read_ipc('search_values.feather', memory_map=False)
+import glob
+d = pl.concat([pl.read_ipc(f, memory_map=False)
+               for f in sorted(glob.glob('search_values/*.feather'))])
 print(d.group_by('stop').len().sort('len', descending=True).to_dicts())
 print('playouts 中央値', d['playouts'].median(),
       '/ 800 未満の割合', (d['playouts'] < 800).mean())

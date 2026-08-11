@@ -1,7 +1,8 @@
 import logging
 from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import patch
+from typing import cast
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -1131,7 +1132,11 @@ def test_estimate_per_worker_mb_bounds_stat_calls() -> None:
 
     result = _estimate_per_worker_mb(paths, logger)
 
-    stat_calls = sum(fp.stat.call_count for fp in paths)
+    # `_make_fake_path` は MagicMock(spec=Path) を Path として返すので，
+    # 型の上では mock の属性 (`call_count`) が見えない．
+    stat_calls = sum(
+        cast(MagicMock, fp).stat.call_count for fp in paths
+    )
     assert stat_calls <= _SIZE_SAMPLE_LIMIT
     # サンプリングしても推定値は変わらない(全ファイル同サイズ)．
     assert result == pytest.approx(800.0, rel=1e-3)

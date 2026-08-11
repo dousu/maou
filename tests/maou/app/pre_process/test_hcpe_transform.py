@@ -332,7 +332,7 @@ def test_search_value_directory_is_applied(
             file_paths=input_paths, array_type="hcpe"
         ),
         feature_store=None,
-        search_value_path=values_dir,
+        search_value_paths=[values_dir],
     ).transform(
         PreProcess.PreProcessOption(
             output_dir=output_dir, max_workers=1

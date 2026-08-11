@@ -39,12 +39,13 @@ def collect_search_values(
     resume: bool = False,
     overwrite: bool = False,
     flush_interval: int = 500,
+    shard_rows: int = 5_000_000,
 ) -> dict[str, str]:
     """HCPE の局面を探索して value 教師を作る．
 
     Args:
         input_path: HCPE (`.feather`) のディレクトリまたはファイル．
-        output_path: 出力する feather のパス．
+        output_path: シャードを書き出すディレクトリ．
         model_path: ONNX モデルのパス．None なら mock 評価器．
         min_ply: この手数以上の局面のみ対象にする．
         max_positions: 対象局面数の上限 (0 で無制限)．
@@ -68,6 +69,7 @@ def collect_search_values(
         resume: 既存の出力にある局面を飛ばして続きから探索するか．
         overwrite: 既存の出力を破棄して作り直すか．
         flush_interval: 途中結果を書き出す局面数の間隔．
+        shard_rows: 確定シャード 1 枚の目標行数．
 
     Returns:
         表示用の要約 dict．
@@ -111,5 +113,6 @@ def collect_search_values(
         resume=resume,
         overwrite=overwrite,
         flush_interval=flush_interval,
+        shard_rows=shard_rows,
     )
     return SearchValueCollector().collect(option)

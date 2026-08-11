@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 from maou.app.pre_process.hcpe_transform import (
@@ -201,7 +202,9 @@ def resize_input_files(
     return ok_files
 
 
-def validate_search_value_path(path: Path | None) -> None:
+def validate_search_value_paths(
+    paths: Sequence[Path],
+) -> None:
     """``--search-value-path`` を実行の最初に検査する．
 
     `transform` の中で検査すると，クラウド入力のダウンロードや
@@ -212,18 +215,18 @@ def validate_search_value_path(path: Path | None) -> None:
     データは読まず，Arrow IPC のフッタからスキーマだけを見る．
 
     Args:
-        path: ``--search-value-path`` の値．``None`` なら何もしない．
+        paths: ``--search-value-path`` の値 (複数指定可)．空なら何もしない．
 
     Raises:
         ValueError: 探索値として読めない場合．
     """
-    if path is None:
+    if not paths:
         return
     from maou.app.pre_process.search_value import (
         validate_search_value_source,
     )
 
-    validate_search_value_source(path)
+    validate_search_value_source(paths)
 
 
 def transform(
@@ -238,7 +241,7 @@ def transform(
     prior_strength: float = 5.0,
     win_rate_fallback: str = "neutral",
     drop_below_threshold: bool = False,
-    search_value_path: Path | None = None,
+    search_value_paths: Sequence[Path] = (),
 ) -> str:
     """Transform HCPE data into neural network training features.
 
@@ -264,9 +267,9 @@ def transform(
             win/loss outcome instead, which is 0.0/1.0 (0.5 for a draw)
             when the position occurred once. Ignored for positions
             excluded via ``drop_below_threshold``.
-        search_value_path: Output of ``maou utility search-values`` -- a
-            single ``.feather`` or a directory of them, whose contents are
-            unioned. When given, ``resultValue`` is replaced by the search
+        search_value_paths: Output of ``maou utility search-values`` -- the
+            shard directory, a single ``.feather``, or any mix of them
+            (the option can be repeated); the contents are unioned. When given, ``resultValue`` is replaced by the search
             value for the positions it covers. A game result is constant
             across the ~110 positions of one game, so recalling which game a
             position came from fits the training set without transferring to
@@ -320,7 +323,7 @@ def transform(
         prior_strength=prior_strength,
         win_rate_fallback=win_rate_fallback,
         drop_below_threshold=drop_below_threshold,
-        search_value_path=search_value_path,
+        search_value_paths=search_value_paths,
     ).transform(option)
 
     return json.dumps(pre_process_result)
