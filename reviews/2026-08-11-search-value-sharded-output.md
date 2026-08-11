@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in:
+applied_in: d0f856c
 ---
 
 # 探索値の出力をシャード化し，入力側を複数パス + Rust 読み出しにする
