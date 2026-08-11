@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 import torch
 
@@ -1041,13 +1043,13 @@ class TestValidationCallbackSharedComputation:
         original_topk = torch.topk
 
         def counting_log_softmax(
-            *args: object, **kwargs: object
-        ):  # type: ignore[no-untyped-def]
+            *args: Any, **kwargs: Any
+        ) -> Any:
             nonlocal log_softmax_calls
             log_softmax_calls += 1
-            return original_log_softmax(*args, **kwargs)  # type: ignore[arg-type]
+            return original_log_softmax(*args, **kwargs)
 
-        def counting_topk(*args: object, **kwargs: object):  # type: ignore[no-untyped-def]
+        def counting_topk(*args: Any, **kwargs: Any) -> Any:
             nonlocal topk_calls
             topk_calls += 1
             return original_topk(*args, **kwargs)  # type: ignore[arg-type]
