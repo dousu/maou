@@ -22,8 +22,11 @@ from maou.infra.console.common import handle_exception
     "--output-path",
     type=click.Path(path_type=Path),
     required=True,
-    help="Feather file to write (id, searchWinRate, playouts, stop). "
-    "Pass it to `maou pre-process --search-value-path`.",
+    help="Directory to write shards into (part_NNNNNNNN.feather, each "
+    "holding id, searchWinRate, playouts, stop, elapsedMs). Every flush "
+    "adds one shard instead of rewriting the whole output, so the cost "
+    "per flush stays flat as the run grows. Pass the directory to "
+    "`maou pre-process --search-value-path`.",
 )
 @click.option(
     "--model-path",
@@ -168,22 +171,37 @@ from maou.infra.console.common import handle_exception
     default=500,
     show_default=True,
     help="Write the results out every this many positions. An interrupted "
-    "run keeps what it had, and --resume continues from there.",
+    "run keeps what it had, and --resume continues from there. Each flush "
+    "adds a small pending_*.feather; it never rewrites what is already "
+    "there.",
+)
+@click.option(
+    "--shard-rows",
+    type=click.IntRange(min=1),
+    default=5_000_000,
+    show_default=True,
+    help="Target rows per finished shard (part_*.feather). Pending files "
+    "are folded into one shard once this many rows have accumulated, so "
+    "the run leaves a few large files rather than thousands of tiny ones. "
+    "A row measures ~19.4 B, so the default is roughly 97 MB per shard. "
+    "Raising it means fewer files but more rows left as pending when a "
+    "run is interrupted.",
 )
 @click.option(
     "--resume",
     is_flag=True,
     default=False,
-    help="Skip positions already present in --output-path and append the "
-    "rest. An interrupted run can simply be re-executed.",
+    help="Skip positions already present in --output-path (every feather "
+    "under it is read) and append new shards. An interrupted run can "
+    "simply be re-executed.",
 )
 @click.option(
     "--overwrite",
     is_flag=True,
     default=False,
-    help="Discard an existing --output-path and start over. Without this "
-    "or --resume, an existing output is an error: it usually represents "
-    "days of GPU time.",
+    help="Delete the --output-path directory and start over. Without "
+    "this or --resume, an existing output is an error: it usually "
+    "represents days of GPU time.",
 )
 @handle_exception
 def search_values(
@@ -212,6 +230,7 @@ def search_values(
     resume: bool,
     overwrite: bool,
     flush_interval: int,
+    shard_rows: int,
 ) -> None:
     """Search floodgate positions to build per-position value targets.
 
@@ -257,5 +276,6 @@ def search_values(
         resume=resume,
         overwrite=overwrite,
         flush_interval=flush_interval,
+        shard_rows=shard_rows,
     )
     click.echo(result)

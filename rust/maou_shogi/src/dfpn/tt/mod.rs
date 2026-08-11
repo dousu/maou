@@ -26,7 +26,11 @@ fn apply_delta_hand(target: Hand, diff_src: Hand, diff_dst: Hand) -> Hand {
     res
 }
 
-/// プールが保持し続ける総バイト数の上限 (既定 1GiB)．
+/// プールが保持し続けるバイト数の上限 (既定 1GiB)．
+///
+/// **プールごとの上限**である．主 TT ([`Entry`]) と千日手表 (`RepEntry`) は別の
+/// プールなので，実際に保持されうる合計は最大 2 倍になる．既定構成での実測は
+/// 両者合わせて約 440MB で上限には遠い．
 ///
 /// `DFPN_TT_POOL_BYTES` で上書きでき，`0` を渡すとプールを完全に無効化して
 /// 従来どおり毎回新規確保する (A/B とメモリ制約環境向けの逃げ道)．
@@ -37,6 +41,20 @@ fn max_pooled_bytes() -> usize {
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(1 << 30)
+    })
+}
+
+/// `DFPN_TT_POOL_STATS=1` でプールの取りこぼしを stderr へ報告するか．
+///
+/// [`BufferPool::MAX_PER_SIZE`] / [`BufferPool::MAX_BUCKETS`] が実ワークロードで
+/// 足りているかは机上では決まらない．**足りなかったときだけ鳴る**ようにして，
+/// 静かなら足りている，と読めるようにする．
+fn stats_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("DFPN_TT_POOL_STATS")
+            .map(|s| s != "0" && !s.is_empty())
+            .unwrap_or(false)
     })
 }
 
@@ -66,12 +84,30 @@ struct BufferPool<T> {
     /// 再利用できた回数 / 新規確保に落ちた回数 (テストと診断用)．
     hits: u64,
     misses: u64,
+    /// 既に報告済みの `(要素数, 事由)`．同じ事象で stderr を溢れさせないため．
+    warned: Vec<(usize, &'static str)>,
 }
 
 impl<T: Clone> BufferPool<T> {
-    /// 1 サイズあたりの保持本数．同時生存は root dfpn 1 + defensive 1 +
-    /// `root_child_mate_filter` の段 + leaf-mate スレッド数 程度なので 2 で足りる．
-    const MAX_PER_SIZE: usize = 2;
+    /// 1 サイズあたりのバイト予算．[`Self::max_per_size`] が本数へ換算する．
+    const BYTES_PER_SIZE: usize = 64 << 20;
+
+    /// 要素 1 本が `bytes` のとき，そのサイズで保持する本数．
+    ///
+    /// **走査コストではなくメモリで決める．** [`Self::take`] が線形に見るのは
+    /// バケット (サイズ種) だけで，同サイズ内は `pop` の O(1) なので，本数を
+    /// 増やしても探索は遅くならない．
+    ///
+    /// 小さい TT (leaf-mate 32KB) は **mate スレッド数だけ同時生存する**ので
+    /// 本数が要り (攻め + 受けで `leaf_mate_threads + defensive_mate_threads` 本)，
+    /// 大きい TT (root dfpn 256MB) は 1〜2 本で足りる．サイズ別のバイト予算で
+    /// 割ると両方を自動的に満たす．
+    ///
+    /// 下限 2 は，予算を超える大きい TT でも最低限プールされることを保証する
+    /// (ここが 0 や 1 だと root dfpn の 352MB が毎回新規確保に戻る)．
+    fn max_per_size(bytes: usize) -> usize {
+        (Self::BYTES_PER_SIZE / bytes.max(1)).clamp(2, 64)
+    }
     /// 保持するサイズ種の上限．実際に現れるのは 5 種程度 (`min_tt_entries` の
     /// clamp と leaf-mate の 2 冪化でサイズは離散化される)ので，走査は常に軽い．
     const MAX_BUCKETS: usize = 16;
@@ -82,7 +118,34 @@ impl<T: Clone> BufferPool<T> {
             pooled_bytes: 0,
             hits: 0,
             misses: 0,
+            warned: Vec::new(),
         }
+    }
+
+    /// 上限に当たってプールが機能しなかったことを 1 事象につき 1 回だけ報告する．
+    ///
+    /// 冷えたプールでの初回 miss は当然なので鳴らさない．鳴るのは
+    /// **一度プールに入ったサイズを再要求して外した**場合と，返却を拒否した場合
+    /// だけで，どちらも上限が実ワークロードに足りていない証拠になる．
+    fn warn_once(&mut self, n: usize, reason: &'static str) {
+        if !stats_enabled()
+            || self.warned.iter().any(|(s, r)| *s == n && *r == reason)
+        {
+            return;
+        }
+        self.warned.push((n, reason));
+        eprintln!(
+            "[dfpn-tt-pool] {reason}: entries={n} bytes={} hits={} misses={} \
+             buckets={} pooled_bytes={} (limits: per_size={} buckets={} bytes={})",
+            n * std::mem::size_of::<T>(),
+            self.hits,
+            self.misses,
+            self.buckets.len(),
+            self.pooled_bytes,
+            Self::max_per_size(n * std::mem::size_of::<T>()),
+            Self::MAX_BUCKETS,
+            max_pooled_bytes(),
+        );
     }
 
     /// 要素数がちょうど `n` のバッファを取り出し `fill_value` で初期化して返す．
@@ -96,6 +159,18 @@ impl<T: Clone> BufferPool<T> {
             .position(|(size, bufs)| *size == n && !bufs.is_empty());
         let Some(idx) = found else {
             self.misses += 1;
+            // 一度プールに載ったサイズを再要求して外した．
+            //
+            // ただし**起動直後は偽陽性になる**: mate スレッドが一斉に起動すると
+            // 誰もまだ返却していないので全員が外す．これは上限不足ではなく，
+            // 返却が始まれば解消する．ウォームアップを過ぎてなお外す場合だけ
+            // 「同時生存数に対して保持本数が足りない」と読める．
+            const WARMUP_TAKES: u64 = 64;
+            if self.hits + self.misses >= WARMUP_TAKES
+                && self.buckets.iter().any(|(size, _)| *size == n)
+            {
+                self.warn_once(n, "repeat miss after warmup");
+            }
             return None;
         };
         let mut buf = self.buckets[idx].1.pop()?;
@@ -109,18 +184,26 @@ impl<T: Clone> BufferPool<T> {
     fn put(&mut self, buf: Vec<T>) {
         let n = buf.len();
         let bytes = n * std::mem::size_of::<T>();
-        if bytes == 0 || self.pooled_bytes + bytes > max_pooled_bytes() {
+        if bytes == 0 {
             return;
         }
-        match self.buckets.iter_mut().find(|(size, _)| *size == n) {
-            Some((_, bufs)) => {
-                if bufs.len() >= Self::MAX_PER_SIZE {
+        if self.pooled_bytes + bytes > max_pooled_bytes() {
+            self.warn_once(n, "put refused: DFPN_TT_POOL_BYTES");
+            return;
+        }
+        // `iter_mut().find()` の借用を跨いで `warn_once` (&mut self) を呼べないので，
+        // 添字を先に確定させてから触る．
+        match self.buckets.iter().position(|(size, _)| *size == n) {
+            Some(i) => {
+                if self.buckets[i].1.len() >= Self::max_per_size(bytes) {
+                    self.warn_once(n, "put refused: per-size budget");
                     return;
                 }
-                bufs.push(buf);
+                self.buckets[i].1.push(buf);
             }
             None => {
                 if self.buckets.len() >= Self::MAX_BUCKETS {
+                    self.warn_once(n, "put refused: MAX_BUCKETS");
                     return;
                 }
                 self.buckets.push((n, vec![buf]));
@@ -862,7 +945,10 @@ mod tests {
             "小バッファが大 TT をプールから追い出した (固定費が戻る)"
         );
         assert!(
-            regular_pooled_count(SMALL) <= BufferPool::<Entry>::MAX_PER_SIZE,
+            regular_pooled_count(SMALL)
+                <= BufferPool::<Entry>::max_per_size(
+                    SMALL * std::mem::size_of::<Entry>()
+                ),
             "1 サイズあたりの保持本数を超えている"
         );
     }

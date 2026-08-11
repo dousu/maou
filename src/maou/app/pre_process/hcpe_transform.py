@@ -7,7 +7,7 @@ import multiprocessing
 import queue
 import tempfile
 import threading
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -164,7 +164,7 @@ class PreProcess:
         prior_strength: float = 5.0,
         win_rate_fallback: str = "neutral",
         drop_below_threshold: bool = False,
-        search_value_path: Path | None = None,
+        search_value_paths: Sequence[Path] = (),
     ):
         """Initialize pre-processor.
 
@@ -187,19 +187,21 @@ class PreProcess:
                 ``bestMoveWinRate`` の双方に適用される．
             drop_below_threshold: True の場合，出現回数が
                 position_count_threshold 未満の局面を出力から完全に除外する．
-            search_value_path: ``maou utility search-values`` の出力
-                (単一 `.feather` またはそれらを含むディレクトリ)．
+            search_value_paths: ``maou utility search-values`` の出力
+                (シャードのディレクトリ / 単一 `.feather` / それらの混在)．
+                **複数指定できる**ので，別々に貯めた出力をまとめて渡せる．
                 指定すると該当局面の ``resultValue`` を対局結果由来の値から
                 **探索値**へ差し替える．対局結果は 1 対局の全局面で同じ値に
                 なるため「どの対局か」を思い出す近道が成立するが，探索値は
                 局面ごとに異なるのでその近道が効かなくなる．
                 出力に無い局面は対局結果由来のまま残るので部分適用できる．
-                ディレクトリなら配下の `.feather` を union する．
+                ディレクトリなら配下の `.feather` を union する (id 重複は
+                パス順で後勝ち)．
                 読めない・スキーマが合わないファイルがあれば
                 **変換を始める前に** ``ValueError`` で落ちる．
 
         Raises:
-            ValueError: ``search_value_path`` が探索値として読めない場合．
+            ValueError: ``search_value_paths`` が探索値として読めない場合．
         """
         self.__feature_store = feature_store
         self.__datasource = datasource
@@ -211,11 +213,11 @@ class PreProcess:
         self.__prior_strength = prior_strength
         self.__win_rate_fallback = win_rate_fallback
         self.__drop_below_threshold = drop_below_threshold
-        self.__search_value_path = search_value_path
+        self.__search_value_paths = tuple(search_value_paths)
         self.__search_values: pl.DataFrame | None = None
         self.__search_values_applied = 0
         self.intermediate_store = None
-        if search_value_path is not None:
+        if self.__search_value_paths:
             # **変換を始める前**に読んで検査する．差し替え自体は変換と集約が
             # 終わってからでないと走らないので，遅延ロードのままだと不備が
             # 数時間後に判明し，その実行が丸ごと無駄になる．
@@ -224,7 +226,7 @@ class PreProcess:
             )
 
             self.__search_values = load_search_values(
-                search_value_path
+                self.__search_value_paths
             )
 
     def _apply_search_values(
@@ -1013,7 +1015,7 @@ class PreProcess:
                             / f"{base_name}.feather",
                         )
 
-        if self.__search_value_path is not None:
+        if self.__search_value_paths:
             pre_process_result["search_values_applied"] = str(
                 self.__search_values_applied
             )

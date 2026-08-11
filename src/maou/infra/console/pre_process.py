@@ -289,17 +289,19 @@ from maou.interface import preprocess
 @click.option(
     "--search-value-path",
     type=click.Path(exists=True, path_type=Path),
-    default=None,
+    multiple=True,
     required=False,
-    help="Output of `maou utility search-values`: a .feather file, or a "
-    "directory whose *.feather/*.arrow are all unioned. Replaces "
-    "resultValue with the per-position search value for the positions it "
-    "covers. A game result is the same for every position of a game, so "
-    "recalling which game a position came from fits the training set "
-    "without transferring to unseen games; search values differ position "
-    "by position. Positions absent from the input keep their game-result "
-    "value. Unreadable files, or files without a usable id/searchWinRate "
-    "column, fail the run before any input is downloaded or resized.",
+    help="Output of `maou utility search-values`: the shard directory, a "
+    ".feather file, or any mix. Repeat the option to union several runs "
+    "(*.feather/*.arrow under a directory are all unioned; duplicate ids "
+    "resolve last-wins in the given order). Replaces resultValue with the "
+    "per-position search value for the positions it covers. A game result "
+    "is the same for every position of a game, so recalling which game a "
+    "position came from fits the training set without transferring to "
+    "unseen games; search values differ position by position. Positions "
+    "absent from the input keep their game-result value. Unreadable "
+    "files, or files without a usable id/searchWinRate column, fail the "
+    "run before any input is downloaded or resized.",
 )
 @handle_exception
 def pre_process(
@@ -341,7 +343,7 @@ def pre_process(
     prior_strength: float,
     win_rate_fallback: str,
     drop_below_threshold: bool,
-    search_value_path: Path | None,
+    search_value_path: tuple[Path, ...],
 ) -> None:
     import warnings
 
@@ -357,7 +359,7 @@ def pre_process(
     # 全ダウンロード) と resize_input_files (入力コーパス全体の書き直し) の
     # どちらより手前でなければ，パスの打ち間違い 1 つでその 1 往復を捨てる．
     # フッタからスキーマを読むだけなので，ここに置いても実質無料．
-    preprocess.validate_search_value_path(search_value_path)
+    preprocess.validate_search_value_paths(search_value_path)
 
     # Check for mixing cloud providers for input
     cloud_input_count = sum(
@@ -606,6 +608,6 @@ def pre_process(
             prior_strength=prior_strength,
             win_rate_fallback=win_rate_fallback,
             drop_below_threshold=drop_below_threshold,
-            search_value_path=search_value_path,
+            search_value_paths=search_value_path,
         )
     )
