@@ -1,5 +1,5 @@
 ---
-status: pending
+status: applied
 applied_in:
 ---
 
