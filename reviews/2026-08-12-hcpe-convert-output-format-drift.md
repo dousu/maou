@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in:
+applied_in: 466adac
 date: 2026-08-12
 target: [docs/commands/hcpe_convert.md]
 risk: low
