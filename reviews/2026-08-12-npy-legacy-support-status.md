@@ -115,7 +115,7 @@ save_hcpe_array(array, "output.hcpe.npy", validate=True)
 - `CLAUDE.md:19` の `- **Legacy Support**: Numpy .npy format still supported`
   を削除．§ Data Pipeline は Arrow IPC / Polars / Rust I/O の 3 行になる．
 - `docs/architecture.md` の § Centralized Schema Management の例を，存在しない
-  `maou.domain.data.io` から `maou.domain.data.rust_io` の
+  `maou.domain.data.io` から `maou.domain.data.array_io` の
   `save_hcpe_df` / `load_hcpe_df` に差し替え，`.npy` を `.feather` にした．
   例の主題が「配列の I/O」から「DataFrame の I/O」に変わるため，structured
   array は DataFrame から変換して得る旨を 1 段落補った．

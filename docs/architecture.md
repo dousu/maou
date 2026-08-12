@@ -129,7 +129,7 @@ piece_id = Board.raw_piece_to_piece_id(raw_piece)
 
 ### Centralized Schema Management
 ```python
-from maou.domain.data.rust_io import load_hcpe_df, save_hcpe_df
+from maou.domain.data.array_io import load_hcpe_df, save_hcpe_df
 from maou.domain.data.schema import get_hcpe_dtype, get_preprocessing_dtype
 
 # Standardized data types (numpy structured dtype)
