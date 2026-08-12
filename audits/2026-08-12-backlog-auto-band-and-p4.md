@@ -179,6 +179,11 @@ backlog に行を追加した．
   導入だと**モジュールごと skip** される (`file_data_source.py` →
   `interface/learn` → torch)．`uv sync` だけの環境では `infra/file_system` の
   変更が一切検証されないまま緑に見える．
+- **N5** (PR #457 マージ後に発見) — `test_usi_go_mate_e2e` が全件実行だと
+  `checkmate timeout` で落ちる (単体実行では通る)．**PR #457 マージ前の
+  `6d8ee6b` でも同様に落ちる**ので特定の変更による回帰ではないが，失敗の
+  出方がソルバ回帰と見分けられないのが問題．1手詰に 5 秒の壁時計バジェット
+  を課す設計を見直すべき．
 
 ## Environment notes
 
