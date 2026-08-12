@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: 9ac52cf
 date: 2026-08-12
 target: [CLAUDE.md]
 risk: medium
