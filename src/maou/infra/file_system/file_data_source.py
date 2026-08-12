@@ -619,6 +619,14 @@ class FileDataSource(
                 record["moveLabel"][0] = batch.move_label[idx]
 
             if (
+                batch.move_win_rate is not None
+                and "moveWinRate" in dtype_names
+            ):
+                record["moveWinRate"][0] = batch.move_win_rate[
+                    idx
+                ]
+
+            if (
                 batch.result_value is not None
                 and "resultValue" in dtype_names
             ):
@@ -731,6 +739,12 @@ class FileDataSource(
                 and "moveLabel" in dtype_names
             ):
                 array["moveLabel"] = batch.move_label
+
+            if (
+                batch.move_win_rate is not None
+                and "moveWinRate" in dtype_names
+            ):
+                array["moveWinRate"] = batch.move_win_rate
 
             if (
                 batch.result_value is not None

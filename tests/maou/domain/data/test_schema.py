@@ -71,6 +71,7 @@ class TestPreprocessingSchema:
             "boardIdPositions",
             "piecesInHand",
             "moveLabel",
+            "moveWinRate",
             "resultValue",
         }
         if dtype.names is not None:
@@ -84,6 +85,12 @@ class TestPreprocessingSchema:
         assert dtype["piecesInHand"].subdtype[0] == np.uint8  # type: ignore[misc,index]
         assert dtype["moveLabel"].subdtype[0] == np.float16  # type: ignore[misc,index]
         assert dtype["moveLabel"].shape == (MOVE_LABELS_NUM,)  # type: ignore[misc]
+        # moveWinRate は moveLabel と同じ形・同じ dtype．
+        # policy 教師 (win_rate / weighted モード) が読む．
+        assert dtype["moveWinRate"].subdtype[0] == np.float16  # type: ignore[misc,index]
+        assert dtype["moveWinRate"].shape == (  # type: ignore[misc]
+            MOVE_LABELS_NUM,
+        )
         assert dtype["resultValue"] == np.float16  # type: ignore[misc]
         if dtype.names is not None:
             assert "legalMoveMask" not in dtype.names
