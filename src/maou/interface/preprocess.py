@@ -179,7 +179,16 @@ def resize_input_files(
         try:
             import polars as pl
 
-            row_count = len(pl.scan_ipc(fp).collect())
+            # 行数だけが要るので全列を実体化しない．
+            # preprocessing の 1496 幅リスト列では
+            # `len(scan_ipc(fp).collect())` がファイル1本を丸ごと
+            # メモリに載せる (Stream 形式で例外になる挙動は同じ)．
+            row_count = (
+                pl.scan_ipc(fp)
+                .select(pl.len())
+                .collect()
+                .item()
+            )
         except Exception:
             ok_files.append(fp)
             continue

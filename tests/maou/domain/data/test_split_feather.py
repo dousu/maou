@@ -498,3 +498,82 @@ class TestResizeInputFiles:
         )
 
         assert result == []
+
+
+class TestResizeInputFilesRowCounting:
+    """`resize_input_files` の行数判定に関する回帰テスト．"""
+
+    def test_unreadable_file_passes_through_unchunked(
+        self, tmp_path: Path
+    ) -> None:
+        """行数を読めないファイルは束ねずにそのまま通す．
+
+        回帰の罠: 行数取得を `len(scan_ipc(fp).collect())` から
+        `scan_ipc(fp).select(pl.len())` へ替える際，Stream 形式
+        (`scan_ipc` が扱えない) のファイルで例外が出なくなると，
+        これまで `ok_files` へ素通ししていたファイルが「小さい」と
+        判定されて束ねられ，出力ファイルの構成が変わる．
+        両式が同じく送出することを固定する．
+        """
+        import io
+
+        from maou.interface.preprocess import (
+            resize_input_files,
+        )
+
+        input_dir = tmp_path / "input"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        work_dir = tmp_path / "work"
+
+        # Stream 形式は scan_ipc で読めない (拡張子は .feather)．
+        stream_df = create_empty_hcpe_df(2)
+        buf = io.BytesIO()
+        stream_df.write_ipc_stream(buf)
+        stream_path = input_dir / "stream.feather"
+        stream_path.write_bytes(buf.getvalue())
+
+        # 束ねる相手を 1 本用意する．これが無いと small_files が
+        # 1 本以下になり，誤判定しても結果が変わらず素通りする．
+        readable = _create_hcpe_file(
+            input_dir, "small.feather", 5
+        )
+
+        result = resize_input_files(
+            file_paths=[stream_path, readable],
+            rows_per_file=100,
+            work_dir=work_dir,
+        )
+
+        # stream は 2 行 < threshold(50) だが行数を読めないので
+        # small_files に入らず，そのままのパスで返る．
+        # readable だけでは small_files が 1 本なのでこれも束ねられない．
+        assert stream_path in result
+        assert result == [stream_path, readable]
+
+    def test_small_files_are_still_chunked(
+        self, tmp_path: Path
+    ) -> None:
+        """読めるファイルの「小さい」判定は従来どおり効く．"""
+        from maou.interface.preprocess import (
+            resize_input_files,
+        )
+
+        input_dir = tmp_path / "input"
+        work_dir = tmp_path / "work"
+
+        fps = [
+            _create_hcpe_file(
+                input_dir, f"small_{i}.feather", 5
+            )
+            for i in range(3)
+        ]
+
+        result = resize_input_files(
+            file_paths=fps,
+            rows_per_file=100,
+            work_dir=work_dir,
+        )
+
+        # 5 行 < threshold(50) なので 3 本が 1 本に束ねられる．
+        assert len(result) == 1
+        assert sum(len(load_hcpe_df(p)) for p in result) == 15
