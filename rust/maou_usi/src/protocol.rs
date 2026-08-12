@@ -359,6 +359,16 @@ pub enum CheckmateResult {
     NoMate,
     /// 予算内に結論が出なかった (詰みとも不詰とも言えない)．
     Timeout,
+    /// **詰みは証明できたが手順を復元できなかった**．
+    ///
+    /// USI の `checkmate` は `<手順>` / `nomate` / `timeout` の 3 種しか返せず，
+    /// 手順を示せない以上 `timeout` を出すしかない — が，**時間切れとは原因が
+    /// 全く違う**．同じ行に潰れていると「ソルバが解けなかった」のか
+    /// 「解けたが PV 復元に失敗した」のか外から区別できず，真の回帰を疑った
+    /// ときの切り分けが実測 50 回超に膨らんだ (2026-08-12)．
+    /// 行そのものは規約どおり `checkmate timeout` にしつつ，agent が直前に
+    /// `info string` で理由を出す．
+    MateWithoutPv,
 }
 
 /// コマンドを USI の行 (改行なし) へシリアライズする．
@@ -392,7 +402,11 @@ pub fn serialize(cmd: &EngineCommand) -> String {
             CheckmateResult::Mate(moves) if !moves.is_empty() => {
                 format!("checkmate {}", moves.join(" "))
             }
-            CheckmateResult::Mate(_) | CheckmateResult::Timeout => "checkmate timeout".to_string(),
+            // 手順なしの詰み / PV 復元不能 / 時間切れ はいずれも規約上
+            // `checkmate timeout` にしか写像できない (理由は info string で出す)．
+            CheckmateResult::Mate(_)
+            | CheckmateResult::Timeout
+            | CheckmateResult::MateWithoutPv => "checkmate timeout".to_string(),
             CheckmateResult::NoMate => "checkmate nomate".to_string(),
         },
     }
