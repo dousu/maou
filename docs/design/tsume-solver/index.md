@@ -9,6 +9,7 @@
 | [証明数・反証数の集約](proof-disproof-numbers.md) | φ/δ 集約，δ-sum と二重計数除去 (sum_mask)，DAG，cross-hand |
 | [初期値ヒューリスティック](initial-heuristics.md) | df-pn+ 風初期化，エッジコスト，decouple，インライン 1 手詰 |
 | [転置表管理](transposition-table.md) | len-aware 単一 TT，持ち駒優越，cross-hand look_up_parent，amount GC |
+| [TT の確保コストとライフサイクル](tt-allocation.md) | TT サイズ決定 (ノード予算との分離)，全ゼロ空 slot，`isready` 前払い，fill コストの許容判断 |
 | [ループ・GHI 対策](loop-ghi.md) | 千日手検出，経路依存反証の scope 化，dominance 枝刈り |
 | [手順改善・PV 復元](move-ordering-and-pv.md) | move ordering，PV 復元 (verify_proof + build_pv) |
 | [合駒最適化](aigoma-optimization.md) | 中合いの再帰構造，遅延展開 (DelayedMoveList)，chain 対称性 |

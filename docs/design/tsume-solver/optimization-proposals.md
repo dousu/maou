@@ -29,7 +29,17 @@ Pawlewicz & Hayward, "Scalable Parallel DFPN Search" (CG 2014)
 ビルドホストの CPU 命令に最適化する `target-cpu=native` は wheel 可搬性を壊すため採用しない
 (§11.1-1 と同じ binding 制約)．SIMD 等の HW 命令は runtime gate 経由でのみ用いる．
 
-## 11.3 旧二エンジン期の採否記録
+## 11.3 TT 確保まわりの不採用・許容判断
+
+**探索アルゴリズムではなく確保コストの案**は
+[TT の確保コストとライフサイクル](tt-allocation.md) 側に置く．現時点で確定している判断:
+
+- **既定 `RootDfpnNodes` を下げる — 却下** (2026-08-12)．動機だった確保コストが
+  別の手段で消え，残る対価は reach の縮小のみになったため ([§12.2](tt-allocation.md))．
+- **プール貸し出し時の `fill` (O(size)) — 許容** (2026-08-12)．9.5GB/s で既にメモリ帯域に
+  張り付いており，消すには世代スタンプ化しかない ([§12.5](tt-allocation.md))．
+
+## 11.4 旧二エンジン期の採否記録
 
 History Heuristic・lazy move generation・PNS 予算適応配分・Frontier Variant・各種 TT 圧縮など，
 旧アーキで評価された最適化案の採否とベンチマークの記録は git 履歴に残る．これらは旧二エンジン
