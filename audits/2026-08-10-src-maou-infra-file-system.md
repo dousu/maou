@@ -211,6 +211,14 @@ step 2 (`/simplify`) が返した約17件を D1-D11 に**統合**する過程で
   `("concatenated", …)` を **1個だけ** yield する (`:704-716`)．
   `hcpe_transform.py:677,683` がこれを `tqdm(total=…)` に渡すので
   当該組み合わせで進捗が 1/N のまま動かない．
+
+  **Correction** (2026-08-12, `c066f76`): 前段の「production は後者しか
+  呼ばない」から `iter_files_columnar` を削除すると，公開名が 1 つ消える．
+  同名は `app/learning/streaming_dataset.py:199` の `StreamingSource`
+  プロトコルが宣言するメンバであり，`tests/` から 10 本以上が呼んでいる．
+  呼び出し件数だけを見て「死んでいる」と判断すると，プロトコル準拠を壊す
+  変更になる．重複解消は `iter_files_columnar_subset` への**委譲**で足りる
+  (それを適用した)．
 - **D11. 行数スキャンが逐次 + ファイルごとに `open()` 2回.**
   `_ensure_row_counts` は `scan_row_count` を直列実行し，各回で
   マジックバイト用に開いて閉じ，`pl.scan_ipc` で開き直す．
@@ -273,6 +281,21 @@ step 2.5 key 1 で Python 15箇所 + Rust enum を照合済み．
   (利用者が検証分割なしを要求しても10%取られる)．また seed 42 決め打ちで，
   `file_level_split(seed=None)` (非再現) と方針が食い違う．
   同じ算術が `utility.py:1211-1229`, `:1256-1272` にもあり計4箇所．
+
+  **Correction** (2026-08-12, `c066f76`): 「黙って 0.1 になる」は誤り．
+  `interface/learn.py:307-311` が `0.0 < test_ratio < 1.0` を検証している
+  ので，`--test-ratio 0.0` は最終的に `ValueError` で落ちる — 黙ってはいない．
+  ただし `learn_multi_stage` は入口でこれを検証せず，Stage 3 の `learn()`
+  呼び出し (`:1322`) まで到達して初めて落ちるため，**Stage 1 と Stage 2 を
+  回し切ったあと**で失敗する．記録が言うより悪い挙動で，修正も違う
+  (`or` の置き換えだけでは足りず，検証を入口へ上げる必要がある)．
+
+  また，本当に**黙って**化けていたのは `--stage2-test-ratio` の方だった:
+  こちらは `0.0` が CLI の既定値かつ help に「0.0 = no split」と明記された
+  正当な値なのに，`interface/utility_interface.py:498` と
+  `console/utility.py:1217` の `or 0.2` が毎回 20% に書き換えていた
+  (`benchmark-training` は既定のまま走らせるだけで踏む)．この記録は
+  性質の違う 2 つの欠陥を 1 項目に束ねている．
 - **O5. cache/ノブ系の意味の分裂.**
   (a) `--input-local-cache` は BigQuery にしか渡されず，S3/GCS 分岐
   (`pre_process.py:417-431,449-463`) は `input_local_cache_dir is not None`
