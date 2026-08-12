@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in:
+applied_in: ed8dcab
 date: 2026-08-12
 target: [CLAUDE.md, docs/architecture.md]
 risk: medium
