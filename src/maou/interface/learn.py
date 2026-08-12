@@ -46,6 +46,13 @@ from maou.app.learning.streaming_dataset import (
 
 SUPPORTED_MODEL_ARCHITECTURES = BACKBONE_ARCHITECTURES
 
+# ``--test-ratio`` 未指定時の検証割合．
+# 行単位分割 (この層) と Stage 3 のファイル単位分割
+# (`infra/console/learn_model.py`) の両方がこれを引く．
+# 層ごとに直値を置くと `--no-streaming` に切り替えた瞬間に
+# 検証割合が黙って変わるので，定数を 1 つに寄せてある．
+DEFAULT_TEST_RATIO = 0.2
+
 
 @dataclass(frozen=True)
 class StageDataConfig:
@@ -303,9 +310,9 @@ def learn(
             f"got {model_architecture}"
         )
 
-    # テスト割合設定 (デフォルト0.2)
+    # テスト割合設定 (デフォルトは DEFAULT_TEST_RATIO)
     if test_ratio is None:
-        test_ratio = 0.2
+        test_ratio = DEFAULT_TEST_RATIO
     elif not 0.0 < test_ratio < 1.0:
         raise ValueError(
             f"test_ratio must be between 0 and 1, got {test_ratio}"
