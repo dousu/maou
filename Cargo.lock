@@ -1768,7 +1768,7 @@ dependencies = [
 
 [[package]]
 name = "maou_shogi"
-version = "5.13.0"
+version = "5.14.0"
 dependencies = [
  "arrayvec",
  "rustc-hash",
@@ -1779,7 +1779,7 @@ dependencies = [
 
 [[package]]
 name = "maou_usi"
-version = "0.28.0"
+version = "0.28.1"
 dependencies = [
  "maou_search",
  "maou_shogi",

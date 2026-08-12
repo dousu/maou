@@ -28,6 +28,25 @@
 pub(crate) mod expansion;
 mod pv;
 
+/// solve 1 回で確保する主 TT の要素数を決める (`TTSIZE` env で上書き可)．
+///
+/// **サイズの元は「どれだけノードを置く見込みか」であって「どこで打ち切るか」
+/// ではない．** 時間でだけ止める用途 (USI `go mate`) は `max_nodes` に
+/// `u64::MAX` を置くしかないので，呼び出し側は
+/// [`super::DfPnSolver::set_tt_nodes_hint`] で切り離せる．
+///
+/// `warm_tt_pool` が**同じ式**を使う必要があるため関数に括り出してある —
+/// ずれると温めたバケットと実際に要求されるバケットが食い違い，
+/// warm が丸ごと無駄になる (プールはサイズ別バケットなので静かに外れる)．
+pub(super) fn tt_entries_for(budget_nodes: u64, min_tt_entries: usize) -> usize {
+    if let Ok(s) = std::env::var("TTSIZE") {
+        return s.parse::<usize>().unwrap_or(1 << 23).max(1 << 12);
+    }
+    // floor は既定 1<<18 (production)．leaf-mate ソルバは min_tt_entries を
+    // 小さくして per-leaf の TT 確保コストを下げる (new_leaf_mate)．
+    ((budget_nodes as usize).saturating_mul(2)).clamp(min_tt_entries, 1 << 23)
+}
+
 use super::heuristics::{check_order_key, evasion_order_key};
 use super::mate_len::{MateLen, DEPTH_MAX_MATE_LEN, ZERO_MATE_LEN};
 use super::movegen::delayed_move_list::DelayedMoveList;
@@ -552,19 +571,10 @@ impl DfPnSolver {
 
         // len-aware TT (local; 再帰へ &mut で渡す)．サイズは budget 比例で確保し，満杯時は
         // GC (maybe_collect_garbage) で低 amount entry を間引く．`TTSIZE` で entry 数を上書き可．
-        let size = if let Ok(s) = std::env::var("TTSIZE") {
-            s.parse::<usize>().unwrap_or(1 << 23).max(1 << 12)
-        } else {
-            // floor は既定 1<<18 (production)．leaf-mate ソルバは min_tt_entries を
-            // 小さくして per-leaf の TT 確保コストを下げる (new_leaf_mate)．
-            //
-            // サイズの元は「どれだけノードを置く見込みか」であって「どこで
-            // 打ち切るか」ではない．時間でだけ止める用途 (USI `go mate`) は
-            // max_nodes に u64::MAX を置くしかないので，そのまま使うと難易度に
-            // 関係なく上限を確保してしまう．set_tt_nodes_hint で切り離せる．
-            let budget = self.tt_nodes_hint.unwrap_or(self.max_nodes);
-            ((budget as usize).saturating_mul(2)).clamp(self.min_tt_entries, 1 << 23)
-        };
+        let size = tt_entries_for(
+            self.tt_nodes_hint.unwrap_or(self.max_nodes),
+            self.min_tt_entries,
+        );
         // 千日手テーブルも固定サイズ (generation GC で bound)．既定は主 TT と同数
         // (24 byte/entry ≒ 主 TT の 37.5% メモリ)．`REPSIZE` で上書き可．
         let rep_size = if let Ok(s) = std::env::var("REPSIZE") {
