@@ -1,5 +1,5 @@
 ---
-status: pending
+status: applied
 applied_in:
 date: 2026-08-12
 target: [CLAUDE.md, docs/architecture.md]
@@ -102,3 +102,27 @@ save_hcpe_array(array, "output.hcpe.npy", validate=True)
   `domain/data/rust_io` の `save_hcpe_df` / `load_hcpe_df` でよいか
   (structured array ではなく DataFrame を扱う API になる — 例の主題が
   「配列の I/O」から「DataFrame の I/O」に変わる)．
+
+## 決定 (2026-08-12)
+
+ユーザ判断で **案 1 (削除)** を採用した．理由は「`.npy` はもう使う予定が
+ない」．提案側は案 2 (範囲を明示) を推していたが，`.npy` を将来の入力形式
+として残す意思が無い以上，範囲を書き残すと「選べる形式」と読まれ続ける —
+という判断で案 1 が採られた．
+
+適用内容:
+
+- `CLAUDE.md:19` の `- **Legacy Support**: Numpy .npy format still supported`
+  を削除．§ Data Pipeline は Arrow IPC / Polars / Rust I/O の 3 行になる．
+- `docs/architecture.md` の § Centralized Schema Management の例を，存在しない
+  `maou.domain.data.io` から `maou.domain.data.rust_io` の
+  `save_hcpe_df` / `load_hcpe_df` に差し替え，`.npy` を `.feather` にした．
+  例の主題が「配列の I/O」から「DataFrame の I/O」に変わるため，structured
+  array は DataFrame から変換して得る旨を 1 段落補った．
+
+### 残る不整合 (この提案の対象外)
+
+`infra/utility/benchmark_polars_io.py` は `.npy` の save/load を持ち続ける．
+これは `.feather` と `.npy` の I/O 性能を比較するベンチマーク台で，CLI から
+到達しない．**「もう使う予定がない」形式との比較を維持する意味があるか**は
+コード側の判断なので，`audits/coverage.md` の N-2 行に残した．

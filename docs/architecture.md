@@ -129,17 +129,21 @@ piece_id = Board.raw_piece_to_piece_id(raw_piece)
 
 ### Centralized Schema Management
 ```python
+from maou.domain.data.rust_io import load_hcpe_df, save_hcpe_df
 from maou.domain.data.schema import get_hcpe_dtype, get_preprocessing_dtype
-from maou.domain.data.io import save_hcpe_array, load_hcpe_array
 
-# Standardized data types
+# Standardized data types (numpy structured dtype)
 hcpe_dtype = get_hcpe_dtype()
 preprocessing_dtype = get_preprocessing_dtype()
 
-# High-performance I/O
-save_hcpe_array(array, "output.hcpe.npy", validate=True)
-loaded_array = load_hcpe_array("input.hcpe.npy", validate=True)
+# High-performance I/O (Arrow IPC + LZ4, Rust backend)
+save_hcpe_df(df, "output.feather")
+loaded_df = load_hcpe_df("input.feather")
 ```
+
+I/O は Polars DataFrame を単位に行い，numpy structured array は
+DataFrame から変換して得る (`convert_hcpe_df_to_numpy` ほか)．
+`.feather` 以外の形式はデータソースが受け付けない．
 
 ### Explicit Array Type System
 **CRITICAL**: Always specify `array_type` parameter:
