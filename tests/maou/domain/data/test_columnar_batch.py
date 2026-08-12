@@ -249,6 +249,59 @@ class TestColumnarBatch:
 
         assert merged.move_win_rate is None
 
+    # --- /audit-backlog 2026-08-12 / backlog 行 O3 -------------------------
+
+    def test_concatenate_rejects_mismatched_optional_column(
+        self,
+    ) -> None:
+        """optional 列の有無が揃わないバッチ列を明示的に拒否すること．
+
+        以前は有無を ``batches[0]`` だけで判定しつつ内包表記は全要素を
+        走ったため，2 番目以降に列が無いと**短いまま**連結され，行対応が
+        例外なしに崩れていた．
+        """
+        with_rate = self._make_batch_with_move_win_rate(n=3)
+        without_rate = self._make_batch(n=4)
+
+        with pytest.raises(
+            ValueError, match="move_win_rate.*1 of 2 batches"
+        ):
+            ColumnarBatch.concatenate([with_rate, without_rate])
+
+    def test_concatenate_rejects_missing_leading_column(
+        self,
+    ) -> None:
+        """先頭にだけ列が無い場合も黙って落とさないこと．
+
+        以前はこの向きだと ``batches[0]`` が None なので列全体が黙って
+        ``None`` になり，後続バッチが持っていた値が消えていた．
+        """
+        without_rate = self._make_batch(n=4)
+        with_rate = self._make_batch_with_move_win_rate(n=3)
+
+        with pytest.raises(
+            ValueError, match="move_win_rate.*1 of 2 batches"
+        ):
+            ColumnarBatch.concatenate([without_rate, with_rate])
+
+    def test_concatenate_preserves_row_alignment(
+        self,
+    ) -> None:
+        """揃っている場合は全 optional 列が行数どおり連結されること．"""
+        b1 = self._make_batch_with_move_win_rate(n=3)
+        b2 = self._make_batch_with_move_win_rate(n=4)
+        merged = ColumnarBatch.concatenate([b1, b2])
+
+        assert len(merged) == 7
+        for field in (
+            "move_label",
+            "result_value",
+            "move_win_rate",
+        ):
+            value = getattr(merged, field)
+            assert value is not None, field
+            assert value.shape[0] == 7, field
+
 
 def _make_preprocessing_df(n: int) -> pl.DataFrame:
     """Create a valid preprocessing Polars DataFrame for testing."""

@@ -89,9 +89,16 @@ class ObjectStorageDataSource(
             test_ratio: float = 0.25,
             seed: float | str | bytes | bytearray | None = None,
         ) -> tuple:
-            if seed is not None:
-                random.seed(seed)
-            random.shuffle(data)
+            # モジュールグローバルの random.seed() を呼ぶと，同一
+            # プロセス内の無関係な乱数消費者まで巻き添えにする．
+            # random.Random(seed) は同じ Mersenne Twister を同じ
+            # seed で初期化するため，分割結果は従来と一致する．
+            rng = (
+                random.Random(seed)
+                if seed is not None
+                else random
+            )
+            rng.shuffle(data)
             split_idx = int(float(len(data)) * (1 - test_ratio))
             return data[:split_idx], data[split_idx:]
 

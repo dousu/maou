@@ -881,7 +881,11 @@ def learn_model(
                 rng = random.Random(42)
                 shuffled = list(_s3_paths)
                 rng.shuffle(shuffled)
-                effective_ratio = test_ratio or 0.1
+                effective_ratio = (
+                    test_ratio
+                    if test_ratio is not None
+                    else 0.1
+                )
                 n_val = max(
                     1, int(len(shuffled) * effective_ratio)
                 )
