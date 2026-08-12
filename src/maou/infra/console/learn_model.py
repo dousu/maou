@@ -884,7 +884,7 @@ def learn_model(
                 effective_ratio = (
                     test_ratio
                     if test_ratio is not None
-                    else 0.1
+                    else learn.DEFAULT_TEST_RATIO
                 )
                 n_val = max(
                     1, int(len(shuffled) * effective_ratio)
