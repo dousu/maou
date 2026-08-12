@@ -721,13 +721,16 @@ for name, df in gcs_datasource.iter_batches_df():
 
 ### Performance Comparison
 
+データソースが受け付けるのは `.feather` (Arrow IPC) だけである．`.npy` は
+`FileDataSource` / object storage / BigQuery キャッシュのいずれでも
+`Only .feather files are supported` で拒否される．
+
 | File Format | iter_batches() | iter_batches_df() | Notes |
 |-------------|----------------|-------------------|-------|
-| `.feather` | ❌ Not supported | ✅ Zero-copy load | Most efficient |
-| `.npy` | ✅ mmap/memory | ✅ Auto-convert | Conversion overhead |
-| Cloud (cached) | ✅ numpy arrays | ✅ Auto-convert | Same as .npy |
+| `.feather` | ✅ structured array へ変換 | ✅ Zero-copy load | 唯一の対応形式 |
 
-**Recommendation:** Use `.feather` files for new data pipelines to take advantage of direct DataFrame loading.
+`iter_batches()` は `ColumnarBatch` を structured array に変換して返すため，
+DataFrame のまま扱える場面では `iter_batches_df()` の方が変換 1 回分安い．
 
 ### PyTorch Dataset with Polars DataFrames (Phase 5)
 

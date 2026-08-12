@@ -1072,10 +1072,12 @@ mod warm_tests {
         // size = clamp(NODES * 2, 1<<18, 1<<23) = 600_000
         const NODES: u64 = 300_000;
         const SIZE: usize = 600_000;
-        assert!(
-            SIZE > (1 << 18) && SIZE < (1 << 23),
-            "clamp に掛からない前提"
-        );
+        const {
+            assert!(
+                SIZE > (1 << 18) && SIZE < (1 << 23),
+                "clamp に掛からない前提"
+            )
+        };
 
         assert_eq!(
             regular_pooled_count(SIZE),
