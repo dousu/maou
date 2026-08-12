@@ -620,7 +620,7 @@ def test_move_win_rate_survives_the_columnar_to_structured_path(
         assert "moveWinRate" in record.dtype.names
         np.testing.assert_allclose(
             record["moveWinRate"],
-            np.asarray(win_rates[i], dtype=np.float16),
+            np.asarray(win_rates[i], dtype=np.float32),
             rtol=0,
             atol=0,
         )
@@ -632,7 +632,7 @@ def test_move_win_rate_survives_the_columnar_to_structured_path(
     for i in range(rows):
         np.testing.assert_allclose(
             stacked[i]["moveWinRate"],
-            np.asarray(win_rates[i], dtype=np.float16),
+            np.asarray(win_rates[i], dtype=np.float32),
             rtol=0,
             atol=0,
         )

@@ -162,7 +162,7 @@ def get_preprocessing_dtype() -> np.dtype:
             ),  # Move label for training
             (
                 "moveWinRate",
-                np.float16,
+                np.float32,
                 (MOVE_LABELS_NUM,),
             ),  # Per-move win rates (policy target for win_rate/weighted)
             (
@@ -955,7 +955,10 @@ def convert_preprocessing_df_to_numpy(
     )
 
     # 1D List column: moveWinRate List[Float32] -> (N, MOVE_LABELS_NUM)
-    # moveLabel と同じ理由で float16 に落とす．
+    # moveLabel とは違い float32 のまま保持する．streaming 経路
+    # (ColumnarBatch.move_win_rate) が float32 を渡すので，同じ教師信号が
+    # 経路によって別の値に丸まらないようにするため．常駐メモリは
+    # float16 に落とした場合の倍になる．
     # moveWinRate を持たない古い .feather も読めるようにゼロ埋めで
     # フォールバックする (この列は 2026-08 に入ったもので，
     # それ以前に書かれた preprocessing データには存在しない)．
@@ -964,7 +967,7 @@ def convert_preprocessing_df_to_numpy(
             df["moveWinRate"],
             n,
             (MOVE_LABELS_NUM,),
-            np.dtype(np.float16),
+            np.dtype(np.float32),
             nest_depth=1,
         )
     else:
