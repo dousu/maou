@@ -1355,8 +1355,8 @@ mod tests {
     type Calls = Rc<RefCell<Vec<(String, Vec<String>, SearchBudget)>>>;
     type RulesLog = Rc<RefCell<Vec<GoRules>>>;
 
-    #[allow(clippy::type_complexity)] // impl Fn を含むタプル返却は alias 化不能 (TAIT 未安定)
     /// `solve_mate` の応答を指定して agent を組む (`go mate` テスト用)．
+    // impl Fn を含むタプル返却は alias 化不能 (TAIT 未安定)
     #[allow(clippy::type_complexity)]
     fn agent_with_mate(
         mate: CheckmateResult,
@@ -1375,6 +1375,8 @@ mod tests {
         })
     }
 
+    // 同上
+    #[allow(clippy::type_complexity)]
     fn agent_with_fake(
         outcome: SearchOutcome,
     ) -> (
