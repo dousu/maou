@@ -65,6 +65,27 @@ pub(crate) fn build_evaluator(config: &EngineConfig) -> Result<EngineEvaluator, 
     }
 }
 
+/// dfpn の TT バッファプールを前払いで温める (USI では `isready` 中)．
+///
+/// TT は `solve` ごとに確保され，`Entry::null()` が全ゼロでないため確保時に
+/// 全バイトを書く．そのため**プロセス最初の探索だけ**が数百 MB の first-touch
+/// を負担し，`byoyomi 1000` の初手が予算を超えることがある (実測 0.5〜3.5 秒 —
+/// 実戦なら時間切れのリスク)．評価器の warmup と同じ理屈で `readyok` の前へ
+/// 寄せる (実測: warm なし 1.889s → warm あり 0.502s = 2 手目以降と同値)．
+///
+/// **温めるのは実際に使う予算ごと**．プールはサイズ別バケットなので，予算が
+/// 違えば別バケットになり効かない．攻め方向 root dfpn と受け方向 dfpn は
+/// `search.rs` で**同時に spawn される**ので，どちらも生存しうる — 両方温める．
+/// leaf-mate は 512〜65536 entries と小さく per-leaf に作り捨てるので対象外．
+fn warmup_dfpn_tt(options: &SearchOptions) {
+    if options.root_dfpn {
+        maou_shogi::dfpn::warm_tt_pool(options.root_dfpn_nodes);
+    }
+    if options.defensive_mate {
+        maou_shogi::dfpn::warm_tt_pool(options.root_defensive_mate_nodes);
+    }
+}
+
 /// 平手初期局面を 1 回評価して初回推論の固定費 (TensorRT エンジンビルド/
 /// CUDA 初期化) を前払いする (USI では `isready` 中，自己対局では起動時)．
 pub(crate) fn warmup_evaluator(evaluator: &EngineEvaluator) -> Result<(), String> {
@@ -141,9 +162,11 @@ impl MaouSearchBackend {
     pub fn build(config: &EngineConfig) -> Result<MaouSearchBackend, String> {
         let evaluator = build_evaluator(config)?;
         warmup_evaluator(&evaluator)?;
+        let options = search_options(config);
+        warmup_dfpn_tt(&options);
         Ok(MaouSearchBackend::from_shared(
             Arc::new(evaluator),
-            search_options(config),
+            options,
             config.subtree_reuse,
         ))
     }

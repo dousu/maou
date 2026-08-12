@@ -35,6 +35,38 @@ pub use api::{
 };
 pub use solver::{DfPnSolver, ProgressSample, SearchReport, StopReason, TsumeResult};
 
+/// 探索より前に TT バッファプールを温める (USI `isready` から呼ぶ想定)．
+///
+/// **なぜ要るか**: TT は `solve` ごとに確保され，`Entry::null()` が全ゼロで
+/// ないため `alloc_zeroed` に落ちず**確保時に全バイトを書く**．そのため
+/// **プロセス最初の探索だけ**が数百 MB 分の first-touch を負担し，
+/// `byoyomi 1000` の初手が予算を超えることがある (実測 0.5〜3.5 秒)．
+/// プール ([`tt`] の `BufferPool`) は 2 回目以降を安くするが，1 回目は救えない．
+///
+/// TensorRT のエンジンビルドを `isready` で前払いするのと同じ理屈で，
+/// ここを `readyok` の前に寄せると初手が定常時と同じ速さになる
+/// (実測: warm なし 1.889s → warm あり 0.502s = 2 手目以降と同値)．
+/// USI は `isready` が長引くことを想定しており，maou_usi 側には
+/// `--keep-alive-ms` の生存通知もある．
+///
+/// # 使い方
+///
+/// **実際に使うノード予算ごとに呼ぶこと．** プールはサイズ別バケットなので，
+/// 予算が違えば別バケットになり温めた分は効かない．USI では攻め方向 root dfpn
+/// (`root_dfpn_nodes`) と，**並行に走る**受け方向 dfpn
+/// (`root_defensive_mate_nodes`) が別サイズで同時に生存するため両方要る．
+///
+/// 冪等 — 2 回目以降はプールから借りて返すだけなので安価．
+pub fn warm_tt_pool(budget_nodes: u64) {
+    // production 既定の floor (DfPnSolver::with_timeout と同じ)．leaf-mate の
+    // 小 TT は per-leaf に作り捨てる規模なので温める価値がない．
+    const DEFAULT_MIN_TT_ENTRIES: usize = 1 << 18;
+    let size = search::tt_entries_for(budget_nodes, DEFAULT_MIN_TT_ENTRIES);
+    // 確保して即 drop する — drop でプールへ戻るので，次の solve は pool hit
+    // になり first-touch を払わない．
+    drop(tt::TranspositionTable::new(size, size));
+}
+
 // sibling module から `super::<name>` で参照するための再エクスポート．
 use heuristics::{init_pn_dn_and, init_pn_dn_or, move_brief_eval};
 use movegen::check_cache::CheckCache;

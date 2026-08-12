@@ -1048,3 +1048,40 @@ mod tests {
         assert_eq!((rb.pn(), rb.dn()), (2, 3));
     }
 }
+
+#[cfg(test)]
+mod warm_tests {
+    use super::regular_pooled_count;
+
+    /// [`crate::dfpn::warm_tt_pool`] が該当サイズのバケットを埋める．
+    ///
+    /// USI `isready` から呼んで初手の first-touch を前払いする機構なので，
+    /// **温めたサイズと実際に要求されるサイズが一致すること**が要 —
+    /// プールはサイズ別バケットなので，式がずれると warm は静かに空振りし
+    /// 初手のコストがそのまま残る (症状が出ないので気づけない)．
+    ///
+    /// プールはプロセス global なので，他テストと衝突しない要素数を選ぶ．
+    #[test]
+    fn test_warm_tt_pool_populates_matching_bucket() {
+        // size = clamp(NODES * 2, 1<<18, 1<<23) = 600_000
+        const NODES: u64 = 300_000;
+        const SIZE: usize = 600_000;
+        assert!(
+            SIZE > (1 << 18) && SIZE < (1 << 23),
+            "clamp に掛からない前提"
+        );
+
+        assert_eq!(
+            regular_pooled_count(SIZE),
+            0,
+            "前提: このサイズはまだプールに無い",
+        );
+
+        crate::dfpn::warm_tt_pool(NODES);
+
+        assert!(
+            regular_pooled_count(SIZE) > 0,
+            "warm 後は同じサイズのバケットがプールに載っていること",
+        );
+    }
+}
