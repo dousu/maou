@@ -208,16 +208,10 @@ class FileDataSource(
         class _FileEntry:
             name: str
             path: Path
-            dtype: np.dtype[
-                Any
-            ]  # Placeholder (not used for DataFrames)
             length: int
-            memmap: (
-                Any | None
-            )  # Placeholder (not used for DataFrames)
             cached_array: (
                 Any | None
-            )  # Can be DataFrame or ndarray
+            )  # ndarray (hcpe) or None (columnar)
             cached_columnar: ColumnarBatch | None = (
                 None  # SOA representation
             )
@@ -247,7 +241,6 @@ class FileDataSource(
             )
             t_init_start = time.perf_counter()
             self.array_type = array_type
-            self.bit_pack = bit_pack
             normalized_cache_mode = cast(
                 FileDataSource.CacheMode, cache_mode.lower()
             )
@@ -256,17 +249,12 @@ class FileDataSource(
                     "cache_mode must be either 'file' or 'memory', "
                     f"got {cache_mode}"
                 )
-            self.memmap_arrays: list[
-                tuple[str, Any]
-            ] = []  # Unused (DataFrames only)
             self._file_entries: list[
                 FileDataSource.FileManager._FileEntry
             ] = []
             self.cache_mode: FileDataSource.CacheMode = (
                 normalized_cache_mode
             )
-            # 最適化: 最後にアクセスしたファイルインデックスをキャッシュ
-            self._last_file_idx = 0
             # 最適化: cache_mode="memory"の場合，全ファイルを結合した単一配列
             self._concatenated_array: np.ndarray | None = None
             self._concatenated_columnar: (
@@ -354,9 +342,7 @@ class FileDataSource(
                         entry = FileDataSource.FileManager._FileEntry(
                             name=file_path.name,
                             path=file_path,
-                            dtype=np.dtype("uint8"),
                             length=array_length,
-                            memmap=None,
                             cached_array=None,
                             cached_columnar=converted,
                         )
@@ -364,9 +350,7 @@ class FileDataSource(
                         entry = FileDataSource.FileManager._FileEntry(
                             name=file_path.name,
                             path=file_path,
-                            dtype=converted.dtype,
                             length=array_length,
-                            memmap=None,
                             cached_array=converted,
                         )
                     self._file_entries.append(entry)
@@ -875,43 +859,41 @@ class FileDataSource(
             tuple[str, pl.DataFrame]: (batch_name, polars_dataframe)
         """
         try:
-            import polars as pl
+            import polars  # noqa: F401
         except ImportError:
             raise ImportError(
                 "polars is required for DataFrame iteration. "
                 "Install with: uv add polars"
             )
 
-        # Iterate over entries (all are .feather files)
+        # `_FileEntry.cached_array` は structured ndarray (hcpe) か
+        # None (columnar) のいずれかで，DataFrame が入ることはない．
+        # 以前ここにあった `isinstance(cached_array, pl.DataFrame)` 分岐は
+        # 到達不能で，常に下の再読込へ落ちていた (docstring が述べる挙動)．
         for entry in self.__file_manager._file_entries:
-            # DataFrame already loaded and cached
-            if isinstance(entry.cached_array, pl.DataFrame):
-                yield entry.name, entry.cached_array
-            else:
-                # Load DataFrame if not cached
-                from maou.interface.data_io import (
-                    load_hcpe_df,
-                    load_preprocessing_df,
-                    load_stage1_df,
-                    load_stage2_df,
-                )
+            from maou.interface.data_io import (
+                load_hcpe_df,
+                load_preprocessing_df,
+                load_stage1_df,
+                load_stage2_df,
+            )
 
-                if self.__file_manager.array_type == "hcpe":
-                    df = load_hcpe_df(entry.path)
-                elif (
-                    self.__file_manager.array_type
-                    == "preprocessing"
-                ):
-                    df = load_preprocessing_df(entry.path)
-                elif self.__file_manager.array_type == "stage1":
-                    df = load_stage1_df(entry.path)
-                elif self.__file_manager.array_type == "stage2":
-                    df = load_stage2_df(entry.path)
-                else:
-                    raise ValueError(
-                        f"Unsupported array_type: {self.__file_manager.array_type}"
-                    )
-                yield entry.name, df
+            if self.__file_manager.array_type == "hcpe":
+                df = load_hcpe_df(entry.path)
+            elif (
+                self.__file_manager.array_type
+                == "preprocessing"
+            ):
+                df = load_preprocessing_df(entry.path)
+            elif self.__file_manager.array_type == "stage1":
+                df = load_stage1_df(entry.path)
+            elif self.__file_manager.array_type == "stage2":
+                df = load_stage2_df(entry.path)
+            else:
+                raise ValueError(
+                    f"Unsupported array_type: {self.__file_manager.array_type}"
+                )
+            yield entry.name, df
 
     def total_pages(self) -> int:
         """Return the total number of pages (batches) in the data source."""

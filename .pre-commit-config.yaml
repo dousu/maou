@@ -61,6 +61,24 @@ repos:
 #  E402 抑止が 0.15.2 側で 9 件のエラーとして再燃した)．
 # local hook には rev が無いため `pre-commit autoupdate` の対象外になり，
 # ruff の版上げは pyproject.toml の編集としてのみ起きる (差分が見える)．
+# rustfmt も ruff と同じ理由で local hook にする．
+# hook 側が独自に Rust toolchain を入れると rust-toolchain の版と
+# 二重化し，ローカルの `cargo fmt` と pre-commit の結果が食い違う．
+# local hook には rev が無いので `pre-commit autoupdate` の対象外になり，
+# 版上げは toolchain の更新としてのみ起きる．
+# `--check` ではなく自動整形にするのは Python 側の ruff-format に揃えるため
+# (未整形を残すと，無関係な PR に整形差分が混ざる)．
+# `cargo fmt` はファイル引数ではなく crate 単位で動くので
+# pass_filenames: false が必須．
+- repo: local
+  hooks:
+  - id: cargo-fmt
+    name: cargo-fmt
+    entry: cargo fmt --all
+    language: system
+    types_or: [rust]
+    pass_filenames: false
+    require_serial: true
 - repo: local
   hooks:
   - id: ruff-check

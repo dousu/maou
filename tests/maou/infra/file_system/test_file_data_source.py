@@ -506,3 +506,64 @@ def test_load_failure_propagates_other_errors_unchanged(
             file_paths=file_paths,
             array_type="hcpe",
         )
+
+
+def test_iter_batches_df_yields_every_file_in_full(
+    tmp_path: Path,
+) -> None:
+    """`iter_batches_df` は全ファイルを完全な DataFrame として返す．
+
+    回帰の罠: ここには以前 `isinstance(entry.cached_array,
+    pl.DataFrame)` の分岐があった．`cached_array` は structured
+    ndarray (hcpe) か None (columnar) にしかならないので分岐は
+    到達不能で，常に下のディスク再読込へ落ちていた．
+    「キャッシュを返す」側を生かす方向へ直すと，columnar では
+    None が，hcpe では ndarray が yield され，戻り値の型が壊れる．
+    このテストは *再読込した DataFrame* が返ることを固定する．
+    """
+    file_paths, expected_dfs = _create_hcpe_files(
+        tmp_path, file_count=3, rows_per_file=4
+    )
+
+    datasource = FileDataSource(
+        file_paths=file_paths,
+        array_type="hcpe",
+    )
+
+    yielded = list(datasource.iter_batches_df())
+
+    assert [name for name, _ in yielded] == [
+        p.name for p in file_paths
+    ]
+    for (_, df), expected in zip(yielded, expected_dfs):
+        assert isinstance(df, pl.DataFrame)
+        assert len(df) == len(expected)
+        assert df["id"].to_list() == expected["id"].to_list()
+        assert (
+            df["eval"].to_list() == expected["eval"].to_list()
+        )
+
+
+def test_iter_batches_df_yields_dataframes_for_columnar_types(
+    tmp_path: Path,
+) -> None:
+    """columnar 系 (preprocessing) でも DataFrame が返る．
+
+    columnar 経路では `cached_array` が常に None なので，
+    到達不能分岐を生かす修正をするとここが None を yield する．
+    """
+    file_paths, expected_dfs = _create_preprocessing_files(
+        tmp_path, file_count=2, rows_per_file=3
+    )
+
+    datasource = FileDataSource(
+        file_paths=file_paths,
+        array_type="preprocessing",
+    )
+
+    yielded = list(datasource.iter_batches_df())
+
+    assert len(yielded) == 2
+    for (_, df), expected in zip(yielded, expected_dfs):
+        assert isinstance(df, pl.DataFrame)
+        assert df["id"].to_list() == expected["id"].to_list()
