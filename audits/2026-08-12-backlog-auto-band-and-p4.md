@@ -182,13 +182,39 @@ backlog に行を追加した．
 
 ## Environment notes
 
-- **pre-commit フレームワークが本環境で bootstrap できない．** `uv-lock`
-  hook が GPU 専用の `tensorrt-cu12-libs` を解決しようとして失敗する
-  (`maou[tensorrt-infer]` 経由)．`.pre-commit-config.yaml` の各 hook を
-  個別コマンドとして実行して代替した: `ruff format` / `ruff check` /
-  `mypy src/ tests/` / `pytest` 全件 / `scripts/check-cli-docs.sh` /
-  `cz check` / trailing-whitespace・end-of-file・check-toml 相当．
+- **~~pre-commit フレームワークが本環境で bootstrap できない．~~** `uv-lock`
+  hook が GPU 専用の `tensorrt-cu12-libs` を解決しようとして失敗したため，
+  `.pre-commit-config.yaml` の各 hook を個別コマンドとして実行して代替した:
+  `ruff format` / `ruff check` / `mypy src/ tests/` / `pytest` 全件 /
+  `scripts/check-cli-docs.sh` / `cz check` /
+  trailing-whitespace・end-of-file・check-toml 相当．
   `uv.lock` の version 行は `uv lock` が生成するのと同じ 1 行差分を直接当てた．
+
+  **Correction** (2026-08-12, 本 run 内): 上の「bootstrap できない」は
+  **誤り** — 環境の恒久的な制約ではなく，一度きりの転送失敗だった．
+  ユーザの指摘 (「特定ドメインにアクセスできなかったからか」) を受けて
+  切り分けた結果:
+
+  | 検査 | 結果 |
+  |---|---|
+  | `pypi.nvidia.com` への到達性 | **HTTP 200** (proxy 経由，ブロックされていない) |
+  | wheel 本体の完全性 (curl, 全体) | 4,276,636,826 B = `Content-Length` 一致，sha256 **一致** |
+  | wheel_stub と同一経路の再現 (urllib + 16KiB ループ, proxy 経由) | 同上，sha256 **一致** |
+  | `/tmp` に 4.5GB 書き込み | 成功 (109 MB/s) |
+  | `uv lock --no-cache --upgrade-package tensorrt-cu12-libs` 再実行 | **成功** (`Built tensorrt-cu12-libs==10.15.1.29`) |
+  | `uv run pre-commit run --all-files` | **全 hook Passed** (`uv-lock` 含む) |
+
+  真因は **4.28GB の wheel の転送が途中で切れたこと**．`wheel_stub` は
+  読み取りバイト数を `Content-Length` と突き合わせないので
+  (`wheel_stub/wheel.py:202-210` のループは空読みで抜けるだけ)，短いファイル
+  を書いたまま次行の sha256 assert で落ちる．`urlopen_with_retry` は接続の
+  確立しか再試行しないため，ストリーム途中の切断は再試行されない．
+  **環境設定 (ドメイン許可リスト等) に修正すべき点はない．**
+
+  したがって本 run の QA は「pre-commit が動かないので代替した」のではなく，
+  「代替手段で同等のものを実行した」が正しい — 事後に
+  `uv run pre-commit run --all-files` を判断帯ブランチで実行し，
+  **全 hook Passed** を確認済み (PR #457 に反映)．
 - **torch を入れないと自動帯が無検証になる (G3)．** run 開始時点で
   `test_file_data_source.py` はモジュールごと skip されていた．
   `uv sync --extra cpu` で torch を入れて 52 passed + 3 skipped →
