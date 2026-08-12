@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in: pending
+applied_in: 9a14b71
 date: 2026-08-12
 target: [docs/commands/usi.md]
 risk: low
