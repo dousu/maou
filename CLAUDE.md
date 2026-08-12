@@ -87,7 +87,7 @@ Full spec: [docs/memory-architecture.md](docs/memory-architecture.md).
 | `.claude/commands/checkpoint-context.md` | Writer of campaign working memory (`worklog/`, `scratchpad/`). | yes |
 | `.claude/commands/resume-context.md` | Read-only resume. | yes |
 | `.claude/commands/audit-and-fix.md` | Writer of `audits/` (path 単位の監査). | yes |
-| `.claude/commands/audit-backlog.md` | Writer of `audits/` (deferred / out-of-scope の個別消化). | yes |
+| `.claude/commands/audit-backlog.md` | Writer of `audits/` (deferred / out-of-scope の個別消化)．判断コスト P1-P6 で分類し，P1-P3 (自動帯) はユーザに聞かずに修正・PR・マージする． | yes |
 
 ### MUST rules
 
@@ -98,6 +98,17 @@ Full spec: [docs/memory-architecture.md](docs/memory-architecture.md).
   — it is not tied to any one command). `/checkpoint-context` step 5 and
   `/audit-and-fix` step 8 both reconcile proposals; either may take the
   approval.
+- **Standing approval — drift corrections only.** `/audit-backlog` の
+  P2 クラス (`.claude/commands/audit-backlog.md` § "priority is decision
+  cost") が **drift correction** と判定した durable-doc 修正は，この項が
+  与える恒久承認により，その run 内で適用してよい．`reviews/*.md` の
+  提案は依然として MUST — 承認の往復だけを省く．
+  判定基準は 1 つ: **訂正後の本文が現行コードから一意に決まるか**．
+  一意なら適用 (例: doc が `.npy` と書き，writer は `.feather` を書く)．
+  一意でないなら — 新しい指針，節の再構成，規則の追加，複数の書き方が
+  あり得る記述 — P2 ではないので判断帯に落ち，通常どおり承認を待つ．
+  迷った場合は待つ側に倒す．この恒久承認は `/audit-backlog` にのみ
+  適用され，`/audit-and-fix` step 8 には及ばない (拡張は別提案とする)．
 - MUST treat `worklog/*.md` as immutable. Each `/checkpoint-context`
   creates a **new** file — never edit a previous one.
 - MUST preserve failed attempts, reasoning, and uncertainty in every
