@@ -505,7 +505,7 @@ mod tests {
         drop(out);
 
         // 前提: File 形式ではない (判定が効いていることの確認)
-        assert!(!super::read_feather(&path).is_err());
+        assert!(super::read_feather(&path).is_ok());
 
         let mut index = DataIndex::new(ArrayType::HCPE, vec![path.clone()]);
         index.build_from_files().unwrap();
