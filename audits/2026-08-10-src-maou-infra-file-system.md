@@ -132,6 +132,14 @@ step 2 (`/simplify`) が返した約17件を D1-D11 に**統合**する過程で
 いずれも `coverage.md` の Deferred backlog に **D12-D15** として追加済み．
 本節の D1-D11 の記述自体は正しく，取り消しではない．
 
+**Correction** (2026-08-12, `4c27c18`): 上の箇条書きが挙げる
+「進捗記録の二重計算」(D12(c) の `cumulative_rows`) は**欠陥ではなかった**．
+`cumulative_rows` は**ループ内で使う走行合計**であり，`cum_lengths`
+(`np.cumsum`) が作られるのはループを抜けた後なので，「`sum(lengths)` の
+二重計算」ではない．マイルストーンごとに `sum(lengths)` を取る形に
+「直す」と O(n²) の悪化になる．併記の `milestone_interval` も，圧縮しても
+読みやすくならず欠陥もない．D12 行は棄却して削除した．
+
 **教訓 (統合は行を消す)**: finding を1行にまとめると読みやすくなるが，
 まとめきれなかった分が黙って消える．行数を惜しむべきではない．
 
@@ -308,6 +316,18 @@ step 2.5 key 1 で Python 15箇所 + Rust enum を照合済み．
   層をまたいで不一致 (`:45` は `True`，`:115`/`:407` は `False`)．
   (d) `learn-model` には `--input-cache-mode` が **存在せず** `"file"` 決め打ち
   (`learn_model.py:796,820,847`)．ベンチマーク側にだけ露出している．
+
+  **Correction** (2026-08-12, `4c27c18`): (a) の診断は誤りである．
+  **2 つの別オプションを混同している** — `--input-local-cache` (bool フラグ)
+  と `--input-local-cache-dir` (パス) があり，S3/GCS 分岐は
+  `local_cache_dir=input_local_cache_dir` を**ちゃんと渡している**
+  (`pre_process.py:427`/`:459`)．「無言の no-op」ではない．
+  実際の欠陥は 2 つで，(i) bool フラグの方は BigQuery だけが読み
+  (`use_local_cache=` `:399`)，S3/GCS では黙って無視される，
+  (ii) S3/GCS では `--input-local-cache-dir` が事実上**必須**なのに任意に
+  見え，省くと elif 連鎖を全て外れて `"Please specify an input source"`
+  という**入力を指定しているのに出る誤ったメッセージ**で落ちる．
+  (b)(c)(d) は記録どおり有効．
 - **O6. `bq_data_source.py:483-493` が `.npy` を数えて `.feather` を書く.**
   `__save_to_local` (`:285-293`) は `.feather` を書くのに検証は
   `glob("*.npy")`．結果 **毎回** "Created 0 local cache files" と
