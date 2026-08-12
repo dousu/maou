@@ -115,10 +115,11 @@ P6 → P1 の順に降りて最初に当たったクラスを採り，そのあ�
 | app/learning Deferred 4 | confirmed (`_ensure_device` は現在 6 箇所) | ~250 行の基底クラス抽出．Deferred 2 と同じ理由 |
 | app/learning Deferred 5 | confirmed dormant | mask を供給する経路が無いままなので着手できない．状況は前回から変わっていない |
 | app/learning Deferred 6 / 7 | confirmed | **G1** — GPU が要る．この環境では正しさを確かめられない |
-| infra D1 (`moveWinRate`) | confirmed | **P5 + G4**．CLI 既定が `--policy-target-mode win_rate` であることも確認した (`learn_model.py:569`) ので，`--no-streaming` は既定オプションで落ちる．「dtype に足す」と「変換直後に捨てる」は互いに素な diff で，外すと丸ごと捨てになる → **ask 対象**．今回は run の終端に達したため次 run へ |
+| infra D1 (`moveWinRate`) | confirmed | **P5 + G4**．CLI 既定が `--policy-target-mode win_rate` であることも確認した (`learn_model.py:569`) ので，`--no-streaming` は既定オプションで落ちる．**ask 対象として問い，「dtype に足す」の回答を得て実装した → PR #482** (下記 § Ask 参照) |
 | infra D2 (seed) | confirmed (**shape 変化**) | `__train_test_split` は seed を受け取れるようになったが (`file_data_source.py:186`)，公開 `train_test_split(test_ratio)` と ABC (`app/learning/dl.py:74`) には seed が無く，呼び出し側 (`dl.py:244`, `stage_component_factory.py:99,196`) も渡さない．端から端まで無 seed という結論は変わらない．**P4 + G4** |
 | infra D3+D4 | confirmed (**大幅に縮小**) | 下記 Corrections 参照．**残りは P3・ゲート無しで，次 run の自動帯の最有力候補** |
-| infra D5 / D8+D9 / D13 / D14 / D15 | confirmed | D8+D9 は **ask 対象** (削除 P6 / 修復 P4 で diff が互いに素)．他は今回の軸から外れる |
+| infra D5 / D13 / D14 / D15 | confirmed | 今回の軸 (Arrow の形式判定) から外れる．D15 は「運用上のリスクとして実在するか」自体が未判断のまま |
+| infra D8+D9 | confirmed (production caller ゼロを `src`/`tests`/`docs` で再確認) | **ask 対象として問い，「削除する」の回答を得て実装した → PR #483** (下記 § Ask 参照)．行の後半 (`train_test_split` の `list(range(N))`) は**未処理のまま残している** — seed 固定時の分割値が変わるので D2 と同じ決めに帰着する |
 | infra D10+D11 (1) | confirmed (**dormant**) | 下記 Corrections 参照 |
 | O5 | confirmed (**(a) の見立てを訂正**) | 下記 Corrections 参照 |
 | O9 | confirmed | **P4 + G1** — BigQuery が無いと直したことを確かめられない．`TABLESAMPLE` をページごとに引き直す (`bq_data_source.py:405-420`) 一方で総数は別クエリ (`:236-243`) から採る構造は現存 |
@@ -217,3 +218,52 @@ NEW-1 / NEW-3 として元から backlog にあったもの．
 - git hooks はコンテナに未インストールだったので
   `pre-commit install -t pre-commit -t commit-msg` を実行してから
   全コミットを打った (`--no-verify` は不使用)．
+
+## Ask (1 回だけ・自動帯のマージ後)
+
+`/audit-backlog` の分割テスト (「枝が実質的に異なる diff を生み，外すと
+レビューして捨てる作業が無駄になるか」) を満たしたのは 2 件だけだったので，
+**1 回の `AskUserQuestion` にまとめて**，自動帯 (#477 / #481) がマージされた
+あとに聞いた．回答はこの run 内で実装し，PR にしてある — **回答は diff を
+決めるだけで，マージを承認するものではない**ので，どちらも未マージのまま．
+
+| 行 | 枝 | 回答 | 実装 |
+|---|---|---|---|
+| **D1** | (a) dtype に足す / (b) 変換直後に捨てる / (c) 明示エラーに留める | **(a) dtype に足す** | PR #482 |
+| **D8+D9** | (a) 修復する / (b) 削除する / (c) 触らない | **(b) 削除する** | PR #483 |
+
+**なぜこの 2 件だけか**: どちらも枝が共通行を持たない．D1 の (a) と (b) は
+複数層にまたがる逆向きの設計で，D8+D9 の「削除」と「修復」は片方が公開名と
+テストを消し，もう片方が構築子を書き換える．外した方を書いていたら，
+レビューして捨てる分がそのまま無駄になる．
+
+他の判断帯 (O7 / O8 / NEW-1 / NEW-2 / NEW-3) は**聞いていない** — いずれも
+書くべきコードが 1 通りに決まり，判断は「これを入れるか」だけなので，
+PR がその判断を運べる．
+
+## In flight (追記: ask 後の 2 件)
+
+| PR | クラス | base | 決めてもらう点 |
+|---|---|---|---|
+| **#482** | P5 | `main` (independent) | `moveWinRate` を dtype に載せる．**旧 dtype の structured array / `.npy` は新 reader と形が合わなくなる** (`.feather` は影響なし，古い列欠けはゼロ埋め)．dtype を `moveLabel` に揃えて float16 にした点だけ私の選択なので，float32 で揃えたければ 1 行 |
+| **#483** | P6 | `main` (independent) | `file_level_split` の削除．**公開名とそのテストファイルが消える**．production caller はゼロ．データ互換性と CLI には影響なし |
+
+**バージョンの衝突**: #482 と #483 はどちらも `0.87.0` を取っている
+(`major_version_zero = true` なので breaking も minor)．後からマージする方は
+再 bump が要る．両 PR の本文に明記した．
+
+## Reconciliation (6d) — ask 後の最終値
+
+触れた項目 + 新規発見 = 26 (backlog 25 行 + 新規 1)
+
+- **resolved** (行削除・マージ済み): 1 — O10 (#477, `dc2231e`)
+- **in flight** (行保持・PR リンク付与): 7 — O7 / O8残り (#478), NEW-2 (#479),
+  NEW-1 / NEW-3 (#480), D1 (#482), D8+D9 前半 (#483)
+- **re-triaged** (行保持): 17 — うち文面を鋭くしたのは D3+D4 / D10+D11 / O5 /
+  D8+D9 後半
+- **new row**: 1 — N-1 (BinaryView/LargeBinary)
+- **not a finding**: 0
+
+行数: 25 → 25 (O10 を削り，N-1 を足した)．D8+D9 は **#483 がマージされても
+行を消さない** — 後半 (`list(range(N))` の索引メモリ) が未処理で残るため，
+その部分だけに絞って残す．
