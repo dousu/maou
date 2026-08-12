@@ -567,3 +567,35 @@ def test_iter_batches_df_yields_dataframes_for_columnar_types(
     for (_, df), expected in zip(yielded, expected_dfs):
         assert isinstance(df, pl.DataFrame)
         assert df["id"].to_list() == expected["id"].to_list()
+
+
+# ============================================================================
+# /audit-backlog 2026-08-12 — backlog 行 D8/D9 の回帰テスト
+# ============================================================================
+
+
+def test_spliter_exposes_no_full_load_streaming_split() -> None:
+    """``FileDataSourceSpliter`` が streaming 用の分割 API を持たないこと．
+
+    backlog 行 D8/D9: ``file_level_split`` は「全ロードを避けるための
+    ファイル単位分割」を謳いながら，``FileDataSourceSpliter.__init__``
+    が ``FileManager`` を構築する — つまり**全ロードを払わないと呼べ
+    なかった** (``interface/learn.py`` が「Stage 3 で ~123GB，spawn
+    worker で OOM kill」と書いている当の経路)．production caller は
+    ゼロで，テストからしか呼ばれていなかった．
+
+    2026-08-12 にユーザ判断で削除した．このテストは「全ロードを前提と
+    する構築子から streaming source を返す API」が黙って戻ってこない
+    ことを固定する — 戻すなら構築子側を先に直す必要がある．
+    """
+    spliter_cls = FileDataSource.FileDataSourceSpliter
+
+    assert not hasattr(spliter_cls, "file_level_split")
+
+    # 残っている公開 API は行レベル分割だけ (FileDataSource を返す)．
+    public = {
+        name
+        for name in vars(spliter_cls)
+        if not name.startswith("_")
+    }
+    assert public == {"logger", "train_test_split"}
