@@ -1,5 +1,6 @@
 ---
-status: pending
+status: applied
+applied_in: 4e335ee
 date: 2026-08-12
 target: [docs/commands/pre_process.md]
 risk: low
@@ -80,4 +81,4 @@ reversibility: trivial
 
 CLAUDE.md § "Standing approval — drift corrections only" が与える恒久承認の
 範囲内 (訂正後の本文が現行コードから一意に決まる drift correction)．
-`/audit-backlog` の P2 として本 run 内で適用する．
+`/audit-backlog` の P2 として適用済み (`4e335ee`, PR #456)．
