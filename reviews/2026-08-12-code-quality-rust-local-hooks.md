@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: cf3e4ca
 date: 2026-08-12
 target: [docs/code-quality.md]
 risk: low
@@ -74,3 +74,7 @@ CLAUDE.md の standing approval (drift 訂正のみ) の外にある．承認を
 - 案 1 (追記) でよいか，案 2 (言語ごとの表への再構成) を採るか．
 - 表に再構成する場合，clippy の扱い (`audits/coverage.md` NEW-2 行 /
   この run の PR) を先に決めてから書いた方が二度手間にならない．
+
+## 決定 (2026-08-12)
+
+ユーザ承認により **案 1 (既存節に 1 段落追記)** を採用し，`cf3e4ca` で適用した．
