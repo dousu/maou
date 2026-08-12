@@ -6,10 +6,15 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import polars as pl
 from google.cloud import bigquery
 
 from maou.interface import learn, preprocess
+from maou.interface.data_schema import (
+    convert_hcpe_df_to_numpy,
+    convert_preprocessing_df_to_numpy,
+)
 
 
 class MissingBigQueryConfig(Exception):
@@ -84,9 +89,16 @@ class BigQueryDataSource(
             test_ratio: float = 0.25,
             seed: float | str | bytes | bytearray | None = None,
         ) -> tuple:
-            if seed is not None:
-                random.seed(seed)
-            random.shuffle(data)
+            # モジュールグローバルの random.seed() を呼ぶと，同一
+            # プロセス内の無関係な乱数消費者まで巻き添えにする．
+            # random.Random(seed) は同じ Mersenne Twister を同じ
+            # seed で初期化するため，分割結果は従来と一致する．
+            rng = (
+                random.Random(seed)
+                if seed is not None
+                else random
+            )
+            rng.shuffle(data)
             split_idx = int(float(len(data)) * (1 - test_ratio))
             return data[:split_idx], data[split_idx:]
 
@@ -541,8 +553,14 @@ class BigQueryDataSource(
                 self.__evict_cache_if_needed()
             return df
 
-        def get_item(self, idx: int) -> pl.DataFrame:
-            """特定のレコードをnumpy structured arrayとして返す."""
+        def get_item(self, idx: int) -> np.ndarray:
+            """特定のレコードをnumpy structured arrayとして返す.
+
+            ``learn.dataset.DataSource`` の契約 (0 次元 structured array)
+            を満たす形で返す．以前は ``pl.DataFrame`` の 1 行をそのまま
+            返しており，``KifDataset.__getitem__`` が ``data.dtype.names``
+            を読む時点で ``AttributeError`` になっていた．
+            """
             if bool(self.__pruning_info):
                 # idx が属するクラスタグループを探索
                 group_idx = None
@@ -562,12 +580,31 @@ class BigQueryDataSource(
                         f"Index {idx} cannot be mapped to a cluster group."
                     )
                 page_data = self.get_page(group_idx)
-                return page_data[offset_in_group]
+                return self.__row_to_structured_record(
+                    page_data, offset_in_group
+                )
             else:
                 page_num = idx // self.batch_size
                 row_offset = idx % self.batch_size
                 page_data = self.get_page(page_num)
-                return page_data[row_offset]
+                return self.__row_to_structured_record(
+                    page_data, row_offset
+                )
+
+        def __row_to_structured_record(
+            self, page_data: pl.DataFrame, row_offset: int
+        ) -> np.ndarray:
+            """DataFrame の 1 行を 0 次元 structured array に変換する．"""
+            row = page_data.slice(row_offset, 1)
+            if self.array_type == "hcpe":
+                array = convert_hcpe_df_to_numpy(row)
+            elif self.array_type == "preprocessing":
+                array = convert_preprocessing_df_to_numpy(row)
+            else:
+                raise ValueError(
+                    f"Unsupported array_type: {self.array_type}"
+                )
+            return array[0]
 
         def iter_batches(
             self,
@@ -656,7 +693,7 @@ class BigQueryDataSource(
         else:
             self.indicies = indicies
 
-    def __getitem__(self, idx: int) -> pl.DataFrame:
+    def __getitem__(self, idx: int) -> np.ndarray:
         """
         指定されたインデックス idx のレコード (1行)を numpy structured array として返す．
                 必要なページのみオンデマンドに取得する．

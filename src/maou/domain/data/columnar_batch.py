@@ -87,55 +87,43 @@ class ColumnarBatch:
             [b.pieces_in_hand for b in batches]
         )
 
-        move_label: np.ndarray | None = None
-        if batches[0].move_label is not None:
-            move_label = np.concatenate(
-                [
-                    b.move_label
-                    for b in batches
-                    if b.move_label is not None
-                ]
-            )
+        def _concat_optional(
+            field: str,
+        ) -> np.ndarray | None:
+            """optional 列を全バッチ一致を確認したうえで連結する．
 
-        result_value: np.ndarray | None = None
-        if batches[0].result_value is not None:
-            result_value = np.concatenate(
-                [
-                    b.result_value
-                    for b in batches
-                    if b.result_value is not None
-                ]
-            )
+            有無を ``batches[0]`` だけで判定すると，一部のバッチに列が
+            無い場合に**短いまま**連結され，行対応が例外なしに崩れる
+            (逆に先頭だけ無いと黙って全部落ちる)．全バッチで揃って
+            いることを要求し，揃っていなければ明示的に落とす．
+            """
+            values = [getattr(b, field) for b in batches]
+            present = [v is not None for v in values]
+            if not any(present):
+                return None
+            if not all(present):
+                missing = sum(1 for ok in present if not ok)
+                raise ValueError(
+                    f"ColumnarBatch field '{field}' is present in "
+                    f"{len(batches) - missing} of {len(batches)} batches. "
+                    "Concatenating batches with mismatched optional "
+                    "columns would silently misalign rows."
+                )
+            return np.concatenate(values)
 
-        move_win_rate: np.ndarray | None = None
-        if batches[0].move_win_rate is not None:
-            move_win_rate = np.concatenate(
-                [
-                    b.move_win_rate
-                    for b in batches
-                    if b.move_win_rate is not None
-                ]
-            )
+        move_label = _concat_optional("move_label")
 
-        reachable_squares: np.ndarray | None = None
-        if batches[0].reachable_squares is not None:
-            reachable_squares = np.concatenate(
-                [
-                    b.reachable_squares
-                    for b in batches
-                    if b.reachable_squares is not None
-                ]
-            )
+        result_value = _concat_optional("result_value")
 
-        legal_moves_label: np.ndarray | None = None
-        if batches[0].legal_moves_label is not None:
-            legal_moves_label = np.concatenate(
-                [
-                    b.legal_moves_label
-                    for b in batches
-                    if b.legal_moves_label is not None
-                ]
-            )
+        move_win_rate = _concat_optional("move_win_rate")
+
+        reachable_squares = _concat_optional(
+            "reachable_squares"
+        )
+
+        legal_moves_label = _concat_optional(
+            "legal_moves_label"
+        )
 
         return ColumnarBatch(
             board_positions=board_positions,

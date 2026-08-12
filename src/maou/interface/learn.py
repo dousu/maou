@@ -1069,6 +1069,14 @@ def learn_multi_stage(
             f"Invalid stage: {stage}. Must be '1', '2', '3', or 'all'"
         )
 
+    # test_ratio は Stage 3 の learn() でしか検証されていなかったため，
+    # 範囲外の値 (例: --test-ratio 0.0) は Stage 1 と Stage 2 を回し
+    # 切ったあとで初めて ValueError になっていた．入口で落とす．
+    if test_ratio is not None and not 0.0 < test_ratio < 1.0:
+        raise ValueError(
+            f"test_ratio must be between 0 and 1, got {test_ratio}"
+        )
+
     # Validate data configs based on stage
     if stage in ("1", "all") and stage1_data_config is None:
         raise ValueError(

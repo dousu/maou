@@ -495,7 +495,13 @@ def benchmark_training(
         stage2_clip=stage2_clip or 0.0,
         stage2_hidden_dim=stage2_hidden_dim or 128,
         stage2_head_dropout=stage2_head_dropout or 0.0,
-        stage2_test_ratio=stage2_test_ratio or 0.2,
+        # `or 0.2` は --stage2-test-ratio の既定値かつ documented な
+        # 0.0 (= 分割なし) を falsy として 20% に化けさせていた．
+        stage2_test_ratio=(
+            stage2_test_ratio
+            if stage2_test_ratio is not None
+            else 0.0
+        ),
         architecture_config=architecture_config,
         freeze_backbone=freeze_backbone,
         trainable_layers=trainable_layers,

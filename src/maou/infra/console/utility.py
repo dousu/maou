@@ -1211,24 +1211,44 @@ def benchmark_training(
                 StreamingFileSource,
             )
 
-            rng = random.Random(42)
-            shuffled = list(stage2_file_paths)
-            rng.shuffle(shuffled)
-            effective_ratio = stage2_test_ratio or 0.2
-            n_val = max(1, int(len(shuffled) * effective_ratio))
-            n_train = len(shuffled) - n_val
-            if n_train < 1:
-                n_train = 1
-                n_val = len(shuffled) - 1
+            # --stage2-test-ratio は 0.0 = 分割なしが既定 (help に明記)．
+            # `or 0.2` は 0.0 を falsy として 20% に化けさせていた．
+            effective_ratio = (
+                stage2_test_ratio
+                if stage2_test_ratio is not None
+                else 0.0
+            )
+            if effective_ratio <= 0.0:
+                stage2_streaming_train_source = (
+                    StreamingFileSource(
+                        file_paths=list(stage2_file_paths),
+                        array_type="stage2",
+                    )
+                )
+            else:
+                rng = random.Random(42)
+                shuffled = list(stage2_file_paths)
+                rng.shuffle(shuffled)
+                n_val = max(
+                    1, int(len(shuffled) * effective_ratio)
+                )
+                n_train = len(shuffled) - n_val
+                if n_train < 1:
+                    n_train = 1
+                    n_val = len(shuffled) - 1
 
-            stage2_streaming_train_source = StreamingFileSource(
-                file_paths=shuffled[:n_train],
-                array_type="stage2",
-            )
-            stage2_streaming_val_source = StreamingFileSource(
-                file_paths=shuffled[n_train:],
-                array_type="stage2",
-            )
+                stage2_streaming_train_source = (
+                    StreamingFileSource(
+                        file_paths=shuffled[:n_train],
+                        array_type="stage2",
+                    )
+                )
+                stage2_streaming_val_source = (
+                    StreamingFileSource(
+                        file_paths=shuffled[n_train:],
+                        array_type="stage2",
+                    )
+                )
             streaming = True
         else:
             stage2_datasource = (
@@ -1257,7 +1277,9 @@ def benchmark_training(
             rng = random.Random(42)
             shuffled = list(file_paths)
             rng.shuffle(shuffled)
-            effective_ratio = test_ratio or 0.2
+            effective_ratio = (
+                test_ratio if test_ratio is not None else 0.2
+            )
             n_val = max(1, int(len(shuffled) * effective_ratio))
             n_train = len(shuffled) - n_val
             if n_train < 1:
