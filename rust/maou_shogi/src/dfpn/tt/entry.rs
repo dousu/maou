@@ -16,6 +16,37 @@ const K_FINAL_AMOUNT_BONUS: SearchAmount = 1000;
 /// 無効持ち駒 (空 slot 判定に使う sentinel)．hand は各駒 ≤ 18 なので 0xFF を sentinel に使える．
 pub(crate) const NULL_HAND: Hand = [0xFF; HAND_KINDS];
 
+/// 持ち駒をビット反転する (`Entry` の格納形式との相互変換)．
+///
+/// **なぜ反転して持つか**: 空 slot の印は `NULL_HAND`(=全 `0xFF`) なので，
+/// 反転して格納すると**空 slot が全ゼロ**になる．すると TT の初期化が
+/// 「64 バイトのパターン書き込み」から **memset(0)** に畳まれ，確保も
+/// `alloc_zeroed` (遅延ゼロページ) に載せられる．実測 (1<<23 entries,
+/// 537MB): パターン書き込み 2.769s → memset 0.366s → alloc_zeroed 0.000s．
+///
+/// **健全性の根拠**: 全ゼロを「空」と読ませてよいのは (1) `Entry` の他フィールドは
+/// `is_null()` が偽のときしか読まれない (TT の全アクセス経路で確認済み) ことと，
+/// (2) [`Entry::init`] が 11 フィールド**全部**を書くので，ゼロ済み slot を再利用
+/// しても `pn = 0`(=詰み証明済) などが жив残らないこと，による．
+///
+/// `NULL_HAND` が実局面と衝突しないことも別途確認済み: `Hand` は駒種別の枚数で
+/// 上限は `MAX_HAND_COUNT = [18,4,4,4,4,2,2]`，唯一の算術経路
+/// (`apply_delta_hand`) も i32 で計算して同上限へ clamp するので，
+/// 全 `0xFF` は到達不能．
+#[inline]
+const fn inv_hand(h: Hand) -> Hand {
+    let mut r = [0u8; HAND_KINDS];
+    let mut i = 0;
+    while i < HAND_KINDS {
+        r[i] = !h[i];
+        i += 1;
+    }
+    r
+}
+
+/// 空 slot を表す格納値 (= `inv_hand(NULL_HAND)` = 全ゼロ)．
+const NULL_HAND_INV: Hand = [0x00; HAND_KINDS];
+
 /// `min_depth_rep` の千日手フラグ bit．
 /// `min_depth` (∈ [0, KDEPTH_MAX=4000]) は 15bit に収まるため，最上位 bit を流用する
 /// (Entry を 64B = 1 cache line に収めるための pack; 探索意味論は不変)．
@@ -60,12 +91,21 @@ pub(super) struct Entry {
     proven_len: u16,      // 詰み手数 +1 (len_plus_1; これ以上の len なら詰み)
     disproven_len: u16,   // 不詰手数 +1 (len_plus_1; これ以下の len なら不詰)
     min_depth_rep: u16,   // bit15=千日手フラグ / bits0..14=格納最浅深さ (TCA old-child 判定)
-    hand: Hand,           // 現局面の持ち駒 (NULL_HAND = 空 slot)
-    parent_hand: Hand,
+    /// 現局面の持ち駒を**ビット反転して**保持する (全ゼロ = 空 slot)．
+    /// 直接読まず [`Entry::get_hand`] / [`inv_hand`] を通すこと．
+    hand_inv: Hand,
+    /// 親局面の持ち駒 (同じく反転保持)．
+    parent_hand_inv: Hand,
 }
 
 impl Entry {
     /// 空 slot (`hand == NULL_HAND`)．
+    ///
+    /// **production では使わない** — テーブルの初期化は [`Self::zeroed`] を使う
+    /// (全ゼロなら memset / `alloc_zeroed` に載るため)．「番兵値を持つ空 slot」と
+    /// 「全ゼロの空 slot」がどちらも `is_null()` で空と読めることを固定する
+    /// テスト用に残してある．
+    #[cfg(test)]
     pub(super) fn null() -> Self {
         Self {
             board_key: 0,
@@ -78,14 +118,39 @@ impl Entry {
             disproven_len: MINUS1_MATE_LEN.raw() as u16,
             // KDEPTH_MAX(4000) < 0x7FFF．rep bit = 0 (千日手フラグなし)．
             min_depth_rep: KDEPTH_MAX as u16,
-            hand: NULL_HAND,
-            parent_hand: NULL_HAND,
+            hand_inv: NULL_HAND_INV,
+            parent_hand_inv: NULL_HAND_INV,
+        }
+    }
+
+    /// 全ゼロの空 slot (テーブル初期化専用)．
+    ///
+    /// [`Self::null`] と**意味的に同じ必要はない** — 満たすべきは 2 点だけ:
+    /// (1) [`Self::is_null`] が真を返す (`hand_inv` が全ゼロなので成立)，
+    /// (2) [`Self::init`] が全フィールドを上書きする．
+    /// そのため他フィールドのゼロ値 (`pn = 0` 等) は**読まれる前に必ず消える**．
+    ///
+    /// この値で埋めると初期化が memset に畳まれ，確保も `alloc_zeroed`
+    /// (遅延ゼロページ) に載せられる ([`inv_hand`] のコメント参照)．
+    pub(super) const fn zeroed() -> Self {
+        Self {
+            board_key: 0,
+            parent_board_key: 0,
+            pn: 0,
+            dn: 0,
+            sum_mask: BitSet64::zeroed(),
+            amount: 0,
+            proven_len: 0,
+            disproven_len: 0,
+            min_depth_rep: 0,
+            hand_inv: NULL_HAND_INV,
+            parent_hand_inv: NULL_HAND_INV,
         }
     }
 
     /// 新規局面でエントリを初期化する．
     pub(super) fn init(&mut self, board_key: u64, hand: Hand) {
-        self.hand = hand;
+        self.hand_inv = inv_hand(hand);
         self.amount = 1;
         self.board_key = board_key;
         self.proven_len = DEPTH_MAX_PLUS1_MATE_LEN.raw() as u16; // まだ詰みは見つかっていない
@@ -95,14 +160,14 @@ impl Entry {
         // min_depth = KDEPTH_MAX, rep bit = 0 を同時に設定．
         self.min_depth_rep = KDEPTH_MAX as u16;
         self.parent_board_key = 0;
-        self.parent_hand = NULL_HAND;
+        self.parent_hand_inv = NULL_HAND_INV;
         self.sum_mask = BitSet64::full();
     }
 
     /// 空 slot か．cluster scan の終端判定に使う．
     #[inline]
     pub(super) fn is_null(&self) -> bool {
-        self.hand == NULL_HAND
+        self.hand_inv == NULL_HAND_INV
     }
     /// 盤面ハッシュ一致．
     #[inline]
@@ -112,7 +177,7 @@ impl Entry {
     /// 盤面 + 持ち駒一致．
     #[inline]
     pub(super) fn is_for_hand(&self, board_key: u64, hand: Hand) -> bool {
-        self.board_key == board_key && self.hand == hand
+        self.board_key == board_key && self.hand_inv == inv_hand(hand)
     }
     /// 証明済 (proven) または反証済 (disproven) の確定結果を保持するか．
     /// 確定エントリは **証明木そのもの** であり，探索後の PV 復元 (STRICT VERIFY) が辿る経路．
@@ -137,7 +202,7 @@ impl Entry {
     }
     #[inline]
     pub(super) fn get_hand(&self) -> Hand {
-        self.hand
+        inv_hand(self.hand_inv)
     }
     #[inline]
     pub(super) fn sum_mask(&self) -> BitSet64 {
@@ -172,7 +237,7 @@ impl Entry {
     }
     #[inline]
     pub(super) fn get_parent_hand(&self) -> Hand {
-        self.parent_hand
+        inv_hand(self.parent_hand_inv)
     }
     /// 千日手フラグを立てる．
     #[inline]
@@ -183,7 +248,7 @@ impl Entry {
     /// 空 slot 化．GC で低 amount entry を間引く際に使う．
     #[inline]
     pub(super) fn set_null(&mut self) {
-        self.hand = NULL_HAND;
+        self.hand_inv = NULL_HAND_INV;
     }
 
     /// amount を半減．GC で max_amount が飽和に近いとき全体縮小に使う．
@@ -219,7 +284,7 @@ impl Entry {
         self.sum_mask = sum_mask;
         self.amount = self.amount.max(amount);
         self.parent_board_key = parent_board_key;
-        self.parent_hand = parent_hand;
+        self.parent_hand_inv = inv_hand(parent_hand);
     }
 
     /// proven_len を短い方へ更新する．
@@ -251,7 +316,7 @@ impl Entry {
         use_old_child: &mut bool,
     ) -> bool {
         let depth16 = depth as i16;
-        let entry_hand = self.hand;
+        let entry_hand = self.get_hand();
         // 1. 一致局面
         if entry_hand == hand {
             return self.look_up_exact(depth16, len, pn, dn, use_old_child);
