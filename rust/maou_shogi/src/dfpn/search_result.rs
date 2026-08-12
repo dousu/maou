@@ -39,6 +39,14 @@ impl BitSet64 {
     pub(super) const fn full() -> Self {
         BitSet64(u64::MAX)
     }
+    /// 全 bit を落とした値 (TT の全ゼロ初期化専用)．
+    ///
+    /// 探索の意味を持たない — 空 slot は `is_null()` で弾かれるため
+    /// この値が sum 集計に使われることはない (`Entry::zeroed` 参照)．
+    #[inline]
+    pub(super) const fn zeroed() -> Self {
+        BitSet64(0)
+    }
     /// `i` bit が立っているか (= δ を和で計上する子か)．
     ///
     /// **子が 64 を超える場合，64 番目以降は常に `true` (sum 集計) を返す**．
