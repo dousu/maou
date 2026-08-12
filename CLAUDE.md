@@ -16,7 +16,6 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 - **Data Format**: Arrow IPC (.feather) with LZ4 compression
 - **Data Processing**: Polars DataFrames
 - **I/O Backend**: Rust (PyO3 + maturin) for high-performance file I/O
-- **Legacy Support**: Numpy .npy format still supported
 
 ## Critical Rules (MUST)
 
