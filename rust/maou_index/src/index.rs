@@ -11,6 +11,54 @@ use polars::prelude::*;
 
 use crate::error::IndexError;
 
+/// Arrow IPC File 形式のマジックバイト (先頭 8 バイト)．
+const ARROW_FILE_MAGIC: &[u8; 8] = b"ARROW1\0\0";
+
+/// `.feather` を File / Stream いずれの Arrow IPC 形式でも読み込む．
+///
+/// 判定の向きは Python 側 (`domain/data/arrow_format.py`) と同じで，
+/// 「File 形式か?」を問い，そうでなければ Stream として読む．
+/// File 形式のマジックは全バージョンで不変なのに対し，Stream 形式の
+/// 先頭は Arrow 0.15 で `0xFFFFFFFF` の continuation marker が入る形へ
+/// 変わっているため，Stream 側を判定条件に使うと古い Stream ファイルを
+/// File 形式と誤認する．
+///
+/// # Returns
+/// 成功時は `Ok(DataFrame)`，読み込み失敗時は `Err(IndexError)`
+fn read_feather(file_path: &std::path::Path) -> Result<DataFrame, IndexError> {
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(file_path).map_err(|e| {
+        IndexError::BuildFailed(format!("Failed to open {}: {}", file_path.display(), e))
+    })?;
+
+    let mut magic = [0u8; 8];
+    // 8 バイト未満のファイルは File 形式ではありえないので Stream として扱う
+    // (どちらの reader も同じ「壊れたファイル」エラーを返す)．
+    let is_file_format = match file.read_exact(&mut magic) {
+        Ok(()) => &magic == ARROW_FILE_MAGIC,
+        Err(_) => false,
+    };
+
+    let file = std::fs::File::open(file_path).map_err(|e| {
+        IndexError::BuildFailed(format!("Failed to open {}: {}", file_path.display(), e))
+    })?;
+
+    let result = if is_file_format {
+        IpcReader::new(file).finish()
+    } else {
+        IpcStreamReader::new(file).finish()
+    };
+
+    result.map_err(|e| {
+        IndexError::BuildFailed(format!(
+            "Failed to read DataFrame from {}: {}",
+            file_path.display(),
+            e
+        ))
+    })
+}
+
 /// レコードの位置情報．
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RecordLocation {
@@ -204,17 +252,7 @@ impl DataIndex {
     pub fn build_from_files(&mut self) -> Result<(), IndexError> {
         for (file_idx, file_path) in self.file_paths.clone().iter().enumerate() {
             // Featherファイルを読み込み（scan_ipcではなくread_ipcを使用してLZ4圧縮に対応）
-            let df = IpcReader::new(std::fs::File::open(file_path).map_err(|e| {
-                IndexError::BuildFailed(format!("Failed to open {}: {}", file_path.display(), e))
-            })?)
-            .finish()
-            .map_err(|e| {
-                IndexError::BuildFailed(format!(
-                    "Failed to read DataFrame from {}: {}",
-                    file_path.display(),
-                    e
-                ))
-            })?;
+            let df = read_feather(file_path)?;
 
             let num_rows = df.height();
 
@@ -443,5 +481,74 @@ mod tests {
 
         let limited = index.get_all_ids(Some(2));
         assert_eq!(limited.len(), 2);
+    }
+    /// `/audit-backlog` 2026-08-12 backlog 行 O7 の回帰テスト．
+    ///
+    /// Stream 形式の `.feather` は他の全経路 (Python の
+    /// `scan_row_count` / `load_*_df`，Rust の `load_feather`) で読めるのに
+    /// 索引構築だけが `IpcReader` 決め打ちで footer エラーになっていた．
+    #[test]
+    fn test_build_from_files_reads_stream_format() {
+        use std::fs::File;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stream.feather");
+
+        // 本番の `id` は uint64 (`domain/data/schema.py`)．
+        let mut df = df!(
+            "id" => &[10u64, 11u64, 12u64],
+            "eval" => &[100i16, -200i16, 0i16],
+        )
+        .unwrap();
+        let mut out = File::create(&path).unwrap();
+        IpcStreamWriter::new(&mut out).finish(&mut df).unwrap();
+        drop(out);
+
+        // 前提: File 形式ではない (判定が効いていることの確認)
+        assert!(!super::read_feather(&path).is_err());
+
+        let mut index = DataIndex::new(ArrayType::HCPE, vec![path.clone()]);
+        index.build_from_files().unwrap();
+
+        assert_eq!(
+            index.search_by_id("11"),
+            Some(RecordLocation {
+                file_index: 0,
+                row_number: 1,
+            })
+        );
+        // eval も読めていること
+        assert_eq!(
+            index
+                .search_by_eval_range(Some(-300), Some(-100), 0, 10)
+                .len(),
+            1
+        );
+    }
+
+    /// File 形式は従来どおり読めること (挙動不変の確認)．
+    #[test]
+    fn test_build_from_files_reads_file_format() {
+        use std::fs::File;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.feather");
+
+        let mut df = df!(
+            "id" => &[1u64, 2u64],
+            "eval" => &[1i16, 2i16],
+        )
+        .unwrap();
+        let mut out = File::create(&path).unwrap();
+        IpcWriter::new(&mut out).finish(&mut df).unwrap();
+        drop(out);
+
+        // 前提: 先頭 8 バイトが File 形式のマジックであること
+        let head = std::fs::read(&path).unwrap();
+        assert_eq!(&head[..8], ARROW_FILE_MAGIC);
+
+        let mut index = DataIndex::new(ArrayType::HCPE, vec![path]);
+        index.build_from_files().unwrap();
+        assert_eq!(index.get_all_ids(None).len(), 2);
     }
 }

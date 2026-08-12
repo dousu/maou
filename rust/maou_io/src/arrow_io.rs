@@ -9,6 +9,9 @@ use std::path::Path;
 
 use crate::error::MaouIOError;
 
+/// Arrow IPC File 形式のマジックバイト (先頭 8 バイト)．
+const ARROW_FILE_MAGIC: &[u8; 8] = b"ARROW1\0\0";
+
 /// 複数のRecordBatchを単一のRecordBatchに統合する．
 ///
 /// 空の場合はエラー，単一バッチの場合はゼロコピーで返し，
@@ -73,20 +76,30 @@ pub fn load_feather(file_path: &str) -> Result<RecordBatch, MaouIOError> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
 
-    // Peek at the first 4 bytes to detect format
+    // Peek at the first 8 bytes to detect format.
+    //
+    // 判定は「File 形式か?」を問い，そうでなければ Stream として読む．
+    // Python 側 (`domain/data/arrow_format.py`) と同じ向きである．
+    // File 形式のマジック `ARROW1\0\0` は全バージョンで不変なのに対し，
+    // Stream 形式の先頭は Arrow 0.15 で `0xFFFFFFFF` の continuation
+    // marker が入る形へ変わっているため，Stream 側を条件にすると
+    // 0.15 以前の Stream ファイルを File と誤認して footer エラーになる．
     use std::io::{Read, Seek, SeekFrom};
-    let mut magic = [0u8; 4];
-    reader.read_exact(&mut magic)?;
+    let mut magic = [0u8; 8];
+    // 8 バイト未満なら File 形式ではありえない (Stream reader が
+    // 「壊れたファイル」として同じエラーを返す)．
+    let is_file_format = match reader.read_exact(&mut magic) {
+        Ok(()) => &magic == ARROW_FILE_MAGIC,
+        Err(_) => false,
+    };
     reader.seek(SeekFrom::Start(0))?;
 
-    // Check if it's Stream format (starts with 0xFFFFFFFF = -1)
-    let batches: Vec<RecordBatch> = if magic == [0xFF, 0xFF, 0xFF, 0xFF] {
-        StreamReader::try_new(reader, None)?
+    let batches: Vec<RecordBatch> = if is_file_format {
+        FileReader::try_new(reader, None)?
             .collect::<Result<_, _>>()
             .map_err(MaouIOError::ArrowError)?
     } else {
-        // File format (starts with "ARROW1")
-        FileReader::try_new(reader, None)?
+        StreamReader::try_new(reader, None)?
             .collect::<Result<_, _>>()
             .map_err(MaouIOError::ArrowError)?
     };
@@ -126,17 +139,32 @@ pub fn save_feather_batches(batches: &[RecordBatch], file_path: &str) -> Result<
 
 /// Load all record batches from a .feather file．
 ///
+/// `load_feather` と同じく File / Stream の両形式を受け付ける
+/// (同じ拡張子の同じ入力を，関数によって読めたり読めなかったりさせない)．
+///
 /// Returns a vector of all batches in the file．
 pub fn load_feather_batches(file_path: &str) -> Result<Vec<RecordBatch>, MaouIOError> {
     let path = Path::new(file_path);
     let file = File::open(path)?;
-    let reader = BufReader::new(file);
+    let mut reader = BufReader::new(file);
 
-    let reader = FileReader::try_new(reader, None)?;
+    use std::io::{Read, Seek, SeekFrom};
+    let mut magic = [0u8; 8];
+    let is_file_format = match reader.read_exact(&mut magic) {
+        Ok(()) => &magic == ARROW_FILE_MAGIC,
+        Err(_) => false,
+    };
+    reader.seek(SeekFrom::Start(0))?;
 
     let mut batches = Vec::new();
-    for batch_result in reader {
-        batches.push(batch_result?);
+    if is_file_format {
+        for batch_result in FileReader::try_new(reader, None)? {
+            batches.push(batch_result?);
+        }
+    } else {
+        for batch_result in StreamReader::try_new(reader, None)? {
+            batches.push(batch_result?);
+        }
     }
 
     if batches.is_empty() {
@@ -606,5 +634,71 @@ mod tests {
         let merged = load_feather(&result[0]).unwrap();
         let original = create_test_batch();
         assert_eq!(merged.schema(), original.schema());
+    }
+
+    /// `/audit-backlog` 2026-08-12 backlog 行 O7 の回帰テスト．
+    ///
+    /// 判定の向きが Python と逆 (「Stream か?」を問い既定 File) だったため，
+    /// `0xFFFFFFFF` の continuation marker を持たない古い Stream ファイルが
+    /// File 形式と誤認され footer エラーになっていた．
+    #[test]
+    fn test_load_feather_defaults_to_stream_when_magic_is_not_arrow1() {
+        use arrow::ipc::writer::StreamWriter;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("stream.feather");
+        let batch = create_test_batch();
+
+        {
+            let file = File::create(&path).unwrap();
+            let mut writer = StreamWriter::try_new(file, &batch.schema()).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        // 前提: File 形式のマジックでは*ない*こと
+        let head = std::fs::read(&path).unwrap();
+        assert_ne!(&head[..8], ARROW_FILE_MAGIC);
+
+        let loaded = load_feather(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.num_rows(), batch.num_rows());
+        assert_eq!(loaded.schema(), batch.schema());
+    }
+
+    /// File 形式は従来どおりマジック一致で File reader に入ること．
+    #[test]
+    fn test_load_feather_file_format_still_detected_by_magic() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("file.feather");
+        let batch = create_test_batch();
+        save_feather(&batch, path.to_str().unwrap()).unwrap();
+
+        let head = std::fs::read(&path).unwrap();
+        assert_eq!(&head[..8], ARROW_FILE_MAGIC);
+
+        let loaded = load_feather(path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.num_rows(), batch.num_rows());
+    }
+
+    /// `load_feather_batches` も同じ入力を受け付けること．
+    #[test]
+    fn test_load_feather_batches_accepts_stream_format() {
+        use arrow::ipc::writer::StreamWriter;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("stream_batches.feather");
+        let batch = create_test_batch();
+
+        {
+            let file = File::create(&path).unwrap();
+            let mut writer = StreamWriter::try_new(file, &batch.schema()).unwrap();
+            writer.write(&batch).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let batches = load_feather_batches(path.to_str().unwrap()).unwrap();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), batch.num_rows());
     }
 }

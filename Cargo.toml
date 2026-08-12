@@ -15,6 +15,7 @@ pyo3 = { version = "0.28", features = ["extension-module"] }
 polars = { version = "0.53", features = [
     "lazy",
     "ipc",
+    "ipc_streaming",  # Arrow IPC Stream 形式の .feather を読むために必要
     "parquet",  # Required by polars-stream 0.53 when ipc is enabled
     # Only include optional dtypes actually used (analyzed from schema.py and index.rs)
     # This replaces dtype-full which compiles 18+ optional dtypes

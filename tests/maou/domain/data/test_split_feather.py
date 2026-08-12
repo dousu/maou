@@ -6,6 +6,7 @@ import numpy as np
 import polars as pl
 import pytest
 
+from maou.domain.data import arrow_format
 from maou.domain.data.rust_io import (
     RUST_BACKEND_AVAILABLE,
     load_hcpe_df,
@@ -503,17 +504,80 @@ class TestResizeInputFiles:
 class TestResizeInputFilesRowCounting:
     """`resize_input_files` の行数判定に関する回帰テスト．"""
 
-    def test_unreadable_file_passes_through_unchunked(
-        self, tmp_path: Path
+    def test_row_count_failure_passes_through_unchunked(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """行数を読めないファイルは束ねずにそのまま通す．
 
-        回帰の罠: 行数取得を `len(scan_ipc(fp).collect())` から
-        `scan_ipc(fp).select(pl.len())` へ替える際，Stream 形式
-        (`scan_ipc` が扱えない) のファイルで例外が出なくなると，
-        これまで `ok_files` へ素通ししていたファイルが「小さい」と
-        判定されて束ねられ，出力ファイルの構成が変わる．
-        両式が同じく送出することを固定する．
+        回帰の罠: 行数取得の実装を替える際に，読めない入力でも
+        例外が出なくなると，これまで `ok_files` へ素通ししていた
+        ファイルが「小さい」と判定されて束ねられ，出力ファイルの
+        構成が変わる．
+
+        2026-08-12 までこの経路に落ちていたのは Stream 形式
+        (`pl.scan_ipc` が扱えない) だけだったが，それは読めるように
+        なった (下のテスト)．素通し自体は防御として残っているので，
+        失敗を注入して固定する．
+        """
+        from maou.interface.preprocess import (
+            resize_input_files,
+        )
+
+        input_dir = tmp_path / "input"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        work_dir = tmp_path / "work"
+
+        unreadable = _create_hcpe_file(
+            input_dir, "unreadable.feather", 2
+        )
+        # 束ねる相手を 1 本用意する．これが無いと small_files が
+        # 1 本以下になり，誤判定しても結果が変わらず素通りする．
+        readable = _create_hcpe_file(
+            input_dir, "small.feather", 5
+        )
+
+        real_scan = arrow_format.scan_row_count
+
+        def flaky_scan(path: Path) -> int:
+            if path.name.startswith("unreadable"):
+                raise OSError("simulated corrupt file")
+            return real_scan(path)
+
+        monkeypatch.setattr(
+            "maou.domain.data.arrow_format.scan_row_count",
+            flaky_scan,
+        )
+
+        result = resize_input_files(
+            file_paths=[unreadable, readable],
+            rows_per_file=100,
+            work_dir=work_dir,
+        )
+
+        # 行数を読めないので small_files に入らず，そのままのパスで
+        # 返る．readable だけでは small_files が 1 本なのでこれも
+        # 束ねられない．
+        assert unreadable in result
+        assert result == [unreadable, readable]
+
+    def test_stream_format_file_is_counted_and_chunked(
+        self, tmp_path: Path
+    ) -> None:
+        """Stream 形式の `.feather` も行数を取れて束ねられる．
+
+        `/audit-backlog` 2026-08-12 backlog 行 O8 の回帰テスト．
+        以前は `pl.scan_ipc` が Stream 形式で例外を投げ，裸の
+        `except Exception` がそれを飲み込んで `ok_files` へ落として
+        いたため，小さい Stream 形式ファイルだけがサイズ調整から
+        黙って外れていた．
+
+        Note: 2 本とも polars で書いている．Rust の writer が書いた
+        `.feather` と polars が書いた `.feather` は binary 列の
+        レイアウトが違い (`LargeBinary` / `BinaryView`)，混ぜると
+        結合が落ちる — これは形式判定とは無関係の別の欠陥で，
+        `coverage.md` の別行として起票した．
         """
         import io
 
@@ -525,30 +589,27 @@ class TestResizeInputFilesRowCounting:
         input_dir.mkdir(parents=True, exist_ok=True)
         work_dir = tmp_path / "work"
 
-        # Stream 形式は scan_ipc で読めない (拡張子は .feather)．
-        stream_df = create_empty_hcpe_df(2)
-        buf = io.BytesIO()
-        stream_df.write_ipc_stream(buf)
         stream_path = input_dir / "stream.feather"
+        buf = io.BytesIO()
+        create_empty_hcpe_df(2).write_ipc_stream(buf)
         stream_path.write_bytes(buf.getvalue())
 
-        # 束ねる相手を 1 本用意する．これが無いと small_files が
-        # 1 本以下になり，誤判定しても結果が変わらず素通りする．
-        readable = _create_hcpe_file(
-            input_dir, "small.feather", 5
+        file_path = input_dir / "small.feather"
+        create_empty_hcpe_df(5).write_ipc(
+            file_path, compression="lz4"
         )
 
         result = resize_input_files(
-            file_paths=[stream_path, readable],
+            file_paths=[stream_path, file_path],
             rows_per_file=100,
             work_dir=work_dir,
         )
 
-        # stream は 2 行 < threshold(50) だが行数を読めないので
-        # small_files に入らず，そのままのパスで返る．
-        # readable だけでは small_files が 1 本なのでこれも束ねられない．
-        assert stream_path in result
-        assert result == [stream_path, readable]
+        # 2 行と 5 行はどちらも threshold(50) 未満なので
+        # 1 本に束ねられ，7 行すべてが残る．
+        assert len(result) == 1
+        assert stream_path not in result
+        assert sum(len(load_hcpe_df(p)) for p in result) == 7
 
     def test_small_files_are_still_chunked(
         self, tmp_path: Path

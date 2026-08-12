@@ -175,21 +175,30 @@ def resize_input_files(
     small_files: list[Path] = []
     ok_files: list[Path] = []
 
+    # polars を module level で持つと軽量 CLI まで巻き添えにするので
+    # 従来どおり関数内で解決する (`scan_row_count` も polars を引く)．
+    import polars as pl
+
+    from maou.domain.data.arrow_format import scan_row_count
+
     for fp in split_result:
         try:
-            import polars as pl
-
             # 行数だけが要るので全列を実体化しない．
             # preprocessing の 1496 幅リスト列では
             # `len(scan_ipc(fp).collect())` がファイル1本を丸ごと
-            # メモリに載せる (Stream 形式で例外になる挙動は同じ)．
-            row_count = (
-                pl.scan_ipc(fp)
-                .select(pl.len())
-                .collect()
-                .item()
+            # メモリに載せる．
+            # File 形式は footer だけを読み，Stream 形式は
+            # `read_ipc_stream` へ落ちる (どちらも行数は取れる)．
+            row_count = scan_row_count(fp)
+        except (OSError, pl.exceptions.PolarsError) as e:
+            # 読めない入力はサイズ調整の対象から外し，そのまま下流へ渡す
+            # (ここで落とすと，これまで通っていた入力が通らなくなる)．
+            # 黙って素通しすると原因が追えないので記録は残す．
+            logger.warning(
+                "Skipping resize for %s (row count unavailable): %s",
+                fp,
+                e,
             )
-        except Exception:
             ok_files.append(fp)
             continue
 
