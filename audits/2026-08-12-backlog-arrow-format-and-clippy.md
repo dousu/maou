@@ -61,9 +61,9 @@ P6 → P1 の順に降りて最初に当たったクラスを採り，そのあ�
 |---|---|---|---|---|---|---|
 | B-1 | O7 | confirmed | **P4** | 今まで失敗していた入力が成功するようになる．既存データは読めたまま，既存の呼び出しも有効なまま | なし | #478 |
 | B-2 | O8 残り | **changed shape** | **P4** | Stream 形式の入力が chunk 対象に入る (今までは黙って外れていた) | なし | #478 |
-| C-1 | NEW-2 | confirmed + 計測 | **P3** (コードはテスト専用の lint 修正で挙動不変) | — | **G4 保持** | #479 |
-| D-1 | NEW-1 | confirmed | **judgment (P4 下限)** | P2 の一意性テストに落ちる — 書き方が 3 通りあり得る | G4 | #480 |
-| D-2 | NEW-3 | confirmed | **judgment (P4 下限)** | 同上 — `.feather` 行の訂正は一意だが `.npy` 行の削除/注記は著者判断 | G4 | #480 |
+| C-1 | NEW-2 | confirmed + 計測 | **P3** (コードはテスト専用の lint 修正で挙動不変) | — | **G4 保持** | #489 |
+| D-1 | NEW-1 | confirmed | **judgment (P4 下限)** | P2 の一意性テストに落ちる — 書き方が 3 通りあり得る | G4 | #486 → #490 |
+| D-2 | NEW-3 | confirmed | **judgment (P4 下限)** | 同上 — `.feather` 行の訂正は一意だが `.npy` 行の削除/注記は著者判断 | G4 | #486 → #490 |
 
 **C-1 の G4 の扱い**: 行は「入れると既存 warning の数だけ初回コストが出る．
 まず計測してから可否を決めること」と書いていた．計測して G4 の**理由**は
@@ -115,11 +115,11 @@ P6 → P1 の順に降りて最初に当たったクラスを採り，そのあ�
 | app/learning Deferred 4 | confirmed (`_ensure_device` は現在 6 箇所) | ~250 行の基底クラス抽出．Deferred 2 と同じ理由 |
 | app/learning Deferred 5 | confirmed dormant | mask を供給する経路が無いままなので着手できない．状況は前回から変わっていない |
 | app/learning Deferred 6 / 7 | confirmed | **G1** — GPU が要る．この環境では正しさを確かめられない |
-| infra D1 (`moveWinRate`) | confirmed | **P5 + G4**．CLI 既定が `--policy-target-mode win_rate` であることも確認した (`learn_model.py:569`) ので，`--no-streaming` は既定オプションで落ちる．**ask 対象として問い，「dtype に足す」の回答を得て実装した → PR #482** (下記 § Ask 参照) |
+| infra D1 (`moveWinRate`) | confirmed | **P5 + G4**．CLI 既定が `--policy-target-mode win_rate` であることも確認した (`learn_model.py:569`) ので，`--no-streaming` は既定オプションで落ちる．**ask 対象として問い，「dtype に足す」の回答を得て実装した → PR #487** (下記 § Ask 参照) |
 | infra D2 (seed) | confirmed (**shape 変化**) | `__train_test_split` は seed を受け取れるようになったが (`file_data_source.py:186`)，公開 `train_test_split(test_ratio)` と ABC (`app/learning/dl.py:74`) には seed が無く，呼び出し側 (`dl.py:244`, `stage_component_factory.py:99,196`) も渡さない．端から端まで無 seed という結論は変わらない．**P4 + G4** |
 | infra D3+D4 | confirmed (**大幅に縮小**) | 下記 Corrections 参照．**残りは P3・ゲート無しで，次 run の自動帯の最有力候補** |
 | infra D5 / D13 / D14 / D15 | confirmed | 今回の軸 (Arrow の形式判定) から外れる．D15 は「運用上のリスクとして実在するか」自体が未判断のまま |
-| infra D8+D9 | confirmed (production caller ゼロを `src`/`tests`/`docs` で再確認) | **ask 対象として問い，「削除する」の回答を得て実装した → PR #483** (下記 § Ask 参照)．行の後半 (`train_test_split` の `list(range(N))`) は**未処理のまま残している** — seed 固定時の分割値が変わるので D2 と同じ決めに帰着する |
+| infra D8+D9 | confirmed (production caller ゼロを `src`/`tests`/`docs` で再確認) | **ask 対象として問い，「削除する」の回答を得て実装した → PR #488** (下記 § Ask 参照)．行の後半 (`train_test_split` の `list(range(N))`) は**未処理のまま残している** — seed 固定時の分割値が変わるので D2 と同じ決めに帰着する |
 | infra D10+D11 (1) | confirmed (**dormant**) | 下記 Corrections 参照 |
 | O5 | confirmed (**(a) の見立てを訂正**) | 下記 Corrections 参照 |
 | O9 | confirmed | **P4 + G1** — BigQuery が無いと直したことを確かめられない．`TABLESAMPLE` をページごとに引き直す (`bq_data_source.py:405-420`) 一方で総数は別クエリ (`:236-243`) から採る構造は現存 |
@@ -229,8 +229,8 @@ NEW-1 / NEW-3 として元から backlog にあったもの．
 
 | 行 | 枝 | 回答 | 実装 |
 |---|---|---|---|
-| **D1** | (a) dtype に足す / (b) 変換直後に捨てる / (c) 明示エラーに留める | **(a) dtype に足す** | PR #482 |
-| **D8+D9** | (a) 修復する / (b) 削除する / (c) 触らない | **(b) 削除する** | PR #483 |
+| **D1** | (a) dtype に足す / (b) 変換直後に捨てる / (c) 明示エラーに留める | **(a) dtype に足す** (dtype 幅は後日 **float32** と確定) | PR #487 |
+| **D8+D9** | (a) 修復する / (b) 削除する / (c) 触らない | **(b) 削除する** | PR #488 |
 
 **なぜこの 2 件だけか**: どちらも枝が共通行を持たない．D1 の (a) と (b) は
 複数層にまたがる逆向きの設計で，D8+D9 の「削除」と「修復」は片方が公開名と
@@ -267,3 +267,90 @@ PR がその判断を運べる．
 行数: 25 → 25 (O10 を削り，N-1 を足した)．D8+D9 は **#483 がマージされても
 行を消さない** — 後半 (`list(range(N))` の索引メモリ) が未処理で残るため，
 その部分だけに絞って残す．
+
+---
+
+# 最終結果 (2026-08-12 セッション終了時)
+
+**上の § In flight / § Reconciliation は run 途中の状態である．最終形はこの節が
+正とする．** PR 番号もここで確定したものを使うこと (#479/#480/#482/#483 は
+stack へ組み直す際に close し，#486-#490 で作り直した)．
+
+## 出荷形態 — 1 本の stack, `main` へのマージ 2 回
+
+途中でユーザから「PR を stack に繋いで `main` へのマージを 1 回にせよ」という
+指摘を受け，`.claude/commands/audit-backlog.md` の step 5 を書き換えた
+(**この run の成果物のひとつ**)．理由は 2 つとも実測:
+
+1. CLAUDE.md がバージョン bump を義務づけるので，`main` 起点の兄弟 PR は
+   同じ `version` 行と `uv.lock` を必ず書き換える → **構造上必ずコンフリクト**．
+   この run は #477 → #481 → #484 → #478 の 4 回すべてで解決が必要だった．
+2. `build-wheel.yml` が `push: branches: [main]` で発火する → N 回マージ =
+   N 回の wheel ビルド．
+
+このセッションの `main` へのマージは，方針転換前の分 (#477/#481/#484/#478) と
+組み直し後の 1 本 (#485) に分かれた．次の run は最初から 1 本になる．
+
+## 最終的な処遇
+
+| 行 | 処遇 | 出荷先 |
+|---|---|---|
+| O10 | resolved | #477 (`dc2231e`) |
+| O7 / O8残り | resolved | #478 (`693a031`) |
+| NEW-2 (clippy) | resolved | #489 → #485 |
+| NEW-1 / NEW-3 | resolved (提案 → 承認 → 適用まで完了) | #486 → #490 → #485 |
+| D1 (`moveWinRate`) | resolved (**float32**) | #487 → #485 |
+| D8+D9 前半 (`file_level_split` 削除) | resolved | #488 → #485 |
+| D8+D9 後半 (`list(range(N))`) | 行に残す | — |
+
+## ユーザ判断 (この run で確定したもの)
+
+| 対象 | 選択 | 備考 |
+|---|---|---|
+| D1 の方向 | dtype に足す | |
+| D1 の dtype 幅 | **float32** | 当初 float16 で出したが，streaming (`ColumnarBatch`) と bit 単位で一致させる方を採った．常駐メモリは倍 |
+| D8+D9 | 削除する | |
+| clippy hook | 入れる | Actions では走らない (`repo: local`) ことを確認のうえ |
+| NEW-1 | 案 1 (既存節に追記) | |
+| NEW-3 | 案 A (`.npy` 行を削除) | |
+| `.npy` の Legacy Support | **案 1 (削除)** | 「もう使う予定はない」．提案は案 2 (範囲明示) を推していたが却下 |
+
+## doc への波及 (step 4d で追った分)
+
+`.npy` の記述を 1 箇所直したことで，同じ主張が他の durable doc に残っていないか
+走査し 3 件見つけた．
+
+| 対象 | 処遇 |
+|---|---|
+| `docs/commands/hcpe_convert.md` | **P2** — 訂正文が一意なので standing approval で適用 (`466adac`)．2026-08-12 に `pre_process.md` で直した欠陥の取り残し |
+| `CLAUDE.md` + `docs/architecture.md` | 提案 → ユーザ判断 (案 1) → 適用 (`ed8dcab`)．`architecture.md` の例は `maou.domain.data.io` という**存在しないモジュール**を呼んでいた |
+| `docs/adr-001` の targets 注 | 行に残す (N-3) |
+
+`reviews/` はこの run で 5 件を `applied` にした (pending はゼロ)．
+
+## 台帳の最終状態
+
+**削除した行** (fix が `main` に載ったもの): O10 / O7 / O8残り / NEW-1 / NEW-2 /
+NEW-3 / D1 の 7 件．**D8+D9 は後半だけに絞って残した**．
+**追加した行**: N-1 (BinaryView/LargeBinary) / N-2 (`.npy` ベンチの存廃) /
+N-3 (adr-001 の注)．
+
+27 → **21 行**．
+
+## Reconciliation (最終)
+
+触れた項目 + 新規発見 = 28 (backlog 25 行 + 新規 3)
+
+- **resolved** (行削除・`main` に到達): 7
+- **re-triaged** (行保持): 18 (うち文面を鋭くしたのは D3+D4 / D10+D11 / O5 /
+  D8+D9 後半)
+- **new row**: 3 — N-1 / N-2 / N-3
+- **not a finding**: 0
+
+## 次の run への引き継ぎ
+
+- **自動帯の最有力候補は D3+D4** — dispatch 部分は既に解消済みで，残る 2 点
+  (3 entry の変換テーブル重複 / structured 変換器 2 本) はどちらもゲート無しの P3．
+- **N-1 は実害が出うる** — writer の違う `.feather` が入力に混在すると
+  `pre-process --input-split-rows` が停止する．
+- **G1 で触れないもの**: app/learning Deferred 6/7 (GPU)，O9 (BigQuery)．
