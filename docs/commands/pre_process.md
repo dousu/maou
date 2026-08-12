@@ -3,7 +3,8 @@
 ## Overview
 
 - Bridges HCPE datasources (local folders, BigQuery, GCS, S3) to feature stores
-  by converting raw `.hcpe` inputs into preprocessed `.npy` shards and optional
+  by converting raw `.hcpe` inputs into preprocessed `.feather` shards (Arrow IPC)
+  and optional
   BigQuery/GCS/S3 uploads. All CLI flags are defined in
   `src/maou/infra/console/pre_process.py` and feed directly into the interface
   adapter.【F:src/maou/infra/console/pre_process.py†L1-L400】
@@ -19,7 +20,7 @@
 | --- | --- | --- |
 | Local filesystem | `--input-path PATH` (file or directory) | Walks recursively via `FileSystem.collect_files`, which returns a **sorted** list and skips cloud-download temp artifacts (`.gstmp`/`.tmp`/`.partial`/`.crc`). `--input-file-packed` is accepted but deprecated and has no effect.【F:src/maou/infra/console/pre_process.py†L16-L66】【F:src/maou/infra/file_system/path_utils.py†L31-L90】 |
 | BigQuery | `--input-dataset-id` + `--input-table-name` | Streams HCPE rows with configurable batch size, cache limits, clustering, and partition hints. Requires the `gcp` optional extra.【F:src/maou/infra/console/pre_process.py†L66-L200】 |
-| GCS | `--input-gcs` + `--input-bucket-name` + `--input-prefix` + `--input-data-name` + `--input-local-cache-dir` | Downloads `.npy` shards tagged `array_type="hcpe"`. Supports worker counts, bundling (`--input-enable-bundling`, `--input-bundle-size-gb`), and optional local caching.【F:src/maou/infra/console/pre_process.py†L200-L360】 |
+| GCS | `--input-gcs` + `--input-bucket-name` + `--input-prefix` + `--input-data-name` + `--input-local-cache-dir` | Downloads `.feather` shards (Arrow IPC) tagged `array_type="hcpe"`; any other suffix is rejected. Supports worker counts, bundling (`--input-enable-bundling`, `--input-bundle-size-gb`), and optional local caching.【F:src/maou/infra/console/pre_process.py†L200-L360】 |
 | S3 | `--input-s3` + bucket metadata | Mirrors the GCS contract using `S3DataSource`. Requires the `aws` optional extra.【F:src/maou/infra/console/pre_process.py†L318-L360】 |
 
 Exactly one datasource may be active; the CLI raises a `ValueError` when multiple
@@ -29,9 +30,9 @@ providers are requested.【F:src/maou/infra/console/pre_process.py†L360-L420�
 
 | Destination | Required flags | Data layout |
 | --- | --- | --- |
-| Local only | `--output-dir PATH` | Writes `.npy` shards tagged `array_type="preprocessing"` to disk. Directory is created automatically when missing.【F:src/maou/infra/console/pre_process.py†L16-L120】【F:src/maou/interface/preprocess.py†L17-L47】 |
+| Local only | `--output-dir PATH` | Writes `transformed_chunk{NNNN}.feather` shards (Arrow IPC) tagged `array_type="preprocessing"` to disk. Directory is created automatically when missing.【F:src/maou/infra/console/pre_process.py†L16-L120】【F:src/maou/interface/preprocess.py†L17-L47】 |
 | BigQuery | `--output-bigquery` + `--dataset-id` + `--table-name` | Streams feature rows via `BigQueryFeatureStore` with cache limits governed by `--output-max-cached-bytes`.【F:src/maou/infra/console/pre_process.py†L360-L487】 |
-| GCS | `--output-gcs` + `--output-bucket-name` + `--output-prefix` + `--output-data-name` | Uploads `.npy` shards as `array_type="preprocessing"` with configurable worker counts and queue sizes.【F:src/maou/infra/console/pre_process.py†L420-L520】 |
+| GCS | `--output-gcs` + `--output-bucket-name` + `--output-prefix` + `--output-data-name` | Uploads `batch{ID}_{N}dfs_{SIZE}MB.feather` shards (Arrow IPC) as `array_type="preprocessing"` with configurable worker counts and queue sizes.【F:src/maou/infra/console/pre_process.py†L420-L520】 |
 | S3 | `--output-s3` + bucket metadata | Same contract as GCS, requiring the AWS optional extra.【F:src/maou/infra/console/pre_process.py†L420-L540】 |
 
 Only one feature store may be selected per run; the CLI enforces mutual
@@ -63,7 +64,7 @@ exclusion and warns when extras are missing.【F:src/maou/infra/console/pre_proc
    Intermediate cache hints are passed through untouched.【F:src/maou/interface/preprocess.py†L17-L89】
 3. **Preprocessing and batching** – `PreProcess.transform` iterates over the HCPE
    batches, deduplicates board states, writes intermediate bundles to disk or a
-   temporary directory, and emits final `.npy` shards. When a feature store is
+   temporary directory, and emits final `.feather` shards. When a feature store is
    configured, each shard is reloaded and uploaded with consistent metadata.
    【F:src/maou/app/pre_process/hcpe_transform.py†L1-L205】
 4. **Result reporting** – The CLI prints the JSON mapping returned by the
@@ -87,7 +88,7 @@ exclusion and warns when extras are missing.【F:src/maou/infra/console/pre_proc
 
 ## Outputs and usage
 
-- Local runs write `.npy` shards derived from HCPE inputs into `--output-dir`
+- Local runs write `.feather` shards derived from HCPE inputs into `--output-dir`
   (if provided); otherwise the app layer uses a temporary directory purely for
   uploading to feature stores.【F:src/maou/app/pre_process/hcpe_transform.py†L93-L205】
 - Cloud-enabled runs push structured arrays with `key_columns=["id"]` and
