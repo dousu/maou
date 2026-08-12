@@ -278,6 +278,15 @@ impl SearchBackend for MaouSearchBackend {
             u64::MAX,
             timeout_secs,
         );
+        // TT サイズだけは難易度相応に絞る．停止条件は上のとおり時間と stop の
+        // ままで，ここは**サイズのヒント**にしか効かない．
+        //
+        // これが無いと `u64::MAX` がそのまま TT サイズ算出に流れ，1 手詰でも
+        // 上限 (1<<23 = 704MB) を確保して全バイト書き込むため，探索の実費が
+        // 数 ms でも応答が数秒になる (実測: 既定 4.9s / 予算相応なら 0.2s)．
+        // 溢れても GC が低 amount entry を間引くので，足りなければ「解けない」
+        // ではなく「遅くなる」に落ちる．長手数を追うときは `RootDfpnNodes` を上げる．
+        solver.set_tt_nodes_hint(self.options.root_dfpn_nodes);
         // 詰将棋としての最短手順を返す (検討機能の用途に合う)
         solver.set_find_shortest(true);
         solver.set_stop_flag(Arc::clone(stop));

@@ -652,6 +652,21 @@ where
                 },
             },
             OptionDecl {
+                // root dfpn のノード予算．`go` では打ち切り予算そのもの，
+                // `go mate` では**TT サイズのヒント**として効く (go mate は
+                // 規約どおり時間と stop でだけ止まる)．
+                //
+                // TT は要素数 = clamp(nodes*2, 1<<18, 1<<23) で，確保時に全バイト
+                // 書き込むため予算に比例した固定費がかかる (実測 約 7ms/MB，
+                // 既定 2M ノード = 352MB)．長手数を追うときだけ上げる．
+                name: "RootDfpnNodes",
+                kind: OptionKind::Spin {
+                    default: c.root_dfpn_nodes.unwrap_or(2_000_000) as i64,
+                    min: 1,
+                    max: 1_000_000_000,
+                },
+            },
+            OptionDecl {
                 name: "LeafMate",
                 kind: OptionKind::Check {
                     default: c.leaf_mate.unwrap_or(true),
@@ -792,6 +807,11 @@ where
                 };
             }
             "RootDfpn" => self.config.root_dfpn = Some(parse_bool()),
+            "RootDfpnNodes" => {
+                if let Ok(n) = v.parse::<u64>() {
+                    self.config.root_dfpn_nodes = Some(n.max(1));
+                }
+            }
             "LeafMate" => self.config.leaf_mate = Some(parse_bool()),
             "DefensiveMate" => self.config.defensive_mate = Some(parse_bool()),
             "DefensiveMateThreads" => {
@@ -1564,6 +1584,46 @@ mod tests {
         assert_eq!(agent.config.time.network_delay_ms, 500);
         let out = agent.handle(GuiCommand::IsReady).unwrap();
         assert_eq!(out, vec![EngineCommand::ReadyOk]);
+    }
+
+    /// `RootDfpnNodes` が宣言され，`setoption` で config に反映される．
+    ///
+    /// このノブは dfpn の TT サイズを決める (`go mate` では**サイズのヒント
+    /// としてのみ**効き，停止は時間と stop のまま)．公開されていないと，
+    /// 長手数を追いたい利用者が TT を増やす手段を持たない — 実際に
+    /// 公開漏れしていたので固定する．
+    #[test]
+    fn test_root_dfpn_nodes_is_declared_and_settable() {
+        let (mut agent, _) = agent_with_fake(default_outcome());
+        let out = agent.handle(GuiCommand::Usi).unwrap();
+        let decl = out
+            .iter()
+            .find_map(|c| match c {
+                EngineCommand::OptionDecl(d) if d.name == "RootDfpnNodes" => Some(d),
+                _ => None,
+            })
+            .expect("RootDfpnNodes が宣言されていること");
+        assert!(
+            matches!(decl.kind, OptionKind::Spin { default, .. } if default == 2_000_000),
+            "既定は 2,000,000 ノード (TT 352MB 相当)",
+        );
+
+        agent
+            .handle(GuiCommand::SetOption {
+                name: "RootDfpnNodes".to_string(),
+                value: Some("30000000".to_string()),
+            })
+            .unwrap();
+        assert_eq!(agent.config.root_dfpn_nodes, Some(30_000_000));
+
+        // 0 は TT サイズ 0 を意味してしまうので下限 1 に丸める
+        agent
+            .handle(GuiCommand::SetOption {
+                name: "RootDfpnNodes".to_string(),
+                value: Some("0".to_string()),
+            })
+            .unwrap();
+        assert_eq!(agent.config.root_dfpn_nodes, Some(1));
     }
 
     #[test]

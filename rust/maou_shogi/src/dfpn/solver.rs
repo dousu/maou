@@ -185,6 +185,20 @@ pub struct DfPnSolver {
     /// (例 1<<10) TT 確保・初期化コストを下げる．既定値では既存挙動と同一．
     /// [`Self::new_leaf_mate`] が小さい値を設定する．
     pub(super) min_tt_entries: usize,
+    /// TT サイズ算出に使うノード数 (未設定なら [`Self::max_nodes`])．
+    ///
+    /// **なぜ分けるか**: TT サイズは「どれだけのノードを置く見込みか」で決まるが，
+    /// `max_nodes` は「どこで打ち切るか」という別の問いに答えている．USI の
+    /// `go mate` のように**時間と stop でだけ止める** (規約上ノード数で止めては
+    /// ならない) 用途では `max_nodes = u64::MAX` を置くしかなく，そのまま
+    /// TT サイズに使うと局面の難易度に関係なく上限 (1<<23 = 704MB) を確保して
+    /// しまう．確保は `Entry::null()` が全ゼロでないため全バイト書き込みになり，
+    /// 1 手詰でも数秒かかる (実測: 既定 4.9s / 22MB なら 0.2s)．
+    ///
+    /// ヒントを外しても**探索は不変**: TT が溢れても
+    /// `maybe_collect_garbage` が低 amount entry を間引くので，小さすぎる TT は
+    /// 「解けなくなる」ではなく「遅くなる」に落ちる．
+    pub(super) tt_nodes_hint: Option<u64>,
     /// 王手生成キャッシュ．
     pub(super) check_cache: CheckCache,
     /// mid 探索パス上の board.hash → ply (千日手検出 + 参照祖先 ply 特定用)．
@@ -270,6 +284,7 @@ impl DfPnSolver {
             check_cache: CheckCache::new(),
             tt_gc_threshold: 0,
             min_tt_entries: 1 << 18,
+            tt_nodes_hint: None,
             path_depths: super::path_stack::PathStack::new(),
             nodes: 0,
             expansion_stack: Vec::new(),
@@ -294,6 +309,18 @@ impl DfPnSolver {
     /// (最短保証なしのノード数削減)．デフォルトは true．
     pub fn set_find_shortest(&mut self, v: bool) -> &mut Self {
         self.find_shortest = v;
+        self
+    }
+
+    /// TT サイズ算出に使うノード数を `max_nodes` と切り離して与える．
+    ///
+    /// 停止条件 (`max_nodes` / timeout / stop フラグ) には**一切影響しない**．
+    /// 「時間でだけ止めたいが TT は難易度相応に確保したい」という
+    /// USI `go mate` のような用途のためにある — そこでは `max_nodes` に
+    /// `u64::MAX` を置く必要があり，それをそのまま TT サイズに使うと
+    /// 常に上限を確保してしまう ([`Self::tt_nodes_hint`] 参照)．
+    pub fn set_tt_nodes_hint(&mut self, nodes: u64) -> &mut Self {
+        self.tt_nodes_hint = Some(nodes);
         self
     }
 
