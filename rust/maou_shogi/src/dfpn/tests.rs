@@ -2253,11 +2253,15 @@ fn test_losing_move_discrimination_before_mate() {
 /// 小予算・小 TT (leaf 用) でも詰みを申告してはならない．
 #[test]
 fn test_defensive_no_false_proof_ply131() {
-    const PLY131: &str = "l2kb1p+R1/5s3/3g5/p1ppp2p1/1N3L3/1pn6/3PPPN2/SPG1sG1+r1/LN1KGs+l2 b b7p 131";
+    const PLY131: &str =
+        "l2kb1p+R1/5s3/3g5/p1ppp2p1/1N3L3/1pn6/3PPPN2/SPG1sG1+r1/LN1KGs+l2 b b7p 131";
     // (a) 通常予算
     let rep = solve_tsume_defense(PLY131, Some(500_000), Some(60)).expect("正当な SFEN");
     assert!(
-        !matches!(rep.result, TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }),
+        !matches!(
+            rep.result,
+            TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }
+        ),
         "偽の被詰み (通常予算): {:?}",
         rep.result
     );
@@ -2269,8 +2273,68 @@ fn test_defensive_no_false_proof_ply131() {
         solver.set_defensive(true);
         let r = solver.solve(&mut board);
         assert!(
-            !matches!(r, TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }),
+            !matches!(
+                r,
+                TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }
+            ),
             "偽の被詰み (leaf 予算 {nodes}): {r:?}"
         );
+    }
+}
+
+/// `set_tt_nodes_hint` は **TT サイズだけ**を動かし，探索の停止条件に影響しない．
+///
+/// USI `go mate` は規約上 (時間 / stop) でだけ止まるので `max_nodes = u64::MAX`
+/// を置くしかない．それがそのまま TT サイズ算出に流れると，1 手詰でも上限
+/// (1<<23 entries = 704MB) を確保して全バイト書き込むため応答が数秒になる．
+/// ヒントで切り離した以上，**ヒントを極端に小さくしても解けなくなってはならない**
+/// (TT が溢れても GC が低 amount entry を間引くので「遅くなる」に落ちる)．
+///
+/// 17 手詰 (数万〜数十万ノード規模) に対して hint=1 を与える — もしヒントが
+/// 停止条件へ漏れていれば 1 ノードで打ち切られ，このテストが落ちる．
+#[test]
+fn test_tt_nodes_hint_does_not_limit_search() {
+    let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
+
+    let solve = |hint: Option<u64>| {
+        let mut board = Board::new();
+        board.set_sfen(sfen).unwrap();
+        let mut solver = DfPnSolver::new(31, 5_000_000);
+        if let Some(n) = hint {
+            solver.set_tt_nodes_hint(n);
+        }
+        match solver.solve_impl(&mut board) {
+            TsumeResult::Checkmate { moves, .. } => moves.len(),
+            other => panic!("詰みを返すべき (hint={hint:?}): {other:?}"),
+        }
+    };
+
+    let baseline = solve(None);
+    assert_eq!(baseline, 17, "前提: この局面は 17 手詰");
+    // 最小ヒントでも同じ最短手数に到達する (TT の floor まで縮んでも探索は不変)．
+    assert_eq!(
+        solve(Some(1)),
+        baseline,
+        "tt_nodes_hint は探索結果を変えてはならない",
+    );
+}
+
+/// ヒント未設定なら従来どおり `max_nodes` から TT サイズが決まる (既存挙動の固定)．
+///
+/// `go` 経路や Python API はヒントを設定しないので，そちらの挙動が
+/// 変わっていないことを保証する．
+#[test]
+fn test_tt_nodes_hint_defaults_to_max_nodes() {
+    let sfen = "9/5Pk2/9/8R/8B/9/9/9/9 b 2Srb4g2s4n4l17p 1";
+    let mut board = Board::new();
+    board.set_sfen(sfen).unwrap();
+    let mut solver = DfPnSolver::new(31, 5_000_000);
+    assert!(
+        solver.tt_nodes_hint.is_none(),
+        "既定ではヒント未設定 (= max_nodes を使う)",
+    );
+    match solver.solve_impl(&mut board) {
+        TsumeResult::Checkmate { moves, .. } => assert_eq!(moves.len(), 17),
+        other => panic!("詰みを返すべき: {other:?}"),
     }
 }

@@ -134,6 +134,7 @@ Declared in the `usi` response; defaults reflect the CLI flags above.
 | `OpeningScript` | string | Forced opening move sequence in USI notation (empty = disabled). |
 | `USI_Ponder` | check | Enable pondering (default on). Declared so the GUI sends `go ponder`; `bestmove` carries the predicted reply (PV's 2nd move). |
 | `RootDfpn` / `LeafMate` | check | Mate search toggles. |
+| `RootDfpnNodes` | spin | Node budget for the root dfpn mate search (default `2000000`). For `go` it is the search cutoff; for `go mate` it only **sizes the transposition table** — that search stops on time/`stop` as the USI spec requires. The table holds `clamp(nodes * 2, 2^18, 2^23)` entries and is written in full on allocation (≈7 ms/MB; the default is ≈352 MB), so this is a fixed cost paid per search, not just at startup. Raise it only to chase long mates; an undersized table is collected by GC rather than losing the mate, so it costs time, not correctness. |
 
 ## Example
 
