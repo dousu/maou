@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import bisect
 import logging
 import random
 import time
@@ -27,9 +28,7 @@ from maou.interface.data_schema import (
     convert_preprocessing_df_to_numpy,
     convert_stage1_df_to_numpy,
     convert_stage2_df_to_numpy,
-    get_preprocessing_dtype,
-    get_stage1_dtype,
-    get_stage2_dtype,
+    get_dtype,
 )
 
 if TYPE_CHECKING:
@@ -54,12 +53,6 @@ _DF_TO_COLUMNAR_CONVERTERS: dict[
     "preprocessing": convert_preprocessing_df_to_columnar,
     "stage1": convert_stage1_df_to_columnar,
     "stage2": convert_stage2_df_to_columnar,
-}
-
-_STRUCTURED_DTYPES: dict[str, Callable[[], np.dtype]] = {
-    "preprocessing": get_preprocessing_dtype,
-    "stage1": get_stage1_dtype,
-    "stage2": get_stage2_dtype,
 }
 
 
@@ -284,26 +277,26 @@ class FileDataSource(
             self._use_columnar = (
                 array_type in _DF_TO_COLUMNAR_CONVERTERS
             )
-            # structured array再構築用のdtype
+            # structured array再構築用のdtype．
+            # bit_pack は未使用 (後方互換の保持のみ) なので常に非パック版を引く．
             self._structured_dtype: np.dtype | None = None
             if self._use_columnar:
-                dtype_factory = _STRUCTURED_DTYPES.get(
-                    array_type
+                self._structured_dtype = get_dtype(
+                    array_type, bit_pack=False
                 )
-                if dtype_factory is not None:
-                    self._structured_dtype = dtype_factory()
 
-            # DF→変換関数を先に取得
-            columnar_converter = _DF_TO_COLUMNAR_CONVERTERS.get(
-                self.array_type
+            # DF→変換関数を先に取得し，ループに入る前に非 None へ確定させる．
+            # ループ内で分岐が両方とも空振りすると lengths だけが伸びて
+            # _file_entries とズレ，以降の全インデックス参照が静かに壊れる．
+            # 分岐そのものを消して構造的に起こり得なくする．
+            converter: Callable[[pl.DataFrame], Any] | None = (
+                _DF_TO_COLUMNAR_CONVERTERS.get(self.array_type)
+                if self._use_columnar
+                else _DF_TO_NUMPY_CONVERTERS.get(
+                    self.array_type
+                )
             )
-            numpy_converter = _DF_TO_NUMPY_CONVERTERS.get(
-                self.array_type
-            )
-            if (
-                not self._use_columnar
-                and numpy_converter is None
-            ):
+            if converter is None:
                 raise ValueError(
                     f"Unknown array_type: {self.array_type}"
                 )
@@ -325,102 +318,97 @@ class FileDataSource(
                             f"Only .feather files are supported. Got: {file_path.suffix}"
                         )
 
-                    try:
-                        file_size_mb = (
-                            file_path.stat().st_size
-                            / (1024 * 1024)
+                    file_size_mb = file_path.stat().st_size / (
+                        1024 * 1024
+                    )
+                    self.logger.debug(
+                        "Loading file %d/%d: %s (%.1f MB)",
+                        idx + 1,
+                        len(self.file_paths),
+                        file_path.name,
+                        file_size_mb,
+                    )
+
+                    t0 = time.perf_counter()
+                    df = self._load_feather(file_path)
+                    array_length = len(df)
+                    t_load = time.perf_counter()
+                    self.logger.debug(
+                        "Loaded %d rows in %.1fs",
+                        array_length,
+                        t_load - t0,
+                    )
+
+                    converted = converter(df)
+                    del df
+                    t_convert = time.perf_counter()
+                    self.logger.debug(
+                        "Converted to %s in %.1fs",
+                        "columnar batch"
+                        if self._use_columnar
+                        else "numpy array",
+                        t_convert - t_load,
+                    )
+
+                    if self._use_columnar:
+                        entry = FileDataSource.FileManager._FileEntry(
+                            name=file_path.name,
+                            path=file_path,
+                            dtype=np.dtype("uint8"),
+                            length=array_length,
+                            memmap=None,
+                            cached_array=None,
+                            cached_columnar=converted,
                         )
-                        self.logger.debug(
-                            "Loading file %d/%d: %s (%.1f MB)",
+                    else:
+                        entry = FileDataSource.FileManager._FileEntry(
+                            name=file_path.name,
+                            path=file_path,
+                            dtype=converted.dtype,
+                            length=array_length,
+                            memmap=None,
+                            cached_array=converted,
+                        )
+                    self._file_entries.append(entry)
+                    lengths.append(array_length)
+                    cumulative_rows += array_length
+
+                    if (
+                        idx % milestone_interval == 0
+                        or idx == n - 1
+                    ):
+                        self.logger.info(
+                            "Progress: %d/%d files, "
+                            "%d rows loaded, "
+                            "%.1fs elapsed",
                             idx + 1,
-                            len(self.file_paths),
-                            file_path.name,
-                            file_size_mb,
+                            n,
+                            cumulative_rows,
+                            time.perf_counter() - t_init_start,
                         )
 
-                        t0 = time.perf_counter()
-                        df = self._load_feather(file_path)
-                        array_length = len(df)
-                        t_load = time.perf_counter()
-                        self.logger.debug(
-                            "Loaded %d rows in %.1fs",
-                            array_length,
-                            t_load - t0,
-                        )
-
-                        if (
-                            self._use_columnar
-                            and columnar_converter is not None
-                        ):
-                            columnar_batch = columnar_converter(
-                                df
-                            )
-                            del df
-                            t_convert = time.perf_counter()
-                            self.logger.debug(
-                                "Converted to columnar batch in %.1fs",
-                                t_convert - t_load,
-                            )
-
-                            self._file_entries.append(
-                                FileDataSource.FileManager._FileEntry(
-                                    name=file_path.name,
-                                    path=file_path,
-                                    dtype=np.dtype("uint8"),
-                                    length=array_length,
-                                    memmap=None,
-                                    cached_array=None,
-                                    cached_columnar=columnar_batch,
-                                )
-                            )
-                        elif numpy_converter is not None:
-                            numpy_array = numpy_converter(df)
-                            del df
-                            t_convert = time.perf_counter()
-                            self.logger.debug(
-                                "Converted to numpy array in %.1fs",
-                                t_convert - t_load,
-                            )
-
-                            self._file_entries.append(
-                                FileDataSource.FileManager._FileEntry(
-                                    name=file_path.name,
-                                    path=file_path,
-                                    dtype=numpy_array.dtype,
-                                    length=array_length,
-                                    memmap=None,
-                                    cached_array=numpy_array,
-                                )
-                            )
-                        lengths.append(array_length)
-                        cumulative_rows += array_length
-
-                        if (
-                            idx % milestone_interval == 0
-                            or idx == n - 1
-                        ):
-                            self.logger.info(
-                                "Progress: %d/%d files, "
-                                "%d rows loaded, "
-                                "%.1fs elapsed",
-                                idx + 1,
-                                n,
-                                cumulative_rows,
-                                time.perf_counter()
-                                - t_init_start,
-                            )
-
-                    except ImportError as e:
-                        raise ImportError(
-                            f"Polars and Rust backend required for .feather files: {e}"
-                        )
-
+                except ImportError as e:
+                    self.logger.error(
+                        f"Failed to load array {file_path}: {e}"
+                    )
+                    raise ImportError(
+                        f"Polars and Rust backend required for .feather files: {e}"
+                    ) from e
                 except Exception as e:
                     self.logger.error(
                         f"Failed to load array {file_path}: {e}"
                     )
                     raise
             self.cum_lengths = np.cumsum([0] + lengths)
+            # get_item は訓練サンプル 1 件ごとに呼ばれるので，探索対象
+            # (cum_lengths[1:]) と探索そのものを Python 側に寄せておく．
+            # np.searchsorted のスカラー呼び出しは 1 件あたりの定数費用が重い．
+            self._cum_upper: list[int] = [
+                int(v) for v in self.cum_lengths[1:]
+            ]
+            self._cum_lower: list[int] = [
+                int(v) for v in self.cum_lengths[:-1]
+            ]
 
             self.total_rows = self.cum_lengths[-1]
             self.total_pages = len(self.cum_lengths) - 1
@@ -588,10 +576,8 @@ class FileDataSource(
                     self._concatenated_columnar, idx
                 )
 
-            file_idx = np.searchsorted(
-                self.cum_lengths[1:], idx, side="right"
-            )
-            local_idx = idx - self.cum_lengths[file_idx]
+            file_idx = bisect.bisect_right(self._cum_upper, idx)
+            local_idx = idx - self._cum_lower[file_idx]
             entry = self._file_entries[file_idx]
 
             if self._use_columnar:

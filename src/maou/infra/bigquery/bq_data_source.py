@@ -481,7 +481,7 @@ class BigQueryDataSource(
 
             # ローカルキャッシュファイルが正しく作成されたか確認
             cache_files = list(
-                self.local_cache_dir.glob("*.npy")
+                self.local_cache_dir.glob("*.feather")
             )
             self.logger.info(
                 f"Created {len(cache_files)} local cache files"
