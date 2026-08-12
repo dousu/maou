@@ -1,5 +1,5 @@
 ---
-description: Consume the deferred and out-of-scope findings that /audit-and-fix left behind. Gathers them from audits/coverage.md's backlog tables, re-verifies each against HEAD, then classifies each by DECISION COST on a mechanical six-class ladder — P1-P3 need no user judgment and are fixed, PR'd and merged without asking; P4-P6 need judgment and become PRs carrying that decision. The user is asked ONCE, on the PR — the run stops mid-session only when the answer decides what code to write. PRs are stacked when they depend on each other so the order is visible. Applies fixes on the normal route (version bump, regression test, reviews/ proposal for durable docs), deletes the resolved backlog rows, and records the run in audits/.
+description: Consume the deferred and out-of-scope findings that /audit-and-fix left behind. Gathers them from audits/coverage.md's backlog tables, re-verifies each against HEAD, then classifies each by DECISION COST on a mechanical six-class ladder — P1-P3 need no user judgment and are fixed, PR'd and merged without asking; P4-P6 need judgment and become PRs carrying that decision. The user is asked ONCE, on the PR — the run stops mid-session only when the answer decides what code to write. Every PR of a run is chained into one stack with exactly one merge into main, so siblings never conflict and the wheel builds once. Applies fixes on the normal route (version bump, regression test, reviews/ proposal for durable docs), deletes the resolved backlog rows, and records the run in audits/.
 argument-hint: [item-selector or class (P1..P6 / auto / judgment) | omit to take everything] [effort-level: low|medium|high|max, default medium]
 ---
 
@@ -234,10 +234,11 @@ in the same run means the first one was under-specified.
   written.** An unmerged PR is an open finding (step 6a).
 - **Ask at most once per run, and only under the test above.** A judgment
   class is a reason to open a PR unmerged, not a reason to interrupt.
-- **PRs that depend on each other are stacked** (step 5b) — a dependent PR
-  is based on the branch it depends on, never on `main`. Independent PRs
-  are based on `main` and say so. The stack is how a reader sees the order
-  without reading the diffs.
+- **Every PR of the run is chained into one stack** (step 5b), and
+  **exactly one of them targets `main`**. There is no "independent, based
+  on `main`" case: the version bump and `uv.lock` make siblings conflict by
+  construction, and every merge into `main` triggers a wheel build. The run
+  lands on `main` once.
 
 ## Steps
 
@@ -346,9 +347,11 @@ makes the classification auditable after the fact.
 both the cheapest and the least able to break anything, so a failure there
 surfaces before the run has spent effort on P3.
 
-Ungated P1/P2/P3 items are consumed in full and merged (step 5d). Gated
-ones are not: a gate moves the item into the judgment band, where it
-becomes a PR whose body names the gate as the reason it is not merged.
+Ungated P1/P2/P3 items are consumed in full and settled (step 5d) — fixed,
+QA'd, and placed at the bottom of the run's chain, needing no further input.
+They reach `main` with the run's single merge (5b), not on their own. Gated
+ones are not settled: a gate moves the item into the judgment band, where it
+becomes a PR whose body names the gate as the reason it is unresolved.
 
 If the auto band is empty, say so in one line and go straight to 3c.
 
@@ -391,7 +394,7 @@ item set in one line and skip the parts of 3b/3c it excludes.
 ### 4. Fix, on the normal route
 
 Group the selected items **by class first, then by owning path**, so each
-commit is one coherent fix and each class can ship independently (step 5).
+commit is one coherent fix and each class is its own review unit in the chain (step 5).
 
 **4a. Check the scope boundary first.** If a selected item cannot be fixed
 without touching something unselected, that is gate **G2**, and it applies
@@ -486,10 +489,16 @@ Committing is not shipping. This step turns the run's commits into review
 units the user can look at afterwards, and merges the ones that had nothing
 to decide.
 
-**5a. One PR per class.** `P1`, `P2`, `P3`, `P4`… each becomes at most one
-PR. That is the "ある程度の単位" the batching exists for: a reviewer
-opening the P4 PR knows every commit in it changes behavior and none of it
-breaks data, because that is what the class means.
+**5a. One PR per class — as a review unit inside the run's single stack.**
+`P1`, `P2`, `P3`, `P4`… each becomes at most one PR. That is the
+"ある程度の単位" the batching exists for: a reviewer opening the P4 PR
+knows every commit in it changes behavior and none of it breaks data,
+because that is what the class means.
+
+**A class PR is a unit of review, not a unit of merging into `main`.** All
+of them are chained (5b) and the run lands on `main` once. Splitting by
+class costs nothing when they are stacked; it costs a conflict per merge
+when they are not.
 
 Split a class into more than one PR only when:
 - it spans unrelated scope classes (Python and Rust, say) — then split by
@@ -504,51 +513,73 @@ If the session was handed a designated branch it must develop on, that
 mandate wins: commit everything there, open the single PR from it, and say
 in the report that class-per-PR was collapsed and why.
 
-**5b. Stack the PRs that depend on each other.** A run that consumes a
-real backlog produces several PRs at once, and left flat they arrive as an
-undifferentiated pile — the reviewer cannot tell which must land first, and
-two of them silently contain each other's diffs. Stacking makes the order
-part of the PR itself.
+**5b. Chain EVERY PR of the run into one stack. Exactly one of them
+targets `main`.**
 
-**The dependency test, applied per PR against the ones already opened in
-this run:**
+This is GitHub's stacked pull requests
+(<https://docs.github.com/en/pull-requests/how-tos/stacked-pull-requests>):
+PR 1 is based on `main`, PR 2 is based on PR 1's head branch, PR 3 on
+PR 2's, and so on. The base link *is* the dependency — naming related PRs
+in the body is not stacking and does not prevent a single conflict.
 
-> Does this PR's diff touch a file that an earlier **unmerged** PR of this
-> run also touches, or rely on a symbol, helper, or signature that PR
-> introduced?
+**There is no "independent, based on `main`" case.** An earlier version of
+this file had one, gated on a per-PR dependency test. That test asked the
+wrong question, and the run of 2026-08-12 is the evidence: five PRs opened
+"independently" off `main`, and every merge into `main` forced a manual
+conflict resolution in the next one. Two properties of this repo make
+sibling PRs conflict *by construction*, whatever their diffs touch:
 
-- **Yes** → base this PR on that PR's **head branch**, not `main`. GitHub
-  then shows only the incremental diff, and the base link states the
-  dependency without anyone writing it down.
-- **No** → base it on `main`, and say "independent — based on `main`" in
-  the body. Do not stack for tidiness. A stack is a merge *constraint*: an
-  independent PR stacked on a judgment-band PR cannot land until the user
-  answers a question that has nothing to do with it.
+1. **Every PR that changes `src/` or `rust/` bumps a version** (CLAUDE.md)
+   and regenerates `uv.lock`. Two siblings off `main` therefore edit the
+   same `version = ...` line and the same lock entry. This is not
+   incidental — it is guaranteed by the versioning rule.
+2. **`.github/workflows/build-wheel.yml` triggers on `push: branches:
+   [main]`.** N merges into `main` build N wheels. The wheel build is the
+   most expensive job in the repo, and N−1 of those builds are waste.
 
-Order the stack by class ascending, P1 at the bottom. That is also the
-merge order, and it puts the parts needing no decision underneath the parts
-that do — so the stack drains from the bottom as the auto band merges,
-rather than being held up from the top.
+So the shape to produce is one chain, and **one merge into `main` for the
+whole run**.
 
-**Open the judgment-band PRs after the auto band has merged** (5d). By
-then `main` already contains P1-P3, so most judgment PRs are independent
-and base cleanly on `main` — the stack exists for the cases where they are
-genuinely not.
+**Order, bottom to top:**
 
-**Restacking is part of the run, not an afterthought.** When a parent
-merges, GitHub retargets its open children onto the parent's base *if the
-parent's head branch is deleted* — which is a repository setting, not a
-guarantee. Verify with `mcp__github__pull_request_read` that each child's
-base is now `main`; where it is not, set it with
-`mcp__github__update_pull_request`. Then bring the child up to date
-(`mcp__github__update_pull_request_branch`, or merge `main` in and push if
-it conflicts), because a child left on a deleted base shows a diff that no
-longer means anything.
+1. the `audits/` ledger + record PR (P1 — see 6e),
+2. the auto band, classes ascending (P1 → P2 → P3),
+3. the judgment band, classes ascending (P4 → P5 → P6),
+4. **the item the user is least likely to accept, last.**
 
-A stacked PR merges only **after its parent has merged and it has been
-retargeted to `main`**. Do not merge a child into its parent's branch to
-"unblock" it — that buries the child's review inside the parent's PR and
-loses the class boundary that made the split worth making.
+Rule 4 is what makes the stack safe to reject piecewise: the user drops an
+item by simply *not* merging that PR into its parent, and everything below
+it is unaffected. Anything placed under a contentious PR is held hostage to
+it, so put a judgment call the run genuinely cannot predict at the top even
+if its class would sort it lower, and say why in the body.
+
+**Version bumps run along the chain, not in parallel.** Each PR bumps from
+the version its parent left, so the stack carries one increasing sequence.
+Two PRs of a run must never claim the same version — that is the conflict
+this step exists to prevent.
+
+**Merging the stack:**
+
+- Merge **top down, child into parent**. Those merges target a branch, not
+  `main`: no `push: main`, no wheel build, and no conflict, because each
+  child is already based on its parent.
+- Then merge the **bottom** PR into `main`, **once**. By then it contains
+  everything above it that was accepted.
+- To reject an item: do not merge it into its parent, and close it. Its
+  children (if any) must be re-based onto its parent before they can flow
+  down — this is the cost that rule 4 above is designed to keep rare.
+
+Do **not** merge a child into `main` directly, and do not retarget children
+onto `main` as parents merge. Both re-create the N-merges-N-wheels problem
+the chain removes.
+
+**Keeping the chain healthy is part of the run.** After any push to a
+branch in the stack, its descendants are stale. Merge the parent branch
+into each descendant in order (bottom → top) and push, so every PR shows
+only its own incremental diff. Verify each PR's base with
+`mcp__github__pull_request_read`; set it with
+`mcp__github__update_pull_request` when GitHub has retargeted a child
+behind your back (it does this when a parent's head branch is deleted).
 
 **5c. PR body — written for the user reading it after the fact.** State,
 for each item in the PR: the backlog row and record it came from, its class
@@ -560,22 +591,30 @@ supply: what changes for them, what the alternative was, why this branch
 was taken, and — for P5/P6 — the concrete compatibility break. Write it so
 that merging is a complete answer.
 
-Every PR of the run carries the same **stack map**, marking its own
-position, so the relationship is visible from whichever PR the user opens
-first:
+Every PR of the run carries the same **stack map**, listing the chain
+bottom-first and marking its own position, so the order and the single
+`main` merge are visible from whichever PR the user opens first. State each
+PR's base explicitly — that is what tells the reader it is a real stack and
+not a list of related links:
 
 ```markdown
-## Stack (2026-08-12 /audit-backlog)
-1. #481 P1 audits/ ledger + record — merged
-2. #482 P3 behavior-preserving fixes — merged
-3. #483 P4 test-ratio / cache glob  ← このPR (base: main, independent)
-4. #484 P5 moveWinRate dtype (base: #483 — 同じ dtype 経路に触るため)
+## Stack (2026-08-12 /audit-backlog) — main へのマージは #481 の 1 回だけ
+1. #481 P1 audits/ ledger + record   (base: main)     ← 最後に main へ
+2. #482 P3 behavior-preserving fixes (base: #481)
+3. #483 P4 test-ratio / cache glob   (base: #482)  ← このPR
+4. #484 P5 moveWinRate dtype         (base: #483)
+5. #485 P6 file_level_split 削除     (base: #484)  ← 一番不確実なので最上段
+
+上から順に親へマージし，最後に #481 を main へ 1 回だけマージする．
+不要な段は「親へマージせず close」するだけでよく，下の段は影響を受けない．
 ```
 
 Follow the repository's PR template if one exists.
 
-**5d. Merge the auto band, bottom-up. Do not wait for the user.** P1/P2/P3
-PRs with no gates merge as soon as all three conditions hold:
+**5d. Land the run in one merge. Do not wait for the user on the auto
+band.** The auto band still ships without a question — what changed is
+*where* it ships to. Its PRs are settled as soon as all three conditions
+hold, and settled means "imposes no further wait on the run's single merge":
 
 1. **The QA in 4c ran here and passed.** This is the real gate. The repo
    deliberately runs no test suite on PRs — `claude-code-review.yml` is
@@ -589,22 +628,32 @@ PRs with no gates merge as soon as all three conditions hold:
    without this file changing. A red check blocks the merge, full stop,
    including when you believe it is unrelated: investigate, fix, or move
    the PR to the judgment band and say so.
-3. **Its base is `main`.** A PR still stacked on an unmerged parent waits
-   for the parent, then gets retargeted and refreshed per 5b. Merging up
-   the stack in any other order is what produces the "why does this PR
-   contain someone else's diff" confusion the stack exists to prevent.
+3. **Everything above it in the stack has been resolved** — merged into
+   it, or closed. The auto band is at the bottom, so this is normally
+   satisfied only once the judgment band above it has been answered. Merging
+   the auto band into `main` *first* would split the run across two merges
+   and two wheel builds, which is exactly what 5b removes.
 
-Prefer `mcp__github__enable_pr_auto_merge` so GitHub merges when the checks
-settle; if the repository does not allow auto-merge, read the checks and
-call `mcp__github__merge_pull_request`. Match the repository's merge style
+**What "merge the auto band" means under a chain.** It does not mean
+pushing the auto band to `main` on its own. It means: the auto-band PRs are
+settled and need no further input, so they impose no wait — the run's single
+merge into `main` can proceed as soon as the judgment band above them is
+answered. If the user answers nothing this session, the whole stack stays
+open and the run hands off as in 5e.
+
+Use `mcp__github__merge_pull_request` for the child-into-parent merges and
+for the final merge into `main`. Match the repository's merge style
 (currently merge commits — `git log --merges` settles it at read time).
-After each merge, restack the children before merging the next one.
 
-**MUST NOT auto-merge**: any P4/P5/P6 PR, any PR carrying a gated item, any
-PR whose classification you could not decide without hedging, any PR whose
-checks are red or still running, and any PR whose parent in the stack has
-not merged. When in doubt the PR stays open — that costs a comment, while a
-wrong merge costs a revert on `main`.
+**MUST NOT merge into `main`**: a stack with an unresolved P4/P5/P6 PR, a
+gated item, a classification you could not decide without hedging, a red or
+still-running check, or an open PR above the one being merged. When in doubt
+the stack stays open — that costs a comment, while a wrong merge costs a
+revert on `main`.
+
+Child-into-parent merges inside the stack are not subject to the wait: they
+target a branch, land no code on `main`, and are how an accepted item flows
+down toward the single merge.
 
 **5e. Judgment-band PRs stay open. That is the deliverable, not a
 shortfall.** They hold the fix, the QA, the reasoning, and the decision, and
@@ -714,14 +763,14 @@ Print the reconciliation as an equation in step 7, not as an assurance.
 
 **6e. Ship the record itself, at the bottom of the stack.** The ledger
 update and the record are P1 by construction — `audits/` ships nothing — so
-they go in their own PR and merge under 5d like any other P1 work. They
-must **not** ride in a judgment-band PR: the account of a run has to reach
-`main` even when the fixes it describes are still under review, or an
-unmerged PR takes the run's only record down with it.
+they go in their own PR, and it is the **bottom** of the chain: the one PR
+whose base is `main` (5b). Everything else in the run is stacked on it, so
+whatever the user accepts flows down into it and reaches `main` with it.
 
-Nothing may be stacked **on** the record PR either. It is written last but
-merges first, and a judgment PR based on it would inherit the wait it was
-built to avoid.
+It must **not** ride inside a judgment-band PR. Being the bottom is what
+guarantees the account survives: if the user rejects the fixes above it,
+each of those PRs is closed and the record still merges — carrying the
+Re-triaged section that explains why they were rejected.
 
 Link the record from `coverage.md` under the backlog table so a future run
 can find the account of a row that is no longer there. Then commit:
@@ -803,10 +852,13 @@ Keep the derive-never-enumerate property:
   being the only real gate, but it does not become redundant: it is what
   covers the checks CI still does not run. Add nothing here; the condition
   is already written as "the QA in 4c ran here", not "no CI exists".
-- **A stack that keeps collapsing to one PR** — that means the dependency
-  test in 5b is answering "no" every time, which is the healthy outcome:
-  class-per-PR off `main` is the cheaper shape. Do not stack to make the
-  stack look used.
+- **A run that produces exactly one PR** — fine, and it is already the
+  shape 5b converges on: one chain, one merge into `main`. Do not split a
+  single coherent change into a stack to make the stack look used; do not
+  un-chain a multi-class run to avoid a stack.
+- **A repo that stops building a wheel on `push: main`** — 5b's second
+  reason weakens but the first does not. The version-bump rule alone still
+  makes siblings off `main` conflict pairwise, so keep the chain.
 - **A class that keeps coming up empty** — that is a signal about the repo,
   not about the rubric. Leave the class; report the emptiness.
 - **A class that keeps being wrong** — that is a signal about the *ladder*,
@@ -817,11 +869,12 @@ Keep the derive-never-enumerate property:
 
 ## Usage
 
-- `/audit-backlog` — classify everything, merge the auto band unattended,
-  and leave the judgment band as PRs to decide on. Asks nothing unless a
-  fork in the road demands it. The intended entry point.
-- `/audit-backlog auto` — the auto band only. Stop after 5d; do not build
-  judgment-band PRs at all. The narrowest run.
+- `/audit-backlog` — classify everything, settle the auto band unattended,
+  and leave the judgment band as PRs to decide on — all of it as one chain
+  that merges into `main` once. Asks nothing unless a fork in the road
+  demands it. The intended entry point.
+- `/audit-backlog auto` — the auto band only. Its chain has nothing above
+  it, so it merges into `main` immediately. The narrowest run.
 - `/audit-backlog judgment` — the judgment band only, when the auto band
   is already clear.
 - `/audit-backlog P4` — the P4 items: fix them and open their PR.
