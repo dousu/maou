@@ -171,6 +171,15 @@ backlog に行を追加した．
   キャッシュが既に存在する」場合に早期 return でスキップされる．検証が最も
   要る「一部だけ壊れている」ケースを通らない (O6 の回帰テストを書く過程で
   発見)．
+
+  **Correction** (2026-08-12, `4c27c18`): この診断は**逆である**．
+  一部だけ欠けている場合は `all_cache_exists` が False になるので早期
+  return せず，末尾の検証を**通る**．スキップされるのは全ページ揃って
+  いる場合だけで，そこは直前の `__check_local_cache_exists` が全ページに
+  ついて確認済みである．破損については，`__check_local_cache_exists` は
+  `cache_path.exists()` しか見ないが，**末尾の検証もファイル数を数える
+  だけ**なので，どちらも破損は検出しない — 早期 return が検証を奪って
+  いるわけではない．述べられた欠陥は存在しないので棄却し，行を削除した．
 - **N3** — `app/learning/dataset.py:45` と `app/pre_process/hcpe_transform.py:62`
   は `@abc.abstractmethod` を付けながら `abc.ABCMeta`/`abc.ABC` を使って
   いないのでマーカーが**不活性**．O1 が構築時に捕まらなかった根本原因で，
