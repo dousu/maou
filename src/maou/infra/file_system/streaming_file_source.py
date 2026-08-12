@@ -17,6 +17,13 @@ from typing import Literal
 
 import polars as pl
 
+# Arrow IPC の File/Stream 判定は domain に置いてある．
+# ここは後方互換のための再輸出で，`streaming_file_source.scan_row_count`
+# を差し替えるテストと，モジュール名で参照する既存の import を保つ．
+from maou.domain.data.arrow_format import (  # noqa: F401
+    is_arrow_ipc_file_format,
+    scan_row_count,
+)
 from maou.interface.data_io import (
     ColumnarBatch,
     convert_preprocessing_df_to_columnar,
@@ -216,56 +223,3 @@ class StreamingFileSource:
             )
             del df  # DF参照を即座に切る(GC対象にする)
             yield batch
-
-
-# Arrow IPC File形式のマジックバイト (先頭8バイト)
-_ARROW_FILE_MAGIC = b"ARROW1\x00\x00"
-
-
-def is_arrow_ipc_file_format(file_path: Path) -> bool:
-    """ファイルがArrow IPC File形式かどうかを判定する．
-
-    先頭8バイトのマジックバイトで判定する．
-    Stream形式の場合はFalseを返す．
-
-    Args:
-        file_path: 判定するファイルのパス
-
-    Returns:
-        Arrow IPC File形式ならTrue，Stream形式ならFalse
-    """
-    with open(file_path, "rb") as f:
-        header = f.read(8)
-    return header == _ARROW_FILE_MAGIC
-
-
-def scan_row_count(file_path: Path) -> int:
-    """featherファイルの行数のみを取得する．
-
-    Arrow IPC File形式の場合はメタデータから高速に取得する．
-    Stream形式の場合は ``pl.read_ipc_stream`` でDataFrameの行数を取得する．
-
-    Args:
-        file_path: featherファイルのパス
-
-    Returns:
-        ファイル内の行数
-    """
-    if is_arrow_ipc_file_format(file_path):
-        # File形式: メタデータのみ読み(高速)
-        lf = pl.scan_ipc(file_path)
-        return lf.select(pl.len()).collect().item()
-    else:
-        # Stream形式: DataFrameの高さを取得
-        # Note: Stream形式ではメタデータのみの読み出しが不可能なため，
-        # 全データを読む必要がある．大規模ファイルではメモリ使用量に注意．
-        logger.info(
-            "File %s is Arrow IPC Stream format. "
-            "Reading full data for row count "
-            "(consider converting to File format).",
-            file_path,
-        )
-        df = pl.read_ipc_stream(file_path)
-        row_count = df.height
-        del df
-        return row_count
