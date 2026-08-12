@@ -550,3 +550,85 @@ class TestLazyInitialization:
             real_scan,
         )
         assert source.total_rows == 15
+
+
+# ============================================================================
+# /audit-backlog 2026-08-12 — 回帰テスト
+# ============================================================================
+
+
+class TestBacklogRegressions:
+    """backlog 行 D10(a) / D12(e) の回帰テスト．"""
+
+    def test_iter_files_columnar_matches_subset_over_all_files(
+        self, tmp_path: Path
+    ) -> None:
+        """全ファイルを渡した ``_subset`` と同じ内容を返すこと．
+
+        D10(a): ``iter_files_columnar`` は ``iter_files_columnar_subset``
+        から計測ログを抜いた二重実装だった．委譲へ寄せたので，両者が
+        同じバッチ列を返すことを固定する．
+        """
+        file_paths = _create_preprocessing_files(
+            tmp_path, file_count=3, rows_per_file=4
+        )
+        source = StreamingFileSource(
+            file_paths=file_paths,
+            array_type="preprocessing",
+        )
+
+        via_all = list(source.iter_files_columnar())
+        via_subset = list(
+            source.iter_files_columnar_subset(file_paths)
+        )
+
+        assert len(via_all) == len(via_subset) == 3
+        for a, b in zip(via_all, via_subset, strict=True):
+            assert len(a) == len(b)
+            np.testing.assert_array_equal(
+                a.board_positions, b.board_positions
+            )
+            assert a.result_value is not None
+            assert b.result_value is not None
+            np.testing.assert_array_equal(
+                a.result_value, b.result_value
+            )
+
+    def test_iter_files_columnar_is_lazy(
+        self, tmp_path: Path
+    ) -> None:
+        """委譲後も generator のまま (呼んだだけでは読まない)こと．"""
+        file_paths = _create_preprocessing_files(
+            tmp_path, file_count=2, rows_per_file=3
+        )
+        source = StreamingFileSource(
+            file_paths=file_paths,
+            array_type="preprocessing",
+        )
+
+        gen = source.iter_files_columnar()
+        for path in file_paths:
+            path.unlink()
+
+        # 遅延評価なので，生成時点ではまだ読んでいない
+        with pytest.raises((OSError, FileNotFoundError)):
+            next(iter(gen))
+
+    @pytest.mark.parametrize(
+        "array_type", ["preprocessing", "stage1", "stage2"]
+    )
+    def test_columnar_array_types_accepted(
+        self, array_type: str
+    ) -> None:
+        """columnar 変換器を持つ型は受理されること．
+
+        D12(e): 2 つ目の検証条件を
+        ``array_type not in _COLUMNAR_CONVERTERS`` へ縮約したので，
+        受理集合が変わっていないことを固定する
+        (拒否側は ``test_init_hcpe_rejected`` が押さえている)．
+        """
+        source = StreamingFileSource(
+            file_paths=[],
+            array_type=array_type,  # type: ignore[arg-type]
+        )
+        assert source.total_rows == 0

@@ -83,10 +83,7 @@ class StreamingFileSource:
                 f"Unsupported array_type: {array_type}. "
                 f"Supported: {list(_FEATHER_LOADERS.keys())}"
             )
-        if (
-            array_type == "hcpe"
-            and array_type not in _COLUMNAR_CONVERTERS
-        ):
+        if array_type not in _COLUMNAR_CONVERTERS:
             raise ValueError(
                 "hcpe array_type is not supported for streaming columnar conversion. "
                 "Use 'preprocessing', 'stage1', or 'stage2'."
@@ -173,11 +170,9 @@ class StreamingFileSource:
         Yields:
             1ファイル分のデータを含む ``ColumnarBatch``
         """
-        for fp in self._file_paths:
-            df = self._loader(fp)
-            batch = self._converter(df)
-            del df  # DF参照を即座に切る(GC対象にする)
-            yield batch
+        yield from self.iter_files_columnar_subset(
+            self._file_paths
+        )
 
     def iter_files_columnar_subset(
         self,
@@ -196,9 +191,7 @@ class StreamingFileSource:
         """
         n = len(file_paths)
         for i, fp in enumerate(file_paths):
-            log_level = logging.DEBUG
-            logger.log(
-                log_level,
+            logger.debug(
                 "Loading file %d/%d: %s",
                 i + 1,
                 n,
@@ -207,8 +200,7 @@ class StreamingFileSource:
             t0 = time.perf_counter()
             df = self._loader(fp)
             t_load = time.perf_counter() - t0
-            logger.log(
-                log_level,
+            logger.debug(
                 "File loaded: %d rows in %.2fs, converting...",
                 len(df),
                 t_load,

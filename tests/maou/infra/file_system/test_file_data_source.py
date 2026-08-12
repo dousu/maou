@@ -302,3 +302,207 @@ def test_file_data_source_progress_logging(
     assert "Loading file 2/2" in debug_text
     assert "Loaded" in debug_text
     assert "Converted to numpy array" in debug_text
+
+
+# ---------------------------------------------------------------------------
+# /audit-backlog 2026-08-12 — 回帰テスト
+#
+# characterization test: P3 (振る舞い不変) の分類そのものの根拠．
+# 修正前後の双方で通る必要がある．
+# ---------------------------------------------------------------------------
+
+
+def test_get_item_index_mapping_across_files(
+    tmp_path: Path,
+) -> None:
+    """全グローバルインデックスが正しいファイル・行へ写ること．
+
+    D13(a): ``np.searchsorted(cum_lengths[1:], ...)`` を
+    ``bisect.bisect_right`` へ置き換えた際の写像の同値性を固定する．
+
+    ファイル長は**わざと不揃い**にしてある．全ファイルが同じ行数だと
+    ``idx - upper`` の誤りが numpy の負インデックスでちょうど巻き戻り，
+    off-by-one が観測できなくなる．
+    """
+    paths_a, dfs_a = _create_preprocessing_files(
+        tmp_path / "a", file_count=2, rows_per_file=5
+    )
+    paths_b, dfs_b = _create_preprocessing_files(
+        tmp_path / "b", file_count=2, rows_per_file=3
+    )
+    file_paths = paths_a + paths_b
+    dataframes = dfs_a + dfs_b
+
+    datasource = FileDataSource(
+        file_paths=file_paths,
+        array_type="preprocessing",
+    )
+
+    # id は _columnar_to_structured_record が 0 埋めするので，
+    # ファイル境界の写像は resultValue で確認する
+    expected = [
+        value
+        for df in dataframes
+        for value in df["resultValue"].to_list()
+    ]
+    assert len(datasource) == len(expected)
+    actual = [
+        float(datasource[idx]["resultValue"])
+        for idx in range(len(datasource))
+    ]
+    assert actual == expected
+
+
+def test_get_item_rejects_out_of_range_index(
+    tmp_path: Path,
+) -> None:
+    """範囲外インデックスが IndexError で落ちること (D13(a) の境界)．"""
+    file_paths, _ = _create_preprocessing_files(
+        tmp_path, file_count=2, rows_per_file=3
+    )
+    datasource = FileDataSource(
+        file_paths=file_paths,
+        array_type="preprocessing",
+    )
+
+    with pytest.raises(IndexError):
+        datasource[len(datasource)]
+
+
+def test_structured_dtype_matches_array_type(
+    tmp_path: Path,
+) -> None:
+    """``_structured_dtype`` が array_type ごとの非パック dtype と一致すること．
+
+    D13(c): ``_STRUCTURED_DTYPES`` テーブルを
+    ``interface.data_schema.get_dtype`` へ寄せた際の characterization
+    test．置き換え前の式 (``get_preprocessing_dtype()`` などの決め打ち)
+    が返していた dtype をそのまま固定する．
+
+    ``bit_pack=True`` でも同じ dtype になることも併せて固定する
+    (現状 preprocessing の packed 版は非パック版と同一なので，この
+    表明は将来 packed 版が分岐した日に初めて差を検出する)．
+    """
+    from maou.interface.data_schema import (
+        get_preprocessing_dtype,
+        get_stage1_dtype,
+    )
+
+    file_paths, _ = _create_preprocessing_files(
+        tmp_path, file_count=1, rows_per_file=2
+    )
+    for bit_pack in (False, True):
+        manager = FileDataSource.FileManager(
+            file_paths=file_paths,
+            array_type="preprocessing",
+            bit_pack=bit_pack,
+        )
+        assert (
+            manager._structured_dtype
+            == get_preprocessing_dtype()
+        )
+        assert manager._structured_dtype != get_stage1_dtype()
+
+
+def test_lengths_and_file_entries_stay_aligned(
+    tmp_path: Path,
+) -> None:
+    """``lengths`` と ``_file_entries`` が常に同数であること．
+
+    D12(a): ローダ分岐がどちらも空振りすると ``lengths`` だけが伸びて
+    ``cum_lengths`` と ``_file_entries`` がズレ，以降の全インデックス
+    参照が例外なしに壊れる．構造的に起こり得ないことを固定する．
+
+    columnar 経路 (preprocessing) と numpy 経路 (hcpe) の**両方**を
+    通す．片方だけだと，分岐のもう一方を落とす退行を検出できない．
+    """
+    hcpe_paths, _ = _create_hcpe_files(
+        tmp_path / "hcpe", file_count=3, rows_per_file=2
+    )
+    prep_paths, _ = _create_preprocessing_files(
+        tmp_path / "prep", file_count=3, rows_per_file=2
+    )
+
+    for array_type, file_paths in (
+        ("hcpe", hcpe_paths),
+        ("preprocessing", prep_paths),
+    ):
+        manager = FileDataSource.FileManager(
+            file_paths=file_paths,
+            array_type=array_type,  # type: ignore[arg-type]
+            bit_pack=False,
+        )
+        assert len(manager._file_entries) == len(file_paths)
+        assert len(manager.cum_lengths) == len(file_paths) + 1
+        assert manager.cum_lengths[-1] == manager.total_rows
+
+
+def test_unknown_array_type_rejected(tmp_path: Path) -> None:
+    """未知の array_type は読み込み前に ValueError で落ちること．"""
+    file_paths, _ = _create_hcpe_files(
+        tmp_path, file_count=1, rows_per_file=2
+    )
+
+    with pytest.raises(ValueError, match="Unknown array_type"):
+        FileDataSource.FileManager(
+            file_paths=file_paths,
+            array_type="not_a_type",  # type: ignore[arg-type]
+            bit_pack=False,
+        )
+
+
+def test_load_failure_wraps_import_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ローダの ImportError が polars 案内つきで再送出されること．
+
+    D12(b): ``try/except ImportError`` が ``try/except Exception`` の
+    内側に入れ子で，内側が文言を変えて再 raise → 外側が即座に捕捉して
+    traceback を二重化していた．入れ子を解いても**伝播する例外の型と
+    文言が変わらない**ことを固定する．
+    """
+    file_paths, _ = _create_hcpe_files(
+        tmp_path, file_count=1, rows_per_file=2
+    )
+
+    def _boom(self: object, path: Path) -> None:
+        raise ImportError("no rust backend")
+
+    monkeypatch.setattr(
+        FileDataSource.FileManager,
+        "_load_feather",
+        _boom,
+    )
+
+    with pytest.raises(
+        ImportError,
+        match="Polars and Rust backend required for .feather files",
+    ):
+        FileDataSource(
+            file_paths=file_paths,
+            array_type="hcpe",
+        )
+
+
+def test_load_failure_propagates_other_errors_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ImportError 以外はそのまま伝播すること (D12(b) の対偶)．"""
+    file_paths, _ = _create_hcpe_files(
+        tmp_path, file_count=1, rows_per_file=2
+    )
+
+    def _boom(self: object, path: Path) -> None:
+        raise RuntimeError("corrupt footer")
+
+    monkeypatch.setattr(
+        FileDataSource.FileManager,
+        "_load_feather",
+        _boom,
+    )
+
+    with pytest.raises(RuntimeError, match="corrupt footer"):
+        FileDataSource(
+            file_paths=file_paths,
+            array_type="hcpe",
+        )
