@@ -1,5 +1,6 @@
 ---
-status: pending
+status: applied
+applied_in: a970043
 date: 2026-08-12
 target:
   - docs/design/tsume-solver/tt-allocation.md
