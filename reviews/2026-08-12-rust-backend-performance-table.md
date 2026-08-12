@@ -1,6 +1,6 @@
 ---
-status: pending
-applied_in:
+status: applied
+applied_in: cf3e4ca
 date: 2026-08-12
 target: [docs/rust-backend.md]
 risk: low
@@ -80,3 +80,7 @@ reversibility: trivial
 - 案 A (削除) か案 B (legacy 注記) か．
 - 案 B を採るなら，`.npy` が実際に生きている経路 (変換ユーティリティ
   など) を先に確定する必要がある — この run では未確認．
+
+## 決定 (2026-08-12)
+
+ユーザ承認により **案 A (2 行を削除し .feather のみに)** を採用し，`cf3e4ca` で適用した．

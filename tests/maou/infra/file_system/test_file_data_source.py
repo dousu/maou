@@ -567,3 +567,147 @@ def test_iter_batches_df_yields_dataframes_for_columnar_types(
     for (_, df), expected in zip(yielded, expected_dfs):
         assert isinstance(df, pl.DataFrame)
         assert df["id"].to_list() == expected["id"].to_list()
+
+
+# ============================================================================
+# /audit-backlog 2026-08-12 — backlog 行 D1 の回帰テスト
+# ============================================================================
+
+
+def test_move_win_rate_survives_the_columnar_to_structured_path(
+    tmp_path: Path,
+) -> None:
+    """``moveWinRate`` が non-streaming 経路で失われないこと．
+
+    backlog 行 D1: ``get_preprocessing_dtype()`` に ``moveWinRate`` が
+    無く，columnar→structured 変換器 2 本も読まなかったため，
+    ``learn-model --no-streaming`` が CLI 既定
+    (``--policy-target-mode win_rate``) で初回ステップから
+    ``ValueError: move_win_rate is required`` で落ちていた．
+
+    **罠**: 変換器は 2 本ある (1 レコード版とバッチ全体版) ．片方だけ
+    直すと ``get_item`` は通るのに ``iter_batches`` が落ちる (逆も然り)
+    ので，両方の経路を通す．
+    """
+    import numpy as np
+
+    from maou.domain.move.label import MOVE_LABELS_NUM
+
+    rows = 3
+    df = create_empty_preprocessing_df(rows)
+    win_rates = [
+        [float((i + 1) % 7) / 10.0] * MOVE_LABELS_NUM
+        for i in range(rows)
+    ]
+    df = df.with_columns(
+        [
+            pl.Series("id", list(range(rows))),
+            pl.Series("moveWinRate", win_rates),
+        ]
+    )
+    file_path = tmp_path / "preprocessing_wr.feather"
+    save_preprocessing_df(df, file_path)
+
+    datasource = FileDataSource(
+        file_paths=[file_path],
+        array_type="preprocessing",
+    )
+
+    # 経路 1: get_item (1 レコード版の変換器)
+    for i in range(rows):
+        record = datasource[i]
+        assert record.dtype.names is not None
+        assert "moveWinRate" in record.dtype.names
+        np.testing.assert_allclose(
+            record["moveWinRate"],
+            np.asarray(win_rates[i], dtype=np.float32),
+            rtol=0,
+            atol=0,
+        )
+
+    # 経路 2: iter_batches (バッチ全体版の変換器)
+    batches = [b for _, b in datasource.iter_batches()]
+    stacked = np.concatenate(batches)
+    assert len(stacked) == rows
+    for i in range(rows):
+        np.testing.assert_allclose(
+            stacked[i]["moveWinRate"],
+            np.asarray(win_rates[i], dtype=np.float32),
+            rtol=0,
+            atol=0,
+        )
+
+
+def test_dataset_yields_move_win_rate_for_non_streaming(
+    tmp_path: Path,
+) -> None:
+    """``KifDataset`` が 3 要素 tuple を返すこと (D1 の実害側)．
+
+    ``dataset.py`` は dtype に ``moveWinRate`` があるときだけ
+    ``move_win_rate`` を含む 3 要素 tuple を返す．dtype に無かった
+    ときは 2 要素で返り，``policy_targets`` が ``None`` を受け取って
+    ``ValueError`` を投げていた — これが「既定オプションで落ちる」の
+    実体である．
+    """
+    from maou.app.learning.dataset import KifDataset
+    from maou.domain.move.label import MOVE_LABELS_NUM
+
+    rows = 2
+    df = create_empty_preprocessing_df(rows)
+    df = df.with_columns(
+        [
+            pl.Series("id", list(range(rows))),
+            pl.Series(
+                "moveWinRate",
+                [[0.25] * MOVE_LABELS_NUM] * rows,
+            ),
+        ]
+    )
+    file_path = tmp_path / "preprocessing_ds.feather"
+    save_preprocessing_df(df, file_path)
+
+    datasource = FileDataSource(
+        file_paths=[file_path],
+        array_type="preprocessing",
+    )
+    dataset = KifDataset(datasource=datasource)
+
+    _, targets = dataset[0]
+    assert len(targets) == 3, (
+        "moveWinRate が dtype に無いと 2 要素になり，"
+        "policy_targets が None を受け取って落ちる"
+    )
+    move_win_rate = targets[2]
+    assert move_win_rate.shape[-1] == MOVE_LABELS_NUM
+
+
+# ============================================================================
+# /audit-backlog 2026-08-12 — backlog 行 D8/D9 の回帰テスト
+# ============================================================================
+
+
+def test_spliter_exposes_no_full_load_streaming_split() -> None:
+    """``FileDataSourceSpliter`` が streaming 用の分割 API を持たないこと．
+
+    backlog 行 D8/D9: ``file_level_split`` は「全ロードを避けるための
+    ファイル単位分割」を謳いながら，``FileDataSourceSpliter.__init__``
+    が ``FileManager`` を構築する — つまり**全ロードを払わないと呼べ
+    なかった** (``interface/learn.py`` が「Stage 3 で ~123GB，spawn
+    worker で OOM kill」と書いている当の経路)．production caller は
+    ゼロで，テストからしか呼ばれていなかった．
+
+    2026-08-12 にユーザ判断で削除した．このテストは「全ロードを前提と
+    する構築子から streaming source を返す API」が黙って戻ってこない
+    ことを固定する — 戻すなら構築子側を先に直す必要がある．
+    """
+    spliter_cls = FileDataSource.FileDataSourceSpliter
+
+    assert not hasattr(spliter_cls, "file_level_split")
+
+    # 残っている公開 API は行レベル分割だけ (FileDataSource を返す)．
+    public = {
+        name
+        for name in vars(spliter_cls)
+        if not name.startswith("_")
+    }
+    assert public == {"logger", "train_test_split"}

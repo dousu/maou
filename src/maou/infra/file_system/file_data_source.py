@@ -34,10 +34,6 @@ from maou.interface.data_schema import (
 if TYPE_CHECKING:
     import polars as pl
 
-    from maou.infra.file_system.streaming_file_source import (
-        StreamingFileSource,
-    )
-
 _DF_TO_NUMPY_CONVERTERS: dict[
     str, Callable[[pl.DataFrame], np.ndarray]
 ] = {
@@ -108,76 +104,6 @@ class FileDataSource(
                     indicies=test_indicies,
                 ),
             )
-
-        def file_level_split(
-            self,
-            test_ratio: float,
-            seed: int | None = None,
-        ) -> tuple[StreamingFileSource, StreamingFileSource]:
-            """ファイル単位のtrain/test分割．
-
-            レコード単位ではなくファイル単位で分割し，
-            それぞれ ``StreamingFileSource`` として返す．
-            ストリーミングモードで使用する．
-
-            Args:
-                test_ratio: テストデータの割合(0.0 < test_ratio < 1.0)
-                seed: シャッフル用のランダムシード
-
-            Returns:
-                (train_source, val_source) のタプル
-
-            Raises:
-                ValueError: ファイルが2つ未満の場合
-            """
-            from maou.infra.file_system.streaming_file_source import (
-                StreamingFileSource,
-            )
-
-            file_paths = list(self.__file_manager.file_paths)
-            n_files = len(file_paths)
-
-            if n_files < 2:
-                raise ValueError(
-                    f"file_level_split requires at least 2 files, "
-                    f"got {n_files}. Use train_test_split() for "
-                    f"row-level splitting instead."
-                )
-
-            # Shuffle file paths
-            rng = random.Random(seed)
-            rng.shuffle(file_paths)
-
-            # Split
-            n_val = max(1, int(n_files * test_ratio))
-            n_train = n_files - n_val
-
-            if n_train < 1:
-                n_train = 1
-                n_val = n_files - 1
-
-            train_paths = file_paths[:n_train]
-            val_paths = file_paths[n_train:]
-
-            self.logger.info(
-                "File-level split: %d train files, "
-                "%d val files (test_ratio=%.2f)",
-                len(train_paths),
-                len(val_paths),
-                test_ratio,
-            )
-
-            array_type = self.__file_manager.array_type
-            train_source = StreamingFileSource(
-                file_paths=train_paths,
-                array_type=array_type,
-            )
-            val_source = StreamingFileSource(
-                file_paths=val_paths,
-                array_type=array_type,
-            )
-
-            return train_source, val_source
 
         def __train_test_split(
             self,
@@ -619,6 +545,14 @@ class FileDataSource(
                 record["moveLabel"][0] = batch.move_label[idx]
 
             if (
+                batch.move_win_rate is not None
+                and "moveWinRate" in dtype_names
+            ):
+                record["moveWinRate"][0] = batch.move_win_rate[
+                    idx
+                ]
+
+            if (
                 batch.result_value is not None
                 and "resultValue" in dtype_names
             ):
@@ -731,6 +665,12 @@ class FileDataSource(
                 and "moveLabel" in dtype_names
             ):
                 array["moveLabel"] = batch.move_label
+
+            if (
+                batch.move_win_rate is not None
+                and "moveWinRate" in dtype_names
+            ):
+                array["moveWinRate"] = batch.move_win_rate
 
             if (
                 batch.result_value is not None

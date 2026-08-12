@@ -79,6 +79,23 @@ repos:
     types_or: [rust]
     pass_filenames: false
     require_serial: true
+# clippy も cargo fmt と同じく local hook (toolchain の版と二重化しない)．
+# `-D warnings` で回す．2026-08-12 時点の workspace は `--all-targets` で
+# warning 0 なので，初回コストは無い (計測して確認済み)．
+# 0 を維持できなくなったら `-D warnings` を外すのではなく，warning を
+# 消すか `#[allow]` に理由コメントを付けて明示すること — 閾値を緩めると
+# 「warning はあるもの」に戻り，ゲートとして機能しなくなる．
+# `--all-targets` はテストコードも対象にする．過去 3 件の warning は
+# すべてテスト側にあった (lib だけ見ていると気付けない)．
+- repo: local
+  hooks:
+  - id: cargo-clippy
+    name: cargo-clippy
+    entry: cargo clippy --workspace --all-targets -- -D warnings
+    language: system
+    types_or: [rust]
+    pass_filenames: false
+    require_serial: true
 - repo: local
   hooks:
   - id: ruff-check

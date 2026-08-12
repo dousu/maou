@@ -40,6 +40,27 @@ ruff だけが例外的に二重化していた．
 差分としてのみ現れる (bot が黙って上げることがなくなる)．
 `uv run` 経由の起動オーバーヘッドは実測で約 90ms/回．
 
+**Rust も同じ原則で回している．** `cargo fmt --all` と
+`cargo clippy --workspace --all-targets -- -D warnings` は 2026-08-12 に
+local hook として登録した．hook 側が独自に Rust toolchain を入れると
+`rust-toolchain` の版と二重化し，ローカルの `cargo fmt` / `cargo clippy` と
+pre-commit の結果が食い違う — ruff で踏んだのと同じ構図である．
+**版の一本化先だけが Python と異なり，Rust では `pyproject.toml` ではなく
+toolchain の指定になる．**
+
+補足が 3 点ある．
+
+- `cargo fmt` を `--check` ではなく自動整形にしてあるのは Python 側の
+  `ruff format` に揃えるため (未整形を残すと，無関係な PR に整形差分が
+  混ざる)．
+- clippy は `-D warnings` で回す．落ちないゲートは守られないためで，
+  warning 0 を維持できなくなったときは閾値を緩めるのではなく，warning を
+  消すか `#[allow]` に理由コメントを付けて明示する．`--all-targets` を
+  付けているのはテストコードも対象にするためで，導入時に見つかった
+  warning 4 件はすべてテスト側にあった (lib だけ見ていると気付けない)．
+- `cargo fmt` / `cargo clippy` はファイル引数ではなく crate 単位で動くので
+  `pass_filenames: false` が必須．
+
 `trailing-whitespace` や `check-yaml` のように**挙動が版に依存しない**
 汎用フックは `repo:` 形式のままでよい．
 
