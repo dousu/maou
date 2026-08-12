@@ -3,6 +3,8 @@
 統一 mid は **単一の len-aware 転置表 (TT)** を持つ．旧版の Dual TT (ProvenTT + WorkingTT)・
 FrontierTT・LeafDisproofTT・refutable disproof エントリは廃止された (記録は git 履歴)．
 本節はエントリ構造・持ち駒優越・cross-hand 参照・GC を扱う．
+TT を**いつ・どれだけ確保するか** (サイズ決定，前払い，fill コスト) は
+[TT の確保コストとライフサイクル](tt-allocation.md) に分けてある．
 
 ### 6.1 持ち駒優越 (hand dominance, Nagai 2002)
 
