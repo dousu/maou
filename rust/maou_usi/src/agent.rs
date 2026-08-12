@@ -919,9 +919,21 @@ where
             let moves = self.game.moves.clone();
             let stop = Arc::clone(&self.stop);
             let backend = self.backend.as_ref().expect("直前で構築済み");
-            emit(EngineCommand::Checkmate(
-                backend.solve_mate(&sfen, &moves, time_ms, &stop)?,
-            ));
+            let result = backend.solve_mate(&sfen, &moves, time_ms, &stop)?;
+            // USI の `checkmate` は `<手順>` / `nomate` / `timeout` の 3 種しか
+            // 返せないので，「詰みは証明できたが手順を復元できなかった」も
+            // 行としては `timeout` になる．**時間切れとは原因が全く違う**ので，
+            // 区別が要る側 (ログ・回帰調査) には info string で出す．
+            if matches!(result, CheckmateResult::MateWithoutPv) {
+                emit(EngineCommand::Info(Info {
+                    string: Some(
+                        "checkmate timeout reason=mate-proven-but-pv-unavailable                          (not a time budget overrun)"
+                            .to_string(),
+                    ),
+                    ..Info::default()
+                }));
+            }
+            emit(EngineCommand::Checkmate(result));
             return Ok(());
         }
 
@@ -1344,6 +1356,25 @@ mod tests {
     type RulesLog = Rc<RefCell<Vec<GoRules>>>;
 
     #[allow(clippy::type_complexity)] // impl Fn を含むタプル返却は alias 化不能 (TAIT 未安定)
+    /// `solve_mate` の応答を指定して agent を組む (`go mate` テスト用)．
+    #[allow(clippy::type_complexity)]
+    fn agent_with_mate(
+        mate: CheckmateResult,
+    ) -> Agent<FakeBackend, impl Fn(&EngineConfig) -> Result<FakeBackend, String>> {
+        let calls: Calls = Rc::new(RefCell::new(Vec::new()));
+        let rules: RulesLog = Rc::new(RefCell::new(Vec::new()));
+        let outcome = default_outcome();
+        Agent::new(EngineConfig::default(), move |_config| {
+            Ok(FakeBackend {
+                calls: Rc::clone(&calls),
+                rules_log: Rc::clone(&rules),
+                outcome: outcome.clone(),
+                nyugyoku: false,
+                mate: mate.clone(),
+            })
+        })
+    }
+
     fn agent_with_fake(
         outcome: SearchOutcome,
     ) -> (
@@ -1624,6 +1655,56 @@ mod tests {
             })
             .unwrap();
         assert_eq!(agent.config.root_dfpn_nodes, Some(1));
+    }
+
+    /// 「詰みは解けたが手順を復元できない」を時間切れと区別できること．
+    ///
+    /// USI の行は規約どおり `checkmate timeout` のままだが，直前に理由を
+    /// `info string` で出す．これが無いと，真のソルバ回帰と偽陽性 (時間切れ) が
+    /// 外から区別できず，切り分けに実測 50 回超を要した (2026-08-12)．
+    #[test]
+    fn test_mate_without_pv_is_distinguishable_from_timeout() {
+        // (a) PV 復元不能: info string が先に出て，行は checkmate timeout
+        let mut agent = agent_with_mate(CheckmateResult::MateWithoutPv);
+        agent.handle(GuiCommand::IsReady).unwrap();
+        let out = agent
+            .handle(GuiCommand::Go(GoParams {
+                mate: Some(crate::protocol::MateLimit::TimeMs(1000)),
+                ..GoParams::default()
+            }))
+            .unwrap();
+        let lines: Vec<String> = out.iter().map(crate::protocol::serialize).collect();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("mate-proven-but-pv-unavailable")),
+            "理由が info string に出ること: {lines:?}",
+        );
+        assert!(
+            lines.iter().any(|l| l == "checkmate timeout"),
+            "行そのものは規約どおり: {lines:?}",
+        );
+
+        // (b) 本物の時間切れ: 同じ行だが理由 info は出ない
+        let mut agent = agent_with_mate(CheckmateResult::Timeout);
+        agent.handle(GuiCommand::IsReady).unwrap();
+        let out = agent
+            .handle(GuiCommand::Go(GoParams {
+                mate: Some(crate::protocol::MateLimit::TimeMs(1000)),
+                ..GoParams::default()
+            }))
+            .unwrap();
+        let lines: Vec<String> = out.iter().map(crate::protocol::serialize).collect();
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.contains("mate-proven-but-pv-unavailable")),
+            "時間切れに理由 info を付けてはならない: {lines:?}",
+        );
+        assert!(
+            lines.iter().any(|l| l == "checkmate timeout"),
+            "行そのものは同じ: {lines:?}",
+        );
     }
 
     #[test]

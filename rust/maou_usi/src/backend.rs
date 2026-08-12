@@ -321,10 +321,11 @@ impl SearchBackend for MaouSearchBackend {
             TsumeResult::Checkmate { ref moves, .. } if !moves.is_empty() => {
                 CheckmateResult::Mate(moves.iter().map(|m| m.to_usi()).collect())
             }
-            // 詰みだが手順を復元できない場合は手順を示せないので timeout 扱い
-            // (誤った `checkmate` 行を出さない)
+            // 詰みだが手順を復元できない．行は規約上 `checkmate timeout` に
+            // なるが，**時間切れとは原因が違う**ので別変種で返す
+            // (agent が info string で理由を出す)．
             TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. } => {
-                CheckmateResult::Timeout
+                CheckmateResult::MateWithoutPv
             }
             TsumeResult::NoCheckmate { .. }
                 if report.stop_reason == maou_shogi::dfpn::StopReason::Disproven =>

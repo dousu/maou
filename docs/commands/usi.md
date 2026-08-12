@@ -45,8 +45,12 @@
   (an illegal scripted move falls back to normal search); and **`go mate`**
   — dfpn mate search for the GUI's mate-search/analysis button, answering
   `checkmate <move sequence>` (shortest mate), `checkmate nomate` (only
-  when no-mate is actually *proven*), or `checkmate timeout` (budget or
-  `stop` reached without a conclusion). It runs on dfpn alone, so it works
+  when no-mate is actually *proven*), or `checkmate timeout`. The last one covers
+  **two different situations** the USI spec cannot distinguish — the budget or
+  `stop` was reached without a conclusion, *or* a mate was proven but its move
+  sequence could not be reconstructed. The second case is preceded by
+  `info string checkmate timeout reason=mate-proven-but-pv-unavailable`, so a
+  genuine solver regression can be told apart from a plain budget overrun. It runs on dfpn alone, so it works
   even without a model, and no `bestmove` is emitted (per the USI spec).
 - For in-process self-play with the same agent, see
   [`maou selfplay`](selfplay.md).
