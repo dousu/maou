@@ -12,11 +12,11 @@ from typing import Literal
 
 import polars as pl
 
+from maou.domain.data.arrow_format import (
+    is_arrow_ipc_file_bytes,
+)
+
 logger = logging.getLogger(__name__)
-
-
-# Arrow IPC File形式のマジックバイト
-_ARROW_FILE_MAGIC = b"ARROW1\x00\x00"
 
 
 def _write_ipc_file(df: pl.DataFrame) -> bytes:
@@ -47,7 +47,7 @@ def _read_ipc_auto(data: bytes) -> pl.DataFrame:
         デシリアライズされたDataFrame
     """
     buffer = io.BytesIO(data)
-    if data[:8] == _ARROW_FILE_MAGIC:
+    if is_arrow_ipc_file_bytes(data):
         return pl.read_ipc(buffer)
     else:
         return pl.read_ipc_stream(buffer)
