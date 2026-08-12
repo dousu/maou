@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in: 0fb7363
+applied_in: c0fa2c4
 date: 2026-08-12
 target: [docs/commands/usi.md]
 risk: low
