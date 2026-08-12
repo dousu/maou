@@ -128,9 +128,7 @@ impl<T: Clone> BufferPool<T> {
     /// **一度プールに入ったサイズを再要求して外した**場合と，返却を拒否した場合
     /// だけで，どちらも上限が実ワークロードに足りていない証拠になる．
     fn warn_once(&mut self, n: usize, reason: &'static str) {
-        if !stats_enabled()
-            || self.warned.iter().any(|(s, r)| *s == n && *r == reason)
-        {
+        if !stats_enabled() || self.warned.iter().any(|(s, r)| *s == n && *r == reason) {
             return;
         }
         self.warned.push((n, reason));
@@ -222,10 +220,8 @@ impl<T: Clone> BufferPool<T> {
     }
 }
 
-static REGULAR_POOL: std::sync::Mutex<BufferPool<Entry>> =
-    std::sync::Mutex::new(BufferPool::new());
-static REP_POOL: std::sync::Mutex<BufferPool<RepEntry>> =
-    std::sync::Mutex::new(BufferPool::new());
+static REGULAR_POOL: std::sync::Mutex<BufferPool<Entry>> = std::sync::Mutex::new(BufferPool::new());
+static REP_POOL: std::sync::Mutex<BufferPool<RepEntry>> = std::sync::Mutex::new(BufferPool::new());
 
 /// プールから借りる (lock が poison していれば借りずに新規確保へ落とす)．
 fn pool_take<T: Clone>(
@@ -268,8 +264,7 @@ impl RegularTable {
     pub(super) fn new(num_entries: usize) -> Self {
         let n = num_entries.max(1);
         let null = Entry::null();
-        let entries =
-            pool_take(&REGULAR_POOL, n, &null).unwrap_or_else(|| vec![null; n]);
+        let entries = pool_take(&REGULAR_POOL, n, &null).unwrap_or_else(|| vec![null; n]);
         RegularTable { entries }
     }
     /// 保存可能要素数．
@@ -436,8 +431,7 @@ impl RepetitionTable {
             generation: 0,
         };
         RepetitionTable {
-            entries: pool_take(&REP_POOL, size, &empty)
-                .unwrap_or_else(|| vec![empty; size]),
+            entries: pool_take(&REP_POOL, size, &empty).unwrap_or_else(|| vec![empty; size]),
             generation: 0,
             entry_count: 0,
             next_generation_update: epg as u64,
@@ -946,9 +940,7 @@ mod tests {
         );
         assert!(
             regular_pooled_count(SMALL)
-                <= BufferPool::<Entry>::max_per_size(
-                    SMALL * std::mem::size_of::<Entry>()
-                ),
+                <= BufferPool::<Entry>::max_per_size(SMALL * std::mem::size_of::<Entry>()),
             "1 サイズあたりの保持本数を超えている"
         );
     }

@@ -2253,11 +2253,15 @@ fn test_losing_move_discrimination_before_mate() {
 /// 小予算・小 TT (leaf 用) でも詰みを申告してはならない．
 #[test]
 fn test_defensive_no_false_proof_ply131() {
-    const PLY131: &str = "l2kb1p+R1/5s3/3g5/p1ppp2p1/1N3L3/1pn6/3PPPN2/SPG1sG1+r1/LN1KGs+l2 b b7p 131";
+    const PLY131: &str =
+        "l2kb1p+R1/5s3/3g5/p1ppp2p1/1N3L3/1pn6/3PPPN2/SPG1sG1+r1/LN1KGs+l2 b b7p 131";
     // (a) 通常予算
     let rep = solve_tsume_defense(PLY131, Some(500_000), Some(60)).expect("正当な SFEN");
     assert!(
-        !matches!(rep.result, TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }),
+        !matches!(
+            rep.result,
+            TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }
+        ),
         "偽の被詰み (通常予算): {:?}",
         rep.result
     );
@@ -2269,7 +2273,10 @@ fn test_defensive_no_false_proof_ply131() {
         solver.set_defensive(true);
         let r = solver.solve(&mut board);
         assert!(
-            !matches!(r, TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }),
+            !matches!(
+                r,
+                TsumeResult::Checkmate { .. } | TsumeResult::CheckmateNoPv { .. }
+            ),
             "偽の被詰み (leaf 予算 {nodes}): {r:?}"
         );
     }
