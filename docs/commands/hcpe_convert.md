@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | `--input-path PATH` | ✅ | File or directory containing CSA/KIF records. Directories are walked recursively via `FileSystem.collect_files`.【F:src/maou/infra/console/hcpe_convert.py†L16-L72】【F:src/maou/interface/converter.py†L60-L89】 |
 | `--input-format {kif,csa}` | ✅ | Accepted formats enforced by `InputFormat`; anything else raises `ValueError`.【F:src/maou/infra/console/hcpe_convert.py†L22-L34】【F:src/maou/interface/converter.py†L33-L58】 |
-| `--output-dir PATH` | ✅ | Destination directory for `.npy` shards. Created automatically when missing; must already be a directory if it exists.【F:src/maou/infra/console/hcpe_convert.py†L34-L46】【F:src/maou/interface/converter.py†L58-L75】 |
+| `--output-dir PATH` | ✅ | Destination directory for `.feather` shards (Arrow IPC). Created automatically when missing; must already be a directory if it exists.【F:src/maou/infra/console/hcpe_convert.py†L34-L46】【F:src/maou/interface/converter.py†L58-L75】 |
 | `--min-rating/--min-moves/--max-moves` | optional | Filter out games below rating thresholds or outside the move-count window before conversion.【F:src/maou/infra/console/hcpe_convert.py†L46-L90】【F:src/maou/app/converter/hcpe_converter.py†L90-L179】 |
 | `--allowed-endgame-status` | repeatable | Restrict CSA/KIF terminal markers (e.g., `%TORYO`). An empty list means "any".【F:src/maou/infra/console/hcpe_convert.py†L72-L90】【F:src/maou/app/converter/hcpe_converter.py†L90-L158】 |
 | `--exclude-moves` | repeatable | Skip specific move IDs even inside accepted games.【F:src/maou/infra/console/hcpe_convert.py†L90-L102】【F:src/maou/app/converter/hcpe_converter.py†L158-L214】 |
@@ -54,7 +54,7 @@
 | Flag group | Required | Description |
 | --- | --- | --- |
 | `--output-bigquery` + `--dataset-id` + `--table-name` | optional | Streams converted features directly into BigQuery via `BigQueryFeatureStore`. Honors `--max-cached-bytes` for batching.【F:src/maou/infra/console/hcpe_convert.py†L102-L134】 |
-| `--output-gcs` + `--bucket-name` + `--prefix` + `--data-name` | optional | Uploads `.npy` shards to GCS with configurable worker counts, queue sizes, and cache limits. Arrays are tagged as `array_type="hcpe"`.【F:src/maou/infra/console/hcpe_convert.py†L134-L210】 |
+| `--output-gcs` + `--bucket-name` + `--prefix` + `--data-name` | optional | Uploads `.feather` shards (Arrow IPC) to GCS with configurable worker counts, queue sizes, and cache limits. Arrays are tagged as `array_type="hcpe"`.【F:src/maou/infra/console/hcpe_convert.py†L134-L210】 |
 | `--output-s3` + bucket flags | optional | Mirrors the GCS contract using `S3FeatureStore`, requiring the AWS optional extra.【F:src/maou/infra/console/hcpe_convert.py†L134-L232】 |
 | `--max-cached-bytes` | default `524,288,000` | Upper bound for feature-store batching buffers.【F:src/maou/infra/console/hcpe_convert.py†L118-L150】 |
 | `--output-max-workers` / `--output-max-queue-size` | default `4` | Concurrency knobs for object-storage uploads; ignored by BigQuery.【F:src/maou/infra/console/hcpe_convert.py†L118-L150】 |
