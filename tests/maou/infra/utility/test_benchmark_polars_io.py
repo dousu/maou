@@ -28,7 +28,7 @@ from maou.interface.data_schema import (
 
 
 def test_main_runs_to_completion(
-    tmp_path: Path, capsys
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """documented command 相当が例外なく完走すること."""
     benchmark_polars_io.main(output_dir=tmp_path, num_records=8)

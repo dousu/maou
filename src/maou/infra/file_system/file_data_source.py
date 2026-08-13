@@ -40,6 +40,11 @@ _DF_TO_NUMPY_CONVERTERS: dict[
     "stage2": convert_stage2_df_to_numpy,
 }
 
+# ``cache_mode='memory'`` の全ロード量がこの GB 数を超えたら OOM 警告を出す．
+# リテラルを 2 箇所に埋めていたので定数化した (テストから閾値を差し替えて
+# 警告経路を検証できるようにする狙いもある — 32GB の実データは用意できない)．
+OOM_WARNING_THRESHOLD_GB: float = 32.0
+
 
 class MissingFileDataConfig(Exception):
     pass
@@ -309,20 +314,32 @@ class FileDataSource(
                 time.perf_counter() - t_init_start,
             )
 
-        def _concatenate_numpy(self) -> None:
-            """structured arrayを単一配列に結合する(hcpe用)."""
-            total_bytes = sum(
-                entry.cached_array.nbytes
-                for entry in self._file_entries
-                if entry.cached_array is not None
-            )
+        def _warn_if_oom_risk(self, total_bytes: int) -> None:
+            """全ロード量が閾値を超えていれば OOM 警告を出す．
+
+            ``_concatenate_numpy`` と ``_concatenate_columnar`` が
+            同じ文面を二重に持っていたので一本化した．
+
+            Args:
+                total_bytes: 結合対象が保持している合計バイト数
+            """
             estimated_gb = total_bytes / (1024**3)
-            if estimated_gb > 32:
+            if estimated_gb > OOM_WARNING_THRESHOLD_GB:
                 self.logger.warning(
                     f"cache_mode='memory' with {self.total_rows} rows "
                     f"(estimated {estimated_gb:.1f} GB) may cause OOM. "
                     f"Consider using cache_mode='file' instead."
                 )
+
+        def _concatenate_numpy(self) -> None:
+            """structured arrayを単一配列に結合する(hcpe用)."""
+            self._warn_if_oom_risk(
+                sum(
+                    entry.cached_array.nbytes
+                    for entry in self._file_entries
+                    if entry.cached_array is not None
+                )
+            )
 
             self.logger.info(
                 "Concatenating %d numpy arrays (%d records)...",
@@ -353,38 +370,15 @@ class FileDataSource(
                 if entry.cached_columnar is not None
             ]
 
-            total_bytes = sum(
-                b.board_positions.nbytes
-                + b.pieces_in_hand.nbytes
-                + (
-                    b.move_label.nbytes
-                    if b.move_label is not None
-                    else 0
-                )
-                + (
-                    b.result_value.nbytes
-                    if b.result_value is not None
-                    else 0
-                )
-                + (
-                    b.reachable_squares.nbytes
-                    if b.reachable_squares is not None
-                    else 0
-                )
-                + (
-                    b.legal_moves_label.nbytes
-                    if b.legal_moves_label is not None
-                    else 0
-                )
-                for b in batches
+            # フィールドを手書きで足し上げない．以前ここは 6 フィールドを
+            # 列挙しており，7 番目の ``move_win_rate``
+            # ((N, MOVE_LABELS_NUM) float32 で最大級) を数え落として
+            # いたため，40GB 級の入力を 18GB と報告して 32GB 閾値に
+            # 掛からなかった．合計は ColumnarBatch 側で
+            # ``dataclasses.fields`` から導出する．
+            self._warn_if_oom_risk(
+                sum(b.nbytes for b in batches)
             )
-            estimated_gb = total_bytes / (1024**3)
-            if estimated_gb > 32:
-                self.logger.warning(
-                    f"cache_mode='memory' with {self.total_rows} rows "
-                    f"(estimated {estimated_gb:.1f} GB) may cause OOM. "
-                    f"Consider using cache_mode='file' instead."
-                )
 
             self.logger.info(
                 "Concatenating %d columnar batches "
