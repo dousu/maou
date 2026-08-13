@@ -31,44 +31,197 @@ from maou.interface.data_io import (
     save_preprocessing_df,
 )
 from maou.interface.data_schema import (
-    MOVE_LABELS_NUM,
+    get_hcpe_dtype,
     get_hcpe_polars_schema,
+    get_preprocessing_dtype,
     get_preprocessing_polars_schema,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _assert_covers_schema(
-    data: Mapping[str, object],
-    schema: Mapping[str, object],
-    label: str,
-) -> None:
-    """テストデータがスキーマの全列を持つことを確認する．
+def _field_dtype(
+    np_dtype: np.dtype, column: str
+) -> np.dtype | None:
+    """structured dtype 側が宣言する列の dtype を引く．
 
-    ``pl.DataFrame(data, schema=schema)`` は列が欠けていると
-    ``KeyError: '<column>'`` を polars の内部フレームで投げるだけで，
-    「ベンチマークのテストデータがスキーマに追い付いていない」とは
-    読み取れない．実際 ``moveWinRate`` (2026-08-12 追加) と
-    ``bestMoveWinRate`` の 2 列が欠けたまま気付かれずにいた．
-    どこを直せばよいかを名指しして落とす．
+    polars スキーマは ``pl.List(pl.UInt8)`` や ``pl.Utf8`` のように
+    **長さを持たない** (固定長は Arrow / numpy 側の情報)．一方
+    structured dtype は ``("piecesInHand", np.uint8, (14,))`` や
+    ``("endgameStatus", (np.str_, 16))`` と長さまで宣言する．
+    ベンチのテストデータが必要とする長さは常に後者なので，そこから引く．
 
     Args:
-        data: 列名 → 値リスト
-        schema: polars スキーマ
-        label: エラーメッセージ用のデータ種別名
+        np_dtype: 対応する structured dtype
+        column: 列名
+
+    Returns:
+        列の dtype．structured dtype にその列が無ければ ``None``．
+    """
+    fields = np_dtype.fields
+    if fields is None or column not in fields:
+        return None
+    field: tuple = fields[column]
+    return field[0]
+
+
+def _synthesize_column(
+    column: str,
+    pl_dtype: "pl.DataType",
+    np_field: np.dtype | None,
+    num_records: int,
+) -> list:
+    """1 列分のベンチ用ダミー値を polars dtype と structured dtype から作る．
+
+    値の中身は I/O 性能の計測にしか使われないので意味は問わない．
+    重要なのは **スキーマが変わったら自動で追従する**ことで，
+    ここに長さや列名をハードコードしないこと自体が目的である．
+
+    Args:
+        column: 列名 (文字列列の値づくりに使う)
+        pl_dtype: polars の列 dtype
+        np_field: structured dtype 側の宣言 (shape と文字幅の出所)．
+            structured dtype に無い列なら ``None``
+        num_records: 生成する行数
+
+    Returns:
+        行数分の値のリスト
 
     Raises:
-        ValueError: スキーマにあって data に無い列があるとき
+        ValueError: 対応していない polars dtype のとき
     """
-    missing = [c for c in schema if c not in data]
-    if missing:
-        raise ValueError(
-            f"{label} のベンチマーク用テストデータがスキーマに追い付いて"
-            f"いない: {missing} が欠けている．"
-            f"benchmark_polars_io._create_{label}_test_data_polars を"
-            f"更新すること．"
+    base = pl_dtype.base_type()
+    shape: tuple[int, ...] = (
+        np_field.shape if np_field is not None else ()
+    )
+
+    if base == pl.Binary:
+        # hcp のような固定長バイト列．shape が無ければ 1 バイト．
+        width = shape[0] if shape else 1
+        return [
+            bytes((i + j) % 256 for j in range(width))
+            for i in range(num_records)
+        ]
+
+    if base == pl.Utf8:
+        # 宣言幅いっぱいに埋めると id 列だけで 128 文字になり，計測
+        # 対象のデータ量が従来と大きく変わってしまう．従来どおり
+        # 短い可読値を作り，**宣言幅で切り詰めるだけ**にする
+        # (structured array へ戻すときの黙った切り詰めを防ぐ)．
+        width = _str_width(np_field)
+        return [
+            f"{column[:8]}_{i:08d}"[:width]
+            for i in range(num_records)
+        ]
+
+    if base == pl.Date:
+        return [date(2025, 12, 25)] * num_records
+
+    if base == pl.List:
+        inner = pl_dtype.inner  # type: ignore[attr-defined]
+        if not shape:
+            raise ValueError(
+                f"列 {column} は polars では List だが structured dtype に"
+                f"長さの宣言が無い．benchmark_polars_io は shape を "
+                f"structured dtype から引くので，dtype 側に列を足すか，"
+                f"_synthesize_column に例外を書くこと．"
+            )
+        return [
+            _nested(shape, inner, i) for i in range(num_records)
+        ]
+
+    if base.is_integer():
+        return [i % 128 for i in range(num_records)]
+
+    if base.is_float():
+        return [float(i % 2) for i in range(num_records)]
+
+    raise ValueError(
+        f"列 {column} の polars dtype {pl_dtype} に対応していない．"
+        f"benchmark_polars_io._synthesize_column を更新すること．"
+    )
+
+
+def _str_width(np_field: np.dtype | None) -> int:
+    """文字列列の宣言幅 (文字数) を返す．
+
+    numpy の unicode dtype は 1 文字 4 バイトなので ``itemsize // 4``．
+    structured dtype に列が無い / 幅が取れない場合は 16 文字に倒す．
+    """
+    if np_field is None or np_field.kind != "U":
+        return 16
+    return max(1, np_field.itemsize // 4)
+
+
+def _nested(
+    shape: tuple[int, ...], inner: "pl.DataType", seed: int
+) -> list:
+    """``shape`` の入れ子リストを作る (9x9 なら 9 要素 × 9 要素)．"""
+    if len(shape) == 1:
+        if inner.is_float():
+            return [
+                float((seed + k) % 7) / 7.0
+                for k in range(shape[0])
+            ]
+        return [(seed + k) % 128 for k in range(shape[0])]
+    return [
+        _nested(shape[1:], inner, seed + k)
+        for k in range(shape[0])
+    ]
+
+
+def _create_test_data(
+    schema: Mapping[str, "pl.DataType"],
+    np_dtype: np.dtype,
+    num_records: int,
+    label: str,
+) -> "pl.DataFrame":
+    """polars スキーマ + structured dtype からベンチ用データを組み立てる．
+
+    以前は列名も長さ (9x9 / 14 / ``MOVE_LABELS_NUM`` / 32 バイト) も
+    ハードコードした dict を手で維持していた．スキーマに列が増えると
+    polars 内部の ``KeyError`` として現れるだけで原因が読み取れず，
+    実際 ``moveWinRate`` と ``bestMoveWinRate`` の 2 列が欠けたまま
+    気付かれずにいた (backlog 行 N5-1)．
+
+    列集合は polars スキーマ，長さは structured dtype を唯一の出所と
+    することで，どちらが変わってもテストデータが自動で追従する．
+    追従できない組み合わせ (List なのに長さの出所が無い，未対応の
+    dtype) は列名を名指しして落とす．
+
+    Args:
+        schema: polars スキーマ
+        np_dtype: 対応する structured dtype (shape の出所)
+        num_records: 生成する行数
+        label: エラーメッセージ用のデータ種別名
+
+    Returns:
+        スキーマどおりの DataFrame
+
+    Raises:
+        ValueError: 列を生成できないとき
+    """
+    data: dict[str, list] = {}
+    for column, pl_dtype in schema.items():
+        np_field = _field_dtype(np_dtype, column)
+        if np_field is None and pl_dtype.base_type() in (
+            pl.List,
+            pl.Binary,
+        ):
+            # 長さの出所が無い列は生成できない．polars スキーマだけが
+            # 先に育って structured dtype が追い付いていない状態なので，
+            # 列名を名指しして落とす (実際 bestMoveWinRate は polars
+            # スキーマにしか無いが，スカラなのでここには来ない)．
+            raise ValueError(
+                f"{label} の列 {column} は長さを要するが structured "
+                f"dtype に宣言が無い．structured dtype 側に列を"
+                f"足すこと．"
+            )
+        data[column] = _synthesize_column(
+            column, pl_dtype, np_field, num_records
         )
+
+    return pl.DataFrame(data, schema=dict(schema))
 
 
 class PerformanceBenchmark:
@@ -89,89 +242,23 @@ class PerformanceBenchmark:
 
     def _create_hcpe_test_data_polars(self) -> pl.DataFrame:
         """Create HCPE test data as Polars DataFrame．"""
-        schema = get_hcpe_polars_schema()
-
-        data = {
-            "hcp": [
-                bytes([i % 256 for _ in range(32)])
-                for i in range(self.num_records)
-            ],
-            "eval": [
-                (i % 1000) - 500
-                for i in range(self.num_records)
-            ],
-            "bestMove16": [
-                i % 10000 for i in range(self.num_records)
-            ],
-            "gameResult": [
-                i % 3 for i in range(self.num_records)
-            ],
-            "id": [
-                f"id_{i:08d}" for i in range(self.num_records)
-            ],
-            "partitioningKey": [
-                date(2025, 12, 25)
-                for _ in range(self.num_records)
-            ],
-            "ratings": [
-                [1500 + (i % 500), 1500 - (i % 500)]
-                for i in range(self.num_records)
-            ],
-            "endgameStatus": [
-                "Toryo" for _ in range(self.num_records)
-            ],
-            "moves": [
-                100 + (i % 100) for i in range(self.num_records)
-            ],
-        }
-
-        _assert_covers_schema(data, schema, "hcpe")
-        return pl.DataFrame(data, schema=schema)
+        return _create_test_data(
+            get_hcpe_polars_schema(),
+            get_hcpe_dtype(),
+            self.num_records,
+            "hcpe",
+        )
 
     def _create_preprocessing_test_data_polars(
         self,
     ) -> pl.DataFrame:
         """Create preprocessing test data as Polars DataFrame．"""
-        schema = get_preprocessing_polars_schema()
-
-        data = {
-            "id": list(range(self.num_records)),
-            "boardIdPositions": [
-                np.arange(81, dtype=np.uint8)
-                .reshape(9, 9)
-                .tolist()
-                for _ in range(self.num_records)
-            ],
-            "piecesInHand": [
-                np.arange(14, dtype=np.uint8).tolist()
-                for _ in range(self.num_records)
-            ],
-            "moveLabel": [
-                np.random.rand(MOVE_LABELS_NUM)
-                .astype(np.float32)
-                .tolist()
-                for _ in range(self.num_records)
-            ],
-            # moveWinRate は 2026-08-12 に preprocessing スキーマへ
-            # 追加された．ここで作らないと ``pl.DataFrame(data,
-            # schema=schema)`` が KeyError で落ちるため，
-            # スキーマに列を足すときはこの辞書も必ず更新すること．
-            "moveWinRate": [
-                np.random.rand(MOVE_LABELS_NUM)
-                .astype(np.float32)
-                .tolist()
-                for _ in range(self.num_records)
-            ],
-            "bestMoveWinRate": [
-                float(i % 2) for i in range(self.num_records)
-            ],
-            "resultValue": [
-                float(i % 2) for i in range(self.num_records)
-            ],
-        }
-
-        _assert_covers_schema(data, schema, "preprocessing")
-        return pl.DataFrame(data, schema=schema)
+        return _create_test_data(
+            get_preprocessing_polars_schema(),
+            get_preprocessing_dtype(),
+            self.num_records,
+            "preprocessing",
+        )
 
     def benchmark_hcpe_io(self, output_dir: Path) -> dict:
         """Benchmark HCPE I/O performance．
