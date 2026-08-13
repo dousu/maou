@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from maou.domain.data.columnar_batch import (
+    COLUMNAR_CONVERTERS as COLUMNAR_CONVERTERS,
+)
+from maou.domain.data.columnar_batch import (
     ColumnarBatch as ColumnarBatch,
 )
 from maou.domain.data.columnar_batch import (

@@ -53,6 +53,14 @@ SUPPORTED_MODEL_ARCHITECTURES = BACKBONE_ARCHITECTURES
 # 検証割合が黙って変わるので，定数を 1 つに寄せてある．
 DEFAULT_TEST_RATIO = 0.2
 
+# 行単位 train/test 分割の既定 seed．
+# これを渡さないと `random` モジュールのグローバル状態で shuffle するため，
+# 同じデータ・同じ `--test-ratio` でも実行ごとに分割が変わる．
+# 学習を中断して再開すると，前回の検証行がそのまま訓練行になり得るので，
+# 3 つの実装 (`file_system` / `object_storage` / `bigquery`) すべてが
+# この定数を引く．値を変えると既存の分割も変わる点に注意．
+DEFAULT_SPLIT_SEED = 0
+
 
 @dataclass(frozen=True)
 class StageDataConfig:

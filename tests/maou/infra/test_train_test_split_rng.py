@@ -14,12 +14,19 @@
 
 from __future__ import annotations
 
+import logging
 import random
+import types
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from maou.domain.data.rust_io import save_preprocessing_df
+from maou.domain.data.schema import (
+    create_empty_preprocessing_df,
+)
 from maou.infra.bigquery.bq_data_source import (
     BigQueryDataSource,
 )
@@ -29,6 +36,7 @@ from maou.infra.file_system.file_data_source import (
 from maou.infra.object_storage.data_source import (
     ObjectStorageDataSource,
 )
+from maou.interface import learn
 
 _SPLITTERS: dict[str, Callable[..., Any]] = {
     "bigquery": (
@@ -87,3 +95,85 @@ def test_split_sizes_and_partition(name: str) -> None:
     assert len(train) == 15
     assert len(test) == 5
     assert sorted(train + test) == list(range(20))
+
+
+_PUBLIC_SPLITTERS: dict[str, tuple[Callable[..., Any], str]] = {
+    "bigquery": (
+        BigQueryDataSource.BigQueryDataSourceSpliter.train_test_split,
+        "_BigQueryDataSourceSpliter",
+    ),
+    "object_storage": (
+        ObjectStorageDataSource.DataSourceSpliter.train_test_split,
+        "_DataSourceSpliter",
+    ),
+    "file_system": (
+        FileDataSource.FileDataSourceSpliter.train_test_split,
+        "_FileDataSourceSpliter",
+    ),
+}
+
+
+class _StubManager:
+    total_rows = 20
+
+
+@pytest.mark.parametrize("name", sorted(_PUBLIC_SPLITTERS))
+def test_public_split_passes_the_default_seed(
+    name: str,
+) -> None:
+    """公開 ``train_test_split`` が既定 seed を渡すこと.
+
+    `/audit-backlog` 2026-08-13 / backlog 行 D2．
+    ``__train_test_split`` は seed 引数を持っていたのに 3 実装とも
+    渡しておらず，分割が実行ごとに変わっていた (学習を中断・再開すると
+    前回の検証行で訓練し得る)．3 実装が同じ定数を引くことを固定する．
+    """
+    split, mangle_prefix = _PUBLIC_SPLITTERS[name]
+
+    seen: dict[str, Any] = {}
+
+    def spy(**kwargs: Any) -> tuple[list[int], list[int]]:
+        seen.update(kwargs)
+        data = kwargs["data"]
+        return data[:15], data[15:]
+
+    stub = types.SimpleNamespace(
+        logger=logging.getLogger(__name__),
+        **{
+            f"{mangle_prefix}__train_test_split": spy,
+            f"{mangle_prefix}__file_manager": _StubManager(),
+            f"{mangle_prefix}__page_manager": _StubManager(),
+        },
+    )
+
+    split(stub, test_ratio=0.25)
+
+    assert seen["seed"] == learn.DEFAULT_SPLIT_SEED
+    assert seen["seed"] is not None
+
+
+def test_file_system_split_is_stable_across_instances(
+    tmp_path: Path,
+) -> None:
+    """同じ入力なら別インスタンスでも同じ分割になること.
+
+    `/audit-backlog` 2026-08-13 / backlog 行 D2 の実経路側の確認．
+    spy を使わず本物のファイルで，再開に相当する 2 回目の構築が
+    1 回目と同じ train/test を返すことを押さえる．
+    """
+    df = create_empty_preprocessing_df(20)
+    path = tmp_path / "split.feather"
+    save_preprocessing_df(df, str(path))
+
+    def split_once() -> tuple[list[int], list[int]]:
+        spliter = FileDataSource.FileDataSourceSpliter(
+            file_paths=[path],
+            array_type="preprocessing",
+        )
+        train, test = spliter.train_test_split(test_ratio=0.25)
+        return (
+            list(train.indicies),
+            list(test.indicies),
+        )
+
+    assert split_once() == split_once()

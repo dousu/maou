@@ -711,3 +711,166 @@ def test_spliter_exposes_no_full_load_streaming_split() -> None:
         if not name.startswith("_")
     }
     assert public == {"logger", "train_test_split"}
+
+
+def _create_varied_preprocessing_file(
+    directory: Path, *, rows: int
+) -> Path:
+    """全フィールドが行ごとに異なる preprocessing ファイルを作る．
+
+    ``_create_preprocessing_files`` は ``resultValue`` と ``id`` しか
+    埋めず，残りは 0 のままなので，フィールドの取り違えや脱落を
+    検出できない (characterization test の非空虚性が保てない)．
+    """
+    from maou.domain.move.label import MOVE_LABELS_NUM
+
+    df = create_empty_preprocessing_df(rows)
+    df = df.with_columns(
+        [
+            pl.Series("id", list(range(rows))),
+            pl.Series(
+                "boardIdPositions",
+                [
+                    [
+                        [
+                            (r * 81 + c * 9 + k) % 256
+                            for k in range(9)
+                        ]
+                        for c in range(9)
+                    ]
+                    for r in range(rows)
+                ],
+            ),
+            pl.Series(
+                "piecesInHand",
+                [
+                    [(r * 14 + k) % 256 for k in range(14)]
+                    for r in range(rows)
+                ],
+            ),
+            pl.Series(
+                "moveLabel",
+                [
+                    [
+                        float((r + k) % 7)
+                        for k in range(MOVE_LABELS_NUM)
+                    ]
+                    for r in range(rows)
+                ],
+            ),
+            pl.Series(
+                "moveWinRate",
+                [
+                    [
+                        float((r * 3 + k) % 5)
+                        for k in range(MOVE_LABELS_NUM)
+                    ]
+                    for r in range(rows)
+                ],
+            ),
+            pl.Series(
+                "bestMoveWinRate",
+                [float(r) / 10.0 for r in range(rows)],
+            ),
+            pl.Series(
+                "resultValue",
+                [float(r % 2) for r in range(rows)],
+            ),
+        ]
+    )
+    path = directory / "varied_preprocessing.feather"
+    save_preprocessing_df(df, path)
+    return path
+
+
+def test_single_record_matches_batch_conversion(
+    tmp_path: Path,
+) -> None:
+    """1件取得と一括変換が同じ値を返すこと．
+
+    `/audit-backlog` 2026-08-13 / backlog 行 D3+D4 (b)．
+    ``_columnar_to_structured_record`` と
+    ``_columnar_batch_to_structured_array`` は同じ 6 フィールドの転記を
+    別々に書いていた．一方だけを直す事故を構造的に潰すため後者へ
+    一本化したので，両経路が一致することを固定する
+    (この assert は修正前後どちらでも通る characterization test で，
+    「挙動不変」の根拠そのものである)．
+    """
+    path = _create_varied_preprocessing_file(tmp_path, rows=6)
+
+    manager = FileDataSource.FileManager(
+        file_paths=[path],
+        array_type="preprocessing",
+        bit_pack=False,
+        cache_mode="memory",
+    )
+
+    batches = list(manager.iter_batches())
+    assert len(batches) == 1
+    _, array = batches[0]
+    assert len(array) == 6
+
+    for idx in range(len(array)):
+        record = manager.get_item(idx)
+        assert record.dtype == array.dtype
+        for name in array.dtype.names or ():
+            assert (record[name] == array[idx][name]).all(), (
+                f"field {name} differs at row {idx}"
+            )
+
+
+def test_negative_index_still_selects_the_last_row(
+    tmp_path: Path,
+) -> None:
+    """負のインデックスが末尾行を指すこと．
+
+    `/audit-backlog` 2026-08-13 / backlog 行 D3+D4 (b) の trap．
+    一本化にあたり 1 行取得をスライスで表現したが，素朴に
+    ``arr[idx : idx + 1]`` と書くと ``idx == -1`` で空スライスになる．
+    元の ``arr[idx]`` は負のインデックスを末尾から数えていたので，
+    その振る舞いを固定する．
+    """
+    path = _create_varied_preprocessing_file(tmp_path, rows=4)
+
+    manager = FileDataSource.FileManager(
+        file_paths=[path],
+        array_type="preprocessing",
+        bit_pack=False,
+        cache_mode="memory",
+    )
+
+    _, array = next(iter(manager.iter_batches()))
+    batch = (
+        manager._concatenated_columnar
+        or manager._file_entries[0].cached_columnar
+    )
+    assert batch is not None
+
+    last = manager._columnar_to_structured_record(batch, -1)
+    for name in array.dtype.names or ():
+        assert (last[name] == array[-1][name]).all(), (
+            f"field {name} differs for the negative index"
+        )
+
+
+def test_columnar_converter_table_is_shared() -> None:
+    """columnar 変換表が 2 モジュールで同一オブジェクトであること．
+
+    `/audit-backlog` 2026-08-13 / backlog 行 D3+D4 (a)．
+    ``file_data_source`` と ``streaming_file_source`` は同内容の dict を
+    各々持っていたため，array_type を足すときに片方だけ更新され得た．
+    domain 側の 1 本を両者が import している状態を固定する．
+    """
+    from maou.domain.data.columnar_batch import (
+        COLUMNAR_CONVERTERS as domain_table,
+    )
+    from maou.infra.file_system import (
+        file_data_source,
+        streaming_file_source,
+    )
+
+    assert file_data_source.COLUMNAR_CONVERTERS is domain_table
+    assert (
+        streaming_file_source.COLUMNAR_CONVERTERS
+        is domain_table
+    )

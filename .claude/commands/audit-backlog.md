@@ -204,6 +204,34 @@ When you do ask, ask **once**, batching every outstanding fork into a
 single `AskUserQuestion`, after the auto band has merged. A second question
 in the same run means the first one was under-specified.
 
+## Standing principle: the run narrates itself in the conversation
+
+Every artifact this command produces — the classification, the PRs, the
+record — is written for someone who has already decided to open it. None
+of them tell the user *what the run is doing* or *which of its outputs
+needs them*. That job belongs to the conversation, and it cannot be
+delegated to a link.
+
+Two moments carry the whole weight:
+
+- **Before any file is touched** (3a): the classification table, plus a
+  plain list of what this session will work and what it will leave. A
+  reader must be able to see the run's scope without opening anything.
+- **When PRs are opened** (5f): a table mapping each backlog row to the PR
+  and commit that answers it. A PR number on its own forces the user to
+  read a diff just to learn which finding it belongs to — which is
+  precisely the reconstruction the ledger exists to remove.
+
+The failure this prevents is not a missing artifact; it is a run whose
+artifacts are all correct and whose user still has to reverse-engineer
+what happened. Treat "it's in the PR body" and "it's in the record" as
+*non-answers* to "what did this run do?" — those are where the detail
+lives, not where the orientation lives.
+
+Both lists are cheap: a dozen lines each, written from material step 3
+already produced. Skipping them buys the run nothing and costs the user a
+manual pass over every diff.
+
 ## Hard constraints
 
 - **Never `--no-verify`.** Pre-commit runs on every commit.
@@ -338,9 +366,38 @@ Sort **within** each class by severity — wrong results a user or operator
 can see, ahead of internal cleanups. That is where the old impact rubric
 went: it orders work inside a class, it no longer decides which class.
 
-Print this table before doing anything with it. It is the user's chance to
-stop a misclassification before it merges, and it is the artifact that
-makes the classification auditable after the fact.
+**Print this table in the conversation before touching a single file, and
+follow it with the run's plan.** Not after the first fix, not alongside
+it — before. This is the first of the two moments in the standing
+principle above. It is the user's chance to stop a misclassification
+before it merges, and it is the artifact that makes the classification
+auditable after the fact. A table printed once work is already underway
+has lost the half of its job that mattered.
+
+The plan is a second, shorter list, and it answers a different question
+than the table: **what is this session actually going to do?** The
+classification says what each item *is*; the plan says which items get
+worked, which get left, and in what order. Write it as two blocks:
+
+```markdown
+### このセッションで処理する
+1. D3+D4 (P3, 自動帯) — columnar 変換表の 1 本化 + structured array 復元の統合
+2. D2 (P4) — 行分割の既定 seed
+3. N-2 (P6) — `.npy` ベンチの扱い (向きはユーザに確認してから書く)
+4. N-3 (doc) — `reviews/` 提案のみ，doc は編集しない
+
+### このセッションでは処理しない (残す理由)
+- Deferred 5/6/7, O9 — G1: GPU / BigQuery がこの環境に無い
+- Deferred 2/4 — G3: ~400 行の学習経路リファクタで等価性を示せない
+- …
+```
+
+The "処理しない" half is not padding. A run that lists only what it will
+do leaves the user unable to tell a deliberate deferral from an
+oversight — and that distinction is the entire value of a backlog that
+has already been triaged once.
+
+Do not begin step 3b until both blocks are on screen.
 
 **3b. Consume the auto band (P1 → P2 → P3) without asking.** No
 `AskUserQuestion`, no pause. Work the classes in ascending order — P1 is
@@ -666,6 +723,26 @@ If the user *does* answer in this session, apply what they decided, re-run
 the QA, and merge under 5d's conditions. If they do not, the PR **is** the
 handoff, and the backlog row stays put until it merges (6a).
 
+**5f. Hand the PRs over as a row → PR table in the conversation.** The
+second moment in the standing principle above. The moment a judgment-band
+PR is opened, print — in chat, not only in the PR body — one row per
+finding:
+
+| backlog 行 | 由来の記録 | クラス | PR | commit | 何を出荷したか |
+|---|---|---|---|---|---|
+
+Opening a PR is not the same as telling the user what to look at. The
+body explains itself to whoever already opened it; the chat table is what
+lets the user decide *which* PR to open, and in what order, without
+paging through diffs to reconstruct which backlog row each one answers.
+That reconstruction is exactly the work the ledger exists to remove.
+
+Mark the auto-band rows in the table as needing no decision, so the user
+can see at a glance how much of the run is actually theirs to judge. When
+the whole run collapsed into one PR (the designated-branch case in 5a),
+the table's commit column carries the review units instead — say so in
+the same breath, since "one PR" otherwise reads as "one decision."
+
 ### 6. Update the ledger and write the record
 
 Three separate bookkeeping duties. All are required; the first is the one
@@ -795,6 +872,10 @@ Compact summary:
 - Judgment band: one line per PR — number, class, the decision it carries,
   and its base. Print the **stack map** once, in the same shape 5c puts in
   the PR bodies, so the report and the PRs agree
+- The **row → PR table from 5f**, repeated here if the report is not
+  already adjacent to it. The report is what a user re-reads days later to
+  remember what a PR was for; a PR number without its backlog row forces
+  them back into the diff
 - **Whether the run asked anything, and why.** If an `AskUserQuestion` was
   raised, name the fork that justified it under the one-check test. If not,
   say so — "asked nothing; N PRs carry their decisions" is the expected
