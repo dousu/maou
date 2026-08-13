@@ -204,6 +204,34 @@ When you do ask, ask **once**, batching every outstanding fork into a
 single `AskUserQuestion`, after the auto band has merged. A second question
 in the same run means the first one was under-specified.
 
+## Standing principle: the run narrates itself in the conversation
+
+Every artifact this command produces — the classification, the PRs, the
+record — is written for someone who has already decided to open it. None
+of them tell the user *what the run is doing* or *which of its outputs
+needs them*. That job belongs to the conversation, and it cannot be
+delegated to a link.
+
+Two moments carry the whole weight:
+
+- **Before any file is touched** (3a): the classification table, plus a
+  plain list of what this session will work and what it will leave. A
+  reader must be able to see the run's scope without opening anything.
+- **When PRs are opened** (5f): a table mapping each backlog row to the PR
+  and commit that answers it. A PR number on its own forces the user to
+  read a diff just to learn which finding it belongs to — which is
+  precisely the reconstruction the ledger exists to remove.
+
+The failure this prevents is not a missing artifact; it is a run whose
+artifacts are all correct and whose user still has to reverse-engineer
+what happened. Treat "it's in the PR body" and "it's in the record" as
+*non-answers* to "what did this run do?" — those are where the detail
+lives, not where the orientation lives.
+
+Both lists are cheap: a dozen lines each, written from material step 3
+already produced. Skipping them buys the run nothing and costs the user a
+manual pass over every diff.
+
 ## Hard constraints
 
 - **Never `--no-verify`.** Pre-commit runs on every commit.
@@ -340,10 +368,11 @@ went: it orders work inside a class, it no longer decides which class.
 
 **Print this table in the conversation before touching a single file, and
 follow it with the run's plan.** Not after the first fix, not alongside
-it — before. It is the user's chance to stop a misclassification before it
-merges, and it is the artifact that makes the classification auditable
-after the fact. A table printed once work is already underway has lost the
-half of its job that mattered.
+it — before. This is the first of the two moments in the standing
+principle above. It is the user's chance to stop a misclassification
+before it merges, and it is the artifact that makes the classification
+auditable after the fact. A table printed once work is already underway
+has lost the half of its job that mattered.
 
 The plan is a second, shorter list, and it answers a different question
 than the table: **what is this session actually going to do?** The
@@ -695,8 +724,9 @@ the QA, and merge under 5d's conditions. If they do not, the PR **is** the
 handoff, and the backlog row stays put until it merges (6a).
 
 **5f. Hand the PRs over as a row → PR table in the conversation.** The
-moment a judgment-band PR is opened, print — in chat, not only in the PR
-body — one row per finding:
+second moment in the standing principle above. The moment a judgment-band
+PR is opened, print — in chat, not only in the PR body — one row per
+finding:
 
 | backlog 行 | 由来の記録 | クラス | PR | commit | 何を出荷したか |
 |---|---|---|---|---|---|
