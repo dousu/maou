@@ -140,10 +140,17 @@ for batch in dataloader:
 
 > **注 (2026-08-09)**: 上のコード例は当時の targets タプルである．
 > 現在 `legal_move_mask` はどのデータ経路も供給せず，targets は
-> `(labels_policy, labels_value, move_win_rate)` (3 要素目は省略可)
-> になっている．経緯は [loss-functions.md](loss-functions.md) の
+> `(labels_policy, labels_value, move_win_rate)` になっている．
+> 経緯は [loss-functions.md](loss-functions.md) の
 > 「合法手マスキング」節を参照．本 ADR の主題である
 > DataLoader/GPU 転送の決定自体は有効である．
+>
+> **追記 (2026-08-13)**: `moveWinRate` が preprocessing の
+> structured dtype に入った (2026-08-12) ため，preprocessing 経路の
+> `KifDataset` は**常に 3 要素**を返す
+> (`app/learning/dataset.py:137-142`)．2 要素を返す分岐は
+> `moveWinRate` を持たない dtype 向けに防御的に残っているだけで，
+> 現在のどのデータ経路からも到達しない．
 
 ### 5. グローバルワーカー初期化関数の実装
 
