@@ -23,6 +23,7 @@ import polars as pl
 from maou.domain.data.arrow_format import (  # noqa: F401
     is_arrow_ipc_file_format,
     scan_row_count,
+    scan_row_counts,
 )
 from maou.interface.data_io import (
     COLUMNAR_CONVERTERS,
@@ -120,15 +121,11 @@ class StreamingFileSource:
         # 途中で scan_row_count が例外を投げたときに打ち切られた
         # カウントが memo (`_row_counts is not None`) として残り，
         # 以降 total_rows が過少申告され steps_per_epoch が狂う．
-        row_counts: list[int] = []
-        total_rows = 0
-        for fp in self._file_paths:
-            row_count = scan_row_count(fp)
-            row_counts.append(row_count)
-            total_rows += row_count
+        # この「部分結果を返さない」保証は scan_row_counts が持つ．
+        row_counts = scan_row_counts(self._file_paths)
 
         self._row_counts = row_counts
-        self._total_rows = total_rows
+        self._total_rows = sum(row_counts)
 
         logger.info(
             "StreamingFileSource scanned: "

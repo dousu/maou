@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+import pytest
 
 from maou.domain.data.rust_io import save_hcpe_df
 from maou.domain.data.schema import (
@@ -267,3 +268,118 @@ class TestTotalPages:
         """total_pages returns 0 for empty source."""
         source = StreamingHcpeDataSource(file_paths=[])
         assert source.total_pages() == 0
+
+
+# ============================================================================
+# /audit-backlog 2026-08-13 — backlog 行 D14(a) の回帰テスト
+# ============================================================================
+
+
+class TestSharedRowCountScan:
+    """行数スキャンを ``domain.data.arrow_format.scan_row_counts`` へ寄せた．
+
+    ``StreamingFileSource`` と別実装だったループを共有した変更の回帰
+    テスト．挙動 (``__len__`` / ``total_pages``) は不変で，per-file の
+    カウントを捨てなくなった分だけ増える．
+    """
+
+    def test_len_still_equals_sum_of_per_file_scan(
+        self, tmp_path: Path
+    ) -> None:
+        """``__len__`` が共有化の前後で変わらないこと (挙動不変の根拠)."""
+        from maou.domain.data.arrow_format import scan_row_count
+
+        file_paths = _create_hcpe_files(
+            tmp_path, file_count=4, rows_per_file=3
+        )
+        source = StreamingHcpeDataSource(file_paths=file_paths)
+
+        assert len(source) == sum(
+            scan_row_count(p) for p in file_paths
+        )
+
+    def test_row_counts_exposes_per_file_counts(
+        self, tmp_path: Path
+    ) -> None:
+        """per-file のカウントを捨てずに公開すること.
+
+        以前は合計した時点で捨てていたため，sharding 用の行数リストを
+        提供できなかった (backlog 行 D14(a))．
+        """
+        file_paths = _create_hcpe_files(
+            tmp_path, file_count=3, rows_per_file=5
+        )
+        source = StreamingHcpeDataSource(file_paths=file_paths)
+
+        assert source.row_counts == [5, 5, 5]
+        assert sum(source.row_counts) == len(source)
+
+    def test_row_counts_is_a_copy(self, tmp_path: Path) -> None:
+        """返したリストを書き換えても内部状態が壊れないこと."""
+        file_paths = _create_hcpe_files(
+            tmp_path, file_count=2, rows_per_file=4
+        )
+        source = StreamingHcpeDataSource(file_paths=file_paths)
+
+        source.row_counts.append(999)
+
+        assert source.row_counts == [4, 4]
+        assert len(source) == 8
+
+    def test_scan_runs_once(self, tmp_path: Path) -> None:
+        """2 回目以降のアクセスで再スキャンしないこと."""
+        file_paths = _create_hcpe_files(
+            tmp_path, file_count=2, rows_per_file=4
+        )
+        source = StreamingHcpeDataSource(file_paths=file_paths)
+
+        _ = len(source)
+        first = source._row_counts
+        _ = source.row_counts
+        _ = len(source)
+
+        assert source._row_counts is first
+
+    def test_failed_scan_does_not_cache_partial_counts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """スキャン途中の例外で打ち切られたカウントを memo しないこと.
+
+        trap: ``StreamingFileSource`` 側にはこの回帰テストがあったが，
+        こちらには無く，安全なのは実装の構造が違う結果の偶然だった．
+        共有後はこの性質が両者で同じ根拠を持つ．
+        """
+        from maou.domain.data import arrow_format
+
+        file_paths = _create_hcpe_files(
+            tmp_path, file_count=3, rows_per_file=5
+        )
+        source = StreamingHcpeDataSource(file_paths=file_paths)
+
+        real_scan = arrow_format.scan_row_count
+        seen: list[Path] = []
+
+        def flaky(path: Path) -> int:
+            seen.append(path)
+            if len(seen) == 2:
+                raise OSError("simulated corrupt file")
+            return real_scan(path)
+
+        monkeypatch.setattr(
+            "maou.domain.data.arrow_format.scan_row_count",
+            flaky,
+        )
+
+        with pytest.raises(OSError, match="simulated"):
+            _ = len(source)
+
+        assert source._row_counts is None
+        assert source._total_rows is None
+
+        monkeypatch.setattr(
+            "maou.domain.data.arrow_format.scan_row_count",
+            real_scan,
+        )
+        assert len(source) == 15

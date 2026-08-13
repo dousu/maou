@@ -18,6 +18,7 @@ from maou.domain.data.arrow_format import (
     is_arrow_ipc_file_bytes,
     is_arrow_ipc_file_format,
     scan_row_count,
+    scan_row_counts,
 )
 
 
@@ -162,3 +163,87 @@ class TestDataframeIoRoundTrip:
 
         assert _read_ipc_auto(file_buf.getvalue()).equals(df)
         assert _read_ipc_auto(stream_buf.getvalue()).equals(df)
+
+
+class TestScanRowCounts:
+    """`scan_row_counts` — backlog 行 D14(a) の回帰テスト．
+
+    ``StreamingFileSource`` と ``StreamingHcpeDataSource`` が別々に
+    書いていた行数スキャンのループを domain へ寄せた．共有した意味は
+    「部分結果を返さない」性質を 1 箇所で守ることにあるので，それを
+    ここで固定する．
+    """
+
+    def test_returns_counts_in_input_order(
+        self, df: pl.DataFrame, tmp_path: Path
+    ) -> None:
+        """入力順のファイルごとの行数を返すこと."""
+        paths = [
+            _write_file_format(
+                df.head(n), tmp_path / f"f{n}.feather"
+            )
+            for n in (3, 7, 5)
+        ]
+
+        assert scan_row_counts(paths) == [3, 7, 5]
+
+    def test_matches_per_file_scan_row_count(
+        self, df: pl.DataFrame, tmp_path: Path
+    ) -> None:
+        """1 件ずつ ``scan_row_count`` を呼んだ結果と一致すること.
+
+        これが「挙動不変」の根拠 (共有前の各実装はこのループだった)．
+        """
+        paths = [
+            _write_file_format(
+                df.head(n), tmp_path / f"f{n}.feather"
+            )
+            for n in (1, 4, 7)
+        ]
+
+        assert scan_row_counts(paths) == [
+            scan_row_count(p) for p in paths
+        ]
+
+    def test_empty_input_returns_empty_list(self) -> None:
+        assert scan_row_counts([]) == []
+
+    def test_raises_without_returning_partial_counts(
+        self,
+        df: pl.DataFrame,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """途中で例外が出たら**何も返さない**こと.
+
+        trap: 素朴な ``counts = []; for ...: counts.append(...)`` を
+        呼び出し側が持つと，例外時に打ち切られたリストが memo として
+        残り，以降 total_rows が過少申告される．共有側が例外を
+        素通しすることでこの壊れ方を封じている．
+        """
+        paths = [
+            _write_file_format(
+                df.head(n), tmp_path / f"f{n}.feather"
+            )
+            for n in (2, 3, 4)
+        ]
+
+        real_scan = scan_row_count
+        seen: list[Path] = []
+
+        def flaky(path: Path) -> int:
+            seen.append(path)
+            if len(seen) == 2:
+                raise OSError("simulated corrupt file")
+            return real_scan(path)
+
+        monkeypatch.setattr(
+            "maou.domain.data.arrow_format.scan_row_count",
+            flaky,
+        )
+
+        with pytest.raises(OSError, match="simulated"):
+            scan_row_counts(paths)
+
+        # 3 件目まで進まずに中断していること
+        assert len(seen) == 2

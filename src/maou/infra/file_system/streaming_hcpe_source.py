@@ -47,6 +47,7 @@ class StreamingHcpeDataSource(DataSource):
         """
         self._file_paths = list(file_paths)
         self._total_rows: int | None = None
+        self._row_counts: list[int] | None = None
 
         logger.info(
             "StreamingHcpeDataSource initialized (lazy): %d files",
@@ -62,31 +63,47 @@ class StreamingHcpeDataSource(DataSource):
         """行数スキャンを実行する(未実行の場合のみ)．
 
         初回呼び出し時に全ファイルの行数をスキャンし，
-        ``_total_rows`` を設定する．
+        ``_row_counts`` と ``_total_rows`` を設定する．
         2回目以降の呼び出しでは何もしない．
+
+        スキャンは ``StreamingFileSource`` と同じ
+        :func:`~maou.domain.data.arrow_format.scan_row_counts` を使う．
+        以前は両者が別々にループを書いており，「例外で打ち切られた
+        カウントを memo しない」性質を各々が独立に守っていた
+        (安全なのは構造が違う結果の偶然だった)．
         """
-        if self._total_rows is not None:
+        if self._row_counts is not None:
             return
 
-        from maou.infra.file_system.streaming_file_source import (
-            scan_row_count,
+        from maou.domain.data.arrow_format import (
+            scan_row_counts,
         )
 
         t0 = time.perf_counter()
-        total = 0
-        n = len(self._file_paths)
-        for fp in self._file_paths:
-            total += scan_row_count(fp)
+        # 部分結果を返さないことは scan_row_counts が保証する．
+        row_counts = scan_row_counts(self._file_paths)
 
-        self._total_rows = total
+        self._row_counts = row_counts
+        self._total_rows = sum(row_counts)
         elapsed = time.perf_counter() - t0
         logger.info(
             "StreamingHcpeDataSource scanned: "
             "%d files, %d total rows in %.1fs",
-            n,
+            len(self._file_paths),
             self._total_rows,
             elapsed,
         )
+
+    @property
+    def row_counts(self) -> list[int]:
+        """各ファイルの行数リスト(初回アクセス時にスキャン実行)．
+
+        以前は per-file のカウントを合計した時点で捨てていたため，
+        sharding に必要な行数リストを提供できなかった．
+        """
+        self._ensure_row_counts()
+        assert self._row_counts is not None
+        return list(self._row_counts)
 
     def __len__(self) -> int:
         """全ファイルの合計行数(初回アクセス時にスキャン実行)."""
