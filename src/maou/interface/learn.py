@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
 import torch
 
 from maou.app.learning.adaptive_batch import (
@@ -54,12 +55,51 @@ SUPPORTED_MODEL_ARCHITECTURES = BACKBONE_ARCHITECTURES
 DEFAULT_TEST_RATIO = 0.2
 
 # 行単位 train/test 分割の既定 seed．
-# これを渡さないと `random` モジュールのグローバル状態で shuffle するため，
-# 同じデータ・同じ `--test-ratio` でも実行ごとに分割が変わる．
-# 学習を中断して再開すると，前回の検証行がそのまま訓練行になり得るので，
-# 3 つの実装 (`file_system` / `object_storage` / `bigquery`) すべてが
-# この定数を引く．値を変えると既存の分割も変わる点に注意．
+# これを渡さないと分割が実行ごとに変わり，学習を中断して再開すると
+# 前回の検証行がそのまま訓練行になり得る．3 つの実装
+# (`file_system` / `object_storage` / `bigquery`) すべてが
+# `train_test_split_indices` 経由でこの定数を引く．
+# 値を変えると既存の分割も変わる点に注意．
 DEFAULT_SPLIT_SEED = 0
+
+
+def train_test_split_indices(
+    total_rows: int,
+    test_ratio: float,
+    seed: int = DEFAULT_SPLIT_SEED,
+) -> tuple[np.ndarray, np.ndarray]:
+    """行番号を訓練用と検証用に分割する．
+
+    3 つのデータソース実装 (`file_system` / `object_storage` /
+    `bigquery`) が同じ処理を1文字違わず持っていたのでここへ寄せた．
+
+    実装が ``random.Random(seed).shuffle(list(range(N)))`` ではなく
+    ``np.random.default_rng(seed).permutation(N)`` なのは，前者が
+    **索引だけで巨大なメモリを食う**ため: 5000万行で Python の int
+    オブジェクトとリストの参照が同時に生存し約 2.6GB になる．
+    ndarray なら int64 × N の 400MB で済み，並べ替えも C ループ 1 回で
+    終わる．
+
+    **分割値は seed が同じでも従来と一致しない** (Mersenne Twister の
+    shuffle と PCG64 の permutation は別の並びを作る)．
+    `DEFAULT_SPLIT_SEED` を導入して分割が再現可能になった直後の，
+    意図的な 1 回きりの変更である．
+
+    Args:
+        total_rows: 全行数
+        test_ratio: 検証に回す割合 (0.0-1.0)
+        seed: 乱数シード
+
+    Returns:
+        (訓練用の行番号, 検証用の行番号)．どちらも ``np.int64`` の1次元
+        配列で，2つを合わせると ``0`` から ``total_rows - 1`` の全体を
+        重複なく覆う．
+    """
+    shuffled = np.random.default_rng(seed).permutation(
+        total_rows
+    )
+    split_idx = int(float(total_rows) * (1 - test_ratio))
+    return shuffled[:split_idx], shuffled[split_idx:]
 
 
 @dataclass(frozen=True)

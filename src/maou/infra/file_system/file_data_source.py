@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import bisect
 import logging
-import random
 import time
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
@@ -77,10 +76,8 @@ class FileDataSource(
         ) -> tuple[FileDataSource, FileDataSource]:
             self.logger.info(f"test_ratio: {test_ratio}")
             input_indicies, test_indicies = (
-                self.__train_test_split(
-                    data=list(
-                        range(self.__file_manager.total_rows)
-                    ),
+                learn.train_test_split_indices(
+                    total_rows=self.__file_manager.total_rows,
                     test_ratio=test_ratio,
                     seed=learn.DEFAULT_SPLIT_SEED,
                 )
@@ -95,25 +92,6 @@ class FileDataSource(
                     indicies=test_indicies,
                 ),
             )
-
-        def __train_test_split(
-            self,
-            data: list,
-            test_ratio: float = 0.25,
-            seed: float | str | bytes | bytearray | None = None,
-        ) -> tuple:
-            # モジュールグローバルの random.seed() を呼ぶと，同一
-            # プロセス内の無関係な乱数消費者まで巻き添えにする．
-            # random.Random(seed) は同じ Mersenne Twister を同じ
-            # seed で初期化するため，分割結果は従来と一致する．
-            rng = (
-                random.Random(seed)
-                if seed is not None
-                else random
-            )
-            rng.shuffle(data)
-            split_idx = int(float(len(data)) * (1 - test_ratio))
-            return data[:split_idx], data[split_idx:]
 
     class FileManager:
         logger: logging.Logger = logging.getLogger(__name__)
