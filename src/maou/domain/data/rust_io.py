@@ -15,6 +15,10 @@ from typing import cast
 import polars as pl
 import pyarrow as pa
 
+from maou.domain.data.arrow_format import (
+    feather_read_errors_name_the_file,
+)
+
 try:
     from maou._rust.maou_io import (
         load_feather_file,
@@ -112,7 +116,8 @@ def load_generic_df(file_path: Path | str) -> pl.DataFrame:
     """
     _check_rust_backend()
 
-    arrow_batch = load_feather_file(str(file_path))
+    with feather_read_errors_name_the_file(Path(file_path)):
+        arrow_batch = load_feather_file(str(file_path))
     return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
 
 
@@ -162,7 +167,8 @@ def load_hcpe_df(file_path: Path | str) -> pl.DataFrame:
     _check_rust_backend()
 
     # Rust関数を呼び出し（Stream/File形式自動判定）
-    arrow_batch = load_hcpe_feather(str(file_path))
+    with feather_read_errors_name_the_file(Path(file_path)):
+        arrow_batch = load_hcpe_feather(str(file_path))
     # Arrow → Polars（ゼロコピー）
     return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
 
@@ -210,7 +216,8 @@ def load_preprocessing_df(
     _check_rust_backend()
 
     # Rust関数を呼び出し（Stream/File形式自動判定）
-    arrow_batch = load_preprocessing_feather(str(file_path))
+    with feather_read_errors_name_the_file(Path(file_path)):
+        arrow_batch = load_preprocessing_feather(str(file_path))
     return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
 
 
@@ -263,7 +270,8 @@ def load_stage1_df(file_path: Path | str) -> pl.DataFrame:
     """
     _check_rust_backend()
 
-    arrow_batch = load_feather_file(str(file_path))
+    with feather_read_errors_name_the_file(Path(file_path)):
+        arrow_batch = load_feather_file(str(file_path))
     return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
 
 
@@ -316,7 +324,8 @@ def load_stage2_df(file_path: Path | str) -> pl.DataFrame:
     """
     _check_rust_backend()
 
-    arrow_batch = load_feather_file(str(file_path))
+    with feather_read_errors_name_the_file(Path(file_path)):
+        arrow_batch = load_feather_file(str(file_path))
     return cast(pl.DataFrame, pl.from_arrow(arrow_batch))
 
 

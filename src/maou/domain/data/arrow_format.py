@@ -14,8 +14,9 @@
 """
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 
 import polars as pl
@@ -33,6 +34,66 @@ PARALLEL_SCAN_MIN_FILES = 8
 # 行数スキャンの既定スレッド数．メタデータ読みは I/O 待ちが支配的なので
 # CPU 数ではなく同時ラウンドトリップ数として選ぶ．
 DEFAULT_SCAN_WORKERS = 8
+
+
+@contextmanager
+def feather_read_errors_name_the_file(
+    file_path: Path,
+) -> Iterator[None]:
+    """`.feather` 読み込みの例外に，どのファイルかと推定原因を書き足す．
+
+    **中途書き込みの `.feather` は拡張子で捕捉できない．**
+    中断した ``save_*_df`` や in-place な ``rsync`` / ``gsutil cp`` が
+    残す不完全なファイルは拡張子が `.feather` のままなので，
+    :func:`~maou.infra.file_system.path_utils._is_temp_artifact` の
+    ような末尾拡張子フィルタは原理的に素通しする．
+
+    ただし**素通しした先で黙って壊れたデータを読むわけではない** —
+    実際には読み込み時点で確実に落ちる．問題は落ち方で，polars も
+    Rust バックエンドも**ファイル名を含まない**メッセージを出す:
+
+    - 途中書き (File 形式のまま footer が欠ける):
+      ``ComputeError: out-of-spec: InvalidFooter``
+    - 0 バイト: ``OSError: failed to fill whole buffer``
+
+    数百ファイルを渡す運用ではこれだけでは犯人を特定できないので，
+    例外に :meth:`BaseException.add_note` で注記を足す．
+
+    ``add_note`` を使うのは **例外の型も同一性も変えない**ため．
+    ``OSError`` を捕まえている呼び出し側 (:func:`scan_row_counts` の
+    「部分結果を返さない」保証に依存するテストなど) はそのまま動く．
+
+    Args:
+        file_path: 読もうとしている `.feather` のパス
+
+    Yields:
+        なし (with 節の中で読み込みを行う)
+    """
+    try:
+        yield
+    except Exception as e:
+        note = f"reading feather file: {file_path}"
+        try:
+            size = file_path.stat().st_size
+        except OSError:
+            pass
+        else:
+            note += f" ({size} bytes)"
+            if size == 0:
+                note += (
+                    " — the file is empty; it is most likely an "
+                    "interrupted write, not valid Arrow IPC"
+                )
+            else:
+                note += (
+                    " — if this is a footer/spec error the file is "
+                    "most likely incomplete (an interrupted "
+                    "save_*_df / rsync / gsutil cp leaves a "
+                    "truncated .feather that no extension filter "
+                    "can catch)"
+                )
+        e.add_note(note)
+        raise
 
 
 def is_arrow_ipc_file_bytes(data: bytes) -> bool:
@@ -95,10 +156,11 @@ def _scan_row_count_if_file_format(
     Returns:
         File形式なら行数，Stream形式なら ``None``
     """
-    if not is_arrow_ipc_file_format(file_path):
-        return None
-    lf = pl.scan_ipc(file_path)
-    return int(lf.select(pl.len()).collect().item())
+    with feather_read_errors_name_the_file(file_path):
+        if not is_arrow_ipc_file_format(file_path):
+            return None
+        lf = pl.scan_ipc(file_path)
+        return int(lf.select(pl.len()).collect().item())
 
 
 def _scan_row_count_stream(file_path: Path) -> int:
@@ -120,10 +182,11 @@ def _scan_row_count_stream(file_path: Path) -> int:
         "(consider converting to File format).",
         file_path,
     )
-    df = pl.read_ipc_stream(file_path)
-    row_count = df.height
-    del df
-    return row_count
+    with feather_read_errors_name_the_file(file_path):
+        df = pl.read_ipc_stream(file_path)
+        row_count = df.height
+        del df
+        return row_count
 
 
 def scan_row_counts(
