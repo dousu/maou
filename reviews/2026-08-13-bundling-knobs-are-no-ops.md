@@ -1,5 +1,6 @@
 ---
-status: pending
+status: applied
+applied_in: a1ce41c
 date: 2026-08-13
 target:
   - docs/commands/pre_process.md
@@ -75,3 +76,4 @@ O5 行そのものは「ノブの意味が層をまたいで分裂している�
 CLAUDE.md § "Standing approval — drift corrections only" が与える恒久承認の
 範囲内 — 訂正後の本文が現行コードから一意に決まる drift correction であり，
 新しい指針・節の再構成・規則の追加を含まない．
+`/audit-backlog` の P2 として適用済み (`a1ce41c`)．
