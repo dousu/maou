@@ -82,6 +82,7 @@ class FileDataSource(
                         range(self.__file_manager.total_rows)
                     ),
                     test_ratio=test_ratio,
+                    seed=learn.DEFAULT_SPLIT_SEED,
                 )
             )
             return (
