@@ -1027,7 +1027,13 @@ class TimingCallback(BaseCallback):
             self._ensure_device(context.loss.device)
             loss_detached = context.loss.detach()
             self._total_loss += loss_detached
-            self._last_batch_loss = loss_detached
+            # 参照ごと保持すると呼び出し側の ``context.loss`` と
+            # ストレージを共有してしまい，``reset()`` の ``zero_()`` が
+            # 呼び出し側のテンソルをその場で 0 にする．``+=`` で自前の
+            # ストレージに足し込む ``_total_loss`` と揃えるため，
+            # 値だけを写す (テンソル同一性は ``_ACCUMULATORS`` の
+            # 契約なので ``clone()`` での作り直しは不可)．
+            self._last_batch_loss.copy_(loss_detached)
 
         # ウォームアップ期間後のタイミング統計を記録
         if context.batch_idx >= self.warmup_batches:

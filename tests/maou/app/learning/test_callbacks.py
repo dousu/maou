@@ -1217,6 +1217,62 @@ class TestAccumulatorDeclaration:
         for name, _ in callback._ACCUMULATORS:
             assert getattr(callback, name) is before[name], name
 
+    def test_last_batch_loss_does_not_alias_caller_tensor(
+        self,
+    ) -> None:
+        """``_last_batch_loss`` が呼び出し側のストレージを掴まないこと．
+
+        ``on_batch_end`` が ``context.loss.detach()`` を**参照ごと**
+        保持していた頃は，``detach()`` が元テンソルとストレージを共有
+        するため，後続の ``reset()`` → ``zero_()`` が**呼び出し側の
+        ``context.loss`` をその場で 0 にして**いた．``+=`` で自前の
+        ストレージに足し込む ``_total_loss`` とは非対称で，こちらだけ
+        所有権が外に漏れていた (`audits/coverage.md` の N8 行)．
+
+        ここでの **trap** は素朴な直し方の方にある．``clone()`` で
+        作り直すと所有権の問題は消えるが，``_last_batch_loss`` が毎
+        バッチ別オブジェクトへ張り替わり，``_ACCUMULATORS`` が前提と
+        する「一度移送したテンソルをその場で使い回す」契約
+        (``test_reset_after_device_migration_keeps_tensor_identity``)
+        を裏切る．そこで **同一性の維持** と **非共有** を同時に固定
+        し，``copy_()`` 以外の実装が通らないようにする．
+        """
+        callback = TimingCallback()
+        callback._ensure_device(torch.device("cpu"))
+        owned_before = callback._last_batch_loss
+
+        context = _create_context(
+            outputs_policy=torch.zeros((1, 2)),
+            policy_target_distribution=torch.zeros((1, 2)),
+            labels_value=torch.zeros((1, 1)),
+            outputs_value=torch.zeros((1, 1)),
+            loss=3.5,
+        )
+        caller_loss = context.loss
+        assert caller_loss is not None
+
+        callback.on_batch_end(context)
+
+        # 値は写っている
+        assert (
+            callback._last_batch_loss.item()
+            == pytest.approx(3.5)
+        )
+        # 同一性は保たれている (clone() での張り替えを禁じる)
+        assert callback._last_batch_loss is owned_before
+        # ストレージは共有していない
+        assert (
+            callback._last_batch_loss.data_ptr()
+            != caller_loss.data_ptr()
+        )
+
+        callback.reset()
+
+        # reset は自前のテンソルだけをゼロ化する
+        assert callback._last_batch_loss.item() == 0.0
+        # 呼び出し側のテンソルは無傷
+        assert caller_loss.item() == pytest.approx(3.5)
+
     def test_validation_callback_declares_every_metric_tensor(
         self,
     ) -> None:
