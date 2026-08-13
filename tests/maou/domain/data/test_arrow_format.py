@@ -8,13 +8,18 @@
 (これが「挙動不変」の根拠であり，判定を共有した意味でもある)．
 """
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import polars as pl
 import pytest
 
+from maou.domain.data import arrow_format
 from maou.domain.data.arrow_format import (
     ARROW_FILE_MAGIC,
+    PARALLEL_SCAN_MIN_FILES,
     is_arrow_ipc_file_bytes,
     is_arrow_ipc_file_format,
     scan_row_count,
@@ -247,3 +252,147 @@ class TestScanRowCounts:
 
         # 3 件目まで進まずに中断していること
         assert len(seen) == 2
+
+
+class TestScanRowCountsParallel:
+    """`scan_row_counts` の並列経路 — backlog 行 FS-D10+D11 (2)．
+
+    File 形式のメタデータ読みだけをスレッドプールに載せた．並列化して
+    よい根拠は「同じ件数・同じ順・部分結果なし」が保たれることなので，
+    それを ``PARALLEL_SCAN_MIN_FILES`` を超える件数で固定する
+    (これ未満は逐次経路に落ちるので，既存テストは並列側を通らない)．
+
+    Stream 形式は行数取得に全データ読みが要り，並列化するとピーク
+    メモリがワーカー数倍になるため**逐次のまま**にしてある．混在時に
+    そうなっていることもここで固定する．
+    """
+
+    def _paths(
+        self,
+        df: pl.DataFrame,
+        tmp_path: Path,
+        counts: list[int],
+    ) -> list[Path]:
+        return [
+            _write_file_format(
+                df.head(n), tmp_path / f"p{i}_{n}.feather"
+            )
+            for i, n in enumerate(counts)
+        ]
+
+    def test_parallel_matches_sequential(
+        self, df: pl.DataFrame, tmp_path: Path
+    ) -> None:
+        """並列経路が逐次経路と同じ値・同じ順を返すこと (挙動不変の根拠)．"""
+        counts = [1, 7, 3, 5, 2, 6, 4, 7, 1, 3]
+        assert len(counts) >= PARALLEL_SCAN_MIN_FILES
+        paths = self._paths(df, tmp_path, counts)
+
+        assert scan_row_counts(paths) == counts
+        assert scan_row_counts(paths) == [
+            scan_row_count(p) for p in paths
+        ]
+        # ワーカー 1 本 (実質逐次) でも同じ
+        assert scan_row_counts(paths, max_workers=1) == counts
+
+    def test_parallel_raises_without_returning_partial_counts(
+        self, df: pl.DataFrame, tmp_path: Path
+    ) -> None:
+        """並列経路でも部分結果を返さないこと．
+
+        ``ThreadPoolExecutor.map`` は消費時に最初の例外を再送出する．
+        逐次経路と違い後続ファイルの読みは走り得るが，**返り値としての
+        部分結果は出さない**という保証は同じ．
+        """
+        paths = self._paths(
+            df, tmp_path, [1, 2, 3, 4, 5, 6, 7, 1, 2, 3]
+        )
+        paths[4].write_bytes(b"not a feather file at all")
+
+        with pytest.raises(Exception) as excinfo:
+            scan_row_counts(paths)
+        assert not isinstance(excinfo.value, AssertionError)
+
+    def test_stream_format_files_are_scanned_sequentially(
+        self,
+        df: pl.DataFrame,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Stream 形式は並列に読まないこと (ピークメモリの保護)．
+
+        trap: Stream 形式の全読みをプールに載せると，同時実行数ぶん
+        DataFrame がメモリに載る．並列に載せた実装ではこのテストの
+        ``concurrent`` が 1 を超える．
+        """
+        paths = self._paths(
+            df, tmp_path, [1, 2, 3, 4, 5, 6, 7, 1]
+        )
+        # 後半 3 本を Stream 形式に差し替える
+        for i, n in ((5, 6), (6, 7), (7, 1)):
+            _write_stream_format(df.head(n), paths[i])
+
+        lock = threading.Lock()
+        state = {"live": 0, "max": 0}
+        real_stream = arrow_format._scan_row_count_stream
+
+        def counting_stream(path: Path) -> int:
+            with lock:
+                state["live"] += 1
+                state["max"] = max(state["max"], state["live"])
+            try:
+                time.sleep(0.01)
+                return real_stream(path)
+            finally:
+                with lock:
+                    state["live"] -= 1
+
+        monkeypatch.setattr(
+            arrow_format,
+            "_scan_row_count_stream",
+            counting_stream,
+        )
+
+        assert scan_row_counts(paths) == [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            1,
+        ]
+        assert state["max"] == 1, (
+            "Stream 形式の全読みが並列に走っている"
+        )
+
+    def test_below_threshold_uses_the_sequential_path(
+        self,
+        df: pl.DataFrame,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """しきい値未満ではプールを作らないこと．
+
+        既存の「部分結果を返さない」テスト群は ``scan_row_count`` を
+        差し替えて検証しており，逐次経路が残っていることが前提になる．
+        """
+        paths = self._paths(df, tmp_path, [1, 2, 3])
+        assert len(paths) < PARALLEL_SCAN_MIN_FILES
+
+        made_pool = False
+
+        def _guard(
+            max_workers: int | None = None,
+        ) -> ThreadPoolExecutor:
+            nonlocal made_pool
+            made_pool = True
+            return ThreadPoolExecutor(max_workers=max_workers)
+
+        monkeypatch.setattr(
+            arrow_format, "ThreadPoolExecutor", _guard
+        )
+
+        assert scan_row_counts(paths) == [1, 2, 3]
+        assert not made_pool

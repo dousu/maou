@@ -15,6 +15,7 @@
 
 import logging
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import polars as pl
@@ -24,6 +25,14 @@ logger = logging.getLogger(__name__)
 
 # Arrow IPC File形式のマジックバイト (先頭8バイト)
 ARROW_FILE_MAGIC = b"ARROW1\x00\x00"
+
+# 行数スキャンを並列化する下限ファイル数．これ未満はスレッド生成のほうが
+# 高くつく．
+PARALLEL_SCAN_MIN_FILES = 8
+
+# 行数スキャンの既定スレッド数．メタデータ読みは I/O 待ちが支配的なので
+# CPU 数ではなく同時ラウンドトリップ数として選ぶ．
+DEFAULT_SCAN_WORKERS = 8
 
 
 def is_arrow_ipc_file_bytes(data: bytes) -> bool:
@@ -67,28 +76,60 @@ def scan_row_count(file_path: Path) -> int:
     Returns:
         ファイル内の行数
     """
-    if is_arrow_ipc_file_format(file_path):
-        # File形式: メタデータのみ読み(高速)
-        lf = pl.scan_ipc(file_path)
-        return lf.select(pl.len()).collect().item()
-    else:
-        # Stream形式: DataFrameの高さを取得
-        # Note: Stream形式ではメタデータのみの読み出しが不可能なため，
-        # 全データを読む必要がある．大規模ファイルではメモリ使用量に注意．
-        logger.info(
-            "File %s is Arrow IPC Stream format. "
-            "Reading full data for row count "
-            "(consider converting to File format).",
-            file_path,
-        )
-        df = pl.read_ipc_stream(file_path)
-        row_count = df.height
-        del df
-        return row_count
+    count = _scan_row_count_if_file_format(file_path)
+    if count is not None:
+        return count
+    return _scan_row_count_stream(file_path)
+
+
+def _scan_row_count_if_file_format(
+    file_path: Path,
+) -> int | None:
+    """File 形式ならメタデータから行数を返し，Stream 形式なら ``None``．
+
+    メタデータ読みだけで完結するので安全に並列化できる (:func:`scan_row_counts`)．
+
+    Args:
+        file_path: featherファイルのパス
+
+    Returns:
+        File形式なら行数，Stream形式なら ``None``
+    """
+    if not is_arrow_ipc_file_format(file_path):
+        return None
+    lf = pl.scan_ipc(file_path)
+    return int(lf.select(pl.len()).collect().item())
+
+
+def _scan_row_count_stream(file_path: Path) -> int:
+    """Stream 形式のファイルの行数を全読みで得る．
+
+    Stream形式ではメタデータのみの読み出しが不可能なため，全データを
+    読む必要がある．**この関数は並列に呼ばないこと** — ピークメモリが
+    同時実行数倍になる．
+
+    Args:
+        file_path: featherファイルのパス
+
+    Returns:
+        ファイル内の行数
+    """
+    logger.info(
+        "File %s is Arrow IPC Stream format. "
+        "Reading full data for row count "
+        "(consider converting to File format).",
+        file_path,
+    )
+    df = pl.read_ipc_stream(file_path)
+    row_count = df.height
+    del df
+    return row_count
 
 
 def scan_row_counts(
     file_paths: Iterable[Path],
+    *,
+    max_workers: int | None = None,
 ) -> list[int]:
     """複数のfeatherファイルの行数をまとめて取得する．
 
@@ -100,8 +141,19 @@ def scan_row_counts(
     (実際 ``StreamingFileSource`` と ``StreamingHcpeDataSource`` は
     別実装で，安全なのは構造が違う結果の偶然にすぎなかった)．
 
+    File 形式のファイルはメタデータだけ読めば行数が分かるので，
+    **その部分だけをスレッドプールで並列に**引く．ネットワーク越しの
+    ストレージでは 1 ファイルあたりのラウンドトリップが支配的で，
+    数百ファイルの逐次スキャンが起動レイテンシの支配項になる．
+
+    Stream 形式のファイルは行数を得るのに**全データを読む**必要がある
+    ため，並列化するとピークメモリがワーカー数倍になる．そちらは
+    逐次のまま残す (元々「File 形式に変換せよ」と警告する経路である)．
+
     Args:
         file_paths: featherファイルパスの列
+        max_workers: File 形式のメタデータ読みに使うスレッド数．
+            ``None`` なら ``DEFAULT_SCAN_WORKERS`` とファイル数の小さい方．
 
     Returns:
         入力と同じ順のファイルごとの行数リスト
@@ -110,4 +162,27 @@ def scan_row_counts(
         OSError: ファイルを読めないとき
         polars.exceptions.PolarsError: featherとして解釈できないとき
     """
-    return [scan_row_count(fp) for fp in file_paths]
+    paths = list(file_paths)
+    if len(paths) < PARALLEL_SCAN_MIN_FILES:
+        # スレッド生成のほうが高くつく規模
+        return [scan_row_count(fp) for fp in paths]
+
+    workers = max_workers or min(
+        DEFAULT_SCAN_WORKERS, len(paths)
+    )
+
+    # 例外は「部分結果を返さない」ため，全件そろってから返す．
+    # ``ThreadPoolExecutor.map`` は消費時に最初の例外を再送出するので，
+    # with 節の中で list 化しきる．
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        probed = list(
+            executor.map(_scan_row_count_if_file_format, paths)
+        )
+
+    # Stream 形式 (``None``) だけを逐次で埋める
+    return [
+        count
+        if count is not None
+        else _scan_row_count_stream(path)
+        for count, path in zip(probed, paths)
+    ]
