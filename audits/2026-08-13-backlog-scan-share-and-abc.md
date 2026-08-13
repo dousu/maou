@@ -27,9 +27,11 @@ last_sha: 7bcb830
   理由として挙げた条件が，この run までに消えていた」型の変化 (§ Classification)
 - **confirmed: 16**
 
-うち **5 行**を消化し，[PR #492](https://github.com/dousu/maou/pull/492)
-に載せた．**マージはユーザ判断待ち**なので，行はまだ削除していない
-(6a: 行を消すのは fix が**マージされたとき**)．
+うち **5 件**を消化し，[PR #492](https://github.com/dousu/maou/pull/492)
+に載せた．PR を出したあと**ユーザが同一セッション中に「別途選択が要る
+箇所がなければマージしてよい」と回答**したため，5d の条件 (この環境の
+QA が通っている / GitHub の check が緑 / stack の上に未解決が無い) を
+確認してマージした．
 
 ## Classification
 
@@ -104,8 +106,17 @@ last_sha: 7bcb830
 
 ## Consumed
 
-**なし** — 5 件とも fix は書いたが，PR #492 が未マージなので
-`coverage.md` の行は残してある (§ In flight)．
+| backlog 行 | 対象 | 出荷したもの | 行の扱い |
+|---|---|---|---|
+| D8+D9 (残り) | 3 データソース | `7dcf993` | **削除** |
+| N3 | `app/{learning,pre_process}` | `b652d5e` | **削除** |
+| N-1 | `rust/maou_io` | `1a393ff` | **削除** |
+| N5-1 | `infra/utility` | `e7c5d3e` | **削除** |
+| D14 **(a)** | `domain/data` + `infra/file_system` | `b3568f9` | **行は残す** — (b) が未着手なので，行を (b) の記述に縮めた |
+
+**消化は 5 件だが削除した行は 4 行**である．D14 は 1 行に (a) と (b) の
+2 つの finding が入っており，(a) だけが出荷されたため．行ごと消すと
+(b) が backlog から見えなくなる．
 
 ## Applied
 
@@ -142,9 +153,9 @@ last_sha: 7bcb830
 
 ## In flight
 
-| PR | クラス | base | 未決の問い |
-|---|---|---|---|
-| [#492](https://github.com/dousu/maou/pull/492) | P3 ×2 + P4 ×3 | `main` | **train/test の分割値が 1 度だけ変わること**を受け入れるか (`7dcf993`)．他の 4 件は分岐の無い修正で，PR 本文に代案を書いてある |
+**なし** — [#492](https://github.com/dousu/maou/pull/492) が抱えていた
+問い (**train/test の分割値が 1 度だけ変わることを受け入れるか**,
+`7dcf993`) は同一セッション中にユーザが回答し，解決済み．
 
 **class ごとに PR を分けていない**理由: このセッションは
 `claude/audit-backlog-c06z52` という designated branch を渡されており，
@@ -231,24 +242,25 @@ dormant なので，判断は「この経路に caller が戻るとき」に据�
 
 触れた項目 + 新規発見 = **20** (backlog 18 行 + 新規 2)
 
-- **resolved** (行削除・fix マージ済): **0** — PR #492 が未マージのため
-- **in flight** (行保持・PR リンクを追記): **5** — D14(a) / N5-1 /
-  D8+D9 / N3 / N-1
+- **resolved** (fix マージ済): **5** — D8+D9 / N3 / N-1 / N5-1 は
+  行を削除．**D14(a) は行を残した** — 同じ行の (b) が未着手のため，
+  行を (b) の記述に縮めた
+- **in flight**: **0**
 - **re-triaged** (行保持・文面を鋭くした): **3** — D10+D11 / D13 / N4
 - **そのまま保持** (再検証で confirmed，文面変更なし): **10** —
   app/learning Deferred 2-7 (6) / D5 / D15 / O5 / O9
 - **new row**: **2** — N6-1 / N6-2
 - **not a finding**: **0**
 
-0 + 5 + 3 + 10 + 2 = **20** ✓
+5 + 0 + 3 + 10 + 2 = **20** ✓
 
-backlog 行数: **18 → 20** (18 − 0 + 2)．削除がゼロなのは設計どおりで，
-PR #492 がマージされた時点で 5 行を削除できる (次の run の 1e が
-`list_pull_requests` と残った行の両方からこれを拾う)．
+backlog 行数: **18 → 16** (18 − 4 + 2)．**消化は 5 件・削除は 4 行**で
+数が食い違うのは，D14 の 1 行が (a) と (b) の 2 つの finding を抱えて
+いたため (§ Consumed)．
 
-`coverage.md` 本表の `Open items` は**変更なし** — deferred 表から
-削除した行がゼロのため (`src/maou/app/learning` = 6, 
-`src/maou/infra/file_system` = 3 のまま)．
+`coverage.md` 本表の `Open items`: `src/maou/infra/file_system` を
+`3 deferred` → `2 deferred` (D8+D9 の行を削除)．
+`src/maou/app/learning` は `6 deferred` のまま．
 
 ## Environment notes
 
