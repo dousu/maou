@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import abc
 import pathlib
 
 import numpy as np
@@ -260,3 +261,63 @@ def test_numpy_to_tensor_preserves_memmap_zero_copy(
 
     assert tensor.data_ptr() == ptr
     assert int(tensor[0, 0]) == 9
+
+
+# ============================================================================
+# /audit-backlog 2026-08-13 — backlog 行 N3 の回帰テスト
+# ============================================================================
+
+
+class TestDataSourceIsAbstract:
+    """``DataSource`` が実際に ABC であること．
+
+    N3: 以前は ``@abc.abstractmethod`` を付けながら ``ABCMeta`` を
+    使っていなかったので，未実装の実装が**構築時に一切捕まらなかった**．
+    `BigQueryDataSource.__getitem__` が ``pl.DataFrame`` を返していた
+    不具合 (O1) が実行時まで露見しなかった根本原因．
+    """
+
+    def test_base_uses_abcmeta(self) -> None:
+        assert isinstance(DataSource, abc.ABCMeta)
+        assert DataSource.__abstractmethods__ == frozenset(
+            {"__getitem__", "__len__"}
+        )
+
+    def test_incomplete_subclass_fails_at_construction(
+        self,
+    ) -> None:
+        """抽象メソッドを埋めない実装は構築時に落ちること.
+
+        **trap**: デコレータだけでは何も起きない．この assert が
+        ``TypeError`` を期待しなくなったら ABC が外れている．
+        """
+
+        class _MissingLen(DataSource):
+            def __getitem__(self, idx: int) -> np.ndarray:
+                raise NotImplementedError
+
+        with pytest.raises(TypeError, match="__len__"):
+            _MissingLen()  # type: ignore[abstract]
+
+    def test_complete_subclass_still_constructs(self) -> None:
+        """全部埋めた実装はこれまでどおり構築できること (挙動不変)."""
+
+        class _Complete(DataSource):
+            def __getitem__(self, idx: int) -> np.ndarray:
+                return np.zeros(1)
+
+            def __len__(self) -> int:
+                return 0
+
+        assert len(_Complete()) == 0
+
+    def test_learning_datasource_stays_abstract(self) -> None:
+        """``LearningDataSource`` は中間抽象のまま構築できないこと.
+
+        両メソッドとも未定義の中間クラスで，production では一度も
+        構築されない．ABC 化でここが構築不能になるのは意図どおり．
+        """
+        from maou.app.learning.dl import LearningDataSource
+
+        with pytest.raises(TypeError):
+            LearningDataSource()  # type: ignore[abstract]

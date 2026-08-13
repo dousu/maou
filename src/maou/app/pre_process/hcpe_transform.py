@@ -60,13 +60,22 @@ class FeatureStore(metaclass=abc.ABCMeta):
         pass
 
 
-class DataSource:
+class DataSource(abc.ABC):
     """Abstract interface for accessing HCPE data sources.
 
     Provides iteration over batches of HCPE data for processing
     into neural network training features.
 
     Supports both numpy arrays (legacy) and Polars DataFrames (modern).
+
+    ``abc.ABC`` を継承しているのは，未実装のメソッドを**構築時に**
+    捕まえるため．以前は ``@abc.abstractmethod`` を付けながら
+    ``ABCMeta`` を使っていなかったので，これらのデコレータは
+    documentation 以上の意味を持たなかった．
+
+    注意: 抽象メソッドは 3 本ある (``__len__`` / ``iter_batches`` /
+    ``total_pages``)．``total_pages`` は具象 ``iter_batches_df`` の
+    **下**にあるので見落としやすい．
     """
 
     @abc.abstractmethod

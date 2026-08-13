@@ -512,6 +512,11 @@ class TestLazyInitialization:
         いたため，途中で ``scan_row_count`` が例外を投げると打ち切ら
         れたリストが memo (``_row_counts is not None``) として残り，
         以降 ``total_rows`` が過少申告され steps_per_epoch が狂った．
+
+        差し替え先は ``maou.domain.data.arrow_format.scan_row_count``．
+        ループ本体は ``scan_row_counts`` (domain) に移ったので，
+        ``streaming_file_source`` 側の再輸出名を差し替えても
+        production 経路には届かず，テストが空虚になる．
         """
         file_paths = _create_preprocessing_files(
             tmp_path, file_count=3, rows_per_file=5
@@ -531,8 +536,7 @@ class TestLazyInitialization:
             return real_scan(path)
 
         monkeypatch.setattr(
-            "maou.infra.file_system.streaming_file_source"
-            ".scan_row_count",
+            "maou.domain.data.arrow_format.scan_row_count",
             flaky_scan,
         )
 
@@ -545,8 +549,7 @@ class TestLazyInitialization:
 
         # スキャンが回復すれば正しい合計が得られること
         monkeypatch.setattr(
-            "maou.infra.file_system.streaming_file_source"
-            ".scan_row_count",
+            "maou.domain.data.arrow_format.scan_row_count",
             real_scan,
         )
         assert source.total_rows == 15

@@ -1,6 +1,5 @@
 import datetime
 import logging
-import random
 from collections import OrderedDict
 from collections.abc import Generator
 from pathlib import Path
@@ -65,10 +64,8 @@ class BigQueryDataSource(
         ) -> tuple["BigQueryDataSource", "BigQueryDataSource"]:
             self.logger.info(f"test_ratio: {test_ratio}")
             input_indices, test_indicies = (
-                self.__train_test_split(
-                    data=list(
-                        range(self.__page_manager.total_rows)
-                    ),
+                learn.train_test_split_indices(
+                    total_rows=self.__page_manager.total_rows,
                     test_ratio=test_ratio,
                     seed=learn.DEFAULT_SPLIT_SEED,
                 )
@@ -83,25 +80,6 @@ class BigQueryDataSource(
                     indicies=test_indicies,
                 ),
             )
-
-        def __train_test_split(
-            self,
-            data: list,
-            test_ratio: float = 0.25,
-            seed: float | str | bytes | bytearray | None = None,
-        ) -> tuple:
-            # モジュールグローバルの random.seed() を呼ぶと，同一
-            # プロセス内の無関係な乱数消費者まで巻き添えにする．
-            # random.Random(seed) は同じ Mersenne Twister を同じ
-            # seed で初期化するため，分割結果は従来と一致する．
-            rng = (
-                random.Random(seed)
-                if seed is not None
-                else random
-            )
-            rng.shuffle(data)
-            split_idx = int(float(len(data)) * (1 - test_ratio))
-            return data[:split_idx], data[split_idx:]
 
     class PageManager:
         logger: logging.Logger = logging.getLogger(__name__)
@@ -639,7 +617,7 @@ class BigQueryDataSource(
         clustering_key: str | None = None,
         partitioning_key_date: str | None = None,
         page_manager: PageManager | None = None,
-        indicies: list[int] | None = None,
+        indicies: list[int] | np.ndarray | None = None,
         use_local_cache: bool = False,
         local_cache_dir: str | None = None,
         sample_ratio: float | None = None,
@@ -654,7 +632,7 @@ class BigQueryDataSource(
               キャッシュの上限サイズ (バイト単位，デフォルト100MB)
             clustering_key (str | None): クラスタリングキーの列名 (指定されると各クラスタ単位で取得)
             page_manager (PageManager | None): PageManager
-            indicies (list[int] | None): 選択可能なインデックスのリスト
+            indicies (list[int] | np.ndarray | None): 選択可能なインデックス
             use_local_cache (bool): ローカルキャッシュを使用するかどうか
             local_cache_dir (str | None): ローカルキャッシュディレクトリのパス
             sample_ratio (float | None): サンプリング割合 (0.01-1.0, None=全データ)
@@ -687,12 +665,15 @@ class BigQueryDataSource(
         else:
             self.__page_manager = page_manager
 
+        # `file_system` / `object_storage` と同じ受け口にそろえる．
+        # ここだけ list をそのまま持つと，分割側が ndarray を返した
+        # 瞬間に型注釈と実体がずれる (BigQuery だけ)．
         if indicies is None:
-            self.indicies = list(
-                range(self.__page_manager.total_rows)
+            self.indicies: np.ndarray = np.arange(
+                self.__page_manager.total_rows, dtype=np.int64
             )
         else:
-            self.indicies = indicies
+            self.indicies = np.asarray(indicies, dtype=np.int64)
 
     def __getitem__(self, idx: int) -> np.ndarray:
         """

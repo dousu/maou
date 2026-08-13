@@ -42,7 +42,16 @@ def _resolve_expected_dtypes(
     return resolved
 
 
-class DataSource:
+class DataSource(abc.ABC):
+    """学習用データソースの抽象基底．
+
+    ``abc.ABC`` を継承しているのは，未実装のメソッドを**構築時に**
+    捕まえるため．以前は ``@abc.abstractmethod`` を付けながら
+    ``ABCMeta`` を使っていなかったので，これらのデコレータは
+    documentation 以上の意味を持たず，`BigQueryDataSource.__getitem__`
+    が ``pl.DataFrame`` を返していた不具合が実行時まで露見しなかった．
+    """
+
     @abc.abstractmethod
     def __getitem__(self, idx: int) -> np.ndarray:
         """

@@ -14,6 +14,7 @@
 """
 
 import logging
+from collections.abc import Iterable
 from pathlib import Path
 
 import polars as pl
@@ -84,3 +85,29 @@ def scan_row_count(file_path: Path) -> int:
         row_count = df.height
         del df
         return row_count
+
+
+def scan_row_counts(
+    file_paths: Iterable[Path],
+) -> list[int]:
+    """複数のfeatherファイルの行数をまとめて取得する．
+
+    :func:`scan_row_count` をファイル順に適用するだけだが，
+    **途中で例外が出たときに部分結果を返さない**ことを保証する．
+    呼び出し側がこのループを自前で書くと，「例外で打ち切られた
+    カウントを memo として保持してしまい，以降 total_rows が
+    過少申告される」という壊れ方を各々が作り込むことになる
+    (実際 ``StreamingFileSource`` と ``StreamingHcpeDataSource`` は
+    別実装で，安全なのは構造が違う結果の偶然にすぎなかった)．
+
+    Args:
+        file_paths: featherファイルパスの列
+
+    Returns:
+        入力と同じ順のファイルごとの行数リスト
+
+    Raises:
+        OSError: ファイルを読めないとき
+        polars.exceptions.PolarsError: featherとして解釈できないとき
+    """
+    return [scan_row_count(fp) for fp in file_paths]

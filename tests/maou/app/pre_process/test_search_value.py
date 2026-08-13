@@ -574,6 +574,11 @@ class _NoDataSource(DataSource):
     """``__init__`` の検査だけを見るためのダミー．
 
     早期検証は ``transform`` より前に走るので，データソースは触られない．
+
+    ``total_pages`` は「触られないから」という理由で長らく欠けていた．
+    ``DataSource`` が ``abc.ABC`` になったので，欠けたままだと構築時に
+    ``TypeError`` になる — それが ABC を入れた目的そのものなので，
+    ダミーであっても抽象メソッドは全部埋める．
     """
 
     def __len__(self) -> int:
@@ -581,6 +586,9 @@ class _NoDataSource(DataSource):
 
     def iter_batches(self) -> Iterator[tuple[str, np.ndarray]]:
         return iter(())
+
+    def total_pages(self) -> int:
+        return 0
 
 
 class TestEarlyValidation:
