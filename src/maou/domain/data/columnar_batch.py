@@ -10,6 +10,7 @@ Polars DataFrame → ColumnarBatch の変換関数も含む．
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -57,6 +58,32 @@ class ColumnarBatch:
     def __len__(self) -> int:
         """バッチ内のレコード数を返す."""
         return int(self.board_positions.shape[0])
+
+    @property
+    def nbytes(self) -> int:
+        """保持している全フィールドの合計バイト数．
+
+        フィールド名を**列挙せず** :func:`dataclasses.fields` から導出する．
+        呼び出し側が手書きのフィールド一覧で合計を取ると，
+        ``ColumnarBatch`` にフィールドが増えたときに数え落とし，
+        メモリ見積りが黙って過少になる (実際 ``FileDataSource`` の
+        ``cache_mode='memory'`` OOM 警告は ``move_win_rate`` —
+        ``(N, MOVE_LABELS_NUM)`` float32 で最大級のフィールド — を
+        数え落としており，40GB 級の入力を 18GB と報告していた)．
+
+        ``None`` のフィールド (その array_type で使わない列) は 0 として
+        数える．
+
+        Returns:
+            合計バイト数
+        """
+        return sum(
+            int(value.nbytes)
+            for f in dataclasses.fields(self)
+            if isinstance(
+                value := getattr(self, f.name), np.ndarray
+            )
+        )
 
     @staticmethod
     def concatenate(

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import polars as pl
 import pytest
@@ -301,6 +303,102 @@ class TestColumnarBatch:
             value = getattr(merged, field)
             assert value is not None, field
             assert value.shape[0] == 7, field
+
+
+class TestColumnarBatchNbytes:
+    """``ColumnarBatch.nbytes`` の回帰テスト．
+
+    `/audit-backlog` 2026-08-13 / backlog 行 FS-D5 (分離した見積り部分)．
+
+    ``FileDataSource.FileManager._concatenate_columnar`` は
+    ``cache_mode='memory'`` の OOM 警告のために合計バイト数を
+    **6 フィールド手書き**で足しており，7 番目の ``move_win_rate``
+    ((N, MOVE_LABELS_NUM) float32) を数え落としていた．最大級の
+    フィールドが抜けるため 40GB 級の入力が 18GB と報告され，32GB
+    閾値に掛からなかった．
+
+    合計は ``dataclasses.fields`` から導出するようにしたので，ここでは
+    「導出であること」— 新しい配列フィールドが追加されても自動的に
+    数えられること — を固定する．
+    """
+
+    def _batch(
+        self, n: int, *, with_move_win_rate: bool
+    ) -> ColumnarBatch:
+        return ColumnarBatch(
+            board_positions=np.zeros((n, 9, 9), dtype=np.uint8),
+            pieces_in_hand=np.zeros((n, 14), dtype=np.uint8),
+            move_label=np.zeros(
+                (n, MOVE_LABELS_NUM), dtype=np.float16
+            ),
+            result_value=np.zeros(n, dtype=np.float16),
+            move_win_rate=(
+                np.zeros((n, MOVE_LABELS_NUM), dtype=np.float32)
+                if with_move_win_rate
+                else None
+            ),
+        )
+
+    def test_counts_move_win_rate(self) -> None:
+        """``move_win_rate`` が合計に含まれること (数え落としの回帰)．
+
+        これが落ちる実装が出荷されていた．``move_win_rate`` は
+        float32 × MOVE_LABELS_NUM なので float16 の ``move_label``
+        のちょうど 2 倍あり，抜けると見積りが半分以下になる．
+        """
+        n = 4
+        with_rate = self._batch(n, with_move_win_rate=True)
+        without = self._batch(n, with_move_win_rate=False)
+
+        expected_delta = (
+            n * MOVE_LABELS_NUM * np.dtype(np.float32).itemsize
+        )
+        assert (
+            with_rate.nbytes - without.nbytes == expected_delta
+        )
+
+    def test_counts_every_ndarray_field(self) -> None:
+        """全 ndarray フィールドの合計に一致すること．
+
+        手書きの列挙に戻ると，ここが列挙から漏れたフィールド分だけ
+        小さくなって落ちる．
+        """
+        n = 3
+        batch = ColumnarBatch(
+            board_positions=np.zeros((n, 9, 9), dtype=np.uint8),
+            pieces_in_hand=np.zeros((n, 14), dtype=np.uint8),
+            move_label=np.zeros(
+                (n, MOVE_LABELS_NUM), dtype=np.float16
+            ),
+            result_value=np.zeros(n, dtype=np.float16),
+            move_win_rate=np.zeros(
+                (n, MOVE_LABELS_NUM), dtype=np.float32
+            ),
+            reachable_squares=np.zeros(
+                (n, 9, 9), dtype=np.uint8
+            ),
+            legal_moves_label=np.zeros(
+                (n, MOVE_LABELS_NUM), dtype=np.uint8
+            ),
+        )
+
+        populated = [
+            getattr(batch, f.name)
+            for f in dataclasses.fields(batch)
+            if isinstance(getattr(batch, f.name), np.ndarray)
+        ]
+        # 全 7 フィールドを埋めたので，導出なら 7 本すべてを数える
+        assert len(populated) == 7
+        assert batch.nbytes == sum(a.nbytes for a in populated)
+
+    def test_none_fields_count_as_zero(self) -> None:
+        """使わない列 (``None``) は 0 として数えること．"""
+        n = 2
+        batch = ColumnarBatch(
+            board_positions=np.zeros((n, 9, 9), dtype=np.uint8),
+            pieces_in_hand=np.zeros((n, 14), dtype=np.uint8),
+        )
+        assert batch.nbytes == (n * 9 * 9) + (n * 14)
 
 
 def _make_preprocessing_df(n: int) -> pl.DataFrame:
