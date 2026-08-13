@@ -80,7 +80,23 @@ G1 は撤回できる．**行が挙げるゲートは，その行が書かれた
 | N6-2 | app/pre_process | P4 | **G4** | `hcpe_transform.py:118` の HCPE 決め打ちは健在．override 側は全て正しく分岐しているので production は dormant．改名か分岐かの決めが要る |
 
 (15 行に見えるのは FS-D5 と FS-D10+D11 が「一部消化・一部残し」で
-両方の表に現れるため．backlog 行としては 12 行が残る．)
+両方の表に現れるため．**この run が起票した N7 を加えて，backlog 行は
+16 → 17 行**になる — 削除がゼロ (PR 未マージ) で，新規が 1 行．)
+
+## Reconciliation (6d)
+
+`16 (再検証した行) + 1 (新規 finding) = 0 resolved + 5 in flight +
+12 re-triaged + 1 new row + 0 not-a-finding`
+
+- **resolved 0** — 6a は「マージされたら削除」なので，PR が開いている
+  うちは 1 行も消せない
+- **in flight 5** — O5 / FS-D5 / FS-D10+D11 / N6-1 の 4 行 + 新規 N7．
+  いずれも行を残して [PR #493](https://github.com/dousu/maou/pull/493)
+  をリンクした
+- **re-triaged 12** — 上表「残した 12 件」．うち 3 件 (N4 / N6-2 /
+  FS-D15) は今回の再検証で記述を鋭くした
+- **new row 1** — N7
+- backlog 行数: **16 → 17**
 
 ## Consumed
 
@@ -170,7 +186,7 @@ P2-1 は `src/` を触らないので bump なし．
 
 ## Out of scope
 
-**新規 1 件 — この run 中に修正済み (行は作らない)．**
+**新規 1 件 — この run 中に修正済み，backlog 行 N7 として起票．**
 
 `tests/maou/infra/utility/test_benchmark_polars_io.py:30` の `capsys`
 に型注釈が無く，`mypy` が `no-untyped-def` で落ちていた．HEAD
