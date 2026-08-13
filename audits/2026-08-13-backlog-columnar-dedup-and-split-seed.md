@@ -62,7 +62,7 @@ last_sha: 05654ba
 
 | backlog 行 | 対象 | 出荷したもの | 行の扱い |
 |---|---|---|---|
-| D3+D4 | `infra/file_system` | `22da510` | **削除** (fix はこの PR に載り，PR 単位で判断される) |
+| D3+D4 | `infra/file_system` | `22da510` | 保持 (PR 未マージ) — PR リンクを追記 |
 | D2 | 3 データソース | `ecc7a30` | 保持 (PR 未マージ) — PR リンクを追記 |
 | N-2 | `infra/utility` | `d0c4984` | 保持 (PR 未マージ) — PR リンクを追記 |
 | N-3 | `docs/adr-001-…` | `reviews/2026-08-13-adr-001-targets-note.md` (`status: pending`) | 保持 |
@@ -98,7 +98,7 @@ last_sha: 05654ba
 
 | PR | クラス | base | 未決の問い |
 |---|---|---|---|
-| (下記 § PR 参照) | P3 + P4 + P6 + doc 提案 | `main` | (1) 行分割の既定 seed を `0` で確定してよいか (P4-1)．(2) `.npy` 全削除の diff が意図どおりか (P6-1，向きはこの run で承認済み)．(3) ADR-001 注の扱い 3 案のどれを採るか (doc-1) |
+| [#491](https://github.com/dousu/maou/pull/491) | P3 + P4 + P6 + doc 提案 | `main` | (1) 行分割の既定 seed を `0` で確定してよいか (P4-1)．(2) `.npy` 全削除の diff が意図どおりか (P6-1，向きはこの run で承認済み)．(3) ADR-001 注の扱い 3 案のどれを採るか (doc-1) |
 
 **class ごとに PR を分けていない**理由: このセッションは
 `claude/audit-backlog-ejdnzm` という designated branch を渡されており，
@@ -179,6 +179,22 @@ preprocessing スキーマに追い付いておらず (`moveWinRate`,
   詰めたが，値の shape (9x9 / 14 / `MOVE_LABELS_NUM`) は依然ハードコード
   で，型が変わる drift は捕まえられない．スキーマからの生成に寄せるかは
   判断が要る．
+
+## Reconciliation (6d)
+
+触れた項目 + 新規発見 = **20** (backlog 19 行 + 新規 1)
+
+- **resolved** (行削除・`main` に到達): **0** — この run の PR は判断帯を
+  含むため未マージ．6a は「マージされた行だけを消す」と定める
+- **in flight** (行保持・PR リンク済み): **4** — D3+D4 / D2 / N-2 / N-3
+- **re-triaged** (行保持・文面を鋭くした): **2** — D8+D9 / N4
+- **そのまま保持** (再検証で confirmed，文面変更なし): **13** —
+  app/learning Deferred 2-7 / D5 / D10+D11 / D13 / D14 / D15 / O5 / O9 / N3 / N-1
+  (計 15 のうち D8+D9・N4 を除く 13)
+- **new row**: **1** — N5-1
+- **not a finding**: **0**
+
+backlog 行数: **19 → 20**．
 
 ## Environment notes
 
