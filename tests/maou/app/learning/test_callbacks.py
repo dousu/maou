@@ -5,6 +5,10 @@ import torch
 
 from maou.app.learning.callbacks import (
     LRSchedulerStepCallback,
+    Stage1AccuracyCallback,
+    Stage2F1Callback,
+    Stage3LossCallback,
+    TimingCallback,
     TrainingContext,
     ValidationCallback,
     ValidationMetrics,
@@ -1064,3 +1068,168 @@ class TestValidationCallbackSharedComputation:
         assert log_softmax_calls == 1
         # targets 側の topk は logits と別物なので 1 回残る．
         assert topk_calls == 2
+
+
+class TestAccumulatorDeclaration:
+    """蓄積テンソルが宣言表 ``_ACCUMULATORS`` から導出されることの回帰テスト．
+
+    以前は生成 (``__init__``)・デバイス移送 (``_ensure_device``)・ゼロ化
+    (``reset``) の3箇所で同じ属性名を手書きしており，メトリクスを1つ足すと
+    3箇所すべてを直す必要があった．1箇所でも漏らすと「GPUへ移し忘れる」
+    「エポック間でリセットし忘れる」という欠陥になる．
+
+    ここでの **trap** は，宣言表を導入しても3経路のどれかが表を引かずに
+    独自の属性リストへ戻ると，同じ欠陥がそのまま再発することである．
+    そこで表と実際の挙動を突き合わせる形で固定する．
+    """
+
+    @pytest.mark.parametrize(
+        "factory",
+        [
+            ValidationCallback,
+            TimingCallback,
+            Stage1AccuracyCallback,
+            Stage2F1Callback,
+            Stage3LossCallback,
+        ],
+    )
+    def test_declared_accumulators_are_created_as_zero_tensors(
+        self, factory: Any
+    ) -> None:
+        """宣言した属性がすべて0のテンソルとして生成されること."""
+        callback = factory()
+        assert callback._ACCUMULATORS, (
+            f"{factory.__name__} は蓄積テンソルを宣言していない"
+        )
+        for name, dtype in callback._ACCUMULATORS:
+            tensor = getattr(callback, name)
+            assert isinstance(tensor, torch.Tensor)
+            assert tensor.ndim == 0
+            assert float(tensor) == 0.0
+            expected = (
+                torch.tensor(0.0).dtype
+                if dtype is None
+                else dtype
+            )
+            assert tensor.dtype == expected
+
+    @pytest.mark.parametrize(
+        "factory",
+        [
+            ValidationCallback,
+            TimingCallback,
+            Stage1AccuracyCallback,
+            Stage2F1Callback,
+            Stage3LossCallback,
+        ],
+    )
+    def test_ensure_device_moves_every_declared_accumulator(
+        self, factory: Any
+    ) -> None:
+        """``_ensure_device`` が宣言した全テンソルを移送すること．
+
+        CPUのみの環境でも ``.to()`` の呼び出し有無は観測できるので，
+        「表にあるのに移送されない属性」をここで捕まえる．
+        """
+        callback = factory()
+        moved: set[str] = set()
+        originals = {
+            name: getattr(callback, name)
+            for name, _ in callback._ACCUMULATORS
+        }
+
+        for name, _ in callback._ACCUMULATORS:
+            tensor = originals[name]
+            marker = tensor.clone()
+
+            def _record(
+                *args: Any,
+                _name: str = name,
+                _marker: torch.Tensor = marker,
+                **kwargs: Any,
+            ) -> torch.Tensor:
+                moved.add(_name)
+                return _marker
+
+            tensor.to = _record
+
+        callback._ensure_device(torch.device("cpu"))
+
+        assert moved == {
+            name for name, _ in callback._ACCUMULATORS
+        }
+        assert callback._device_initialized is True
+
+    @pytest.mark.parametrize(
+        "factory",
+        [
+            ValidationCallback,
+            TimingCallback,
+            Stage1AccuracyCallback,
+            Stage2F1Callback,
+            Stage3LossCallback,
+        ],
+    )
+    def test_reset_zeroes_accumulators_and_counters(
+        self, factory: Any
+    ) -> None:
+        """``reset`` が宣言した全テンソル・全カウンタを0に戻すこと."""
+        callback = factory()
+        for name, _ in callback._ACCUMULATORS:
+            getattr(callback, name).add_(3)
+        for name in callback._COUNTERS:
+            setattr(callback, name, 7)
+
+        callback.reset()
+
+        for name, _ in callback._ACCUMULATORS:
+            assert float(getattr(callback, name)) == 0.0, name
+        for name in callback._COUNTERS:
+            assert getattr(callback, name) == 0, name
+
+    @pytest.mark.parametrize(
+        "factory",
+        [
+            ValidationCallback,
+            TimingCallback,
+            Stage1AccuracyCallback,
+            Stage2F1Callback,
+            Stage3LossCallback,
+        ],
+    )
+    def test_reset_after_device_migration_keeps_tensor_identity(
+        self, factory: Any
+    ) -> None:
+        """移送済みなら ``reset`` は ``zero_()`` でその場ゼロ化すること．
+
+        移送後に作り直すと再びCPUテンソルに戻ってしまい，次のエポックで
+        device mismatch を起こす — その退行をテンソル同一性で固定する．
+        """
+        callback = factory()
+        callback._ensure_device(torch.device("cpu"))
+        before = {
+            name: getattr(callback, name)
+            for name, _ in callback._ACCUMULATORS
+        }
+
+        callback.reset()
+
+        for name, _ in callback._ACCUMULATORS:
+            assert getattr(callback, name) is before[name], name
+
+    def test_validation_callback_declares_every_metric_tensor(
+        self,
+    ) -> None:
+        """``ValidationCallback`` の蓄積テンソルが表から漏れていないこと．
+
+        「メトリクスを足したが表に書き忘れた」= 移送もリセットもされない
+        属性が生まれる，という元の欠陥そのものを検出する．
+        """
+        callback = ValidationCallback()
+        declared = {name for name, _ in callback._ACCUMULATORS}
+        actual = {
+            name
+            for name, value in vars(callback).items()
+            if isinstance(value, torch.Tensor)
+        }
+        assert actual == declared

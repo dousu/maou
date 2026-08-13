@@ -147,6 +147,63 @@ class BaseCallback:
     _postfix_sync_interval: int = 50
     """``get_postfix`` で ``.item()`` を呼ぶ間隔(バッチ数)．"""
 
+    _ACCUMULATORS: tuple[
+        tuple[str, torch.dtype | None], ...
+    ] = ()
+    """GPU上で蓄積するテンソル属性の宣言表 ``(属性名, dtype)``．
+
+    ``dtype`` が ``None`` の要素は ``torch.tensor(0.0)`` (既定の浮動小数
+    dtype) で，それ以外は ``torch.tensor(0, dtype=dtype)`` で作られる．
+
+    この表が**唯一の定義**で，生成 (:meth:`_init_accumulators`)・デバイス
+    移送 (:meth:`_ensure_device`)・ゼロ化 (:meth:`_reset_accumulators`)
+    はすべてここから導出される．3箇所に手書きしていた頃は
+    「メトリクスを足したがGPUへ移し忘れる/リセットし忘れる」欠陥が
+    起きうる形だったため，表への1行追加だけで済むようにしてある．
+    """
+
+    _COUNTERS: tuple[str, ...] = ()
+    """``int`` のカウンタ属性名．生成・リセットとも0にする．"""
+
+    _device_initialized: bool = False
+
+    def _init_accumulators(self) -> None:
+        """宣言表に従って蓄積テンソルとカウンタをCPU上に生成する."""
+        for name, dtype in self._ACCUMULATORS:
+            setattr(
+                self,
+                name,
+                torch.tensor(0.0)
+                if dtype is None
+                else torch.tensor(0, dtype=dtype),
+            )
+        for name in self._COUNTERS:
+            setattr(self, name, 0)
+
+    def _ensure_device(self, device: torch.device) -> None:
+        """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
+        if self._device_initialized:
+            return
+        for name, _ in self._ACCUMULATORS:
+            tensor: torch.Tensor = getattr(self, name)
+            setattr(self, name, tensor.to(device))
+        self._device_initialized = True
+
+    def _reset_accumulators(self) -> None:
+        """蓄積テンソルとカウンタをゼロに戻す．
+
+        デバイス移送済みなら ``zero_()`` でその場でゼロ化し，未移送なら
+        CPU上に作り直す (移送前に ``.to()`` の対象を失わないため)．
+        """
+        if self._device_initialized:
+            for name, _ in self._ACCUMULATORS:
+                tensor: torch.Tensor = getattr(self, name)
+                tensor.zero_()
+            for name in self._COUNTERS:
+                setattr(self, name, 0)
+        else:
+            self._init_accumulators()
+
     def on_epoch_start(self, epoch_idx: int) -> None:
         pass
 
@@ -221,6 +278,8 @@ class LoggingCallback(BaseCallback):
     TensorBoard書き込み時(Nバッチごと)にのみ ``.item()`` を呼ぶ．
     """
 
+    _ACCUMULATORS = (("_running_loss", None),)
+
     def __init__(
         self,
         writer: SummaryWriter,
@@ -230,16 +289,11 @@ class LoggingCallback(BaseCallback):
         self.writer = writer
         self.dataloader_length = dataloader_length
         self.logger = logger or logging.getLogger(__name__)
-        self._running_loss: torch.Tensor = torch.tensor(0.0)
+        self._running_loss: torch.Tensor
+        self._init_accumulators()
         self.record_num = max(1, dataloader_length // 10)
         self.last_loss = 0.0
-        self._device_initialized: bool = False
-
-    def _ensure_device(self, device: torch.device) -> None:
-        """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
-        if not self._device_initialized:
-            self._running_loss = self._running_loss.to(device)
-            self._device_initialized = True
+        self._device_initialized = False
 
     def on_batch_end(self, context: TrainingContext) -> None:
         if context.loss is not None:
@@ -310,91 +364,56 @@ class ValidationCallback(BaseCallback):
     エポック終了時の ``get_average_metrics()`` でのみ ``.item()`` を呼ぶ．
     """
 
+    _ACCUMULATORS = (
+        ("_running_vloss", None),
+        ("_policy_cross_entropy_sum", None),
+        ("_value_brier_score_sum", None),
+        ("_policy_top5_ratio_sum", None),
+        ("_value_high_conf_pred_count", torch.long),
+        ("_value_high_conf_correct", torch.long),
+        ("_policy_f1_tp", torch.long),
+        ("_policy_f1_fp", torch.long),
+        ("_policy_f1_fn", torch.long),
+        # policy 教師が全ゼロ (= 勾配を生まない) 行の件数
+        ("_policy_empty_target_count", torch.long),
+        # move_win_rate metrics
+        ("_policy_top1_win_rate_sum", None),
+        ("_policy_move_label_ce_sum", None),
+        ("_policy_expected_win_rate_sum", None),
+    )
+
+    _COUNTERS = (
+        "batch_count",
+        "policy_sample_count",
+        "value_sample_count",
+        "policy_top5_sample_count",
+        "policy_move_label_ce_count",
+        "move_win_rate_sample_count",
+    )
+
     def __init__(self, logger: logging.Logger | None = None):
         self.logger = logger or logging.getLogger(__name__)
-        self._running_vloss: torch.Tensor = torch.tensor(0.0)
-        self._policy_cross_entropy_sum: torch.Tensor = (
-            torch.tensor(0.0)
-        )
-        self._value_brier_score_sum: torch.Tensor = (
-            torch.tensor(0.0)
-        )
-        self.batch_count = 0
-        self.policy_sample_count = 0
-        self.value_sample_count = 0
-        self._policy_top5_ratio_sum: torch.Tensor = (
-            torch.tensor(0.0)
-        )
-        self.policy_top5_sample_count = 0
-        self._value_high_conf_pred_count: torch.Tensor = (
-            torch.tensor(0, dtype=torch.long)
-        )
-        self._value_high_conf_correct: torch.Tensor = (
-            torch.tensor(0, dtype=torch.long)
-        )
-        self._policy_f1_tp: torch.Tensor = torch.tensor(
-            0, dtype=torch.long
-        )
-        self._policy_f1_fp: torch.Tensor = torch.tensor(
-            0, dtype=torch.long
-        )
-        self._policy_f1_fn: torch.Tensor = torch.tensor(
-            0, dtype=torch.long
-        )
-        # policy 教師が全ゼロ (= 勾配を生まない) 行の件数
-        self._policy_empty_target_count: torch.Tensor = (
-            torch.tensor(0, dtype=torch.long)
-        )
-        # move_win_rate metrics
-        self._policy_top1_win_rate_sum: torch.Tensor = (
-            torch.tensor(0.0)
-        )
-        self._policy_move_label_ce_sum: torch.Tensor = (
-            torch.tensor(0.0)
-        )
-        self.policy_move_label_ce_count = 0
-        self._policy_expected_win_rate_sum: torch.Tensor = (
-            torch.tensor(0.0)
-        )
-        self.move_win_rate_sample_count = 0
-        self._device_initialized: bool = False
-
-    def _ensure_device(self, device: torch.device) -> None:
-        """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
-        if self._device_initialized:
-            return
-        self._running_vloss = self._running_vloss.to(device)
-        self._policy_cross_entropy_sum = (
-            self._policy_cross_entropy_sum.to(device)
-        )
-        self._value_brier_score_sum = (
-            self._value_brier_score_sum.to(device)
-        )
-        self._policy_top5_ratio_sum = (
-            self._policy_top5_ratio_sum.to(device)
-        )
-        self._value_high_conf_pred_count = (
-            self._value_high_conf_pred_count.to(device)
-        )
-        self._value_high_conf_correct = (
-            self._value_high_conf_correct.to(device)
-        )
-        self._policy_f1_tp = self._policy_f1_tp.to(device)
-        self._policy_f1_fp = self._policy_f1_fp.to(device)
-        self._policy_f1_fn = self._policy_f1_fn.to(device)
-        self._policy_empty_target_count = (
-            self._policy_empty_target_count.to(device)
-        )
-        self._policy_top1_win_rate_sum = (
-            self._policy_top1_win_rate_sum.to(device)
-        )
-        self._policy_move_label_ce_sum = (
-            self._policy_move_label_ce_sum.to(device)
-        )
-        self._policy_expected_win_rate_sum = (
-            self._policy_expected_win_rate_sum.to(device)
-        )
-        self._device_initialized = True
+        self._running_vloss: torch.Tensor
+        self._policy_cross_entropy_sum: torch.Tensor
+        self._value_brier_score_sum: torch.Tensor
+        self._policy_top5_ratio_sum: torch.Tensor
+        self._value_high_conf_pred_count: torch.Tensor
+        self._value_high_conf_correct: torch.Tensor
+        self._policy_f1_tp: torch.Tensor
+        self._policy_f1_fp: torch.Tensor
+        self._policy_f1_fn: torch.Tensor
+        self._policy_empty_target_count: torch.Tensor
+        self._policy_top1_win_rate_sum: torch.Tensor
+        self._policy_move_label_ce_sum: torch.Tensor
+        self._policy_expected_win_rate_sum: torch.Tensor
+        self.batch_count: int
+        self.policy_sample_count: int
+        self.value_sample_count: int
+        self.policy_top5_sample_count: int
+        self.policy_move_label_ce_count: int
+        self.move_win_rate_sample_count: int
+        self._init_accumulators()
+        self._device_initialized = False
 
     def on_batch_end(self, context: TrainingContext) -> None:
         if (
@@ -603,54 +622,7 @@ class ValidationCallback(BaseCallback):
 
     def reset(self) -> None:
         """Reset all counters for next epoch."""
-        if self._device_initialized:
-            self._running_vloss.zero_()
-            self._policy_cross_entropy_sum.zero_()
-            self._value_brier_score_sum.zero_()
-            self._policy_top5_ratio_sum.zero_()
-            self._value_high_conf_pred_count.zero_()
-            self._value_high_conf_correct.zero_()
-            self._policy_f1_tp.zero_()
-            self._policy_f1_fp.zero_()
-            self._policy_f1_fn.zero_()
-            self._policy_empty_target_count.zero_()
-            self._policy_top1_win_rate_sum.zero_()
-            self._policy_move_label_ce_sum.zero_()
-            self._policy_expected_win_rate_sum.zero_()
-        else:
-            self._running_vloss = torch.tensor(0.0)
-            self._policy_cross_entropy_sum = torch.tensor(0.0)
-            self._value_brier_score_sum = torch.tensor(0.0)
-            self._policy_top5_ratio_sum = torch.tensor(0.0)
-            self._value_high_conf_pred_count = torch.tensor(
-                0, dtype=torch.long
-            )
-            self._value_high_conf_correct = torch.tensor(
-                0, dtype=torch.long
-            )
-            self._policy_f1_tp = torch.tensor(
-                0, dtype=torch.long
-            )
-            self._policy_f1_fp = torch.tensor(
-                0, dtype=torch.long
-            )
-            self._policy_f1_fn = torch.tensor(
-                0, dtype=torch.long
-            )
-            self._policy_empty_target_count = torch.tensor(
-                0, dtype=torch.long
-            )
-            self._policy_top1_win_rate_sum = torch.tensor(0.0)
-            self._policy_move_label_ce_sum = torch.tensor(0.0)
-            self._policy_expected_win_rate_sum = torch.tensor(
-                0.0
-            )
-        self.batch_count = 0
-        self.policy_sample_count = 0
-        self.value_sample_count = 0
-        self.policy_top5_sample_count = 0
-        self.policy_move_label_ce_count = 0
-        self.move_win_rate_sample_count = 0
+        self._reset_accumulators()
 
     def _cross_entropy_from_log_probs(
         self,
@@ -899,6 +871,11 @@ class ValidationCallback(BaseCallback):
 class TimingCallback(BaseCallback):
     """Callback for timing training operations."""
 
+    _ACCUMULATORS = (
+        ("_total_loss", None),
+        ("_last_batch_loss", None),
+    )
+
     def __init__(self, warmup_batches: int = 5):
         self.warmup_batches = warmup_batches
         self.timing_stats: dict[str, list[float]] = {
@@ -912,14 +889,15 @@ class TimingCallback(BaseCallback):
         }
         self.measured_batches = 0
         self.total_samples = 0
-        self._total_loss: torch.Tensor = torch.tensor(0.0)
-        self._last_batch_loss: torch.Tensor = torch.tensor(0.0)
+        self._total_loss: torch.Tensor
+        self._last_batch_loss: torch.Tensor
+        self._init_accumulators()
         self.epoch_start_time = 0.0
         self.batch_start_time = 0.0
         self.previous_batch_end_time: float | None = None
         self._measurement_start_time: float | None = None
         self._temp_timings: dict[str, float] = {}
-        self._device_initialized: bool = False
+        self._device_initialized = False
 
     def reset(self) -> None:
         """エポック間で蓄積値をリセットする."""
@@ -927,12 +905,7 @@ class TimingCallback(BaseCallback):
             self.timing_stats[key].clear()
         self.measured_batches = 0
         self.total_samples = 0
-        if self._device_initialized:
-            self._total_loss.zero_()
-            self._last_batch_loss.zero_()
-        else:
-            self._total_loss = torch.tensor(0.0)
-            self._last_batch_loss = torch.tensor(0.0)
+        self._reset_accumulators()
         self.epoch_start_time = 0.0
         self.batch_start_time = 0.0
         self.previous_batch_end_time = None
@@ -1043,15 +1016,6 @@ class TimingCallback(BaseCallback):
             time.perf_counter()
             - self._temp_timings["optimizer_start"]
         )
-
-    def _ensure_device(self, device: torch.device) -> None:
-        """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
-        if not self._device_initialized:
-            self._total_loss = self._total_loss.to(device)
-            self._last_batch_loss = self._last_batch_loss.to(
-                device
-            )
-            self._device_initialized = True
 
     def on_batch_end(self, context: TrainingContext) -> None:
         batch_total_time = (
@@ -1424,21 +1388,21 @@ class Stage2F1Callback(BaseCallback):
     F1計算ロジックは Stage 2 の multi-label binary classification に対応する．
     """
 
+    _ACCUMULATORS = (
+        ("_total_f1", None),
+        ("_total_loss", None),
+    )
+    _COUNTERS = ("_total_samples", "_num_batches")
+
     def __init__(self) -> None:
-        self._total_f1: torch.Tensor = torch.tensor(0.0)
-        self._total_samples: int = 0
-        self._total_loss: torch.Tensor = torch.tensor(0.0)
-        self._num_batches: int = 0
-        self._device_initialized: bool = False
+        self._total_f1: torch.Tensor
+        self._total_loss: torch.Tensor
+        self._total_samples: int
+        self._num_batches: int
+        self._init_accumulators()
+        self._device_initialized = False
         self._cached_f1: float = 0.0
         self._cached_loss: float = 0.0
-
-    def _ensure_device(self, device: torch.device) -> None:
-        """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
-        if not self._device_initialized:
-            self._total_f1 = self._total_f1.to(device)
-            self._total_loss = self._total_loss.to(device)
-            self._device_initialized = True
 
     def on_batch_end(self, context: TrainingContext) -> None:
         """バッチごとにF1スコアとlossをGPUテンソル上に蓄積する."""
@@ -1498,14 +1462,7 @@ class Stage2F1Callback(BaseCallback):
 
     def reset(self) -> None:
         """エポック間でカウンタをリセットする."""
-        if self._device_initialized:
-            self._total_f1.zero_()
-            self._total_loss.zero_()
-        else:
-            self._total_f1 = torch.tensor(0.0)
-            self._total_loss = torch.tensor(0.0)
-        self._total_samples = 0
-        self._num_batches = 0
+        self._reset_accumulators()
 
     def get_postfix(self) -> dict[str, str] | None:
         """Running F1 スコアと loss を tqdm 用に返す．
@@ -1549,21 +1506,21 @@ class Stage1AccuracyCallback(BaseCallback):
     ``(sigmoid(logits) > 0.5) == targets.bool()``
     """
 
+    _ACCUMULATORS = (
+        ("_total_correct", None),
+        ("_total_loss", None),
+    )
+    _COUNTERS = ("_total_elements", "_num_batches")
+
     def __init__(self) -> None:
-        self._total_correct: torch.Tensor = torch.tensor(0.0)
-        self._total_elements: int = 0
-        self._total_loss: torch.Tensor = torch.tensor(0.0)
-        self._num_batches: int = 0
-        self._device_initialized: bool = False
+        self._total_correct: torch.Tensor
+        self._total_loss: torch.Tensor
+        self._total_elements: int
+        self._num_batches: int
+        self._init_accumulators()
+        self._device_initialized = False
         self._cached_acc: float = 0.0
         self._cached_loss: float = 0.0
-
-    def _ensure_device(self, device: torch.device) -> None:
-        """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
-        if not self._device_initialized:
-            self._total_correct = self._total_correct.to(device)
-            self._total_loss = self._total_loss.to(device)
-            self._device_initialized = True
 
     def on_batch_end(self, context: TrainingContext) -> None:
         """バッチごとに精度とlossをGPUテンソル上に蓄積する."""
@@ -1606,14 +1563,7 @@ class Stage1AccuracyCallback(BaseCallback):
 
     def reset(self) -> None:
         """エポック間でカウンタをリセットする."""
-        if self._device_initialized:
-            self._total_correct.zero_()
-            self._total_loss.zero_()
-        else:
-            self._total_correct = torch.tensor(0.0)
-            self._total_loss = torch.tensor(0.0)
-        self._total_elements = 0
-        self._num_batches = 0
+        self._reset_accumulators()
 
     def get_postfix(self) -> dict[str, str] | None:
         """Running accuracy と loss を tqdm 用に返す．
@@ -1699,17 +1649,15 @@ class Stage3LossCallback(BaseCallback):
     バッチごとのGPUパイプラインストールを回避する．
     """
 
-    def __init__(self) -> None:
-        self._total_loss: torch.Tensor = torch.tensor(0.0)
-        self._num_batches: int = 0
-        self._device_initialized: bool = False
-        self._cached_loss: float = 0.0
+    _ACCUMULATORS = (("_total_loss", None),)
+    _COUNTERS = ("_num_batches",)
 
-    def _ensure_device(self, device: torch.device) -> None:
-        """初回バッチで蓄積テンソルをGPUデバイスに移動する."""
-        if not self._device_initialized:
-            self._total_loss = self._total_loss.to(device)
-            self._device_initialized = True
+    def __init__(self) -> None:
+        self._total_loss: torch.Tensor
+        self._num_batches: int
+        self._init_accumulators()
+        self._device_initialized = False
+        self._cached_loss: float = 0.0
 
     def on_batch_end(self, context: TrainingContext) -> None:
         """バッチごとにlossをGPUテンソル上に蓄積する."""
@@ -1727,11 +1675,7 @@ class Stage3LossCallback(BaseCallback):
 
     def reset(self) -> None:
         """エポック間でカウンタをリセットする."""
-        if self._device_initialized:
-            self._total_loss.zero_()
-        else:
-            self._total_loss = torch.tensor(0.0)
-        self._num_batches = 0
+        self._reset_accumulators()
 
     def get_postfix(self) -> dict[str, str] | None:
         """Running loss を tqdm 用に返す．
