@@ -1,5 +1,6 @@
 ---
-status: pending
+status: applied
+applied_in: 33b3573
 date: 2026-08-13
 target: [docs/adr-001-dataloader-multiprocessing-optimization.md]
 risk: low
@@ -91,7 +92,8 @@ ADR は決定の記録であり，本文は当時の姿を保つのが原則．�
 > 現在のどのデータ経路からも到達しない．
 ```
 
-## 判断が要る点
+## 決定
 
-案 1 / 2 / 3 のどれを採るか．承認をもらえた案をこの run か次の run で
-適用し，`status: applied` + `applied_in: <sha>` を埋める．
+**案 1 を採用** (2026-08-13，ユーザ承認)．`33b3573` で適用．
+2026-08-09 の注は当時の記述として残し，追記で現状を足した．
+ADR は決定の記録であり，本文は当時の姿を保つのが原則という理由による．

@@ -17,10 +17,15 @@ last_sha: 05654ba
 
 # `/audit-backlog` — columnar 変換の重複 (D3+D4)，分割 seed (D2)，`.npy` ベンチ (N-2)
 
-`coverage.md` の backlog 2 表から 19 行 (deferred 11 + out-of-scope 8) を
-拾い，HEAD `05654ba` に対して全件を再検証した．**stale はゼロ** —
-19 件すべてが今も成立する．うち 1 件 (N-2) は **changed shape** で，
+`coverage.md` の backlog 2 表から **21 行** (deferred 11 + out-of-scope 10)
+を拾い，HEAD `05654ba` に対して全件を再検証した．**stale はゼロ** —
+21 件すべてが今も成立する．うち 1 件 (N-2) は **changed shape** で，
 記録が書いていたより深刻だった (下記 § Corrections)．
+
+> **数え直しの訂正**: run の途中では「19 行 (deferred 11 +
+> out-of-scope 8)」と報告していたが，out-of-scope 表を 2 行数え落として
+> いた．分類自体は 21 行すべてを覆っている (下の表 4 + 17 = 21) ので，
+> 誤っていたのは合計値だけである．§ Reconciliation は訂正後の数字．
 
 ## Classification
 
@@ -36,7 +41,7 @@ last_sha: 05654ba
 | P6-1 | N-2 | `infra/utility` | **P6** | 公開関数 4 本 (`save_hcpe_array` ほか) を削除し，documented command の出力形式が変わる | G4 を**解除** — この run でユーザに聞き，「`.npy` を全削除」の回答を得た |
 | doc-1 | N-3 | `docs/adr-001-…` | 判断帯 | **P2 の一意性テストに落ちる**: 日付入り ADR 注の扱いに 3 通りの妥当な書き方があり，訂正後の本文がコードから一意に決まらない | 提案のみ．doc は**編集していない** |
 
-### 再検証で判断帯に留まった 15 件
+### 再検証で判断帯に留まった 17 件
 
 | backlog 行 | クラス相当 | ゲート | この run で留めた理由 |
 |---|---|---|---|
@@ -62,14 +67,15 @@ last_sha: 05654ba
 
 | backlog 行 | 対象 | 出荷したもの | 行の扱い |
 |---|---|---|---|
-| D3+D4 | `infra/file_system` | `22da510` | 保持 (PR 未マージ) — PR リンクを追記 |
-| D2 | 3 データソース | `ecc7a30` | 保持 (PR 未マージ) — PR リンクを追記 |
-| N-2 | `infra/utility` | `d0c4984` | 保持 (PR 未マージ) — PR リンクを追記 |
-| N-3 | `docs/adr-001-…` | `reviews/2026-08-13-adr-001-targets-note.md` (`status: pending`) | 保持 |
+| D3+D4 | `infra/file_system` | `22da510` | **削除** |
+| D2 | 3 データソース | `ecc7a30` | **削除** |
+| N-2 | `infra/utility` | `d0c4984` | **削除** |
+| N-3 | `docs/adr-001-…` | `33b3573` (提案 `reviews/2026-08-13-adr-001-targets-note.md` は `applied`) | **削除** |
 
-**注**: 6a は「マージされた行だけを消す」と定める．この run の PR は
-判断帯 (P4/P6) を含むため未マージであり，**D3+D4 を含め 4 行すべてを
-残す**のが規則どおりである．D3+D4 の行には PR リンクを追記した．
+**ユーザがこのセッション中に 3 件とも回答した**ため，4 行とも消化して
+行を削除した (5e: セッション中に回答があれば適用して 5d の条件でマージ
+する)．回答は「seed は 0 固定で問題ない」「`.npy` 削除は意図どおり」
+「adr-001 は案 1」．
 
 ## Applied
 
@@ -98,7 +104,8 @@ last_sha: 05654ba
 
 | PR | クラス | base | 未決の問い |
 |---|---|---|---|
-| [#491](https://github.com/dousu/maou/pull/491) | P3 + P4 + P6 + doc 提案 | `main` | (1) 行分割の既定 seed を `0` で確定してよいか (P4-1)．(2) `.npy` 全削除の diff が意図どおりか (P6-1，向きはこの run で承認済み)．(3) ADR-001 注の扱い 3 案のどれを採るか (doc-1) |
+_(なし)_ — [#491](https://github.com/dousu/maou/pull/491) が抱えていた
+3 つの問いはすべてこのセッション中に回答され，解決済み．
 
 **class ごとに PR を分けていない**理由: このセッションは
 `claude/audit-backlog-ejdnzm` という designated branch を渡されており，
@@ -182,19 +189,25 @@ preprocessing スキーマに追い付いておらず (`moveWinRate`,
 
 ## Reconciliation (6d)
 
-触れた項目 + 新規発見 = **20** (backlog 19 行 + 新規 1)
+触れた項目 + 新規発見 = **22** (backlog 21 行 + 新規 1)
 
-- **resolved** (行削除・`main` に到達): **0** — この run の PR は判断帯を
-  含むため未マージ．6a は「マージされた行だけを消す」と定める
-- **in flight** (行保持・PR リンク済み): **4** — D3+D4 / D2 / N-2 / N-3
+- **resolved** (行削除): **4** — D3+D4 / D2 / N-2 / N-3
+- **in flight**: **0**
 - **re-triaged** (行保持・文面を鋭くした): **2** — D8+D9 / N4
-- **そのまま保持** (再検証で confirmed，文面変更なし): **13** —
-  app/learning Deferred 2-7 / D5 / D10+D11 / D13 / D14 / D15 / O5 / O9 / N3 / N-1
-  (計 15 のうち D8+D9・N4 を除く 13)
+- **そのまま保持** (再検証で confirmed，文面変更なし): **15** —
+  app/learning Deferred 2-7 (6) / D5 / D10+D11 / D13 / D14 / D15 / O5 /
+  O9 / N3 / N-1 (9)
 - **new row**: **1** — N5-1
 - **not a finding**: **0**
 
-backlog 行数: **19 → 20**．
+4 + 0 + 2 + 15 + 1 = **22** ✓
+
+backlog 行数: **21 → 18** (21 − 4 + 1)．
+
+`coverage.md` 本表の `Open items` も更新した:
+`src/maou/infra/file_system` を `8 deferred` → `3 deferred`．
+**8 という数字はこの run の前から既に古かった** — 削除前の時点で
+deferred 表の infra/file_system 行は 5 本しかなかった．実数に合わせた．
 
 ## Environment notes
 
