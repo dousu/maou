@@ -335,6 +335,19 @@ NEW-3 / D1 の 7 件．**D8+D9 は後半だけに絞って残した**．
 **追加した行**: N-1 (BinaryView/LargeBinary) / N-2 (`.npy` ベンチの存廃) /
 N-3 (adr-001 の注)．
 
+   **Correction** (2026-08-13, `05654ba`): N-2 を「使う予定のない形式との
+   比較ベンチを残す意味があるか」という保守方針の問いとして立てたのは
+   誤りだった．`benchmark_datasource_iteration` が `.npy` パスを
+   `FileDataSource` に渡しており，`FileManager` の拡張子ガード
+   (`Only .feather files are supported`) に必ず当たるため，
+   `docs/performance.md:72` が案内する
+   `python -m maou.infra.utility.benchmark_polars_io` は**一度も完走した
+   ことがない**．正しい問いは「残すか消すか」ではなく「壊れているものを
+   どう直すか」だった．この run の到達性判定が
+   「`infra/console/` と `interface/` からの参照ゼロ」だけを見て
+   `docs/` を走査しなかったことが原因 — `python -m` 形式の入口は
+   CLI 参照の grep に掛からない．
+
 27 → **21 行**．
 
 ## Reconciliation (最終)
