@@ -77,6 +77,17 @@ step 2.5a で `<path>` のコードから導出した sweep key は7つ．
   中途書き込みファイル (中断した `save_*_df`，in-place な `rsync`)．
   suffix リストでは原理的に捕捉できず，size/footer 検査が要る．
 
+  **Correction** (2026-08-13, `672431a`): 上の「size/footer 検査が要る」
+  は誤り．検査を足さなくても，中途書き込みファイルは**読み込み時点で
+  確実に落ちている** — File 形式のまま footer が欠ければ
+  `ComputeError: out-of-spec: InvalidFooter`，0 バイトなら
+  `OSError: failed to fill whole buffer` (実機で再現して確認)．
+  「suffix フィルタを素通りする」→「壊れたデータを黙って読む」と
+  つないだのが飛躍で，実際の欠陥は**どちらのメッセージもファイル名を
+  含まない**ことだった．数百ファイルを渡す運用で犯人を特定できない．
+  したがって対処は検査の追加ではなく診断の改善で足りる
+  (`domain/data/arrow_format.feather_read_errors_name_the_file`)．
+
 ## Applied
 
 `8c1417e` (step 1 — 4件, 回帰テスト各1):
