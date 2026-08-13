@@ -696,6 +696,8 @@ s3_datasource = S3DataSource(
     local_cache_dir="./cache",
     array_type="hcpe",
     max_workers=16,
+    # enable_bundling / bundle_size_gb は受理されるが現状は効果がない
+    # (.feather は常に個別保存される)．docs/commands/pre_process.md 参照．
     enable_bundling=True,
     bundle_size_gb=1.5,
 )
