@@ -25,10 +25,8 @@ from maou.domain.data.arrow_format import (  # noqa: F401
     scan_row_count,
 )
 from maou.interface.data_io import (
+    COLUMNAR_CONVERTERS,
     ColumnarBatch,
-    convert_preprocessing_df_to_columnar,
-    convert_stage1_df_to_columnar,
-    convert_stage2_df_to_columnar,
     load_hcpe_df,
     load_preprocessing_df,
     load_stage1_df,
@@ -43,15 +41,6 @@ _FEATHER_LOADERS: dict[str, Callable[[Path], pl.DataFrame]] = {
     "preprocessing": load_preprocessing_df,
     "stage1": load_stage1_df,
     "stage2": load_stage2_df,
-}
-
-# ColumnarBatch converter dispatch table
-_COLUMNAR_CONVERTERS: dict[
-    str, Callable[[pl.DataFrame], ColumnarBatch]
-] = {
-    "preprocessing": convert_preprocessing_df_to_columnar,
-    "stage1": convert_stage1_df_to_columnar,
-    "stage2": convert_stage2_df_to_columnar,
 }
 
 
@@ -90,7 +79,7 @@ class StreamingFileSource:
                 f"Unsupported array_type: {array_type}. "
                 f"Supported: {list(_FEATHER_LOADERS.keys())}"
             )
-        if array_type not in _COLUMNAR_CONVERTERS:
+        if array_type not in COLUMNAR_CONVERTERS:
             raise ValueError(
                 "hcpe array_type is not supported for streaming columnar conversion. "
                 "Use 'preprocessing', 'stage1', or 'stage2'."
@@ -99,7 +88,7 @@ class StreamingFileSource:
         self._file_paths = list(file_paths)
         self._array_type = array_type
         self._loader = _FEATHER_LOADERS[array_type]
-        self._converter = _COLUMNAR_CONVERTERS[array_type]
+        self._converter = COLUMNAR_CONVERTERS[array_type]
 
         # 行数スキャンは遅延実行(total_rows初回アクセス時)
         self._total_rows: int | None = None

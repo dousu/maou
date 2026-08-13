@@ -10,6 +10,7 @@ Polars DataFrame → ColumnarBatch の変換関数も含む．
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -324,3 +325,17 @@ def convert_stage2_df_to_columnar(
         pieces_in_hand=pieces_in_hand,
         legal_moves_label=legal_moves_label,
     )
+
+
+# ``array_type`` → ColumnarBatch 変換器の唯一の対応表．
+# 以前は infra 側の 2 モジュール (``file_data_source`` と
+# ``streaming_file_source``) が同内容の dict を各々持っていたため，
+# 新しい array_type を足すときに片方だけ更新される事故があり得た．
+# 変換器の定義と同じ場所に 1 本だけ置き，両者はこれを import する．
+COLUMNAR_CONVERTERS: dict[
+    str, Callable[[pl.DataFrame], ColumnarBatch]
+] = {
+    "preprocessing": convert_preprocessing_df_to_columnar,
+    "stage1": convert_stage1_df_to_columnar,
+    "stage2": convert_stage2_df_to_columnar,
+}

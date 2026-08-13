@@ -18,10 +18,8 @@ import numpy as np
 
 from maou.interface import learn, preprocess
 from maou.interface.data_io import (
+    COLUMNAR_CONVERTERS,
     ColumnarBatch,
-    convert_preprocessing_df_to_columnar,
-    convert_stage1_df_to_columnar,
-    convert_stage2_df_to_columnar,
 )
 from maou.interface.data_schema import (
     convert_hcpe_df_to_numpy,
@@ -41,14 +39,6 @@ _DF_TO_NUMPY_CONVERTERS: dict[
     "preprocessing": convert_preprocessing_df_to_numpy,
     "stage1": convert_stage1_df_to_numpy,
     "stage2": convert_stage2_df_to_numpy,
-}
-
-_DF_TO_COLUMNAR_CONVERTERS: dict[
-    str, Callable[[pl.DataFrame], ColumnarBatch]
-] = {
-    "preprocessing": convert_preprocessing_df_to_columnar,
-    "stage1": convert_stage1_df_to_columnar,
-    "stage2": convert_stage2_df_to_columnar,
 }
 
 
@@ -189,7 +179,7 @@ class FileDataSource(
 
             # SOA化対応: preprocessing/stage1/stage2はColumnarBatchで保持
             self._use_columnar = (
-                array_type in _DF_TO_COLUMNAR_CONVERTERS
+                array_type in COLUMNAR_CONVERTERS
             )
             # structured array再構築用のdtype．
             # bit_pack は未使用 (後方互換の保持のみ) なので常に非パック版を引く．
@@ -204,7 +194,7 @@ class FileDataSource(
             # _file_entries とズレ，以降の全インデックス参照が静かに壊れる．
             # 分岐そのものを消して構造的に起こり得なくする．
             converter: Callable[[pl.DataFrame], Any] | None = (
-                _DF_TO_COLUMNAR_CONVERTERS.get(self.array_type)
+                COLUMNAR_CONVERTERS.get(self.array_type)
                 if self._use_columnar
                 else _DF_TO_NUMPY_CONVERTERS.get(
                     self.array_type
@@ -513,6 +503,12 @@ class FileDataSource(
             DataSource ABCの互換性を維持するため，外部I/Fは変更せず
             内部SOA表現からstructured arrayを再構築する．
 
+            フィールドの写し取りは
+            :meth:`_columnar_batch_to_structured_array` に一本化して
+            ある．以前は同じ 6 フィールドの転記をここでも書いており，
+            ColumnarBatch にフィールドが増えたとき片方だけ更新される
+            (1件取得と一括取得で内容が食い違う) 事故があり得た．
+
             Args:
                 batch: ColumnarBatch
                 idx: レコードインデックス
@@ -520,63 +516,9 @@ class FileDataSource(
             Returns:
                 numpy structured array (single record)
             """
-            assert self._structured_dtype is not None
-            assert self._structured_dtype.names is not None
-            dtype_names = self._structured_dtype.names
-            record = np.empty(1, dtype=self._structured_dtype)
-
-            # id field (preprocessing/stage1/stage2 dtypeに存在)
-            if "id" in dtype_names:
-                record["id"][0] = (
-                    0  # ColumnarBatchにはid情報がない
-                )
-
-            record["boardIdPositions"][0] = (
-                batch.board_positions[idx]
-            )
-            record["piecesInHand"][0] = batch.pieces_in_hand[
-                idx
-            ]
-
-            if (
-                batch.move_label is not None
-                and "moveLabel" in dtype_names
-            ):
-                record["moveLabel"][0] = batch.move_label[idx]
-
-            if (
-                batch.move_win_rate is not None
-                and "moveWinRate" in dtype_names
-            ):
-                record["moveWinRate"][0] = batch.move_win_rate[
-                    idx
-                ]
-
-            if (
-                batch.result_value is not None
-                and "resultValue" in dtype_names
-            ):
-                record["resultValue"][0] = batch.result_value[
-                    idx
-                ]
-
-            if (
-                batch.reachable_squares is not None
-                and "reachableSquares" in dtype_names
-            ):
-                record["reachableSquares"][0] = (
-                    batch.reachable_squares[idx]
-                )
-
-            if (
-                batch.legal_moves_label is not None
-                and "legalMovesLabel" in dtype_names
-            ):
-                record["legalMovesLabel"][0] = (
-                    batch.legal_moves_label[idx]
-                )
-
-            return record[0]
+            return self._columnar_batch_to_structured_array(
+                batch, row=idx
+            )[0]
 
         def get_items(
             self, indices: list[int]
@@ -636,14 +578,20 @@ class FileDataSource(
                     yield (entry.name, entry.cached_array)
 
         def _columnar_batch_to_structured_array(
-            self, batch: ColumnarBatch
+            self,
+            batch: ColumnarBatch,
+            *,
+            row: int | None = None,
         ) -> np.ndarray:
-            """ColumnarBatch全体をstructured arrayに変換する．
+            """ColumnarBatchをstructured arrayに変換する．
 
             iter_batchesなど，structured array形式が必要な箇所で使用．
 
             Args:
                 batch: ColumnarBatch
+                row: ``None`` なら batch 全体を変換する．整数を渡すと
+                    その 1 行だけを含む長さ 1 の配列を返す
+                    (:meth:`_columnar_to_structured_record` 用)．
 
             Returns:
                 numpy structured array
@@ -651,39 +599,55 @@ class FileDataSource(
             assert self._structured_dtype is not None
             assert self._structured_dtype.names is not None
             dtype_names = self._structured_dtype.names
-            n = len(batch)
+            if row is None:
+                selection = slice(None)
+                n = len(batch)
+            else:
+                # 負のインデックスでも 1 行スライスになるよう正規化する
+                # (``arr[-1:0]`` は空になってしまうため)．
+                start = row if row >= 0 else row + len(batch)
+                selection = slice(start, start + 1)
+                n = 1
             array = np.empty(n, dtype=self._structured_dtype)
 
             if "id" in dtype_names:
                 array["id"] = np.zeros(n, dtype=np.uint64)
 
-            array["boardIdPositions"] = batch.board_positions
-            array["piecesInHand"] = batch.pieces_in_hand
+            array["boardIdPositions"] = batch.board_positions[
+                selection
+            ]
+            array["piecesInHand"] = batch.pieces_in_hand[
+                selection
+            ]
 
             if (
                 batch.move_label is not None
                 and "moveLabel" in dtype_names
             ):
-                array["moveLabel"] = batch.move_label
+                array["moveLabel"] = batch.move_label[selection]
 
             if (
                 batch.move_win_rate is not None
                 and "moveWinRate" in dtype_names
             ):
-                array["moveWinRate"] = batch.move_win_rate
+                array["moveWinRate"] = batch.move_win_rate[
+                    selection
+                ]
 
             if (
                 batch.result_value is not None
                 and "resultValue" in dtype_names
             ):
-                array["resultValue"] = batch.result_value
+                array["resultValue"] = batch.result_value[
+                    selection
+                ]
 
             if (
                 batch.reachable_squares is not None
                 and "reachableSquares" in dtype_names
             ):
                 array["reachableSquares"] = (
-                    batch.reachable_squares
+                    batch.reachable_squares[selection]
                 )
 
             if (
@@ -691,7 +655,7 @@ class FileDataSource(
                 and "legalMovesLabel" in dtype_names
             ):
                 array["legalMovesLabel"] = (
-                    batch.legal_moves_label
+                    batch.legal_moves_label[selection]
                 )
 
             return array
