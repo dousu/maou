@@ -570,27 +570,53 @@ class BigQueryDataSource(
                     page_data, row_offset
                 )
 
-        def __row_to_structured_record(
-            self, page_data: pl.DataFrame, row_offset: int
+        def to_structured_array(
+            self, df: pl.DataFrame
         ) -> np.ndarray:
-            """DataFrame の 1 行を 0 次元 structured array に変換する．"""
-            row = page_data.slice(row_offset, 1)
+            """DataFrame を array_type に応じた structured array に変換する．
+
+            1 行取得 (``get_item``) とページ単位取得 (``iter_batches``)
+            の**両方**がここを通る．以前は 1 行側にしか変換が無く，
+            ページ側は ``pl.DataFrame`` をそのまま返していたため，
+            同じ ``BigQueryDataSource`` が呼ぶメソッドによって別の型を
+            返していた．
+
+            Args:
+                df: BigQuery から取得した 1 ページ分の DataFrame
+
+            Returns:
+                numpy structured array
+
+            Raises:
+                ValueError: ``array_type`` が未知のとき
+            """
             if self.array_type == "hcpe":
-                array = convert_hcpe_df_to_numpy(row)
+                return convert_hcpe_df_to_numpy(df)
             elif self.array_type == "preprocessing":
-                array = convert_preprocessing_df_to_numpy(row)
+                return convert_preprocessing_df_to_numpy(df)
             else:
                 raise ValueError(
                     f"Unsupported array_type: {self.array_type}"
                 )
-            return array[0]
+
+        def __row_to_structured_record(
+            self, page_data: pl.DataFrame, row_offset: int
+        ) -> np.ndarray:
+            """DataFrame の 1 行を 0 次元 structured array に変換する．"""
+            return self.to_structured_array(
+                page_data.slice(row_offset, 1)
+            )[0]
 
         def iter_batches(
             self,
         ) -> Generator[tuple[str, pl.DataFrame], None, None]:
             """
             BigQuery のテーブル全体に対して，
-            ページ 単位のNumpy Structured Arrayを順次取得するジェネレータ．
+            ページ単位の Polars DataFrame を順次取得するジェネレータ．
+
+            **DataFrame を返す**ことに注意．structured array を要求する
+            ``DataSource`` 契約に合わせる変換は
+            ``BigQueryDataSource.iter_batches`` 側で行う．
             """
             for page_num in range(self.total_pages):
                 if bool(self.__pruning_info):
@@ -690,8 +716,44 @@ class BigQueryDataSource(
 
     def iter_batches(
         self,
-    ) -> Generator[tuple[str, pl.DataFrame], None, None]:
+    ) -> Generator[tuple[str, np.ndarray], None, None]:
+        """バッチを numpy structured array として順次返す．
+
+        ``app.pre_process.hcpe_transform.DataSource`` の契約
+        (``tuple[str, np.ndarray]``) を満たす．以前は ``PageManager`` の
+        ``pl.DataFrame`` をそのまま流していたため，``PreProcess`` が
+        ``_process_single_array(data: np.ndarray)`` に渡した時点で
+        ``data["hcp"]`` / ``np.ascontiguousarray`` が落ちていた．
+        ``__getitem__`` については同じ形の不具合が既に直っている
+        (backlog 行 O1)．
+
+        Yields:
+            tuple[str, np.ndarray]: (バッチ名, structured array)
+        """
         # indiciesを使ったランダムアクセスは無視して全体を効率よくアクセスする
+        for name, df in self.__page_manager.iter_batches():
+            yield (
+                name,
+                self.__page_manager.to_structured_array(df),
+            )
+
+    def iter_batches_df(
+        self,
+    ) -> Generator[tuple[str, pl.DataFrame], None, None]:
+        """バッチを Polars DataFrame として順次返す．
+
+        BigQuery からは元々 DataFrame で取れるので，そのまま返す．
+
+        override が必要なのは，基底の既定実装
+        (``hcpe_transform.DataSource.iter_batches_df``) が
+        ``iter_batches()`` の返り値に ``array.dtype.names`` を読みに行く
+        うえ，**HCPE スキーマ決め打ち**で DataFrame を組み直すため
+        (backlog 行 N6-2)．``array_type='preprocessing'`` では黙って
+        誤ったスキーマを当てることになる．
+
+        Yields:
+            tuple[str, pl.DataFrame]: (バッチ名, DataFrame)
+        """
         yield from self.__page_manager.iter_batches()
 
     def total_pages(self) -> int:
