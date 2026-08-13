@@ -510,3 +510,33 @@ no-op カーネルと常駐バッファは残る．マスクを供給する経�
 構築しても緑になる．したがって統合は「別名を残せば無害」ではなく，
 **テストを head 型に対する主張へ書き換えるのとセット**でしか出荷
 できない．「0 文字差」という見かけより高くつく．
+
+**Correction** (2026-08-13, `cb21490`): **上の Deferred 3 訂正の (i) 自体が
+誤りだった．** 「`else` 腕は未対応の head 型を `TypeError` で弾く検証を
+担っており，落とすと黙って通る」と書いたが，`_build_model` は private で
+呼び出し元が `stage_component_factory.py:695` と `:785` の 2 つしか無く，
+**どちらも呼び出しの 7-10 行前に head を自分で構築している**
+(`ReachableSquaresHead(...)` を `:688`，`LegalMovesHead(...)` を `:777`)．
+第 3 の head 型がこの分岐に到達する経路は存在せず，`else` 腕
+(`:878-882`) は**到達不能**である．`"Unsupported head type"` を参照する
+テストもリポジトリ内にゼロ．したがって統合時に「これまで拒否されていた
+head 型が黙って通る」ことは起こらない — 失われるのは実際には何も
+守っていない防御コードだけである．
+
+ただし訂正の **(ii) は今も成立する**: `test_stage_component_factory.py:297`
+/`:398` の `isinstance` アサーションは両方とも通るようになり，2 本の
+テストが識別力を失う．**統合がテスト書き換えとセットである結論
+(P4 + G2) は変わらない** — 変わるのはその理由の内訳だけである．
+
+**Deferred 2 の「head/callback/metric getter とログ 2 本しか違わない」は
+不完全** (2026-08-13, `cb21490`)．`run_stage1_with_training_loop`
+(現 `:422-568`) と `run_stage2_with_training_loop` (現 `:571-717`) には
+**4 本目の軸**がある: 使う `TrainingLoop` サブクラスが違う
+(`Stage1TrainingLoop` `:451` vs `RawLogitsTrainingLoop` `:600`)．これは
+命名や文字列ではなく**挙動の軸**なので，「差分は装飾だけ」という前提で
+統合を設計すると取り落とす．
+
+また `_build_stage1_model_and_optimizer` / `_build_stage2_model_and_optimizer`
+の「38 行の byte-identical な末尾」も過大で，実際に完全一致するのは
+**28 行** (`:705-732` / `:795-822`)．38 行の窓には
+`stage_name="Stage 1"`/`"Stage 2"` (`:702`/`:792`) が入るため一致しない．

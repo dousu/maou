@@ -386,3 +386,38 @@ step 2.5 key 1 で Python 15箇所 + Rust enum を照合済み．
 - コストは実測で `Explore` 1回・約8.6分・約196k トークン (level `high`)．
   1428行の path に対しては steps 1-2 より重い．`low`/`medium` で
   key を絞る設計 (Usage 節) は妥当だった．
+
+## Corrections
+
+**Correction** (2026-08-13, `cb21490`): **D14(b) が挙げる「path 外の障害」は
+誤りだった．** record は `FileDataSource` から `preprocess.DataSource` を
+外すには `infra/utility/benchmark_polars_io.py:419-451` の対応が要ると
+書いているが，その行範囲は `print_summary` の docstring と
+HCPE/preprocessing の `print(...)` 行であり，`FileDataSource` とは無関係で
+ある．実際の使用箇所は `:386-390` (`FileDataSource(...)` の構築) と `:394`
+(`for name, df in polars_datasource.iter_batches_df():`) で，
+**`iter_batches_df` は `FileDataSource` 自身の具象メソッド**
+(`file_data_source.py:726`) なので，ABC を外してもこの呼び出しは壊れない．
+
+**真の障害はテスト群である**: `tests/maou/app/pre_process/test_hcpe_transform.py:79`
+/`:92`/`:305`/`:331`，`tests/maou/integrations/test_app_hcpe_transform.py:185-190`
+/`:259-264`，`tests/maou/integrations/test_convert_and_preprocess.py:226-231`
+/`:328`/`:430`/`:534` が `FileDataSource` を `PreProcess(datasource: DataSource)`
+に渡している．
+
+さらに `_use_columnar` 分岐の見立ても不正確だった．現在の出現位置は
+`:165`,`:171`,`:182`,`:236`,`:241`,`:305`,`:456`,`:539` で，このうち
+**preprocess の役割に属するのは `:539` (`iter_batches`) と `:726`
+(`iter_batches_df`) だけ**である．`:241` (ロードループ) と `:456`
+(`get_item`) は `learn.LearningDataSource` の役割を支えているので，
+**ABC を外しても退役しない**．「継承を外せば `_use_columnar` 分岐が
+まとめて消える」という前提で見積もると過大になる．
+
+**Correction** (2026-08-13, `cb21490`): **D10+D11 の「`FileDataSource.total_pages()`
+にはテストも無い」は誤り．** production caller がゼロである点は正しいが，
+テストは `FileDataSource` を `PreProcess` に渡す形で間接的にこれを実行して
+いる (上と同じ 3 ファイル)．ただしいずれも `cache_mode` を渡さないため
+`"file"` モードで走り，**食い違い自体は未実行のまま**である．「テストが
+無いから壊しても気付かれない」ではなく「テストはあるが問題の条件を
+踏んでいない」が正しい — 直すときに必要なのは新規テストではなく，
+`cache_mode="memory"` を踏むケースの追加である．
