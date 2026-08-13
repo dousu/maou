@@ -1,5 +1,6 @@
 use arrow::array::RecordBatch;
-use arrow::compute::concat_batches;
+use arrow::compute::{cast, concat_batches};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::ipc::reader::{FileReader, StreamReader};
 use arrow::ipc::writer::{FileWriter, IpcWriteOptions};
 use arrow::ipc::CompressionType;
@@ -28,8 +29,102 @@ fn consolidate_batches(batches: Vec<RecordBatch>) -> Result<RecordBatch, MaouIOE
         return Ok(batches.into_iter().next().unwrap());
     }
 
+    let batches = normalize_view_types(batches)?;
     let schema = batches[0].schema();
     concat_batches(&schema, &batches).map_err(MaouIOError::ArrowError)
+}
+
+/// view 型を対応する非 view 型へ読み替える．
+///
+/// polars 1.38 は `Binary` 列を **BinaryView** で書き，`maou_io` の
+/// [`save_feather`] (arrow-rs) は **LargeBinary** で書く．中身は同じでも
+/// Arrow の型としては別物なので，混ざると `concat_batches` が
+/// `It is not possible to concatenate arrays of different data types` で
+/// 落ちる．寄せ先を非 view 側にするのは，このクレートが書き出すのが
+/// そちらだからで，入力の順序に依らず出力の型が決まる．
+fn canonical_type(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::BinaryView => DataType::LargeBinary,
+        DataType::Utf8View => DataType::LargeUtf8,
+        other => other.clone(),
+    }
+}
+
+/// writer 違いで view / 非 view が混ざった batch 列をそろえる．
+///
+/// **スキーマが完全に一致していれば何もしない** (同じ writer だけで
+/// 書かれた入力の出力は従来とバイト単位で同じ)．食い違うときだけ，
+/// **view / 非 view の差に限って** cast する．それ以外の型の食い違い
+/// (Int32 と Int64 など) は黙って寄せると値が壊れ得るので手を出さず，
+/// これまでどおり `concat_batches` のエラーに任せる．
+///
+/// 背景: `pre-process --input-split-rows` は入力を chunk するため，
+/// polars 書きと Rust 書きの `.feather` が同じディレクトリに混在すると
+/// マージが停止していた (backlog 行 N-1)．
+fn normalize_view_types(batches: Vec<RecordBatch>) -> Result<Vec<RecordBatch>, MaouIOError> {
+    let first = batches[0].schema();
+    if batches.iter().all(|b| b.schema() == first) {
+        return Ok(batches);
+    }
+
+    // 列数・列名が違うのは view 型の問題ではないので触らない．
+    let same_shape = batches.iter().all(|b| {
+        let s = b.schema();
+        s.fields().len() == first.fields().len()
+            && s.fields()
+                .iter()
+                .zip(first.fields())
+                .all(|(a, b)| a.name() == b.name())
+    });
+    if !same_shape {
+        return Ok(batches);
+    }
+
+    // 寄せ先: 各列とも「1 本目の型を非 view 化したもの」．
+    // ただし，非 view 化しても一致しない列が 1 つでもあれば，それは
+    // view の問題ではない食い違いなので normalize しない．
+    let target_fields: Vec<Field> = first
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let target = canonical_type(f.data_type());
+            let nullable = batches.iter().any(|b| b.schema().field(i).is_nullable());
+            Field::new(f.name(), target, nullable)
+        })
+        .collect();
+
+    let normalizable = batches.iter().all(|b| {
+        b.schema()
+            .fields()
+            .iter()
+            .zip(&target_fields)
+            .all(|(f, t)| canonical_type(f.data_type()) == *t.data_type())
+    });
+    if !normalizable {
+        return Ok(batches);
+    }
+
+    let target: SchemaRef = std::sync::Arc::new(Schema::new(target_fields));
+
+    batches
+        .into_iter()
+        .map(|batch| {
+            let columns = batch
+                .columns()
+                .iter()
+                .zip(target.fields())
+                .map(|(col, field)| {
+                    if col.data_type() == field.data_type() {
+                        Ok(col.clone())
+                    } else {
+                        cast(col, field.data_type())
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            RecordBatch::try_new(target.clone(), columns).map_err(MaouIOError::ArrowError)
+        })
+        .collect()
 }
 
 /// Save Arrow RecordBatch to .feather file with LZ4 compression．
@@ -363,6 +458,7 @@ pub fn split_feather(
 mod tests {
     use super::*;
     use arrow::array::{ArrayRef, Int32Array};
+    use arrow::array::{BinaryArray, BinaryViewArray, Int64Array, LargeBinaryArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use std::sync::Arc;
     use tempfile::tempdir;
@@ -700,5 +796,155 @@ mod tests {
         let batches = load_feather_batches(path.to_str().unwrap()).unwrap();
         assert_eq!(batches.len(), 2);
         assert_eq!(batches[0].num_rows(), batch.num_rows());
+    }
+
+    // ========================================================================
+    // /audit-backlog 2026-08-13 — backlog 行 N-1 の回帰テスト
+    // ========================================================================
+    //
+    // polars 1.38 は Binary 列を BinaryView で書き，`save_feather`
+    // (arrow-rs) は LargeBinary で書く．`pre-process --input-split-rows`
+    // は入力を chunk するので，writer の違う `.feather` が同じ入力
+    // ディレクトリに混在するとマージが停止していた．
+
+    fn binary_batch(data_type: DataType, values: &[&[u8]]) -> RecordBatch {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("payload", data_type.clone(), false),
+        ]);
+        let ids = Int32Array::from((0..values.len() as i32).collect::<Vec<_>>());
+        let payload: ArrayRef = match data_type {
+            DataType::BinaryView => Arc::new(BinaryViewArray::from(values.to_vec())),
+            DataType::LargeBinary => Arc::new(LargeBinaryArray::from(values.to_vec())),
+            DataType::Binary => Arc::new(BinaryArray::from(values.to_vec())),
+            other => panic!("unsupported test type: {other}"),
+        };
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(ids) as ArrayRef, payload]).unwrap()
+    }
+
+    #[test]
+    fn consolidate_merges_binary_view_with_large_binary() {
+        // 回帰: 以前は
+        // "It is not possible to concatenate arrays of different data types
+        //  (BinaryView, LargeBinary)" で落ちていた．
+        let batches = vec![
+            binary_batch(DataType::BinaryView, &[b"aa", b"bb"]),
+            binary_batch(DataType::LargeBinary, &[b"cc"]),
+        ];
+
+        let merged = consolidate_batches(batches).unwrap();
+
+        assert_eq!(merged.num_rows(), 3);
+        assert_eq!(
+            merged.schema().field(1).data_type(),
+            &DataType::LargeBinary,
+            "寄せ先は save_feather が書く非 view 側であること"
+        );
+    }
+
+    #[test]
+    fn consolidate_target_type_does_not_depend_on_input_order() {
+        // 1 本目が view でも非 view でも出力の型が同じであること．
+        let a = consolidate_batches(vec![
+            binary_batch(DataType::BinaryView, &[b"aa"]),
+            binary_batch(DataType::LargeBinary, &[b"bb"]),
+        ])
+        .unwrap();
+        let b = consolidate_batches(vec![
+            binary_batch(DataType::LargeBinary, &[b"aa"]),
+            binary_batch(DataType::BinaryView, &[b"bb"]),
+        ])
+        .unwrap();
+
+        assert_eq!(a.schema(), b.schema());
+    }
+
+    #[test]
+    fn consolidate_preserves_payload_bytes_across_writers() {
+        let batches = vec![
+            binary_batch(DataType::BinaryView, &[b"first", b"second"]),
+            binary_batch(DataType::LargeBinary, &[b"third"]),
+        ];
+
+        let merged = consolidate_batches(batches).unwrap();
+        let payload = merged
+            .column(1)
+            .as_any()
+            .downcast_ref::<LargeBinaryArray>()
+            .expect("寄せ先は LargeBinary");
+
+        assert_eq!(payload.value(0), b"first");
+        assert_eq!(payload.value(1), b"second");
+        assert_eq!(payload.value(2), b"third");
+    }
+
+    #[test]
+    fn consolidate_leaves_matching_schemas_untouched() {
+        // **trap**: スキーマが一致している入力まで normalize すると，
+        // これまで BinaryView のまま出ていた出力が LargeBinary に
+        // 変わってしまう．同じ writer だけの入力は従来どおりであること．
+        let batches = vec![
+            binary_batch(DataType::BinaryView, &[b"aa"]),
+            binary_batch(DataType::BinaryView, &[b"bb"]),
+        ];
+
+        let merged = consolidate_batches(batches).unwrap();
+
+        assert_eq!(merged.schema().field(1).data_type(), &DataType::BinaryView);
+    }
+
+    #[test]
+    fn consolidate_still_rejects_unrelated_type_mismatches() {
+        // view の話ではない食い違いは黙って寄せない (値が壊れ得る)．
+        let int32 = create_test_batch();
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+        ]);
+        let int64 = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Int64Array::from(vec![1_i64])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![10_i64])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        assert!(consolidate_batches(vec![int32, int64]).is_err());
+    }
+
+    #[test]
+    fn merge_feather_files_accepts_mixed_writers() {
+        // 経路まるごと: 型の違う `.feather` が混ざったディレクトリを
+        // マージできること．
+        let dir = tempdir().unwrap();
+        let view_path = dir.path().join("view.feather");
+        let large_path = dir.path().join("large.feather");
+        save_feather(
+            &binary_batch(DataType::BinaryView, &[b"aa", b"bb"]),
+            view_path.to_str().unwrap(),
+        )
+        .unwrap();
+        save_feather(
+            &binary_batch(DataType::LargeBinary, &[b"cc"]),
+            large_path.to_str().unwrap(),
+        )
+        .unwrap();
+
+        let out_dir = dir.path().join("out");
+        let outputs = merge_feather_files(
+            &[
+                view_path.to_str().unwrap().to_string(),
+                large_path.to_str().unwrap().to_string(),
+            ],
+            out_dir.to_str().unwrap(),
+            100,
+            "mixed",
+        )
+        .unwrap();
+
+        assert_eq!(outputs.len(), 1);
+        let merged = load_feather(&outputs[0]).unwrap();
+        assert_eq!(merged.num_rows(), 3);
     }
 }
