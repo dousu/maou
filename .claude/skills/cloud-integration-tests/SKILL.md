@@ -154,35 +154,12 @@ uv run maou pre-process \
   --max-workers 16
 ```
 
-### Array Bundling for Efficiency
+### Array Bundling (removed)
 
-Bundle small numpy arrays for optimal I/O:
-
-```bash
-# S3 with array bundling
-uv run maou pre-process \
-  --input-s3 \
-  --input-bucket-name my-bucket \
-  --input-local-cache-dir ./cache \
-  --input-enable-bundling \
-  --input-bundle-size-gb 1.0 \
-  --max-workers 16
-
-# GCS with array bundling
-uv run maou pre-process \
-  --input-gcs \
-  --input-bucket-name my-bucket \
-  --input-local-cache-dir ./cache \
-  --input-enable-bundling \
-  --input-bundle-size-gb 1.5 \
-  --max-workers 16
-```
-
-**Benefits**:
-- Reduces file count from thousands to dozens
-- ~1GB chunks easier to manage
-- Memory mapping for efficient access
-- Significantly faster data loading
+`--input-enable-bundling` / `--input-bundle-size-gb` no longer exist.
+They were accepted but never read — the download path always wrote each
+`.feather` object individually — and were removed on 2026-08-14.
+Tune parallel downloads with `--input-max-workers` instead.
 
 ## Validation Checklist
 
@@ -296,24 +273,16 @@ Metrics to observe:
 - Network overhead
 - End-to-end latency
 
-### Compare Bundled vs Non-Bundled
+### Measure Download Throughput
 
 ```bash
-# Without bundling
 uv run maou utility benchmark-training \
   --input-s3 \
   --input-bucket-name my-bucket \
   --gpu cuda:0
-
-# With bundling
-uv run maou utility benchmark-training \
-  --input-s3 \
-  --input-enable-bundling \
-  --input-bundle-size-gb 1.0 \
-  --gpu cuda:0
 ```
 
-Expected improvement: 3-5x faster data loading with bundling.
+Tune throughput with `--input-max-workers`; there is no bundling option.
 
 ## Success Criteria
 
@@ -349,7 +318,6 @@ Integration tests cover:
 - Parallel upload throughput
 - Parallel download throughput
 - Cache efficiency
-- Array bundling impact
 
 ## When to Use
 

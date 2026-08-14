@@ -123,21 +123,6 @@ def _parse_float_list(
     required=False,
 )
 @click.option(
-    "--input-enable-bundling",
-    type=bool,
-    is_flag=True,
-    help="Enable bundling of arrays for efficient local caching (1GB chunks).",
-    default=False,
-    required=False,
-)
-@click.option(
-    "--input-bundle-size-gb",
-    type=float,
-    help="Target bundle size in GB for array bundling (default: 1.0).",
-    default=1.0,
-    required=False,
-)
-@click.option(
     "--input-gcs",
     type=bool,
     is_flag=True,
@@ -220,8 +205,6 @@ def benchmark_dataloader(
     input_clustering_key: str | None,
     input_partitioning_key_date: str | None,
     input_local_cache_dir: str | None,
-    input_enable_bundling: bool,
-    input_bundle_size_gb: float,
     input_gcs: bool | None,
     input_s3: bool | None,
     input_bucket_name: str | None,
@@ -333,8 +316,6 @@ def benchmark_dataloader(
                         max_workers=input_max_workers,
                         max_cached_bytes=input_max_cached_bytes,
                         sample_ratio=sample_ratio,
-                        enable_bundling=input_enable_bundling,
-                        bundle_size_gb=input_bundle_size_gb,
                     )
                 else:
                     app_logger.error(
@@ -375,8 +356,6 @@ def benchmark_dataloader(
                         max_cached_bytes=input_max_cached_bytes,
                         sample_ratio=sample_ratio,
                         array_type=array_type,
-                        enable_bundling=input_enable_bundling,
-                        bundle_size_gb=input_bundle_size_gb,
                     )
                 else:
                     app_logger.error(
@@ -527,21 +506,6 @@ def benchmark_dataloader(
     "--input-local-cache-dir",
     type=str,
     help="Directory path for storing the local cache of cloud data.",
-    required=False,
-)
-@click.option(
-    "--input-enable-bundling",
-    type=bool,
-    is_flag=True,
-    help="Enable bundling of arrays for efficient local caching (1GB chunks).",
-    default=False,
-    required=False,
-)
-@click.option(
-    "--input-bundle-size-gb",
-    type=float,
-    help="Target bundle size in GB for array bundling (default: 1.0).",
-    default=1.0,
     required=False,
 )
 @click.option(
@@ -1020,8 +984,6 @@ def benchmark_training(
     input_clustering_key: str | None,
     input_partitioning_key_date: str | None,
     input_local_cache_dir: str | None,
-    input_enable_bundling: bool,
-    input_bundle_size_gb: float,
     input_gcs: bool | None,
     input_s3: bool | None,
     input_bucket_name: str | None,
@@ -1300,8 +1262,6 @@ def benchmark_training(
                         max_workers=input_max_workers,
                         max_cached_bytes=input_max_cached_bytes,
                         sample_ratio=sample_ratio,
-                        enable_bundling=input_enable_bundling,
-                        bundle_size_gb=input_bundle_size_gb,
                     )
                 else:
                     app_logger.error(
@@ -1342,8 +1302,6 @@ def benchmark_training(
                         max_workers=input_max_workers,
                         max_cached_bytes=input_max_cached_bytes,
                         sample_ratio=sample_ratio,
-                        enable_bundling=input_enable_bundling,
-                        bundle_size_gb=input_bundle_size_gb,
                     )
                 else:
                     app_logger.error(
