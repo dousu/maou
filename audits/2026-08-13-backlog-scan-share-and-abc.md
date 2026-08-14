@@ -238,6 +238,21 @@ dormant なので，判断は「この経路に caller が戻るとき」に据�
   「HCPE 専用と明記して名前を変える」か「array_type で分岐させる」かの
   判断が要る．
 
+  **Correction** (2026-08-14, `97dfb2a`): 上で挙げた「名前を変える」は，
+  それが **ABC のメソッド名 `iter_batches_df` の改名**を指すのであれば
+  誤りである．`iter_batches_df` の 4 実装のうち **3 つは汎用**で，
+  HCPE 専用ではない — `FileDataSource` (`file_data_source.py:575`) は
+  `array_type` で hcpe/preprocessing/stage1/stage2 を分岐し，
+  `ObjectStorageDataSource` (`data_source.py:480`) は hcpe/preprocessing で
+  スキーマを切り替え，`BigQueryDataSource` (`bq_data_source.py:737`) は
+  DataFrame をそのまま返す．HCPE 決め打ちなのは**基底の既定実装だけ**
+  なので，契約名を HCPE 名へ改めるとこの 3 つと
+  `docs/rust-backend.md:680,701,714,725,730` が誤った名前になる．
+  改名の対象は*契約*ではなく*既定実装*であり，そこが
+  「基底を abstract にして既定実装を `StreamingHcpeDataSource` へ移す
+  (P6)」と「既定実装を HCPE 名のヘルパへ切り出して docstring で明記する
+  (P3)」に分岐する ([本件の記録](2026-08-14-backlog-stream-wait-and-abc-direction.md))．
+
 ## Reconciliation (6d)
 
 触れた項目 + 新規発見 = **20** (backlog 18 行 + 新規 2)
