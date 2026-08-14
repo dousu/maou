@@ -1,6 +1,6 @@
 ---
-description: Consume the deferred and out-of-scope findings that /audit-and-fix left behind. Gathers them from audits/coverage.md's backlog tables, re-verifies each against HEAD, then classifies each by DECISION COST on a mechanical six-class ladder — P1-P3 need no user judgment and are fixed, PR'd and merged without asking; P4-P6 need judgment, are built into unmerged PRs, and are then put to the user as ONE AskUserQuestion listing every outstanding decision with the PR that implements it — so what is being asked, and what is waiting, is never left to be reconstructed from diffs. An item is left unwritten before that question only when the branches produce materially different diffs. Every PR of a run is chained into one stack with exactly one merge into main, so siblings never conflict and the wheel builds once. Applies fixes on the normal route (version bump, regression test, reviews/ proposal for durable docs), deletes the resolved backlog rows, and records the run in audits/.
-argument-hint: [item-selector or class (P1..P6 / auto / judgment) | omit to take everything] [effort-level: low|medium|high|max, default medium]
+description: Consume the deferred and out-of-scope findings that /audit-and-fix left behind. Gathers them from audits/coverage.md's backlog tables, re-verifies each against HEAD, then classifies each by DECISION COST on a mechanical six-class ladder — P1-P3 need no user judgment and are fixed, PR'd and merged without asking; P4-P6 need judgment, are built into unmerged PRs, and are then put to the user as ONE AskUserQuestion listing every outstanding decision with the PR that implements it — so what is being asked, and what is waiting, is never left to be reconstructed from diffs. An item is left unwritten before that question only when the branches produce materially different diffs. The same question also puts DESIGN DECISIONS to the user — the G4 items no run can write a fix for until a human chooses — so that the gated tail of the backlog actually drains instead of being re-triaged forever; a decision taken there is written into the row, retiring its G4, whether or not the fix ships in the same run. Every PR of a run is chained into one stack with exactly one merge into main, so siblings never conflict and the wheel builds once. Applies fixes on the normal route (version bump, regression test, reviews/ proposal for durable docs), deletes the resolved backlog rows, and records the run in audits/.
+argument-hint: [item-selector or class (P1..P6 / auto / judgment / design) | omit to take everything] [effort-level: low|medium|high|max, default medium]
 ---
 
 `/audit-and-fix` deliberately leaves work behind. It defers findings that
@@ -20,9 +20,11 @@ durable docs, committed audit record.
   (step 3d), and act on the answers (step 3e). This is the intended way to
   open the command. It asks exactly once, and only when the judgment band
   is non-empty.
-- A selector may name a class (`P4`), a band (`auto`, `judgment`), item IDs
-  from the listing (`P3-2,P4-1`), or a target path
-  (`src/maou/interface`) to take everything aimed at it.
+- A selector may name a class (`P4`), a band (`auto`, `judgment`,
+  `design`), item IDs from the listing (`P3-2,P4-1`), or a target path
+  (`src/maou/interface`) to take everything aimed at it. `design` selects
+  the G4 rows and spends the whole question budget on their design
+  decisions, shipping no fixes of its own.
 - Second token: effort level `low|medium|high|max`, default `medium`.
 
 ## What this command is *not*
@@ -113,6 +115,33 @@ Re-verification can retire a G4 — the decision may have been taken since,
 or the alternatives may have collapsed to one — but it must be retired
 *explicitly*, with the reason, not by forgetting to look.
 
+### Gates block the work, not the question
+
+This is the correction that matters most, and the backlog is the evidence
+for it. Through 2026-08-14 every gate was treated as terminal: a gated
+item was reported, re-triaged, and left. Seven runs of that left **13
+rows, all gated, most of them G4** — items whose recorded reason for
+existing is that a human has to choose, and which no run had ever put to
+a human. A gate had become a way of not asking.
+
+So read each gate for what it actually blocks:
+
+| Gate | Blocks | Does **not** block |
+|---|---|---|
+| **G1** | shipping a verified fix here | asking which design to adopt |
+| **G2** | fixing without widening scope | asking whether to widen it |
+| **G3** | claiming behavior is unchanged | asking whether to make the change |
+| **G4** | writing any fix at all | **asking — G4 *is* the question** |
+
+**G4 is not a reason to defer; it is a fully specified question waiting to
+be asked.** An earlier run has already done the expensive part — it found
+the fork and named the alternatives. What remains costs one entry in
+step 3d.
+
+A run that leaves a G4 item untouched *and* unasked has not deferred it,
+it has dropped it: the row will read identically next run, and the run
+after that. That is the loop this section exists to break.
+
 ### Worked classifications, from rows in the current backlog
 
 These are the calibration set. When a new item's class is unclear, find the
@@ -195,7 +224,7 @@ Ask **once per run**, batching every outstanding decision, raised *after*
 the auto band is settled and the judgment-band PRs are open. A second
 question in the same run means the first one was under-specified.
 
-Entries come in two kinds, and one question may hold both:
+Entries come in three kinds, and one question may hold all of them:
 
 - **受理を問うもの** — the fix is written and PR'd. The choice is whether to
   take it. Give the option that merges it, and the alternative that was
@@ -205,6 +234,19 @@ Entries come in two kinds, and one question may hold both:
   produce **materially different diffs** and implementing the wrong one
   wastes work the user would have to review and discard. Give the branches
   and what each costs.
+- **設計判断を問うもの** — no fix can be written *at all* until a design
+  question is settled. This is the G4 case, and it is the one the command
+  used to have no channel for. The item is not worked this run and may not
+  be workable for several runs; what the question buys is the **decision**,
+  which is then written into the row so it is never asked again.
+
+The third kind is what drains the long tail. It is not gated on the run
+being able to implement the answer: a design question about
+`FileDataSource.total_pages()`'s meaning, or about whether the inert
+bundling knobs should be removed, is answerable by the user today even if
+the fix needs a GPU, a BigQuery table, or a refactor larger than one run.
+**Ask it anyway** — a recorded decision converts a G4 row into ordinary
+work that any later run can pick up.
 
 The second kind is the narrow case, and both halves of its test must hold:
 
@@ -447,7 +489,8 @@ has lost the half of its job that mattered.
 The plan is a second, shorter list, and it answers a different question
 than the table: **what is this session actually going to do?** The
 classification says what each item *is*; the plan says which items get
-worked, which get left, and in what order. Write it as two blocks:
+worked, which get asked about, which get left, and in what order. Write
+it as three blocks:
 
 ```markdown
 ### このセッションで処理する
@@ -456,18 +499,33 @@ worked, which get left, and in what order. Write it as two blocks:
 3. N-2 (P6) — `.npy` ベンチの扱い (向きはユーザに確認してから書く)
 4. N-3 (doc) — `reviews/` 提案のみ，doc は編集しない
 
+### このセッションで設計判断を問う (3d)
+- O5 — キャッシュを有効にするのは bool flag と dir のどちらか
+  (この 1 問で (a)(d) とノブ削除の 3 つが同時に解ける)
+- FS-D10 — `total_pages()` は「ファイル数」と「yield 数」のどちらを意味させるか
+- N4 — torch 非依存の薄いテストへ切り出すか，CPU extra を必須にするか
+
 ### このセッションでは処理しない (残す理由)
-- Deferred 5/6/7, O9 — G1: GPU / BigQuery がこの環境に無い
-- Deferred 2/4 — G3: ~400 行の学習経路リファクタで等価性を示せない
+- Deferred 5/6/7 — G1: GPU がこの環境に無い．**設計判断は未着手ではなく
+  今回の質問枠に入らなかっただけ** (3d の予算 4 問)．次 run の先頭候補
+- Deferred 2 — G3: ~600 行の学習経路統合で等価性を示せない
 - …
 ```
 
-The "処理しない" half is not padding. A run that lists only what it will
-do leaves the user unable to tell a deliberate deferral from an
+The second block is the one this command kept omitting. A gated item that
+appears only under "処理しない" reads as settled-for-now, and seven runs
+of that is how 13 rows accumulated with nobody ever asked about them. If
+an item is left because a human has to choose, it belongs in the **問う**
+block, not the **処理しない** one — and if it is in neither because the
+question budget ran out, say so *in* the 処理しない block, as above, so
+the omission is visible as a queue position rather than a verdict.
+
+The "処理しない" half is not padding either. A run that lists only what it
+will do leaves the user unable to tell a deliberate deferral from an
 oversight — and that distinction is the entire value of a backlog that
 has already been triaged once.
 
-Do not begin step 3b until both blocks are on screen.
+Do not begin step 3b until all three blocks are on screen.
 
 **3b. Consume the auto band (P1 → P2 → P3) without asking.** The auto band
 never appears in 3d's question — that is what the classification bought.
@@ -516,8 +574,44 @@ out of the question is what made previous runs opaque. Shape each entry
 per the standing principle — the decision, its cost, the recommended
 option first, and the PR number when one exists.
 
-Skip the question only when the judgment band is empty. Say so in one
-line if it is.
+**The question MUST carry at least one 設計判断 entry whenever a G4 row
+exists**, budget permitting (below). This is the rule that drains the
+long tail; without it a run can satisfy 3d entirely with acceptance
+entries for work it already chose to do, and the G4 rows survive
+untouched — which is exactly what the first seven runs did.
+
+Skip the question only when there is nothing in any of the three kinds.
+Say so in one line if that is the case.
+
+**The budget: one call, four questions.** `AskUserQuestion` takes at most
+4 questions of at most 4 options each, and this command asks once. Spend
+it in this order:
+
+1. **One question for all 受理 entries**, using `multiSelect: true` — "この
+   run が出した修正のうち，マージしてよいものを選んでください". N
+   acceptance decisions cost **one** slot, not N. Do not spend a slot per
+   PR.
+2. **One question per 向き entry.** These block work the run would
+   otherwise do now, so they outrank design questions.
+3. **The remaining slots for 設計判断 entries**, highest-value first.
+
+That normally leaves 2-3 design questions per run — enough to retire the
+G4 backlog over a handful of runs, and few enough that each gets real
+options rather than a list.
+
+**Rank design questions by what the answer unblocks**, not by the
+severity of the finding:
+
+- an answer that lets a *later* run write a contained fix beats one whose
+  fix is a 600-line refactor either way;
+- an answer that settles a question **several rows share** beats a
+  single-row one (O5's "which knob enables caching" governs (a), (d) and
+  the knob removal at once);
+- a row that has been re-triaged the most times beats a fresh one — it is
+  the one the loop is provably failing to consume.
+
+Name the losing candidates in the report so the next run can start where
+this one stopped.
 
 **3e. Act on the answers in the same run.**
 
@@ -529,6 +623,24 @@ line if it is.
 - A rejection closes that PR; re-base anything stacked above it (5b) and
   record the rejection in step 6c's Re-triaged section with the user's
   stated reason.
+- A **設計判断** answer is itself the deliverable, and it is recorded
+  whether or not the fix ships this run:
+  1. **Write the decision into the backlog row** — what was chosen, by
+     whom (the user), on what date — and **retire the row's G4**, stating
+     that it is retired because the decision has been taken. The row stays
+     open (the fix has not shipped) but it is no longer blocked on a
+     human. This is the step that stops the question being re-asked.
+  2. **Implement it now if it fits this run** — the answer may collapse a
+     P6 into something contained. Then it ships like any other
+     judgment-band item.
+  3. **Otherwise leave it for a later run**, which now finds a row with a
+     settled design and can treat it as ordinary work. Say in the report
+     that the decision landed but the fix did not, so the split is
+     visible.
+
+A decision recorded in the row without its fix is **not** a failure of the
+run. It is the run converting an item nobody could act on into one anybody
+can.
 
 If a selector was given in `$ARGUMENTS`, honor it: confirm the resolved
 item set in one line and skip the parts of 3b/3c/3d it excludes.
@@ -896,6 +1008,23 @@ already fixed elsewhere rather than fixed here. Do **not** delete a row that
 was merely re-triaged — sharpen its text instead, so the next run inherits
 the better reasoning rather than the original impasse.
 
+**A row whose design decision was taken in 3d is a fourth case: keep it,
+and write the decision into it.** The fix has not shipped, so the row
+survives; but the row must no longer present the question as open, or the
+next run re-asks what the user already settled. Rewrite it to state, in
+this order:
+
+1. **the decision, dated and attributed** — "2026-08-14 にユーザが (b) を
+   選択: …";
+2. **G4 retired**, with that decision as the reason;
+3. **what is left**, now expressed as ordinary work — the gates that
+   remain (G1/G2/G3 are unaffected by a design answer) and what a future
+   run has to write.
+
+A row in this state is the most valuable kind in the backlog: fully
+diagnosed, decided, and waiting only on someone to do it. Do not let it
+read like the undecided version it replaced.
+
 Update the `Open items` count on the affected main-table row to match.
 
 **6b. Leave the source records alone.** They are immutable accounts; their
@@ -932,10 +1061,18 @@ rather than a path audit. Body:
   the PR it merged in.
 - **Applied** — the fixes, with `file:line` and commit SHA.
 - **Decisions asked** — 3d's question, verbatim enough to be re-read: each
-  entry, the options offered, and what the user chose. When the run could
-  not raise the question, say so here and why. This is the section that
-  makes a judgment-band outcome auditable — "the user approved it" is not
-  a record; the options they were shown are.
+  entry, its kind (受理 / 向き / 設計判断), the options offered, and what
+  the user chose. When the run could not raise the question, say so here
+  and why. This is the section that makes a judgment-band outcome
+  auditable — "the user approved it" is not a record; the options they
+  were shown are.
+
+  For **設計判断** entries also record: which rows the answer settles
+  (one answer often governs several), whether the fix shipped in this run
+  or was left for a later one, and **which design questions did not fit
+  the budget** — the losing candidates from 3d's ranking. That last list
+  is what lets the next run open with the queue already ordered instead of
+  re-deriving it.
 - **In flight** — judgment-band PRs left open, with their PR number, their
   base (`main`, or the PR they are stacked on and why), and the question
   outstanding. Say for each whether its row was deleted here (the PR
@@ -962,9 +1099,18 @@ reason: 6c tells you to *append* new out-of-scope items but never makes
 you verify the mapping is total. Assign every item this run touched, and
 every new finding it noticed, exactly one disposition — **resolved** (row
 deleted in the PR that carries its fix) / **in flight** (row kept because
-its PR can merge apart from the ledger, PR linked) / **re-triaged** (row
-kept, text sharpened) / **new row** (id) / **not a finding** (reason).
-An item you cannot assign is the defect the check exists to catch.
+its PR can merge apart from the ledger, PR linked) / **decided** (row kept
+with a 3d design decision written into it and its G4 retired, fix not yet
+written) / **re-triaged** (row kept, text sharpened) / **new row** (id) /
+**not a finding** (reason). An item you cannot assign is the defect the
+check exists to catch.
+
+**decided** and **re-triaged** are not interchangeable, and collapsing
+them hides the only thing that moved. A re-triaged row is still blocked on
+a human; a decided row is not. Count them separately, and report the
+**decided** count prominently — for a backlog whose remainder is mostly
+G4, it is the run's real throughput, more than the number of merged
+diffs.
 
 Note that **resolved** is decided by 6a's separability test, not by
 whether the merge button has been pressed yet. A collapsed single-PR run
@@ -1030,14 +1176,19 @@ Compact summary:
 - Doc drift → `reviews/<file>`, its status, and which P2 branch applied
 - QA: what ran, what passed, what was blocked and why
 - **Reconciliation (6d)**: `<items touched + new findings> = <resolved> +
-  <in flight> + <re-triaged> + <new rows> + <not-a-finding>`, printed as
-  the equation. Backlog rows before → after, so the ledger's movement is
-  visible
+  <in flight> + <decided> + <re-triaged> + <new rows> + <not-a-finding>`,
+  printed as the equation. Backlog rows before → after, so the ledger's
+  movement is visible — and note that a run can legitimately move nothing
+  in that count while still being productive, if what it moved was
+  `<decided>`
 - Version bump(s), old → new, which manifest
 - Ledger: rows deleted (which table), rows added by 1d's repair, any
   record correction from 6b, new record path
-- Backlog remaining, by class — so the next run knows what is left, and
-  how much of it will need the user
+- Backlog remaining, by class **and by whether it is still blocked on a
+  human** — a G4 row and a row whose design was decided last run look
+  alike in a class count and are not alike at all. State the design
+  questions still queued, in the order 3d ranked them, so the next run
+  opens where this one stopped
 
 ### 8. Handoff
 
@@ -1110,6 +1261,22 @@ Keep the derive-never-enumerate property:
   the entries are under-specified, not unnecessary. Give the cost of each
   branch concretely enough that the two are distinguishable; "delete vs
   repair" without what each removes is a coin flip dressed as a choice.
+- **A backlog that stops shrinking** — the diagnostic is not "the
+  remaining items are hard", it is **"how many of them are blocked on a
+  decision nobody has been asked for?"** Count the G4 rows. If that count
+  is flat across runs while the runs report themselves as successful, 3d's
+  design-question budget is being spent on acceptance entries, or the
+  ranking is picking questions whose answers unblock nothing. Fix the
+  budget or the ranking; do not conclude the tail is irreducible.
+  (Runs 1-7, 2026-08-09 through 2026-08-14, are the worked example: every
+  run green, the auto band shrinking, and the G4 rows untouched because
+  the command had no step that asked.)
+- **A gate that starts appearing on most rows** — check whether it is
+  doing the job of G4 by another name. A gate that consistently means "a
+  human has to choose" must route to a 設計判断 entry, whatever it is
+  called; a gate that means "this environment cannot verify it" must not
+  suppress the question. That split, not the gate's name, is what decides
+  whether the item can ever be consumed.
 - **A class that keeps being wrong** — that is a signal about the *ladder*,
   and it is worth acting on. If items keep being merged as P3 and turning
   out to change behavior, sharpen P3's test with the case that fooled it
@@ -1119,9 +1286,13 @@ Keep the derive-never-enumerate property:
 ## Usage
 
 - `/audit-backlog` — classify everything, settle the auto band unattended,
-  build the judgment band into PRs, then ask the user once about all of
-  them — all of it as one chain that merges into `main` once. The intended
-  entry point.
+  build the judgment band into PRs, then ask the user once — about those
+  PRs **and** about the design decisions the gated rows are waiting on —
+  all of it as one chain that merges into `main` once. The intended entry
+  point.
+- `/audit-backlog design` — the design questions only: re-verify the G4
+  rows, rank them, and spend the whole 4-question budget on them. Use this
+  when the backlog has stopped shrinking and the remainder is all gated.
 - `/audit-backlog auto` — the auto band only. Its chain has nothing above
   it, so it merges into `main` immediately, and it asks nothing because
   the judgment band is empty by construction. The narrowest run.
