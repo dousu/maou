@@ -1,5 +1,5 @@
 ---
-description: Consume the deferred and out-of-scope findings that /audit-and-fix left behind. Gathers them from audits/coverage.md's backlog tables, re-verifies each against HEAD, then classifies each by DECISION COST on a mechanical six-class ladder — P1-P3 need no user judgment and are fixed, PR'd and merged without asking; P4-P6 need judgment and become PRs carrying that decision. The user is asked ONCE, on the PR — the run stops mid-session only when the answer decides what code to write. Every PR of a run is chained into one stack with exactly one merge into main, so siblings never conflict and the wheel builds once. Applies fixes on the normal route (version bump, regression test, reviews/ proposal for durable docs), deletes the resolved backlog rows, and records the run in audits/.
+description: Consume the deferred and out-of-scope findings that /audit-and-fix left behind. Gathers them from audits/coverage.md's backlog tables, re-verifies each against HEAD, then classifies each by DECISION COST on a mechanical six-class ladder — P1-P3 need no user judgment and are fixed, PR'd and merged without asking; P4-P6 need judgment, are built into unmerged PRs, and are then put to the user as ONE AskUserQuestion listing every outstanding decision with the PR that implements it — so what is being asked, and what is waiting, is never left to be reconstructed from diffs. An item is left unwritten before that question only when the branches produce materially different diffs. Every PR of a run is chained into one stack with exactly one merge into main, so siblings never conflict and the wheel builds once. Applies fixes on the normal route (version bump, regression test, reviews/ proposal for durable docs), deletes the resolved backlog rows, and records the run in audits/.
 argument-hint: [item-selector or class (P1..P6 / auto / judgment) | omit to take everything] [effort-level: low|medium|high|max, default medium]
 ---
 
@@ -14,10 +14,12 @@ owning-manifest version bump, regression test, `reviews/` proposal for
 durable docs, committed audit record.
 
 `$ARGUMENTS` is `[selector] [level]`, both optional:
-- **Omit the selector** to do the whole run: consume the auto band and
-  merge it (step 3b), then build the judgment band into PRs the user
-  decides on afterwards (step 3c). This is the intended way to open the
-  command, and it normally runs end to end without a question.
+- **Omit the selector** to do the whole run: consume the auto band
+  (step 3b), build the judgment band into unmerged PRs (step 3c), put every
+  one of those decisions to the user as a single `AskUserQuestion`
+  (step 3d), and act on the answers (step 3e). This is the intended way to
+  open the command. It asks exactly once, and only when the judgment band
+  is non-empty.
 - A selector may name a class (`P4`), a band (`auto`, `judgment`), item IDs
   from the listing (`P3-2,P4-1`), or a target path
   (`src/maou/interface`) to take everything aimed at it.
@@ -153,56 +155,104 @@ train and which validate.
 Severity has not stopped mattering; it has stopped being the *tier*. It is
 the sort key **inside** a class (step 3a).
 
-## Standing principle: the user checks the work once, on the PR
+## Standing principle: every judgment-band item is *asked*, once, with its PR in hand
 
-Classifying a finding as P4/P5/P6 says a human has to decide. It does
-**not** say a human has to decide *now*, in the session, before the code
-exists.
+Classifying a finding as P4/P5/P6 says a human has to decide. The run's job
+is to make that decision **legible and answerable** — not merely to leave
+it somewhere the user could find it.
 
-Those are different claims, and conflating them costs the user two reviews
-of the same finding: a question mid-session describing a fix that has not
-been written, and then the PR containing it. The first review is the
-weaker one — it is prose about a diff instead of the diff — and it blocks
-the run while it waits.
+An earlier version of this file said the PR *was* the question: write the
+fix, open it unmerged, put the alternatives in the body, and let the user
+answer by merging or closing. That under-delivered in practice, and the
+runs through 2026-08-14 are the evidence. A PR body explains itself to
+whoever already opened it, but nothing tells the user **what is being
+asked** or **what is waiting on them**. They are left to open each PR, read
+a diff, and reverse-engineer which of them contains a real fork and which
+is routine — which is exactly the reconstruction the ledger exists to
+remove.
 
-So the default is **PR-only**: write the fix, open the PR, put the decision
-in the body, and do not merge. The PR *is* the question. It carries the
-diff, the QA output, the compatibility statement, and the alternative, and
-the user answers it by merging, commenting, or closing — at whatever
-moment suits them, with the auto band already on `main` and out of the way.
+So the shape is both, in order:
 
-### When the run may stop and ask anyway
+1. **Build the fix and open its PR** (unmerged). The PR carries the diff,
+   the QA output, the compatibility statement, and the alternative. It is
+   the *evidence*.
+2. **Raise one `AskUserQuestion`** naming, per item, the choice and the PR
+   that implements it. It is the *interface*.
 
-The exception is narrow and it is about **what code to write**, not about
-how risky the change is:
+The question is what the user answers; the PR is what they consult when the
+one-line summary is not enough. Neither replaces the other — a question
+without a PR asks about prose instead of a diff, and a PR without a
+question leaves the user unsure whether anything is waiting at all.
 
-> Stop and ask only when the branches of the decision produce **materially
-> different diffs**, and implementing the wrong one wastes work the user
-> would have to review and discard.
+**The run does not end with an unasked judgment item.** If a judgment-band
+PR is open, either the question has been raised, or the run must say
+explicitly in its report that it could not raise one and why (see
+"When the question cannot be raised" below).
 
-Both halves must hold.
+### What the single question contains
+
+Ask **once per run**, batching every outstanding decision, raised *after*
+the auto band is settled and the judgment-band PRs are open. A second
+question in the same run means the first one was under-specified.
+
+Entries come in two kinds, and one question may hold both:
+
+- **受理を問うもの** — the fix is written and PR'd. The choice is whether to
+  take it. Give the option that merges it, and the alternative that was
+  rejected: "PR #N: `test_ratio or 0.1` を直す (`0.0` を渡していた実行は
+  結果が変わる) / 現状維持".
+- **向きを問うもの** — the fix is *not* written, because the branches
+  produce **materially different diffs** and implementing the wrong one
+  wastes work the user would have to review and discard. Give the branches
+  and what each costs.
+
+The second kind is the narrow case, and both halves of its test must hold:
 
 - D8/D9 — "delete `file_level_split`" and "repair it" share no lines: one
   removes a public name and its tests, the other rewrites the constructor.
-  Guessing wrong throws away the whole change. **Ask.**
+  Guessing wrong throws away the whole change. **Ask before writing.**
 - D1 — "add `moveWinRate` to the dtype" and "drop it right after
   conversion" are opposed designs of comparable size, each touching several
-  layers. **Ask.**
-- O4 — `test_ratio or 0.1` has exactly one repair; the judgment is whether
-  to accept that results change for anyone passing `0.0`. There is nothing
-  to write differently. **Do not ask — PR it.**
-- P5 and P6 items in general are *not* automatically asks. A dtype change
-  with one sensible form is a PR; two credible forms is a question.
+  layers. **Ask before writing.**
+- O4 — `test_ratio or 0.1` has exactly one repair; the judgment is only
+  whether to accept that results change for anyone passing `0.0`. There is
+  nothing to write differently. **Write it, PR it, then ask for
+  acceptance.**
+- N9 (2026-08-14) — "delete the `.npy` remnant scripts" vs "port them to
+  `.feather`". Re-verification showed the port was a rewrite against four
+  changed APIs, so the branches collapsed to one in substance; the
+  deletion was still written, PR'd, and **asked**, because whether the
+  user wants their own tooling gone is theirs to say.
+- P5 and P6 items are *not* automatically direction questions. A dtype
+  change with one sensible form is written and asked for acceptance; two
+  credible forms is asked before writing.
 
-When the second half fails on its own — the branches differ but the diff is
-small and cheap to redo — implement the one you would recommend, and put
-the alternative in the PR body under the heading the user will answer. A
-30-line diff the user rejects costs less than the round-trip that avoided
-it.
+When the branches differ but the diff is small and cheap to redo,
+implement the one you would recommend and make it an acceptance question
+with the alternative named. A 30-line diff the user rejects costs less
+than a round-trip spent describing it.
 
-When you do ask, ask **once**, batching every outstanding fork into a
-single `AskUserQuestion`, after the auto band has merged. A second question
-in the same run means the first one was under-specified.
+### Phrase each entry as the decision, not as permission
+
+Each entry carries **the decision itself**: what the branches are, what
+each costs, and — for P5/P6 — the concrete compatibility break. Put the
+option you would recommend first and say so.
+
+> "`file_level_split` を削除するか修理するか？ 削除は公開名とテストが
+> 消える．修理は構築時の全ロードを直すことになる" — これは質問である．
+>
+> "D8 に着手してよいですか？" — これは質問ではない．
+
+Name the PR number in the entry whenever one exists, so the user can go
+from the question to the diff in one step.
+
+### When the question cannot be raised
+
+`AskUserQuestion` may be unavailable, or the run may be executing
+unattended. That does not license silence: leave the PRs open, and make
+the report state — in its own words, not by linking — **which items are
+waiting and what each is waiting on**. The next run picks them up through
+step 1e, and the question is raised then.
 
 ## Standing principle: the run narrates itself in the conversation
 
@@ -212,11 +262,15 @@ of them tell the user *what the run is doing* or *which of its outputs
 needs them*. That job belongs to the conversation, and it cannot be
 delegated to a link.
 
-Two moments carry the whole weight:
+Three moments carry the whole weight:
 
 - **Before any file is touched** (3a): the classification table, plus a
   plain list of what this session will work and what it will leave. A
   reader must be able to see the run's scope without opening anything.
+- **When the judgment band is ready** (3d): the single `AskUserQuestion`.
+  This is the moment the run tells the user, in as many words, that a
+  decision is theirs and what it is. Nothing else in the run does that
+  job — a PR left open is a state, not a question.
 - **When PRs are opened** (5f): a table mapping each backlog row to the PR
   and commit that answers it. A PR number on its own forces the user to
   read a diff just to learn which finding it belongs to — which is
@@ -262,8 +316,13 @@ manual pass over every diff.
   the two cannot merge apart. A row is kept only when its fix could land
   — or fail to land — independently of the deletion, which in practice
   means a judgment-band PR stacked above the `audits/` PR (step 6a).
-- **Ask at most once per run, and only under the test above.** A judgment
-  class is a reason to open a PR unmerged, not a reason to interrupt.
+- **Ask exactly once per run, and cover every judgment-band item** (step
+  3d). Once, because a second question means the first was
+  under-specified; every item, because an open PR is a state and not a
+  question — leaving one out is what forces the user to reconstruct the
+  decision from diffs. The only run that asks nothing is one whose
+  judgment band is empty, or one that could not raise the question at all
+  (say which, in the report).
 - **Every PR of the run is chained into one stack** (step 5b), and
   **exactly one of them targets `main`**. There is no "independent, based
   on `main`" case: the version bump and `uv.lock` make siblings conflict by
@@ -365,7 +424,7 @@ Do not classify an unverified item, and do not present one as actionable.
 Verification is cheap relative to writing the wrong fix — and far cheaper
 than merging one unattended.
 
-### 3. Classify, then run the auto band before asking anything
+### 3. Classify, run the auto band, build the judgment band, then ask once
 
 **3a. Assign every confirmed item a class and its gates.** Apply the ladder
 top-down (P6 → P1), then the four gates. Record, per item: ID (`P3-1`),
@@ -410,8 +469,9 @@ has already been triaged once.
 
 Do not begin step 3b until both blocks are on screen.
 
-**3b. Consume the auto band (P1 → P2 → P3) without asking.** No
-`AskUserQuestion`, no pause. Work the classes in ascending order — P1 is
+**3b. Consume the auto band (P1 → P2 → P3) without asking.** The auto band
+never appears in 3d's question — that is what the classification bought.
+No pause here. Work the classes in ascending order — P1 is
 both the cheapest and the least able to break anything, so a failure there
 surfaces before the run has spent effort on P3.
 
@@ -424,13 +484,14 @@ becomes a PR whose body names the gate as the reason it is unresolved.
 If the auto band is empty, say so in one line and go straight to 3c.
 
 **3c. Build the judgment band (P4/P5/P6 + everything gated) into PRs.**
-Per the one-check principle, this is normally *work*, not a question. For
-each item:
+Every item here ends up in step 3d's question; what 3c decides is whether
+it arrives there **with a diff attached**. For each item:
 
-1. Apply the split test from that principle — do the branches produce
-   materially different diffs, *and* would guessing wrong waste work worth
-   reviewing? If both hold, the item goes on the ask list. Otherwise it
-   gets the fix you would recommend.
+1. Apply the split test from the standing principle — do the branches
+   produce materially different diffs, *and* would guessing wrong waste
+   work worth reviewing? If both hold, the item becomes a **向き** entry
+   and is left unwritten. Otherwise it gets the fix you would recommend
+   and becomes a **受理** entry.
 2. Fix it on the normal route (step 4), including the regression test and
    the version bump. A judgment-band item is not a draft: the PR has to be
    mergeable the moment the user says yes.
@@ -444,20 +505,33 @@ lines stop working, what the user has to regenerate. That sentence is the
 entire reason the item is not in the auto band; a PR that omits it has
 turned the decision back into a rubber stamp.
 
-**The ask list, if it is non-empty, is one `AskUserQuestion`** — raised
-after the auto band has merged, so the user answers with the safe work
-already out of the way. Each entry carries **the decision itself**, not a
-request for permission: what the branches are and what each costs.
-"Delete `file_level_split` or repair it? Deleting removes its tests and a
-public name; repairing means fixing the全ロード it forces at construction"
-is a question. "May I work on D8?" is not.
+**3d. Ask — one `AskUserQuestion` covering every judgment-band item.**
+Raised after the auto band is settled and the 3c PRs are open, so the user
+answers with the safe work already out of the way and the diffs available
+to consult.
 
-Answers received here are implemented in the same run and shipped as PRs
-under 5d — the answer decides the diff, it does not authorize the merge.
-The merge decision still belongs to the PR.
+Include **every** judgment-band item, not only the forks: an item whose
+fix is written and PR'd still needs the user to accept it, and leaving it
+out of the question is what made previous runs opaque. Shape each entry
+per the standing principle — the decision, its cost, the recommended
+option first, and the PR number when one exists.
+
+Skip the question only when the judgment band is empty. Say so in one
+line if it is.
+
+**3e. Act on the answers in the same run.**
+
+- A **向き** answer decides the diff: implement it on the normal route
+  (step 4), open its PR, and treat it as accepted for merge — the user
+  chose the branch knowing what it costs, so do not ask a second time.
+- A **受理** answer decides the merge: merge under 5d's conditions,
+  folding the ledger update into the same PR **before** merging (6a).
+- A rejection closes that PR; re-base anything stacked above it (5b) and
+  record the rejection in step 6c's Re-triaged section with the user's
+  stated reason.
 
 If a selector was given in `$ARGUMENTS`, honor it: confirm the resolved
-item set in one line and skip the parts of 3b/3c it excludes.
+item set in one line and skip the parts of 3b/3c/3d it excludes.
 
 ### 4. Fix, on the normal route
 
@@ -470,12 +544,13 @@ even mid-fix, after classification. An auto-band item that hits G2 leaves
 the auto band; it does not get a quiet waiver because the run had already
 started.
 
-Two legitimate resolutions, chosen by the same one-check test as any other
+Two legitimate resolutions, chosen by the same split test as any other
 judgment: **pull the neighbour in** and PR the widened fix unmerged, with
-the coupling stated at the top of the body — or **re-triage** the item as
-still-open with the coupling recorded, when the neighbour is large enough
-that guessing wrong wastes the work. Silently widening is not one of them,
-and neither is widening quietly *and* auto-merging it.
+the coupling stated at the top of the body and the widening put to the
+user as a 3d entry — or **re-triage** the item as still-open with the
+coupling recorded, when the neighbour is large enough that guessing wrong
+wastes the work. Silently widening is not one of them, and neither is
+widening quietly *and* auto-merging it.
 
 **4b. Apply source fixes.** Same triage as `/audit-and-fix` step 1: contained
 and unambiguous → apply. Check the `infra → interface → app → domain` rule
@@ -731,24 +806,27 @@ Child-into-parent merges inside the stack are not subject to the wait: they
 target a branch, land no code on `main`, and are how an accepted item flows
 down toward the single merge.
 
-**5e. Judgment-band PRs stay open. That is the deliverable, not a
-shortfall.** They hold the fix, the QA, the reasoning, and the decision, and
-the user answers them by merging, commenting, or closing — once, on their
-own schedule. Do not chase them with a mid-session question about whether
-to merge; the one-check principle exists precisely to avoid asking the same
-thing twice.
+**5e. Judgment-band PRs stay open until 3d's question is answered.** They
+hold the fix, the QA, and the reasoning; the question (3d) is what tells
+the user a decision is theirs. Opening the PR without asking is the
+failure this step used to permit — do not repeat it.
 
-If the user *does* answer in this session, apply what they decided, re-run
-the QA, and merge under 5d's conditions — folding the ledger update into
-the same PR **before** merging it, never into a follow-up (6a). If they do
-not, the PR **is** the handoff, and whether its row stays put is 6a's
-separability test: kept when the PR can merge apart from the ledger,
-deleted with the fix when it cannot.
+The normal path is that the user answers **in this session**, because 3d
+raised the question here: apply what they decided (3e), re-run the QA, and
+merge under 5d's conditions — folding the ledger update into the same PR
+**before** merging it, never into a follow-up (6a).
+
+When no answer arrives — the question could not be raised, or the session
+ends first — the PR **is** the handoff, and whether its row stays put is
+6a's separability test: kept when the PR can merge apart from the ledger,
+deleted with the fix when it cannot. Say plainly in the report which items
+are in that state and what each is waiting on; step 1e of the next run
+picks them up and raises the question then.
 
 **5f. Hand the PRs over as a row → PR table in the conversation.** The
-second moment in the standing principle above. The moment a judgment-band
-PR is opened, print — in chat, not only in the PR body — one row per
-finding:
+third moment in the standing principle above, and the one that gives 3d's
+question its context. The moment a judgment-band PR is opened, print — in
+chat, not only in the PR body — one row per finding:
 
 | backlog 行 | 由来の記録 | クラス | PR | commit | 何を出荷したか |
 |---|---|---|---|---|---|
@@ -853,12 +931,18 @@ rather than a path audit. Body:
 - **Consumed** — one row per item: source record, target, what shipped, and
   the PR it merged in.
 - **Applied** — the fixes, with `file:line` and commit SHA.
+- **Decisions asked** — 3d's question, verbatim enough to be re-read: each
+  entry, the options offered, and what the user chose. When the run could
+  not raise the question, say so here and why. This is the section that
+  makes a judgment-band outcome auditable — "the user approved it" is not
+  a record; the options they were shown are.
 - **In flight** — judgment-band PRs left open, with their PR number, their
   base (`main`, or the PR they are stacked on and why), and the question
   outstanding. Say for each whether its row was deleted here (the PR
   carries both) or kept (the PR can merge apart from the ledger) — that is
   6a's test, and this section is what step 1e of the next run reads to
-  pick the work back up.
+  pick the work back up. A run whose question was answered in-session
+  normally leaves this section empty; say "なし" rather than omitting it.
 - **Re-triaged** — items selected but left open, with the sharpened reason.
   This is the section that earns the run its keep: a second impasse on the
   same item is far more informative than the first.
@@ -936,11 +1020,12 @@ Compact summary:
   already adjacent to it. The report is what a user re-reads days later to
   remember what a PR was for; a PR number without its backlog row forces
   them back into the diff
-- **Whether the run asked anything, and why.** If an `AskUserQuestion` was
-  raised, name the fork that justified it under the one-check test. If not,
-  say so — "asked nothing; N PRs carry their decisions" is the expected
-  outcome, and stating it is what makes an unnecessary question visible
-  next time
+- **The question and its answers (3d)** — what was asked, per entry, and
+  what the user chose. A run with a non-empty judgment band that reports no
+  question has skipped a required step: say which of the two exemptions
+  applies (empty judgment band, or the question could not be raised) and
+  why. Never report an open judgment-band PR as if leaving it open were
+  itself the ask
 - Re-triaged / rejected, with the reason
 - Doc drift → `reviews/<file>`, its status, and which P2 branch applied
 - QA: what ran, what passed, what was blocked and why
@@ -962,14 +1047,19 @@ The committed record is what carries this run forward. Do not mirror it into
 `worklog/` or `scratchpad/compass.md` — per CLAUDE.md, `audits/` and the
 campaign memory are deliberately separate systems.
 
-Open judgment-band PRs are the other half of the handoff, and they are
-designed to be one: each holds a finished fix, its QA, and the decision it
-needs, so the user can answer whenever they get to it and a later session
-can pick it up cold. Leave them listed in the report with their stack map;
-step 1e of the next run reads them back from `list_pull_requests` plus the
-still-present backlog rows.
+A judgment-band PR that the user answered in-session (3d → 3e) is not a
+handoff at all — it merged, or it was closed, and step 6 recorded which.
 
-Do not end a run by asking whether to merge them. The PR already asks.
+A judgment-band PR left **open** is a handoff, and only arises when 3d's
+question went unanswered or could not be raised. Each holds a finished
+fix, its QA, and the decision it needs, so a later session can pick it up
+cold. Leave them listed in the report with their stack map and **what each
+is waiting on**; step 1e of the next run reads them back from
+`list_pull_requests` plus the still-present backlog rows, and raises the
+question that this run could not.
+
+Do not end a run by re-asking a decision the user already made in it —
+3d asks once, and 3e acts on the answer.
 
 ## Extending this command
 
@@ -1009,6 +1099,17 @@ Keep the derive-never-enumerate property:
   makes siblings off `main` conflict pairwise, so keep the chain.
 - **A class that keeps coming up empty** — that is a signal about the repo,
   not about the rubric. Leave the class; report the emptiness.
+- **A run where the question feels like a formality** — every entry an
+  obvious yes — that is not a reason to skip 3d. The user cannot know an
+  answer was obvious until they have been shown the options, and the
+  judgment classes exist precisely because the run is not entitled to
+  decide. If a *class* keeps producing formalities, that is evidence its
+  test is drawn too high: sharpen the ladder (below), do not quietly stop
+  asking.
+- **A question that keeps getting answered "whichever you recommend"** —
+  the entries are under-specified, not unnecessary. Give the cost of each
+  branch concretely enough that the two are distinguishable; "delete vs
+  repair" without what each removes is a coin flip dressed as a choice.
 - **A class that keeps being wrong** — that is a signal about the *ladder*,
   and it is worth acting on. If items keep being merged as P3 and turning
   out to change behavior, sharpen P3's test with the case that fooled it
@@ -1018,14 +1119,15 @@ Keep the derive-never-enumerate property:
 ## Usage
 
 - `/audit-backlog` — classify everything, settle the auto band unattended,
-  and leave the judgment band as PRs to decide on — all of it as one chain
-  that merges into `main` once. Asks nothing unless a fork in the road
-  demands it. The intended entry point.
+  build the judgment band into PRs, then ask the user once about all of
+  them — all of it as one chain that merges into `main` once. The intended
+  entry point.
 - `/audit-backlog auto` — the auto band only. Its chain has nothing above
-  it, so it merges into `main` immediately. The narrowest run.
+  it, so it merges into `main` immediately, and it asks nothing because
+  the judgment band is empty by construction. The narrowest run.
 - `/audit-backlog judgment` — the judgment band only, when the auto band
-  is already clear.
-- `/audit-backlog P4` — the P4 items: fix them and open their PR.
+  is already clear. Always ends in the question.
+- `/audit-backlog P4` — the P4 items: fix them, open their PR, and ask.
 - `/audit-backlog P3-1,P4-3 high` — two specific items, broader
   verification.
 - `/audit-backlog src/maou/interface` — everything targeting that path,
