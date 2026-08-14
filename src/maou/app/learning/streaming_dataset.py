@@ -682,61 +682,35 @@ class StreamingStage2Dataset(IterableDataset):
         )
 
 
-class Stage2StreamingAdapter(IterableDataset):
-    """StreamingStage2Dataset を TrainingLoop の入力形式に変換するアダプタ．
+class StageStreamingAdapter(IterableDataset):
+    """Stage1/Stage2 ストリーミングを TrainingLoop の入力形式に変換する．
 
-    StreamingStage2Dataset は ``((board, hand), legal_moves)`` を yield するが，
-    TrainingLoop._unpack_batch() は
+    ``StreamingStage1Dataset`` は ``((board, hand), reachable_squares)``，
+    ``StreamingStage2Dataset`` は ``((board, hand), legal_moves)`` を
+    yield するが，TrainingLoop._unpack_batch() は
     ``((board, hand), (labels_policy, labels_value, move_win_rate))``
     を期待する．このアダプタがダミーの value ラベルと None の
-    move_win_rate を挿入する．
+    move_win_rate を挿入する．変換は両者で同一なので 1 クラスが担う．
+
+    ``Stage1StreamingAdapter`` / ``Stage2StreamingAdapter`` は本クラスの
+    別名で，互換のために残してある．
+
+    Args:
+        dataset: ラップする StreamingStage1Dataset または
+            StreamingStage2Dataset
     """
 
-    def __init__(self, dataset: StreamingStage2Dataset) -> None:
-        self._dataset = dataset
-
-    def __iter__(
+    def __init__(
         self,
-    ) -> Iterator[
-        tuple[
-            tuple[torch.Tensor, torch.Tensor],
-            tuple[torch.Tensor, torch.Tensor, None],
-        ]
-    ]:
-        for inputs, targets in self._dataset:
-            dummy_value = torch.zeros(
-                targets.shape[0], 1, dtype=torch.float32
-            )
-            yield (inputs, (targets, dummy_value, None))
+        dataset: StreamingStage1Dataset
+        | StreamingStage2Dataset,
+    ) -> None:
+        self._dataset = dataset
 
     def __len__(self) -> int:
         """tqdm 用のバッチ数推定を委譲する."""
         return len(self._dataset)
 
-    def set_epoch(self, epoch: int) -> None:
-        """エポックごとのシャッフルシードを委譲する."""
-        self._dataset.set_epoch(epoch)
-
-
-class Stage1StreamingAdapter(IterableDataset):
-    """StreamingStage1Dataset を TrainingLoop の入力形式に変換するアダプタ．
-
-    StreamingStage1Dataset は ((board, hand), reachable_squares) を yield するが，
-    TrainingLoop._unpack_batch() は
-    ((board, hand), (labels_policy, labels_value, move_win_rate))
-    を期待する．
-
-    Args:
-        dataset: ラップする StreamingStage1Dataset
-    """
-
-    def __init__(self, dataset: StreamingStage1Dataset) -> None:
-        self._dataset = dataset
-
-    def __len__(self) -> int:
-        """tqdm 用のバッチ数推定を委譲する．"""
-        return len(self._dataset)
-
     def __iter__(
         self,
     ) -> Iterator[
@@ -752,9 +726,21 @@ class Stage1StreamingAdapter(IterableDataset):
             yield (inputs, (targets, dummy_value, None))
 
     def set_epoch(self, epoch: int) -> None:
-        """エポックシードの委譲．"""
+        """エポックごとのシャッフルシードを委譲する.
+
+        ``set_epoch`` を持たない dataset を包んだ場合は何もしない．
+        統合前は Stage 1 側だけがこのガードを持ち，Stage 2 側は無防備に
+        呼んでいた — 安全側 (ガードを付ける側) で揃えてある．
+        """
         if hasattr(self._dataset, "set_epoch"):
             self._dataset.set_epoch(epoch)
+
+
+Stage1StreamingAdapter = StageStreamingAdapter
+"""``StageStreamingAdapter`` の別名 (Stage 1 用)．"""
+
+Stage2StreamingAdapter = StageStreamingAdapter
+"""``StageStreamingAdapter`` の別名 (Stage 2 用)．"""
 
 
 # ============================================================================

@@ -22,7 +22,7 @@ from maou.app.learning.callbacks import (
 from maou.app.learning.compilation import compile_module
 from maou.app.learning.dl import LearningDataSource
 from maou.app.learning.multi_stage_training import (
-    Stage2ModelAdapter,
+    StageModelAdapter,
 )
 from maou.app.learning.network import (
     BackboneArchitecture,
@@ -45,7 +45,7 @@ from maou.app.learning.stage_component_factory import (
     StageComponentFactory,
 )
 from maou.app.learning.streaming_dataset import (
-    Stage2StreamingAdapter,
+    StageStreamingAdapter,
     StreamingDataSource,
     StreamingKifDataset,
     StreamingStage2Dataset,
@@ -1108,7 +1108,7 @@ class TrainingBenchmarkUseCase:
             else None,
             dropout=config.stage2_head_dropout,
         )
-        model: torch.nn.Module = Stage2ModelAdapter(
+        model: torch.nn.Module = StageModelAdapter(
             backbone, legal_moves_head
         )
         model.to(device)
@@ -1151,7 +1151,7 @@ class TrainingBenchmarkUseCase:
                 if config.stage2_batch_size is not None
                 else config.batch_size
             )
-            val_dataset_raw: torch.utils.data.IterableDataset = Stage2StreamingAdapter(
+            val_dataset_raw: torch.utils.data.IterableDataset = StageStreamingAdapter(
                 StreamingStage2Dataset(
                     streaming_source=config.stage2_streaming_val_source,
                     batch_size=val_batch_size,

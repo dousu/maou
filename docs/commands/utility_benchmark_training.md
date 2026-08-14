@@ -31,7 +31,7 @@
 | `--stage12-lr-scheduler CHOICE` | optional | Stage 1/2 ベンチマークの LR スケジューラ．選択肢は `learn.SUPPORTED_LR_SCHEDULERS` から導出され，正準キー (`warmup_cosine_decay`, `cosine_annealing_lr`) と表示名 (`Warmup+CosineDecay`, `CosineAnnealingLR`) の両方を受理する．未指定なら `--lr-scheduler` を継承． |
 | `--stage12-compilation/--no-stage12-compilation` | optional (default off) | Enable/disable `torch.compile` for Stage 1/2 benchmarks independently from `--compilation` (which applies to Stage 3). |
 | `--input-dataset-id` + `--input-table-name` | pair | Pulls from BigQuery with the same batching, cache sizing, clustering, and partition controls as `learn-model`. Missing GCP extras cause a hard error.【F:src/maou/infra/console/utility.py†L824-L868】 |
-| `--input-gcs` / `--input-s3` + bucket metadata (`--input-bucket-name`, `--input-prefix`, `--input-data-name`, `--input-local-cache-dir`) | provider-specific | Downloads tensors via `GCSDataSource`/`S3DataSource` splitters. Supports worker counts and optional sampling ratios; requires the respective optional extras. `--input-enable-bundling` / `--input-bundle-size-gb` are accepted but currently have **no effect** (see `pre_process.md`).【F:src/maou/infra/console/utility.py†L869-L951】【F:src/maou/infra/object_storage/data_source.py†L192-L320】 |
+| `--input-gcs` / `--input-s3` + bucket metadata (`--input-bucket-name`, `--input-prefix`, `--input-data-name`, `--input-local-cache-dir`) | provider-specific | Downloads tensors via `GCSDataSource`/`S3DataSource` splitters. Supports worker counts and optional sampling ratios; requires the respective optional extras. There is no bundling option; each `.feather` object is downloaded individually (see `pre_process.md`).【F:src/maou/infra/console/utility.py†L869-L951】【F:src/maou/infra/object_storage/data_source.py†L192-L320】 |
 | BigQuery cache knobs (`--input-batch-size`, `--input-max-cached-bytes`, `--input-clustering-key`, `--input-partitioning-key-date`, `--input-local-cache-dir`) | optional | Forwarded untouched to mimic production ingestion behavior while benchmarking.【F:src/maou/infra/console/utility.py†L824-L848】 |
 
 Only one datasource may be active at a time; the CLI raises when multiple cloud
@@ -73,9 +73,9 @@ inputs are requested.【F:src/maou/infra/console/utility.py†L520-L803】
 ## Execution flow
 
 1. **Data setup** – The CLI routes to stage-specific setup based on `--stage`:
-   Stage 1 creates `Stage1ModelAdapter` + `ReachableSquaresLoss` (map-style only);
-   Stage 2 creates `Stage2ModelAdapter` + `LegalMovesLoss` (map-style or streaming
-   via `Stage2StreamingAdapter`); Stage 3 uses the existing full-model path. In
+   Stage 1 creates `StageModelAdapter` + `ReachableSquaresLoss` (map-style only);
+   Stage 2 creates `StageModelAdapter` + `LegalMovesLoss` (map-style or streaming
+   via `StageStreamingAdapter`); Stage 3 uses the existing full-model path. In
    streaming mode, files are split at the file level; in map-style mode,
    `datasource.train_test_split(test_ratio)` is used for sample-level splitting.
 2. **Training setup** – In streaming mode,

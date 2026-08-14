@@ -276,10 +276,17 @@ class TestCreateStage2DataPipeline:
 class TestCreateStage1Components:
     """Stage 1 全コンポーネントの生成テスト．"""
 
-    def test_model_type(self) -> None:
-        """modelがStage1ModelAdapterである．"""
-        from maou.app.learning.multi_stage_training import (
-            Stage1ModelAdapter,
+    def test_model_wraps_the_stage1_head(self) -> None:
+        """model が Stage 1 の head をラップし (policy, value) を返す．
+
+        統合前は ``isinstance(model, Stage1ModelAdapter)`` を見ていたが，
+        Stage1/Stage2 のアダプタが 1 クラスに統合され両名が別名になった
+        ため，型アサーションは Stage 2 のアダプタに対しても通ってしまい
+        識別力を失う．そこで **どの head を掴んでいるか**と
+        **何を返すか**という挙動で固定する．
+        """
+        from maou.app.learning.network import (
+            ReachableSquaresHead,
         )
 
         splitter = _make_stage1_splitter()
@@ -294,7 +301,15 @@ class TestCreateStage1Components:
             )
         )
         assert isinstance(components, StageComponents)
-        assert isinstance(components.model, Stage1ModelAdapter)
+        assert isinstance(
+            components.model.head, ReachableSquaresHead
+        )
+        board = torch.randint(0, 32, (2, 9, 9))
+        hand = torch.randn(2, 14)
+        policy, value = components.model((board, hand))
+        assert policy.shape[0] == 2
+        assert value.shape == (2, 1)
+        torch.testing.assert_close(value, torch.zeros(2, 1))
 
     def test_model_on_device(self) -> None:
         """モデルが指定デバイスに配置される．"""
@@ -377,11 +392,12 @@ class TestCreateStage1Components:
 class TestCreateStage2Components:
     """Stage 2 全コンポーネントの生成テスト．"""
 
-    def test_model_type(self) -> None:
-        """modelがStage2ModelAdapterである．"""
-        from maou.app.learning.multi_stage_training import (
-            Stage2ModelAdapter,
-        )
+    def test_model_wraps_the_stage2_head(self) -> None:
+        """model が Stage 2 の head をラップし (policy, value) を返す．
+
+        Stage 1 側の同名テストと同じ理由で，型ではなく挙動で固定する．
+        """
+        from maou.app.learning.network import LegalMovesHead
 
         splitter = _make_stage2_splitter()
         backbone = _make_backbone()
@@ -395,7 +411,13 @@ class TestCreateStage2Components:
             )
         )
         assert isinstance(components, StageComponents)
-        assert isinstance(components.model, Stage2ModelAdapter)
+        assert isinstance(components.model.head, LegalMovesHead)
+        board = torch.randint(0, 32, (2, 9, 9))
+        hand = torch.randn(2, 14)
+        policy, value = components.model((board, hand))
+        assert policy.shape[0] == 2
+        assert value.shape == (2, 1)
+        torch.testing.assert_close(value, torch.zeros(2, 1))
 
     def test_head_params(self) -> None:
         """head_hidden_dim, head_dropoutが伝搬される．"""

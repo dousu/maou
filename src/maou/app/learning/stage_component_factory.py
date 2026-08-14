@@ -18,8 +18,7 @@ from maou.app.learning.dataset import (
     Stage2Dataset,
 )
 from maou.app.learning.multi_stage_training import (
-    Stage1DatasetAdapter,
-    Stage2DatasetAdapter,
+    StageDatasetAdapter,
     pre_stage_collate_fn,
 )
 from maou.app.learning.setup import (
@@ -100,7 +99,7 @@ class StageComponentFactory:
             test_ratio=0.0
         )
         raw_dataset = Stage1Dataset(datasource=train_ds)
-        dataset = Stage1DatasetAdapter(raw_dataset)
+        dataset = StageDatasetAdapter(raw_dataset)
 
         dl_kwargs: dict = {
             "batch_size": batch_size,
@@ -138,7 +137,7 @@ class StageComponentFactory:
             Stage1 のストリーミングデータパイプライン．
         """
         from maou.app.learning.streaming_dataset import (
-            Stage1StreamingAdapter,
+            StageStreamingAdapter,
             StreamingStage1Dataset,
         )
 
@@ -147,7 +146,7 @@ class StageComponentFactory:
             batch_size=batch_size,
             shuffle=True,
         )
-        dataset = Stage1StreamingAdapter(raw_dataset)
+        dataset = StageStreamingAdapter(raw_dataset)
         dataloader = DataLoader(
             dataset,
             batch_size=None,
@@ -198,7 +197,7 @@ class StageComponentFactory:
         )
 
         raw_train = Stage2Dataset(datasource=train_ds)
-        train_dataset = Stage2DatasetAdapter(raw_train)
+        train_dataset = StageDatasetAdapter(raw_train)
         dl_kwargs: dict = {
             "batch_size": batch_size,
             "shuffle": True,
@@ -215,7 +214,7 @@ class StageComponentFactory:
         val_dataloader: DataLoader | None = None
         if test_ratio > 0.0 and val_ds is not None:
             raw_val = Stage2Dataset(datasource=val_ds)
-            val_dataset = Stage2DatasetAdapter(raw_val)
+            val_dataset = StageDatasetAdapter(raw_val)
             val_dl_kwargs: dict = {
                 "batch_size": batch_size,
                 "shuffle": False,
@@ -282,7 +281,7 @@ class StageComponentFactory:
         from torch.utils.data import IterableDataset
 
         from maou.app.learning.streaming_dataset import (
-            Stage2StreamingAdapter,
+            StageStreamingAdapter,
             StreamingStage2Dataset,
         )
 
@@ -291,7 +290,7 @@ class StageComponentFactory:
             batch_size=batch_size,
             shuffle=True,
         )
-        dataset = Stage2StreamingAdapter(raw_dataset)
+        dataset = StageStreamingAdapter(raw_dataset)
 
         _EmptyDataset = type(
             "_EmptyDataset",
@@ -865,21 +864,13 @@ class StageComponentFactory:
             )
         else:
             from maou.app.learning.multi_stage_training import (
-                Stage1ModelAdapter,
-                Stage2ModelAdapter,
-            )
-            from maou.app.learning.network import (
-                LegalMovesHead,
-                ReachableSquaresHead,
+                StageModelAdapter,
             )
 
-            if isinstance(head, ReachableSquaresHead):
-                model = Stage1ModelAdapter(backbone, head)
-            elif isinstance(head, LegalMovesHead):
-                model = Stage2ModelAdapter(backbone, head)
-            else:
-                msg = f"Unsupported head type: {type(head).__name__}"
-                raise TypeError(msg)
+            # Stage 1 / Stage 2 のアダプタは統合済みなので head の型で
+            # 選び分ける必要はない．呼び出し元はいずれも直前に head を
+            # 自分で構築しており，第 3 の head 型がここへ届く経路は無い．
+            model = StageModelAdapter(backbone, head)
         model.to(device)
 
         if compilation:
