@@ -18,6 +18,79 @@ from maou.infra.console.common import (
 )
 from maou.interface import preprocess
 
+_NO_INPUT_SOURCE_MSG = (
+    "Please specify an input source "
+    "(file path, BigQuery table, GCS bucket, or S3 bucket)."
+)
+
+
+def describe_missing_input_options(
+    *,
+    input_dataset_id: str | None,
+    input_table_name: str | None,
+    input_gcs: bool | None,
+    input_s3: bool | None,
+    input_bucket_name: str | None,
+    input_prefix: str | None,
+    input_data_name: str | None,
+    input_local_cache_dir: str | None,
+) -> str:
+    """Explain why no input datasource could be built.
+
+    Every input branch needs its own set of companion options,
+    so a cloud input that is missing one of them falls through
+    to the same place as an invocation with no input at all.
+    Reporting "please specify an input source" in that case
+    points at the wrong option; this names the ones that are
+    actually missing.
+
+    Args:
+        input_dataset_id: ``--input-dataset-id`` value.
+        input_table_name: ``--input-table-name`` value.
+        input_gcs: ``--input-gcs`` flag.
+        input_s3: ``--input-s3`` flag.
+        input_bucket_name: ``--input-bucket-name`` value.
+        input_prefix: ``--input-prefix`` value.
+        input_data_name: ``--input-data-name`` value.
+        input_local_cache_dir: ``--input-local-cache-dir`` value.
+
+    Returns:
+        The error message to log and raise.
+    """
+    if input_gcs or input_s3:
+        source = "--input-gcs" if input_gcs else "--input-s3"
+        required = {
+            "--input-bucket-name": input_bucket_name,
+            "--input-prefix": input_prefix,
+            "--input-data-name": input_data_name,
+            "--input-local-cache-dir": input_local_cache_dir,
+        }
+    elif (
+        input_dataset_id is not None
+        or input_table_name is not None
+    ):
+        source = "BigQuery input"
+        required = {
+            "--input-dataset-id": input_dataset_id,
+            "--input-table-name": input_table_name,
+        }
+    else:
+        return _NO_INPUT_SOURCE_MSG
+
+    missing = [
+        option
+        for option, value in required.items()
+        if value is None
+    ]
+    if not missing:
+        # 呼び出し側の分岐条件と required が食い違ったときだけ
+        # ここに来る．原因を隠すより元の文言で落とす方がよい．
+        return _NO_INPUT_SOURCE_MSG
+    return (
+        f"{source} was specified but these required options "
+        f"are missing: {', '.join(missing)}."
+    )
+
 
 @click.command("pre-process")
 @click.option(
@@ -495,9 +568,15 @@ def pre_process(
             file_paths=input_paths,
         )
     else:
-        error_msg = (
-            "Please specify an input source "
-            "(file path, BigQuery table, GCS bucket, or S3 bucket)."
+        error_msg = describe_missing_input_options(
+            input_dataset_id=input_dataset_id,
+            input_table_name=input_table_name,
+            input_gcs=input_gcs,
+            input_s3=input_s3,
+            input_bucket_name=input_bucket_name,
+            input_prefix=input_prefix,
+            input_data_name=input_data_name,
+            input_local_cache_dir=input_local_cache_dir,
         )
         app_logger.error(error_msg)
         raise ValueError(error_msg)
