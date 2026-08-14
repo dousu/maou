@@ -13,6 +13,17 @@ from collections.abc import Generator
 
 import pytest
 
+# Test modules dropped at collection time because an optional
+# dependency was missing, keyed by dependency name.
+#
+# A collect-phase skip removes the module *and every test in it*
+# from the run.  pytest's tail only reports it as a single skip,
+# so "57 passed, 3 skipped" looks green while hundreds of tests
+# never ran.  ``pytest_terminal_summary`` below states it outright
+# so a QA run that could not exercise the changed code cannot be
+# mistaken for one that did.
+_UNCOLLECTED_BY_DEP: dict[str, set[str]] = {}
+
 # Optional dependencies that may not be installed in base environments.
 # Only errors traceable to these modules are converted to skips;
 # all other errors still fail loudly.
@@ -105,6 +116,9 @@ def pytest_make_collect_report(
         0,
         f"Skipped: optional dependency '{dep}' is not installed",
     )
+    _UNCOLLECTED_BY_DEP.setdefault(dep, set()).add(
+        str(collector.path)
+    )
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -141,3 +155,50 @@ def pytest_runtest_makereport(
         item.reportinfo()[1] or 0,
         f"Skipped: optional dependency '{dep}' is not installed",
     )
+
+
+def format_uncollected_summary(
+    uncollected: dict[str, set[str]],
+) -> list[str]:
+    """Build the terminal-summary lines for uncollected modules.
+
+    Args:
+        uncollected: Module paths that were dropped at collection
+            time, keyed by the missing dependency name.
+
+    Returns:
+        Lines to print, or an empty list when nothing was dropped.
+    """
+    if not uncollected:
+        return []
+    lines = [
+        "These test modules were NOT collected, so the counts "
+        "above do not cover them:",
+    ]
+    for dep in sorted(uncollected):
+        paths = sorted(uncollected[dep])
+        lines.append(
+            f"  optional dependency '{dep}' is not installed "
+            f"-> {len(paths)} module(s) skipped entirely"
+        )
+        lines.extend(f"    {path}" for path in paths)
+    lines.append(
+        "Install the matching extra (see [project.optional-"
+        "dependencies] in pyproject.toml) before treating this "
+        "run as verification."
+    )
+    return lines
+
+
+def pytest_terminal_summary(
+    terminalreporter: pytest.TerminalReporter,
+) -> None:
+    """Report test modules that were skipped as a whole."""
+    lines = format_uncollected_summary(_UNCOLLECTED_BY_DEP)
+    if not lines:
+        return
+    terminalreporter.section(
+        "optional dependencies missing", sep="=", yellow=True
+    )
+    for line in lines:
+        terminalreporter.write_line(line, yellow=True)
