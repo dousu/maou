@@ -42,8 +42,6 @@ class ObjectStorageDataSource(
             max_workers: int = 8,
             max_cached_bytes: int = 100 * 1024 * 1024,
             sample_ratio: float | None = None,
-            enable_bundling: bool = False,
-            bundle_size_gb: float = 1.0,
         ) -> None:
             self.__page_manager = cls_ref.PageManager(
                 bucket_name=bucket_name,
@@ -54,8 +52,6 @@ class ObjectStorageDataSource(
                 max_cached_bytes=max_cached_bytes,
                 sample_ratio=sample_ratio,
                 array_type=array_type,
-                enable_bundling=enable_bundling,
-                bundle_size_gb=bundle_size_gb,
             )
 
         def train_test_split(
@@ -85,8 +81,6 @@ class ObjectStorageDataSource(
     class PageManager:
         logger: logging.Logger = logging.getLogger(__name__)
         array_type: Literal["hcpe", "preprocessing"]
-        bundle_cache: list[np.ndarray]
-        bundle_id: int
 
         def __init__(
             self,
@@ -99,8 +93,6 @@ class ObjectStorageDataSource(
             max_workers: int = 8,
             max_cached_bytes: int = 100 * 1024 * 1024,
             sample_ratio: float | None = None,
-            enable_bundling: bool = False,
-            bundle_size_gb: float = 1.0,
         ) -> None:
             self.bucket_name = bucket_name
             self.prefix = prefix
@@ -130,14 +122,8 @@ class ObjectStorageDataSource(
                 f"Local cache directory: {data_path}"
             )
 
-            self.bundle_cache = []
-            self.bundle_id = 1
-
             # 初期化時にデータをダウンロード
-            self.__download_all_to_local(
-                enable_bundling=enable_bundling,
-                bundle_size_gb=bundle_size_gb,
-            )
+            self.__download_all_to_local()
 
             # Load all .feather files as DataFrames
             lengths = []
@@ -188,16 +174,10 @@ class ObjectStorageDataSource(
             """データ名からローカルのパスを取得する."""
             return self.local_cache_dir / self.data_name
 
-        def __download_all_to_local(
-            self,
-            *,
-            enable_bundling: bool = False,
-            bundle_size_gb: float = 1.0,
-        ) -> None:
+        def __download_all_to_local(self) -> None:
             """すべてのデータまたはサンプルデータをローカルにダウンロードする．
 
-            Note: enable_bundling and bundle_size_gb are ignored for .feather files
-            (kept for API compatibility but not used)
+            ``.feather`` オブジェクトは 1 つずつ個別に保存する．
             """
             try:
                 if self.sample_ratio is not None:
@@ -391,8 +371,6 @@ class ObjectStorageDataSource(
         sample_ratio: float | None = None,
         array_type: Literal["hcpe", "preprocessing"]
         | None = None,
-        enable_bundling: bool = False,
-        bundle_size_gb: float = 1.0,
     ) -> None:
         """
         Args:
@@ -412,8 +390,6 @@ class ObjectStorageDataSource(
               キャッシュ退避の機構は無い (退避予算として使うのは
               ``BigQueryDataSource`` の同名引数の方)
             array_type (str): 配列タイプ ("hcpe" or "preprocessing")
-            enable_bundling (bool): バンドリング機能を有効にするかどうか (デフォルト: False)
-            bundle_size_gb (float): バンドルサイズ (GB) (デフォルト: 1.0)
         """
         if page_manager is None:
             if (
@@ -432,8 +408,6 @@ class ObjectStorageDataSource(
                     max_cached_bytes=max_cached_bytes,
                     sample_ratio=sample_ratio,
                     array_type=array_type,
-                    enable_bundling=enable_bundling,
-                    bundle_size_gb=bundle_size_gb,
                 )
             else:
                 raise MissingObjectStorageConfig(

@@ -1,6 +1,6 @@
 ---
 name: benchmark-execution
-description: Execute performance benchmarks for DataLoader configurations, training performance analysis, GPU utilization monitoring, and optimization validation. Use when analyzing performance bottlenecks, finding optimal training settings, validating speed improvements, or testing array bundling efficiency.
+description: Execute performance benchmarks for DataLoader configurations, training performance analysis, GPU utilization monitoring, and optimization validation. Use when analyzing performance bottlenecks, finding optimal training settings, validating speed improvements, or comparing DataLoader worker counts.
 ---
 
 # Benchmark Execution
@@ -143,33 +143,19 @@ uv run maou utility benchmark-training \
   --batch-size 256
 ```
 
-### Array Bundling Performance Impact
-
-Compare bundled vs non-bundled performance:
+### Cloud Download Performance Impact
 
 ```bash
-# Without bundling
 uv run maou utility benchmark-training \
   --input-s3 \
   --input-bucket-name my-bucket \
-  --gpu cuda:0 \
-  --batch-size 256
-
-# With bundling
-uv run maou utility benchmark-training \
-  --input-s3 \
-  --input-bucket-name my-bucket \
-  --input-enable-bundling \
-  --input-bundle-size-gb 1.0 \
   --gpu cuda:0 \
   --batch-size 256
 ```
 
-**Expected improvements with bundling**:
-- 3-5x faster data loading
-- Reduced file system overhead
-- Better cache locality
-- Lower network request count
+Array bundling was removed on 2026-08-14 (the knobs were accepted but
+never read).  Tune cloud throughput with `--input-max-workers` and a
+local cache directory instead.
 
 ## Mixed Precision Training Analysis
 
@@ -320,7 +306,6 @@ Gradient Norm: 2.34
 
 **Solutions**:
 - Increase `--num-workers`
-- Enable array bundling
 - Use local caching for cloud data
 - Optimize data preprocessing
 
@@ -340,7 +325,6 @@ Gradient Norm: 2.34
 
 **Solutions**:
 - Use `--persistent-workers`
-- Enable array bundling
 - Pre-download cloud data
 - Check disk I/O performance
 
@@ -395,7 +379,6 @@ Create a summary after benchmarking:
 - Memory: 12.8 GB / 40 GB
 
 ## Optimizations Applied
-- Array bundling enabled (1.0 GB chunks)
 - Mixed precision training (AMP)
 - Persistent workers
 - Local caching

@@ -165,21 +165,6 @@ def describe_missing_input_options(
     required=False,
 )
 @click.option(
-    "--input-enable-bundling",
-    type=bool,
-    is_flag=True,
-    help="Enable bundling of arrays for efficient local caching (1GB chunks).",
-    default=False,
-    required=False,
-)
-@click.option(
-    "--input-bundle-size-gb",
-    type=float,
-    help="Target bundle size in GB for array bundling (default: 1.0).",
-    default=1.0,
-    required=False,
-)
-@click.option(
     "--input-gcs",
     type=bool,
     is_flag=True,
@@ -381,8 +366,6 @@ def pre_process(
     input_partitioning_key_date: str | None,
     input_max_workers: int,
     input_local_cache_dir: str | None,
-    input_enable_bundling: bool,
-    input_bundle_size_gb: float,
     input_gcs: bool | None,
     input_s3: bool | None,
     input_bucket_name: str | None,
@@ -491,8 +474,6 @@ def pre_process(
                     max_workers=input_max_workers,
                     max_cached_bytes=input_max_cached_bytes,
                     array_type="hcpe",
-                    enable_bundling=input_enable_bundling,
-                    bundle_size_gb=input_bundle_size_gb,
                 )
             except Exception as e:
                 app_logger.error(
@@ -523,8 +504,6 @@ def pre_process(
                     max_workers=input_max_workers,
                     max_cached_bytes=input_max_cached_bytes,
                     array_type="hcpe",
-                    enable_bundling=input_enable_bundling,
-                    bundle_size_gb=input_bundle_size_gb,
                 )
             except Exception as e:
                 app_logger.error(

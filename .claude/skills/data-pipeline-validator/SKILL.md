@@ -279,32 +279,27 @@ except Exception as e:
 
 ## Array Bundling Validation
 
-### Bundle Configuration
-
-When using array bundling:
+### Local Cache Configuration
 
 ```python
-bundle_config = {
-    'enable_bundling': True,
-    'bundle_size_gb': 1.0,
-    'cache_dir': './cache',
+cache_config = {
+    'local_cache_dir': './cache',
 }
 ```
 
+Array bundling (`enable_bundling` / `bundle_size_gb`) was removed on
+2026-08-14; the knobs were never read.
+
 **Validation checklist**:
-- [ ] `bundle_size_gb` is reasonable (0.5 - 2.0 GB)
-- [ ] `cache_dir` exists and is writable
+- [ ] `local_cache_dir` exists and is writable
 - [ ] Sufficient disk space available
 - [ ] Cache directory not in `.gitignore` conflicts
 
-### Verify Bundling Setup
+### Verify the Removed Bundling Knobs Have Not Returned
 
 ```bash
-# Check bundling configuration in CLI calls
-grep -rn "enable-bundling" src/maou/infra/console/
-
-# Verify bundle size parameter
-grep -rn "bundle-size-gb" src/maou/infra/console/
+# Both must return nothing (removed 2026-08-14)
+grep -rn "enable-bundling\|bundle-size-gb" src/maou/infra/console/
 ```
 
 ## CLI Validation

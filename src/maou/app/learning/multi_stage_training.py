@@ -108,16 +108,22 @@ class Stage3ModelAdapter(torch.nn.Module):
         return self.network(inputs)
 
 
-class Stage1ModelAdapter(torch.nn.Module):
-    """Stage 1 用のモデルアダプタ．
+class StageModelAdapter(torch.nn.Module):
+    """Stage 1 / Stage 2 共通のモデルアダプタ．
 
-    HeadlessNetwork と ReachableSquaresHead をラップし，
+    HeadlessNetwork と事前学習用 head をラップし，
     TrainingLoop が期待する ``(policy, value)`` の2タプルを返す．
     ``value`` 出力はダミーゼロテンソルで，value loss は ``value_loss_ratio=0.0`` で無視される．
 
+    Stage 1 (``ReachableSquaresHead``) と Stage 2 (``LegalMovesHead``) は
+    head を差し替えるだけで挙動が同じなので，1 クラスで両方を担う．
+    ``Stage1ModelAdapter`` / ``Stage2ModelAdapter`` は本クラスの別名で，
+    互換のために残してある．
+
     Args:
         backbone: 共有バックボーンネットワーク
-        head: Stage 1 用の ReachableSquaresHead
+        head: 事前学習用の head (Stage 1 なら ReachableSquaresHead，
+            Stage 2 なら LegalMovesHead)
     """
 
     def __init__(
@@ -148,22 +154,28 @@ class Stage1ModelAdapter(torch.nn.Module):
         return logits, dummy_value
 
 
-class Stage1DatasetAdapter(Dataset):
-    """Stage1Dataset を TrainingLoop の入力形式に変換するアダプタ．
+class StageDatasetAdapter(Dataset):
+    """Stage1/Stage2Dataset を TrainingLoop の入力形式に変換するアダプタ．
 
-    Stage1Dataset は ((board, hand), reachable_squares) を返すが，
+    Stage1Dataset は ``((board, hand), reachable_squares)``，
+    Stage2Dataset は ``((board, hand), legal_moves)`` を返すが，
     TrainingLoop._unpack_batch() は
     ((board, hand), (labels_policy, labels_value, move_win_rate))
-    を期待する．
+    を期待する．変換は両者で同一なので 1 クラスで両方を担う．
 
     PyTorch の default_collate は None を処理できないため，
     DataLoader 作成時には pre_stage_collate_fn を collate_fn に指定すること．
 
+    ``Stage1DatasetAdapter`` / ``Stage2DatasetAdapter`` は本クラスの
+    別名で，互換のために残してある．
+
     Args:
-        dataset: ラップする Stage1Dataset
+        dataset: ラップする Stage1Dataset または Stage2Dataset
     """
 
-    def __init__(self, dataset: Stage1Dataset) -> None:
+    def __init__(
+        self, dataset: Stage1Dataset | Stage2Dataset
+    ) -> None:
         self._dataset = dataset
 
     def __len__(self) -> int:
@@ -180,36 +192,11 @@ class Stage1DatasetAdapter(Dataset):
         return inputs, (targets, dummy_value, None)
 
 
-class Stage2DatasetAdapter(Dataset):
-    """Stage2Dataset を TrainingLoop の入力形式に変換するアダプタ．
+Stage1DatasetAdapter = StageDatasetAdapter
+"""``StageDatasetAdapter`` の別名 (Stage 1 用)．"""
 
-    Stage2Dataset は ((board, hand), legal_moves) を返すが，
-    TrainingLoop._unpack_batch() は
-    ((board, hand), (labels_policy, labels_value, move_win_rate))
-    を期待する．
-
-    PyTorch の default_collate は None を処理できないため，
-    DataLoader 作成時には pre_stage_collate_fn を collate_fn に指定すること．
-
-    Args:
-        dataset: ラップする Stage2Dataset
-    """
-
-    def __init__(self, dataset: Stage2Dataset) -> None:
-        self._dataset = dataset
-
-    def __len__(self) -> int:
-        return len(self._dataset)
-
-    def __getitem__(
-        self, idx: int
-    ) -> tuple[
-        tuple[torch.Tensor, torch.Tensor],
-        tuple[torch.Tensor, torch.Tensor, None],
-    ]:
-        inputs, targets = self._dataset[idx]
-        dummy_value = torch.zeros(1, dtype=torch.float32)
-        return inputs, (targets, dummy_value, None)
+Stage2DatasetAdapter = StageDatasetAdapter
+"""``StageDatasetAdapter`` の別名 (Stage 2 用)．"""
 
 
 def pre_stage_collate_fn(
@@ -237,44 +224,11 @@ def pre_stage_collate_fn(
     return (boards, hands), (targets, values, None)
 
 
-class Stage2ModelAdapter(torch.nn.Module):
-    """Stage 2 用のモデルアダプタ．
+Stage1ModelAdapter = StageModelAdapter
+"""``StageModelAdapter`` の別名 (Stage 1 用)．"""
 
-    HeadlessNetwork と LegalMovesHead をラップし，
-    TrainingLoop が期待する ``(policy, value)`` の2タプルを返す．
-    ``value`` 出力はダミーゼロテンソルで，value loss は ``value_loss_ratio=0.0`` で無視される．
-
-    Args:
-        backbone: 共有バックボーンネットワーク
-        head: Stage 2 用の LegalMovesHead
-    """
-
-    def __init__(
-        self,
-        backbone: HeadlessNetwork,
-        head: torch.nn.Module,
-    ) -> None:
-        super().__init__()
-        self.backbone = backbone
-        self.head = head
-
-    def forward(
-        self, inputs: tuple[torch.Tensor, torch.Tensor]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """フォワードパスを実行し，(policy, dummy_value) を返す．
-
-        Args:
-            inputs: (board, hand) のタプル
-
-        Returns:
-            (logits, dummy_value) のタプル
-        """
-        features = self.backbone.forward_features(inputs)
-        logits = self.head(features)
-        dummy_value = torch.zeros(
-            logits.shape[0], 1, device=logits.device
-        )
-        return logits, dummy_value
+Stage2ModelAdapter = StageModelAdapter
+"""``StageModelAdapter`` の別名 (Stage 2 用)．"""
 
 
 class TruncatedStageModel(torch.nn.Module):
