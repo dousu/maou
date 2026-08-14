@@ -4,6 +4,22 @@
 
 **Framework**: Use `uv run pytest`
 
+### 前提: GPU extra が要る
+
+テストスイートの実行には `torch` が要る．`uv sync` の base install だけ
+では `tests/maou/app/learning/` をはじめ torch を import するモジュール
+が collect 段で失敗する．**先に GPU extra を入れること．**
+
+```bash
+uv sync --extra cpu                     # または --extra cuda
+```
+
+`torch` は `tests/conftest.py` の `_OPTIONAL_DEPS` に**敢えて入れて
+いない**．collect 段の skip はモジュールを丸ごと落とすため，torch を
+そこに入れると「環境が整っていない」実行が緑として報告されてしまう．
+`onnxruntime` / `onnx` / `gradio` / `matplotlib` は該当モジュールが
+局所的なので，従来どおり skip に書き換えられる．
+
 ```bash
 uv run pytest                           # Run all tests
 uv run pytest --cov=src/maou            # Run with coverage
