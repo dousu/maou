@@ -16,38 +16,6 @@ def _create_sample_file(path: Path) -> None:
     array.tofile(path)
 
 
-@pytest.mark.skip(reason="Needs update for .feather files")
-def test_learn_model_passes_cache_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runner = CliRunner()
-
-    captured_kwargs: dict[str, Any] = {}
-
-    def fake_learn(**kwargs: Any) -> str:
-        captured_kwargs.update(kwargs)
-        return "{}"
-
-    monkeypatch.setattr(learn_model.learn, "learn", fake_learn)
-
-    with runner.isolated_filesystem():
-        input_path = Path("input.bin")
-        _create_sample_file(input_path)
-
-        result = runner.invoke(
-            learn_model.learn_model,
-            [
-                "--input-path",
-                str(input_path),
-                "--input-cache-mode",
-                "memory",
-            ],
-        )
-
-    assert result.exit_code == 0, result.output
-    assert captured_kwargs["input_cache_mode"] == "memory"
-
-
 def test_learn_model_passes_stage_batch_sizes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

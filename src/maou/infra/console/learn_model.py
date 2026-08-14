@@ -793,7 +793,6 @@ def learn_model(
                     file_paths=_paths,
                     array_type="stage1",
                     bit_pack=False,
-                    cache_mode="file",
                 )
             ),
             array_type="stage1",
@@ -817,7 +816,6 @@ def learn_model(
                     file_paths=_paths,
                     array_type="stage2",
                     bit_pack=False,
-                    cache_mode="file",
                 )
             ),
             array_type="stage2",
@@ -835,16 +833,14 @@ def learn_model(
 
     if stage3_data_path is not None:
         _s3_paths = FileSystem.collect_files(stage3_data_path)
-        _s3_cache = "file"
         _s3_at = "preprocessing"
         _s3_bp = False
         stage3_data_config = StageDataConfig(
-            create_datasource=lambda _p=_s3_paths, _a=_s3_at, _b=_s3_bp, _c=_s3_cache: (
+            create_datasource=lambda _p=_s3_paths, _a=_s3_at, _b=_s3_bp: (
                 FileDataSource.FileDataSourceSpliter(
                     file_paths=_p,
                     array_type=_a,
                     bit_pack=_b,
-                    cache_mode=_c,
                 )
             ),
             array_type=_s3_at,

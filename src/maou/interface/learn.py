@@ -283,7 +283,6 @@ def learn(
     log_dir: Path | None = None,
     model_dir: Path | None = None,
     cloud_storage: CloudStorage | None = None,
-    input_cache_mode: Literal["file", "memory"] = "file",
     tensorboard_histogram_frequency: int = 0,
     tensorboard_histogram_modules: tuple[str, ...]
     | None = None,
@@ -333,7 +332,6 @@ def learn(
         log_dir: Directory for training logs
         model_dir: Directory for saving trained model
         cloud_storage: Optional cloud storage for model uploads
-        input_cache_mode: Strategy used by the input datasource cache
         tensorboard_histogram_frequency: Number of epochs between parameter
             histogram dumps (0 disables histogram logging)
         tensorboard_histogram_modules: Optional glob patterns to filter which
@@ -510,12 +508,6 @@ def learn(
         dir_init(model_dir)
     logger.info(f"Input: {datasource}, Output: {model_dir}")
 
-    normalized_cache_mode = input_cache_mode.lower()
-    if normalized_cache_mode not in {"file", "memory"}:
-        raise ValueError(
-            "input_cache_mode must be either 'file' or 'memory', "
-            f"got {input_cache_mode}"
-        )
     if tensorboard_histogram_frequency < 0:
         raise ValueError(
             "tensorboard_histogram_frequency must be non-negative"
@@ -557,7 +549,6 @@ def learn(
         model_dir=model_dir,
         model_architecture=model_architecture,
         lr_scheduler_name=lr_scheduler_key,
-        input_cache_mode=normalized_cache_mode,
         tensorboard_histogram_frequency=tensorboard_histogram_frequency,
         tensorboard_histogram_modules=normalized_histogram_modules,
         streaming=streaming,
@@ -1014,7 +1005,6 @@ def learn_multi_stage(
     trainable_layers: int | None = None,
     log_dir: Path | None = None,
     cloud_storage: CloudStorage | None = None,
-    input_cache_mode: Literal["file", "memory"] = "file",
     architecture_config: dict[str, Any] | None = None,
     stage12_lr_scheduler: str | None = "auto",
     stage12_compilation: bool = False,
@@ -1082,7 +1072,6 @@ def learn_multi_stage(
             Stage 1/2 train only the first (total - N) groups via truncated model
         log_dir: Log directory for Stage 3
         cloud_storage: Cloud storage for Stage 3 model uploads
-        input_cache_mode: Cache strategy for Stage 3 inputs
         architecture_config: Architecture-specific config dict for backbone
         stage12_lr_scheduler: Stage 1/2 LRスケジューラ設定．'auto'はbatch_size > 256で自動有効化．
         stage12_compilation: Stage 1/2でtorch.compileを有効化する．
@@ -1405,7 +1394,6 @@ def learn_multi_stage(
             log_dir=log_dir,
             model_dir=model_dir,
             cloud_storage=cloud_storage,
-            input_cache_mode=input_cache_mode,
             architecture_config=architecture_config,
             streaming=streaming,
             streaming_train_source=stage3_streaming_train_source,

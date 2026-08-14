@@ -105,16 +105,6 @@ def _parse_float_list(
     required=False,
 )
 @click.option(
-    "--input-cache-mode",
-    type=click.Choice(
-        ["file", "memory", "mmap"], case_sensitive=False
-    ),
-    help="Cache strategy for local inputs (default: file). 'mmap' is deprecated, use 'file' instead.",
-    default="file",
-    required=False,
-    show_default=True,
-)
-@click.option(
     "--input-clustering-key",
     help="BigQuery clustering key.",
     type=str,
@@ -124,14 +114,6 @@ def _parse_float_list(
     "--input-partitioning-key-date",
     help="BigQuery date partitioning key.",
     type=str,
-    required=False,
-)
-@click.option(
-    "--input-local-cache",
-    type=bool,
-    is_flag=True,
-    help="Enable local caching of cloud data.",
-    default=False,
     required=False,
 )
 @click.option(
@@ -235,10 +217,8 @@ def benchmark_dataloader(
     input_table_name: str | None,
     input_batch_size: int,
     input_max_cached_bytes: int,
-    input_cache_mode: str,
     input_clustering_key: str | None,
     input_partitioning_key_date: str | None,
-    input_local_cache: bool,
     input_local_cache_dir: str | None,
     input_enable_bundling: bool,
     input_bundle_size_gb: float,
@@ -255,17 +235,6 @@ def benchmark_dataloader(
     sample_ratio: float | None,
 ) -> None:
     """Benchmark DataLoader configurations to find optimal parameters."""
-    # Normalize cache_mode: "mmap" is deprecated, convert to "file"
-    if input_cache_mode.lower() == "mmap":
-        import warnings
-
-        warnings.warn(
-            "--input-cache-mode 'mmap' is deprecated. Use 'file' instead.",
-            DeprecationWarning,
-            stacklevel=1,
-        )
-        input_cache_mode = "file"
-
     array_type = "preprocessing"
 
     # Check for mixing cloud providers for input
@@ -299,7 +268,6 @@ def benchmark_dataloader(
             ),
             array_type=array_type,
             bit_pack=input_file_packed,
-            cache_mode=input_cache_mode,
         )
     elif (
         input_dataset_id is not None
@@ -323,7 +291,6 @@ def benchmark_dataloader(
                         max_cached_bytes=input_max_cached_bytes,
                         clustering_key=input_clustering_key,
                         partitioning_key_date=input_partitioning_key_date,
-                        use_local_cache=input_local_cache,
                         local_cache_dir=input_local_cache_dir,
                         sample_ratio=sample_ratio,
                     )
@@ -545,16 +512,6 @@ def benchmark_dataloader(
     required=False,
 )
 @click.option(
-    "--input-cache-mode",
-    type=click.Choice(
-        ["file", "memory", "mmap"], case_sensitive=False
-    ),
-    help="Cache strategy for local inputs (default: file). 'mmap' is deprecated, use 'file' instead.",
-    default="file",
-    required=False,
-    show_default=True,
-)
-@click.option(
     "--input-clustering-key",
     help="BigQuery clustering key.",
     type=str,
@@ -564,14 +521,6 @@ def benchmark_dataloader(
     "--input-partitioning-key-date",
     help="BigQuery date partitioning key.",
     type=str,
-    required=False,
-)
-@click.option(
-    "--input-local-cache",
-    type=bool,
-    is_flag=True,
-    help="Enable local caching of cloud data.",
-    default=False,
     required=False,
 )
 @click.option(
@@ -1068,10 +1017,8 @@ def benchmark_training(
     input_table_name: str | None,
     input_batch_size: int,
     input_max_cached_bytes: int,
-    input_cache_mode: str,
     input_clustering_key: str | None,
     input_partitioning_key_date: str | None,
-    input_local_cache: bool,
     input_local_cache_dir: str | None,
     input_enable_bundling: bool,
     input_bundle_size_gb: float,
@@ -1146,17 +1093,6 @@ def benchmark_training(
             "--stage2-data-path is required when --stage=2"
         )
 
-    # Normalize cache_mode: "mmap" is deprecated, convert to "file"
-    if input_cache_mode.lower() == "mmap":
-        import warnings
-
-        warnings.warn(
-            "--input-cache-mode 'mmap' is deprecated. Use 'file' instead.",
-            DeprecationWarning,
-            stacklevel=1,
-        )
-        input_cache_mode = "file"
-
     array_type = "preprocessing"
 
     # Check for mixing cloud providers for input
@@ -1193,7 +1129,6 @@ def benchmark_training(
                 file_paths=stage1_file_paths,
                 array_type="stage1",
                 bit_pack=False,
-                cache_mode="file",
             )
         )
 
@@ -1256,7 +1191,6 @@ def benchmark_training(
                     file_paths=stage2_file_paths,
                     array_type="stage2",
                     bit_pack=False,
-                    cache_mode="file",
                 )
             )
 
@@ -1301,7 +1235,6 @@ def benchmark_training(
                 file_paths=file_paths,
                 array_type=array_type,
                 bit_pack=input_file_packed,
-                cache_mode=input_cache_mode,
             )
     elif (
         input_dataset_id is not None
@@ -1325,7 +1258,6 @@ def benchmark_training(
                         max_cached_bytes=input_max_cached_bytes,
                         clustering_key=input_clustering_key,
                         partitioning_key_date=input_partitioning_key_date,
-                        use_local_cache=input_local_cache,
                         local_cache_dir=input_local_cache_dir,
                         sample_ratio=sample_ratio,
                     )

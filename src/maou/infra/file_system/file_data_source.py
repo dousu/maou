@@ -10,7 +10,6 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Literal,
-    cast,
 )
 
 import numpy as np
@@ -40,11 +39,6 @@ _DF_TO_NUMPY_CONVERTERS: dict[
     "stage2": convert_stage2_df_to_numpy,
 }
 
-# ``cache_mode='memory'`` の全ロード量がこの GB 数を超えたら OOM 警告を出す．
-# リテラルを 2 箇所に埋めていたので定数化した (テストから閾値を差し替えて
-# 警告経路を検証できるようにする狙いもある — 32GB の実データは用意できない)．
-OOM_WARNING_THRESHOLD_GB: float = 32.0
-
 
 class MissingFileDataConfig(Exception):
     pass
@@ -53,8 +47,6 @@ class MissingFileDataConfig(Exception):
 class FileDataSource(
     learn.LearningDataSource, preprocess.DataSource
 ):
-    CacheMode = Literal["file", "memory"]
-
     class FileDataSourceSpliter(
         learn.LearningDataSource.DataSourceSpliter
     ):
@@ -67,13 +59,11 @@ class FileDataSource(
                 "hcpe", "preprocessing", "stage1", "stage2"
             ],
             bit_pack: bool = False,
-            cache_mode: FileDataSource.CacheMode = "file",
         ) -> None:
             self.__file_manager = FileDataSource.FileManager(
                 file_paths=file_paths,
                 array_type=array_type,
                 bit_pack=bit_pack,
-                cache_mode=cache_mode,
             )
 
         def train_test_split(
@@ -123,7 +113,6 @@ class FileDataSource(
                 "hcpe", "preprocessing", "stage1", "stage2"
             ],
             bit_pack: bool,
-            cache_mode: FileDataSource.CacheMode = "file",
         ) -> None:
             """ファイルシステムから複数のファイルに入っているデータを取り出す．
 
@@ -131,7 +120,6 @@ class FileDataSource(
                 file_paths (list[Path]): .featherファイルのリスト
                 array_type (Literal["hcpe", "preprocessing", "stage1", "stage2"]): データのタイプ
                 bit_pack (bool): 未使用(後方互換性のために保持)
-                cache_mode (CacheMode): キャッシュモード ("file" または "memory")
             """
             self.file_paths = file_paths
             self.logger.info(
@@ -141,25 +129,9 @@ class FileDataSource(
             )
             t_init_start = time.perf_counter()
             self.array_type = array_type
-            normalized_cache_mode = cast(
-                FileDataSource.CacheMode, cache_mode.lower()
-            )
-            if normalized_cache_mode not in {"file", "memory"}:
-                raise ValueError(
-                    "cache_mode must be either 'file' or 'memory', "
-                    f"got {cache_mode}"
-                )
             self._file_entries: list[
                 FileDataSource.FileManager._FileEntry
             ] = []
-            self.cache_mode: FileDataSource.CacheMode = (
-                normalized_cache_mode
-            )
-            # 最適化: cache_mode="memory"の場合，全ファイルを結合した単一配列
-            self._concatenated_array: np.ndarray | None = None
-            self._concatenated_columnar: (
-                ColumnarBatch | None
-            ) = None
 
             # SOA化対応: preprocessing/stage1/stage2はColumnarBatchで保持
             self._use_columnar = (
@@ -297,107 +269,12 @@ class FileDataSource(
             self.total_rows = self.cum_lengths[-1]
             self.total_pages = len(self.cum_lengths) - 1
 
-            # cache_mode="memory"の場合，全ファイルを単一配列に結合
-            if (
-                self.cache_mode == "memory"
-                and self.total_pages > 1
-            ):
-                if self._use_columnar:
-                    self._concatenate_columnar()
-                else:
-                    self._concatenate_numpy()
-
             self.logger.info(
                 "FileManager initialized: %d rows from %d files in %.1fs",
                 self.total_rows,
                 self.total_pages,
                 time.perf_counter() - t_init_start,
             )
-
-        def _warn_if_oom_risk(self, total_bytes: int) -> None:
-            """全ロード量が閾値を超えていれば OOM 警告を出す．
-
-            ``_concatenate_numpy`` と ``_concatenate_columnar`` が
-            同じ文面を二重に持っていたので一本化した．
-
-            Args:
-                total_bytes: 結合対象が保持している合計バイト数
-            """
-            estimated_gb = total_bytes / (1024**3)
-            if estimated_gb > OOM_WARNING_THRESHOLD_GB:
-                self.logger.warning(
-                    f"cache_mode='memory' with {self.total_rows} rows "
-                    f"(estimated {estimated_gb:.1f} GB) may cause OOM. "
-                    f"Consider using cache_mode='file' instead."
-                )
-
-        def _concatenate_numpy(self) -> None:
-            """structured arrayを単一配列に結合する(hcpe用)."""
-            self._warn_if_oom_risk(
-                sum(
-                    entry.cached_array.nbytes
-                    for entry in self._file_entries
-                    if entry.cached_array is not None
-                )
-            )
-
-            self.logger.info(
-                "Concatenating %d numpy arrays (%d records)...",
-                self.total_pages,
-                self.total_rows,
-            )
-
-            t0 = time.perf_counter()
-            arrays = [
-                entry.cached_array
-                for entry in self._file_entries
-                if entry.cached_array is not None
-            ]
-            self._concatenated_array = np.concatenate(arrays)
-            elapsed = time.perf_counter() - t0
-            self.logger.info(
-                "Concatenation completed in %.1fs",
-                elapsed,
-            )
-            for entry in self._file_entries:
-                entry.cached_array = None
-
-        def _concatenate_columnar(self) -> None:
-            """ColumnarBatchをフィールドごとに連結する(SOA化)."""
-            batches = [
-                entry.cached_columnar
-                for entry in self._file_entries
-                if entry.cached_columnar is not None
-            ]
-
-            # フィールドを手書きで足し上げない．以前ここは 6 フィールドを
-            # 列挙しており，7 番目の ``move_win_rate``
-            # ((N, MOVE_LABELS_NUM) float32 で最大級) を数え落として
-            # いたため，40GB 級の入力を 18GB と報告して 32GB 閾値に
-            # 掛からなかった．合計は ColumnarBatch 側で
-            # ``dataclasses.fields`` から導出する．
-            self._warn_if_oom_risk(
-                sum(b.nbytes for b in batches)
-            )
-
-            self.logger.info(
-                "Concatenating %d columnar batches "
-                "(%d records) field-by-field...",
-                self.total_pages,
-                self.total_rows,
-            )
-
-            t0 = time.perf_counter()
-            self._concatenated_columnar = (
-                ColumnarBatch.concatenate(batches)
-            )
-            elapsed = time.perf_counter() - t0
-            self.logger.info(
-                "Concatenation completed in %.1fs",
-                elapsed,
-            )
-            for entry in self._file_entries:
-                entry.cached_columnar = None
 
         def _load_feather(
             self, file_path: Path
@@ -439,16 +316,6 @@ class FileDataSource(
             Returns:
                 numpy structured array (single record)
             """
-            # 従来のstructured array path (hcpe)
-            if self._concatenated_array is not None:
-                return self._concatenated_array[idx]
-
-            # SOA化 path (preprocessing/stage1/stage2)
-            if self._concatenated_columnar is not None:
-                return self._columnar_to_structured_record(
-                    self._concatenated_columnar, idx
-                )
-
             file_idx = bisect.bisect_right(self._cum_upper, idx)
             local_idx = idx - self._cum_lower[file_idx]
             entry = self._file_entries[file_idx]
@@ -516,24 +383,12 @@ class FileDataSource(
             Data is already converted to numpy at initialization time．
             SOA化されたデータはstructured arrayに変換して返す．
 
+            入力ファイル 1 つにつき 1 batch を yield する — すなわち
+            yield 数は ``total_pages`` と常に一致する．
+
             Yields:
                 Tuple of (filename, numpy array)
             """
-            # If concatenated (hcpe path), yield as single batch
-            if self._concatenated_array is not None:
-                yield ("concatenated", self._concatenated_array)
-                return
-
-            # If SOA concatenated, convert to structured array
-            if self._concatenated_columnar is not None:
-                yield (
-                    "concatenated",
-                    self._columnar_batch_to_structured_array(
-                        self._concatenated_columnar
-                    ),
-                )
-                return
-
             # Iterate over individual files
             for entry in self._file_entries:
                 if self._use_columnar:
@@ -644,7 +499,6 @@ class FileDataSource(
         ]
         | None = None,
         bit_pack: bool = True,
-        cache_mode: CacheMode = "file",
     ) -> None:
         """ファイルシステムから複数のファイルに入っているデータを取り出す.
 
@@ -659,10 +513,6 @@ class FileDataSource(
                 なお既定値がここでは ``True``，
                 ``FileDataSourceSpliter.__init__`` では ``False`` と
                 食い違っているが，無視される引数なので観測可能な差はない．
-            cache_mode (CacheMode): キャッシュモード ("file" または "memory")．
-                いずれのモードでも初期化時に全ファイルをメモリへ読み込む．
-                差は「ファイルごとの配列を保持」か
-                「単一配列へ結合」かであり，常駐量の差ではない．
         """
         if file_manager is None:
             if (
@@ -673,7 +523,6 @@ class FileDataSource(
                     file_paths=file_paths,
                     array_type=array_type,
                     bit_pack=bit_pack,
-                    cache_mode=cache_mode,
                 )
             else:
                 raise MissingFileDataConfig(
