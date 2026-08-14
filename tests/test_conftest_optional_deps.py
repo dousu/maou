@@ -30,11 +30,6 @@ class TestIsOptionalDepError:
         ("longrepr", "expected"),
         [
             pytest.param(
-                "ModuleNotFoundError: No module named 'torch'",
-                "torch",
-                id="torch",
-            ),
-            pytest.param(
                 "ModuleNotFoundError: No module named 'onnxruntime'",
                 "onnxruntime",
                 id="onnxruntime",
@@ -79,7 +74,7 @@ class TestIsOptionalDepError:
     def test_returns_none_for_partial_match(self) -> None:
         """Submodule names that start with an optional dep should not match."""
         longrepr = (
-            "ModuleNotFoundError: No module named 'torch_utils'"
+            "ModuleNotFoundError: No module named 'onnx_utils'"
         )
         assert _is_optional_dep_error(longrepr) is None
 
@@ -88,10 +83,72 @@ class TestIsOptionalDepError:
         longrepr = (
             "Traceback (most recent call last):\n"
             "  File 'test_foo.py', line 1, in <module>\n"
-            "    import torch\n"
-            "ModuleNotFoundError: No module named 'torch'\n"
+            "    import onnx\n"
+            "ModuleNotFoundError: No module named 'onnx'\n"
         )
-        assert _is_optional_dep_error(longrepr) == "torch"
+        assert _is_optional_dep_error(longrepr) == "onnx"
+
+
+class TestTorchIsNotOptional:
+    """``torch`` must never be treated as a skippable dependency.
+
+    A collect-phase skip drops a whole module, and torch gates most
+    of the suite (`tests/maou/app/learning/` and every other module
+    importing it).  While torch sat in ``_OPTIONAL_DEPS`` a run in an
+    environment without a GPU extra reported itself green having
+    executed almost nothing, which is how eight consecutive audit
+    runs came to re-confirm the same finding.  A GPU extra
+    (``uv sync --extra cpu`` / ``--extra cuda``) is a prerequisite,
+    so its absence must fail loudly.
+    """
+
+    def test_torch_is_not_in_the_optional_set(self) -> None:
+        """torch must be absent from the skip-conversion set."""
+        assert "torch" not in _mod._OPTIONAL_DEPS
+
+    def test_missing_torch_is_not_converted_to_a_skip(
+        self,
+    ) -> None:
+        """A torch ImportError must not be classified as skippable."""
+        longrepr = (
+            "ModuleNotFoundError: No module named 'torch'"
+        )
+        assert _is_optional_dep_error(longrepr) is None
+
+    def test_collect_hook_leaves_a_torch_failure_failed(
+        self,
+    ) -> None:
+        """The collect hook must not rewrite a torch failure.
+
+        This is the behaviour the summary accumulator could only
+        describe after the fact; here the module is never dropped
+        in the first place.
+        """
+        recorded: dict[str, set[str]] = _mod._UNCOLLECTED_BY_DEP
+        before = {
+            dep: set(paths) for dep, paths in recorded.items()
+        }
+        try:
+            recorded.clear()
+
+            class _Report:
+                outcome = "failed"
+                longrepr = "ModuleNotFoundError: No module named 'torch'"
+
+            class _Collector:
+                path = Path("tests/a/test_torch_user.py")
+
+            report = _Report()
+            gen = _pytest_make_collect_report(_Collector())
+            next(gen)
+            with pytest.raises(StopIteration):
+                gen.send(_FakeOutcome(report))
+
+            assert report.outcome == "failed"
+            assert recorded == {}
+        finally:
+            recorded.clear()
+            recorded.update(before)
 
 
 class TestCheckImportAttrError:
@@ -123,10 +180,10 @@ class TestCheckImportAttrError:
         with patch(
             "importlib.import_module",
             side_effect=ModuleNotFoundError(
-                "No module named 'torch'"
+                "No module named 'gradio'"
             ),
         ):
-            assert _check_import_attr_error(exc) == "torch"
+            assert _check_import_attr_error(exc) == "gradio"
 
     def test_returns_none_for_non_optional_import_error(
         self,
@@ -173,14 +230,14 @@ class TestFormatUncollectedSummary:
         """The summary must name the dep, the count and the paths."""
         lines = _format_uncollected_summary(
             {
-                "torch": {
+                "onnxruntime": {
                     "tests/a/test_one.py",
                     "tests/a/test_two.py",
                 }
             }
         )
         text = "\n".join(lines)
-        assert "torch" in text
+        assert "onnxruntime" in text
         assert "2 module(s) skipped entirely" in text
         assert "tests/a/test_one.py" in text
         assert "tests/a/test_two.py" in text
@@ -189,12 +246,12 @@ class TestFormatUncollectedSummary:
         """Each missing dependency gets its own line."""
         lines = _format_uncollected_summary(
             {
-                "torch": {"tests/a/test_one.py"},
+                "onnx": {"tests/a/test_one.py"},
                 "gradio": {"tests/b/test_two.py"},
             }
         )
         text = "\n".join(lines)
-        assert "torch" in text
+        assert "onnx" in text
         assert "gradio" in text
 
     def test_collect_hook_records_the_dropped_module(
@@ -214,7 +271,7 @@ class TestFormatUncollectedSummary:
 
             class _Report:
                 outcome = "failed"
-                longrepr = "ModuleNotFoundError: No module named 'torch'"
+                longrepr = "ModuleNotFoundError: No module named 'onnxruntime'"
 
             class _Collector:
                 path = Path("tests/a/test_dropped.py")
@@ -225,7 +282,9 @@ class TestFormatUncollectedSummary:
                 gen.send(_FakeOutcome(_Report()))
 
             assert recorded == {
-                "torch": {str(Path("tests/a/test_dropped.py"))}
+                "onnxruntime": {
+                    str(Path("tests/a/test_dropped.py"))
+                }
             }
         finally:
             recorded.clear()

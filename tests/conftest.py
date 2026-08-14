@@ -2,7 +2,16 @@
 
 Converts collection-phase and setup-phase errors caused by known optional
 dependencies into skips, allowing the test suite to run in base environments
-without torch, onnxruntime, onnx, or gradio installed.
+without onnxruntime, onnx, gradio, or matplotlib installed.
+
+``torch`` is deliberately **not** in that set.  A GPU extra
+(``uv sync --extra cpu`` or ``--extra cuda``) is a prerequisite for
+running the suite, so a missing ``torch`` is a broken environment
+rather than a configuration to accommodate: it drops
+``tests/maou/app/learning/`` and every other torch-importing module
+at collection time, which is most of the suite.  Letting that fail
+loudly is the point — a run that could not exercise the changed code
+must not be able to report itself green.
 """
 
 from __future__ import annotations
@@ -27,8 +36,12 @@ _UNCOLLECTED_BY_DEP: dict[str, set[str]] = {}
 # Optional dependencies that may not be installed in base environments.
 # Only errors traceable to these modules are converted to skips;
 # all other errors still fail loudly.
+#
+# ``torch`` is excluded on purpose -- see the module docstring.  It
+# gates most of the suite, so treating its absence as a skippable
+# condition turns "the environment is not set up" into a green run.
 _OPTIONAL_DEPS: frozenset[str] = frozenset(
-    {"torch", "onnxruntime", "onnx", "gradio", "matplotlib"}
+    {"onnxruntime", "onnx", "gradio", "matplotlib"}
 )
 
 # Pattern for AttributeError from pkgutil.resolve_name when a submodule
