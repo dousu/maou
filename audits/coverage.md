@@ -112,6 +112,8 @@ Records of runs that resolved rows deleted from here:
   `KifDataset` の 3 API が全て変わっており，glob 以外に 3 つの
   破綻がある) したため削除の向きで出荷したが，「今は残して後で別物を
   書く」選択は利用者のものなので G4 は retire せず PR に判断を載せた．
+  **ユーザが同一セッション内で「削除する」と回答**したため，そのまま
+  マージした ([PR #498](https://github.com/dousu/maou/pull/498))．
   N4 と O5 は**行の一部だけ**の消化なので行は残り，それぞれ「黙って
   消える部分」「メッセージが原因を指していない部分」を消化済みと明記
   して縮めてある．元記録への訂正は**なし** (changed shape 2 件は
