@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in: PENDING
+applied_in: bdb5b86
 date: 2026-08-14
 target: [docs/commands/pre_process.md]
 risk: low
