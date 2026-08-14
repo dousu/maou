@@ -182,7 +182,6 @@ class Learning:
         log_dir: Path
         model_dir: Path
         lr_scheduler_name: str | None = None
-        input_cache_mode: Literal["file", "memory"] = "file"
         streaming: bool = False
         streaming_train_source: StreamingDataSource | None = (
             None
@@ -1080,8 +1079,7 @@ class Learning:
             f"value_ratio={config.value_loss_ratio}",
             f"Targets: policy={config.policy_target_mode.value}, "
             "value=result-value",
-            f"Data: preprocessing, "
-            f"cache={config.input_cache_mode}",
+            "Data: preprocessing",
             "==============================",
         ]
         self.logger.info("\n".join(lines))

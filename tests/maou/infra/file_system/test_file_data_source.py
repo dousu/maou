@@ -179,8 +179,10 @@ def test_file_data_source_iter_batches(tmp_path: Path) -> None:
     assert total_records == 8  # 2 files * 4 rows
 
 
-def test_file_data_source_memory_cache(tmp_path: Path) -> None:
-    """Test FileDataSource with memory cache mode."""
+def test_file_data_source_repeated_access(
+    tmp_path: Path,
+) -> None:
+    """Test FileDataSource returns stable data on repeated access."""
     file_paths, _ = _create_preprocessing_files(
         tmp_path, file_count=1, rows_per_file=5
     )
@@ -188,7 +190,6 @@ def test_file_data_source_memory_cache(tmp_path: Path) -> None:
     datasource = FileDataSource.FileDataSourceSpliter(
         file_paths=file_paths,
         array_type="preprocessing",
-        cache_mode="memory",
     )
 
     train_ds, _ = datasource.train_test_split(test_ratio=0.0)
@@ -202,8 +203,8 @@ def test_file_data_source_memory_cache(tmp_path: Path) -> None:
     assert record1_second is not None
 
 
-def test_file_data_source_mmap_cache(tmp_path: Path) -> None:
-    """Test FileDataSource with file cache mode."""
+def test_file_data_source_single_file(tmp_path: Path) -> None:
+    """Test FileDataSource with a single input file."""
     file_paths, _ = _create_preprocessing_files(
         tmp_path, file_count=1, rows_per_file=4
     )
@@ -211,7 +212,6 @@ def test_file_data_source_mmap_cache(tmp_path: Path) -> None:
     datasource = FileDataSource.FileDataSourceSpliter(
         file_paths=file_paths,
         array_type="preprocessing",
-        cache_mode="file",
     )
 
     train_ds, _ = datasource.train_test_split(test_ratio=0.0)
@@ -802,7 +802,6 @@ def test_single_record_matches_batch_conversion(
         file_paths=[path],
         array_type="preprocessing",
         bit_pack=False,
-        cache_mode="memory",
     )
 
     batches = list(manager.iter_batches())
@@ -836,14 +835,10 @@ def test_negative_index_still_selects_the_last_row(
         file_paths=[path],
         array_type="preprocessing",
         bit_pack=False,
-        cache_mode="memory",
     )
 
     _, array = next(iter(manager.iter_batches()))
-    batch = (
-        manager._concatenated_columnar
-        or manager._file_entries[0].cached_columnar
-    )
+    batch = manager._file_entries[0].cached_columnar
     assert batch is not None
 
     last = manager._columnar_to_structured_record(batch, -1)
@@ -874,3 +869,66 @@ def test_columnar_converter_table_is_shared() -> None:
         streaming_file_source.COLUMNAR_CONVERTERS
         is domain_table
     )
+
+
+class TestBatchCountMatchesTotalPages:
+    """``iter_batches()`` の yield 数が ``total_pages()`` と一致すること．
+
+    `/audit-backlog` 2026-08-14 / backlog 行 D10+D11 (1)．
+
+    かつて ``cache_mode="memory"`` は複数ファイルを 1 本の配列へ結合し，
+    ``iter_batches()`` が **1 batch だけ**を ``"concatenated"`` という名前で
+    yield する一方 ``total_pages()`` はファイル数 N を返し続けていた．
+    進捗表示 (``hcpe_transform`` の ``total_batches``) はこの数を信じるので，
+    両者の食い違いは黙って誤った進捗になる．
+
+    ノブを廃止して結合経路を消したので，一致は構造的に保証される．
+    ここではその不変条件を固定し，結合経路が再導入されたら落ちるようにする．
+    """
+
+    def test_multi_file_yields_one_batch_per_file(
+        self, tmp_path: Path
+    ) -> None:
+        file_paths, _ = _create_preprocessing_files(
+            tmp_path, file_count=3, rows_per_file=4
+        )
+        datasource = FileDataSource(
+            file_paths=file_paths,
+            array_type="preprocessing",
+        )
+
+        batches = list(datasource.iter_batches())
+
+        assert len(batches) == datasource.total_pages() == 3
+
+    def test_batch_names_are_the_file_names(
+        self, tmp_path: Path
+    ) -> None:
+        """batch 名がファイル名であること (``"concatenated"`` ではない)．"""
+        file_paths, _ = _create_preprocessing_files(
+            tmp_path, file_count=3, rows_per_file=4
+        )
+        datasource = FileDataSource(
+            file_paths=file_paths,
+            array_type="preprocessing",
+        )
+
+        names = [name for name, _ in datasource.iter_batches()]
+
+        assert names == [p.name for p in file_paths]
+
+    def test_hcpe_multi_file_also_agrees(
+        self, tmp_path: Path
+    ) -> None:
+        """hcpe 経路 (structured array) でも一致すること．"""
+        file_paths, _ = _create_hcpe_files(
+            tmp_path, file_count=2, rows_per_file=3
+        )
+        datasource = FileDataSource(
+            file_paths=file_paths,
+            array_type="hcpe",
+        )
+
+        batches = list(datasource.iter_batches())
+
+        assert len(batches) == datasource.total_pages() == 2

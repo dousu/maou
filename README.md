@@ -190,8 +190,9 @@ uv run maou utility benchmark-training --detect-anomaly [...他の引数]
 
 ## Preprocessingデータの読み込み方式
 
-前処理済みデータは Arrow IPC (`.feather`) が既定で、読み込み方式は
-`--input-cache-mode {file,memory}` で選びます (`mmap` は deprecated で、
-内部的に `file` に変換されます)。`KifDataset` は `torch.from_numpy()` で
+前処理済みデータは Arrow IPC (`.feather`) が既定です。入力ファイルは
+初期化時に全てメモリへ読み込まれ、ファイル 1 つにつき 1 配列を保持します
+(データセットを常駐させたくない場合は streaming 経路を使ってください)。
+`KifDataset` は `torch.from_numpy()` で
 ゼロコピー変換するため、read-only 配列を渡すと `ValueError` になります
 (`src/maou/app/learning/dataset.py:186-198`)。

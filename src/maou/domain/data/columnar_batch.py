@@ -66,10 +66,14 @@ class ColumnarBatch:
         フィールド名を**列挙せず** :func:`dataclasses.fields` から導出する．
         呼び出し側が手書きのフィールド一覧で合計を取ると，
         ``ColumnarBatch`` にフィールドが増えたときに数え落とし，
-        メモリ見積りが黙って過少になる (実際 ``FileDataSource`` の
-        ``cache_mode='memory'`` OOM 警告は ``move_win_rate`` —
+        メモリ見積りが黙って過少になる (かつて ``FileDataSource`` が
+        全ファイル結合前に出していた OOM 警告は ``move_win_rate`` —
         ``(N, MOVE_LABELS_NUM)`` float32 で最大級のフィールド — を
-        数え落としており，40GB 級の入力を 18GB と報告していた)．
+        数え落としており，40GB 級の入力を 18GB と報告していた．
+        その結合経路は ``cache_mode`` ノブごと廃止されたが，
+        列挙を避ける理由自体は変わらない)．
+
+        なお現在 production の呼び出し元は無く，テストからのみ参照される．
 
         ``None`` のフィールド (その array_type で使わない列) は 0 として
         数える．

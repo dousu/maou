@@ -6,12 +6,14 @@ benchmark-trainingコマンドでも全て使えることを確認する．
 
 from __future__ import annotations
 
-import types
-
 import click
 import pytest
 
-from maou.infra.console import learn_model, utility
+from maou.infra.console import (
+    learn_model,
+    pre_process,
+    utility,
+)
 from maou.interface.learn import normalize_lr_scheduler_name
 
 
@@ -249,100 +251,63 @@ def _find_option(
 
 
 # ------------------------------------------------------------------
-# --input-cache-mode の一貫性テスト
+# --input-cache-mode が全コマンドから消えていること
 # ------------------------------------------------------------------
 
 
-def _get_input_cache_mode_commands() -> list[
+def _all_commands_that_had_input_cache_mode() -> list[
     tuple[str, click.Command]
 ]:
-    """--input-cache-mode を持つ全コマンドを取得する．"""
+    """かつて --input-cache-mode を持っていた全コマンド．"""
     return [
+        ("learn-model", learn_model.learn_model),
         ("benchmark-dataloader", utility.benchmark_dataloader),
         ("benchmark-training", utility.benchmark_training),
     ]
 
 
-def _get_input_cache_mode_commands_with_modules() -> list[
-    tuple[str, click.Command, types.ModuleType]
-]:
-    """--input-cache-mode を持つ全コマンドとそのモジュールを取得する．
-
-    デコレータで包まれたコールバックからモジュールを特定できないため，
-    コマンドとモジュールの対応を明示的に定義する．
-    """
-    return [
-        (
-            "benchmark-dataloader",
-            utility.benchmark_dataloader,
-            utility,
-        ),
-        (
-            "benchmark-training",
-            utility.benchmark_training,
-            utility,
-        ),
-    ]
-
-
 @pytest.mark.parametrize(
     "name,command",
-    _get_input_cache_mode_commands(),
-    ids=[c[0] for c in _get_input_cache_mode_commands()],
-)
-def test_input_cache_mode_choices_consistency(
-    name: str, command: click.Command
-) -> None:
-    """全コマンドの--input-cache-modeがfile, memory, mmapを受け付けることを確認する．"""
-    option = _find_option(command, "--input-cache-mode")
-    assert option is not None, (
-        f"{name} に --input-cache-mode オプションがありません"
-    )
-    assert isinstance(option.type, click.Choice)
-    choices = set(option.type.choices)
-    assert choices == {"file", "memory", "mmap"}, (
-        f"{name} の --input-cache-mode choices が不正です: {choices}"
-    )
-
-
-@pytest.mark.parametrize(
-    "name,command",
-    _get_input_cache_mode_commands(),
-    ids=[c[0] for c in _get_input_cache_mode_commands()],
-)
-def test_input_cache_mode_default_is_file(
-    name: str, command: click.Command
-) -> None:
-    """全コマンドの--input-cache-modeのデフォルト値がfileであることを確認する．"""
-    option = _find_option(command, "--input-cache-mode")
-    assert option is not None
-    assert option.default == "file", (
-        f"{name} の --input-cache-mode default が 'file' ではありません: {option.default!r}"
-    )
-
-
-@pytest.mark.parametrize(
-    "name,command,module",
-    _get_input_cache_mode_commands_with_modules(),
+    _all_commands_that_had_input_cache_mode(),
     ids=[
-        c[0]
-        for c in _get_input_cache_mode_commands_with_modules()
+        c[0] for c in _all_commands_that_had_input_cache_mode()
     ],
 )
-def test_input_cache_mode_has_mmap_deprecation(
-    name: str,
-    command: click.Command,
-    module: types.ModuleType,
+def test_input_cache_mode_is_gone_everywhere(
+    name: str, command: click.Command
 ) -> None:
-    """全コマンドにmmap→file変換のdeprecation warningが含まれることを確認する．"""
-    import inspect
+    """--input-cache-mode がどのコマンドにも残っていないこと．
 
-    # command.callback はデコレータ(handle_exception)で包まれており，
-    # inspect.getmodule が common.py を返すため，モジュールを明示的に渡す
-    module_source = inspect.getsource(module)
-    assert "'mmap' is deprecated" in module_source, (
-        f"{name} のモジュールに mmap→file の deprecation warning ロジックがありません"
-    )
+    `/audit-backlog` 2026-08-14 / backlog 行 D5 + O5(d)．
+
+    ``cache_mode`` は「全ファイルをメモリへ 1 本に結合するか」の
+    ノブだったが，両モードとも ``__init__`` で全ロードする点は同じで，
+    ``memory`` 側は結合の前後で入力を保持するためピークが 2 倍になる
+    footgun だった．結合した単一配列を必要とする caller はゼロだったので
+    ノブごと廃止した (2026-08-14 のユーザ判断)．
+
+    ``learn-model`` にだけ無いという層をまたいだ非対称 (O5(d)) も，
+    公開するノブが無くなったことで自動的に解消する．
+    """
+    assert (
+        _find_option(command, "--input-cache-mode") is None
+    ), f"{name} に廃止済みの --input-cache-mode が残っています"
+
+
+def test_no_command_advertises_a_cache_mode_option() -> None:
+    """``cache-mode`` を名前に含むオプションがそもそも無いこと．"""
+    for (
+        name,
+        command,
+    ) in _all_commands_that_had_input_cache_mode():
+        offenders = [
+            opt
+            for opt in get_command_options(command)
+            if "cache-mode" in opt
+        ]
+        assert offenders == [], (
+            f"{name} に cache-mode 系オプションが残っています: {offenders}"
+        )
 
 
 # ------------------------------------------------------------------
@@ -405,3 +370,67 @@ def test_learn_model_removed_options_not_in_help() -> None:
         assert opt not in learn_options, (
             f"learn-model に削除済みオプション --{opt} が残っています"
         )
+
+
+# ------------------------------------------------------------------
+# ローカルキャッシュの有効化は dir に一本化されている
+# ------------------------------------------------------------------
+
+
+def _commands_with_cloud_input() -> list[
+    tuple[str, click.Command]
+]:
+    """クラウド入力を受け付ける全コマンド．"""
+    return [
+        ("pre-process", pre_process.pre_process),
+        ("benchmark-dataloader", utility.benchmark_dataloader),
+        ("benchmark-training", utility.benchmark_training),
+    ]
+
+
+@pytest.mark.parametrize(
+    "name,command",
+    _commands_with_cloud_input(),
+    ids=[c[0] for c in _commands_with_cloud_input()],
+)
+def test_input_local_cache_flag_is_gone(
+    name: str, command: click.Command
+) -> None:
+    """bool flag ``--input-local-cache`` が残っていないこと．
+
+    `/audit-backlog` 2026-08-14 / backlog 行 O5(a)．
+
+    flag は BigQuery の ``use_local_cache=`` にしか渡っておらず，
+    S3/GCS の分岐は ``--input-local-cache-dir`` だけを見ていた．
+    ``--input-s3`` に flag だけを渡すと S3 の elif を外れ，入力ソースが
+    未指定であるかのような誤誘導エラーで停止していた．
+    2026-08-14 のユーザ判断で dir に一本化した．
+    """
+    options = get_command_options(command)
+    assert "input-local-cache" not in options, (
+        f"{name} に廃止済みの --input-local-cache が残っています"
+    )
+
+
+@pytest.mark.parametrize(
+    "name,command",
+    _commands_with_cloud_input(),
+    ids=[c[0] for c in _commands_with_cloud_input()],
+)
+def test_input_local_cache_dir_is_the_only_switch(
+    name: str, command: click.Command
+) -> None:
+    """キャッシュ系オプションが ``--input-local-cache-dir`` 1 本であること．"""
+    options = get_command_options(command)
+    assert "input-local-cache-dir" in options, (
+        f"{name} に --input-local-cache-dir がありません"
+    )
+    local_cache_options = {
+        opt
+        for opt in options
+        if opt.startswith("input-local-cache")
+    }
+    assert local_cache_options == {"input-local-cache-dir"}, (
+        f"{name} のローカルキャッシュ系オプションが "
+        f"1 本になっていません: {sorted(local_cache_options)}"
+    )

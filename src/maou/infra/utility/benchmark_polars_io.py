@@ -386,7 +386,6 @@ class PerformanceBenchmark:
         polars_datasource = FileDataSource(
             file_paths=[polars_path],
             array_type="preprocessing",
-            cache_mode="memory",
         )
 
         start = time.perf_counter()

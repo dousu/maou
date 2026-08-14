@@ -159,14 +159,6 @@ def describe_missing_input_options(
     default=4,
 )
 @click.option(
-    "--input-local-cache",
-    type=bool,
-    is_flag=True,
-    help="Enable local caching of cloud data.",
-    default=False,
-    required=False,
-)
-@click.option(
     "--input-local-cache-dir",
     type=str,
     help="Directory path for storing the local cache of cloud data.",
@@ -388,7 +380,6 @@ def pre_process(
     input_clustering_key: str | None,
     input_partitioning_key_date: str | None,
     input_max_workers: int,
-    input_local_cache: bool,
     input_local_cache_dir: str | None,
     input_enable_bundling: bool,
     input_bundle_size_gb: float,
@@ -469,7 +460,6 @@ def pre_process(
                     max_cached_bytes=input_max_cached_bytes,
                     clustering_key=input_clustering_key,
                     partitioning_key_date=input_partitioning_key_date,
-                    use_local_cache=input_local_cache,
                     local_cache_dir=input_local_cache_dir,
                 )
             except Exception as e:

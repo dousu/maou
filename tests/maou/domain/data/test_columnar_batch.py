@@ -310,12 +310,14 @@ class TestColumnarBatchNbytes:
 
     `/audit-backlog` 2026-08-13 / backlog 行 FS-D5 (分離した見積り部分)．
 
-    ``FileDataSource.FileManager._concatenate_columnar`` は
-    ``cache_mode='memory'`` の OOM 警告のために合計バイト数を
+    かつての ``FileDataSource.FileManager._concatenate_columnar`` は
+    全ファイル結合前の OOM 警告のために合計バイト数を
     **6 フィールド手書き**で足しており，7 番目の ``move_win_rate``
     ((N, MOVE_LABELS_NUM) float32) を数え落としていた．最大級の
     フィールドが抜けるため 40GB 級の入力が 18GB と報告され，32GB
-    閾値に掛からなかった．
+    閾値に掛からなかった．結合経路は ``cache_mode`` ノブごと
+    2026-08-14 に廃止されたが (backlog 行 D5)，列挙を避ける規律を
+    固定する意味は残るのでこのテストは維持する．
 
     合計は ``dataclasses.fields`` から導出するようにしたので，ここでは
     「導出であること」— 新しい配列フィールドが追加されても自動的に

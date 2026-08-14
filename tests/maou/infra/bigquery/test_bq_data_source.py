@@ -571,7 +571,6 @@ class TestBigQueryDataSource:
             array_type="hcpe",
             dataset_id=self.dataset_id,
             table_name=self.table_name,
-            use_local_cache=True,
             local_cache_dir=str(local_cache_dir),
         )
 
@@ -634,7 +633,6 @@ class TestBigQueryDataSource:
             array_type="hcpe",
             dataset_id=self.dataset_id,
             table_name=self.table_name,
-            use_local_cache=True,
             local_cache_dir=str(local_cache_dir),
         )
 
@@ -648,7 +646,6 @@ class TestBigQueryDataSource:
             array_type="hcpe",
             dataset_id=self.dataset_id,
             table_name=self.table_name,
-            use_local_cache=True,
             local_cache_dir=str(local_cache_dir),
         )
 
@@ -711,7 +708,6 @@ class TestBigQueryDataSource:
             array_type="hcpe",
             dataset_id=self.dataset_id,
             table_name=self.table_name,
-            use_local_cache=True,
             local_cache_dir=str(local_cache_dir),
         )
 
@@ -774,7 +770,6 @@ class TestBigQueryDataSource:
             array_type="hcpe",
             dataset_id=self.dataset_id,
             table_name=self.table_name,
-            use_local_cache=True,
             local_cache_dir=str(local_cache_dir),
             clustering_key="id",
         )

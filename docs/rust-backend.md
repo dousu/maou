@@ -675,7 +675,6 @@ from maou.infra.file_system.file_data_source import FileDataSource
 datasource = FileDataSource(
     file_paths=[Path("data.feather")],
     array_type="hcpe",
-    cache_mode="file",
 )
 
 for name, df in datasource.iter_batches_df():

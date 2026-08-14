@@ -47,7 +47,6 @@ class TestLogTrainingConfig:
             "policy_loss_ratio": 1.0,
             "value_loss_ratio": 1.0,
             "datasource_type": "hcpe",
-            "input_cache_mode": "file",
         }
         defaults.update(overrides)
         config = MagicMock()

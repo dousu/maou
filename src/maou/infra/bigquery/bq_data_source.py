@@ -40,7 +40,6 @@ class BigQueryDataSource(
             max_cached_bytes: int = 100 * 1024 * 1024,
             clustering_key: str | None = None,
             partitioning_key_date: str | None = None,
-            use_local_cache: bool = False,
             local_cache_dir: str | None = None,
             sample_ratio: float | None = None,
         ) -> None:
@@ -53,7 +52,6 @@ class BigQueryDataSource(
                     max_cached_bytes=max_cached_bytes,
                     clustering_key=clustering_key,
                     partitioning_key_date=partitioning_key_date,
-                    use_local_cache=use_local_cache,
                     local_cache_dir=local_cache_dir,
                     sample_ratio=sample_ratio,
                 )
@@ -95,7 +93,6 @@ class BigQueryDataSource(
             max_cached_bytes: int,
             clustering_key: str | None,
             partitioning_key_date: str | None = None,
-            use_local_cache: bool = False,
             local_cache_dir: str | None = None,
             sample_ratio: float | None = None,
         ) -> None:
@@ -117,13 +114,15 @@ class BigQueryDataSource(
             self.array_type = array_type
             self.__pruning_info = []
 
-            # ローカルキャッシュの設定
-            self.use_local_cache = use_local_cache
+            # ローカルキャッシュの設定．
+            # 有効化の判定はディレクトリの有無**だけ**で行う．
+            # かつては bool flag (--input-local-cache) と dir が別々にあり，
+            # BigQuery だけが flag を見て S3/GCS は dir を見ていたため，
+            # 「どちらがキャッシュを有効にするのか」が層をまたいで割れていた
+            # (backlog 行 O5(a))．判定を 1 箇所に寄せて食い違いを構造的に消す．
+            self.use_local_cache = local_cache_dir is not None
             if self.use_local_cache:
-                if local_cache_dir is None:
-                    raise ValueError(
-                        "local_cache_dir must be specified when use_local_cache is True"
-                    )
+                assert local_cache_dir is not None
                 self.local_cache_dir = Path(local_cache_dir)
                 self.local_cache_dir.mkdir(
                     parents=True, exist_ok=True
@@ -644,7 +643,6 @@ class BigQueryDataSource(
         partitioning_key_date: str | None = None,
         page_manager: PageManager | None = None,
         indicies: list[int] | np.ndarray | None = None,
-        use_local_cache: bool = False,
         local_cache_dir: str | None = None,
         sample_ratio: float | None = None,
     ) -> None:
@@ -659,8 +657,8 @@ class BigQueryDataSource(
             clustering_key (str | None): クラスタリングキーの列名 (指定されると各クラスタ単位で取得)
             page_manager (PageManager | None): PageManager
             indicies (list[int] | np.ndarray | None): 選択可能なインデックス
-            use_local_cache (bool): ローカルキャッシュを使用するかどうか
-            local_cache_dir (str | None): ローカルキャッシュディレクトリのパス
+            local_cache_dir (str | None): ローカルキャッシュディレクトリのパス．
+              指定するとローカルキャッシュが有効になる (None なら無効)．
             sample_ratio (float | None): サンプリング割合 (0.01-1.0, None=全データ)
         """
         if page_manager is None:
@@ -677,7 +675,6 @@ class BigQueryDataSource(
                     max_cached_bytes=max_cached_bytes,
                     clustering_key=clustering_key,
                     partitioning_key_date=partitioning_key_date,
-                    use_local_cache=use_local_cache,
                     local_cache_dir=local_cache_dir,
                     sample_ratio=sample_ratio,
                 )
