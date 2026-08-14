@@ -258,8 +258,10 @@ manual pass over every diff.
   open, with sharpened reasoning recorded), or rejected (won't do, recorded
   as such). Silently dropping a selected item is the one outcome that is
   not allowed.
-- **A backlog row is deleted when its fix has merged — not when it is
-  written.** An unmerged PR is an open finding (step 6a).
+- **A backlog row is deleted in the PR that carries its fix**, whenever
+  the two cannot merge apart. A row is kept only when its fix could land
+  — or fail to land — independently of the deletion, which in practice
+  means a judgment-band PR stacked above the `audits/` PR (step 6a).
 - **Ask at most once per run, and only under the test above.** A judgment
   class is a reason to open a PR unmerged, not a reason to interrupt.
 - **Every PR of the run is chained into one stack** (step 5b), and
@@ -267,6 +269,13 @@ manual pass over every diff.
   on `main`" case: the version bump and `uv.lock` make siblings conflict by
   construction, and every merge into `main` triggers a wheel build. The run
   lands on `main` once.
+- **One merge into `main` per run — bookkeeping included.** The ledger
+  update is part of the run, not a sequel to it: a row deletion, a
+  `reviews/` status transition, and the run's record all ride in the run's
+  single PR (6a). **Never open a follow-up PR into `main` to finish the
+  paperwork** — if a decision arrives too late for this run's PR, the next
+  run picks it up through step 2 (stale) and step 1e (merged-after-the-fact)
+  at no extra cost.
 
 ## Steps
 
@@ -324,9 +333,11 @@ work an earlier run could not finish itself:
 - **Stale stacks.** A PR still based on a merged or deleted branch shows a
   meaningless diff. Retarget and refresh it per 5b before anything else
   reads it.
-- **Merged PRs whose rows are still present.** 6a deletes a row when its
-  fix *merges*, and the merge often happens after the run ended. Confirm
-  against `main` and delete the row now, noting it in this run's record.
+- **Merged PRs whose rows are still present.** A row kept under 6a's
+  separability test outlives its PR when the merge happens after the run
+  ended. Confirm against `main`, delete the row **in this run's own PR**,
+  and note it in this run's record. This is the designed recovery path —
+  it is why a late decision never justifies a bookkeeping-only PR.
 - **`reviews/` proposals left `pending` whose decision has since been
   taken** (the PR carrying them merged, or the user answered on it). Apply
   the proposal, commit, set `status: applied` + `applied_in: <sha>`. This
@@ -570,6 +581,14 @@ If the session was handed a designated branch it must develop on, that
 mandate wins: commit everything there, open the single PR from it, and say
 in the report that class-per-PR was collapsed and why.
 
+**A collapsed run is all-or-nothing, and that changes 6a.** With one PR
+there is no way for the user to accept some items and reject others — the
+whole branch merges or it does not. So the ledger update belongs *inside*
+that PR: delete the rows for everything the PR ships, in the PR that ships
+it. Keeping them "until it merges" is what forces a second PR into `main`
+afterwards, which 5b exists to prevent. The commits are the review units
+here, so make each one a coherent class and say so in the body.
+
 **5b. Chain EVERY PR of the run into one stack. Exactly one of them
 targets `main`.**
 
@@ -720,8 +739,11 @@ to merge; the one-check principle exists precisely to avoid asking the same
 thing twice.
 
 If the user *does* answer in this session, apply what they decided, re-run
-the QA, and merge under 5d's conditions. If they do not, the PR **is** the
-handoff, and the backlog row stays put until it merges (6a).
+the QA, and merge under 5d's conditions — folding the ledger update into
+the same PR **before** merging it, never into a follow-up (6a). If they do
+not, the PR **is** the handoff, and whether its row stays put is 6a's
+separability test: kept when the PR can merge apart from the ledger,
+deleted with the fix when it cannot.
 
 **5f. Hand the PRs over as a row → PR table in the conversation.** The
 second moment in the standing principle above. The moment a judgment-band
@@ -748,17 +770,48 @@ the same breath, since "one PR" otherwise reads as "one decision."
 Three separate bookkeeping duties. All are required; the first is the one
 that keeps the backlog from growing forever.
 
-**6a. Delete the rows whose fixes have MERGED** — from **either** the
-Deferred backlog or the Out-of-scope backlog, whichever table held them.
-This is the step that makes consumption real; without it the finding is
-still open as far as every future run is concerned.
+**6a. Delete the rows in the PR that carries their fix** — from **either**
+the Deferred backlog or the Out-of-scope backlog, whichever table held
+them. This is the step that makes consumption real; without it the finding
+is still open as far as every future run is concerned.
 
-Merged, not written. A row whose fix sits in an open judgment-band PR is
-**still open**: the PR can be rejected, reworked, or closed, and a row
-deleted on the strength of an unmerged branch would take the finding out of
-the ledger with nothing on `main` to show for it. Keep the row and append
-the PR link to its text, so the next run sees the work is already in
-flight instead of starting it again.
+**The test is separability, not merge timing.** The reason a row is not
+deleted on the strength of an unmerged branch is that the PR can be
+rejected, reworked, or closed — leaving the ledger claiming a fix that
+`main` does not have. That risk exists only when the deletion and the fix
+can **diverge**: when they sit in different PRs that merge independently.
+
+So apply this test, not a calendar:
+
+- **The deletion rides in the same PR as its fix** → delete the row **in
+  that PR**. Merging accepts both; closing discards both. They cannot
+  diverge, so there is nothing to protect against. This is always the case
+  for a run collapsed into one PR (the designated-branch case in 5a), and
+  it is the normal case.
+- **The deletion would ride in a PR that can merge without its fix** →
+  keep the row and append the PR link to its text, so the next run sees
+  the work is in flight instead of starting it again. In a stack this is
+  the bottom (`audits/`) PR versus a judgment-band PR above it: the user
+  can close the upper PR and the bottom one still merges. Write those
+  deletions into the bottom branch only once the item is accepted, before
+  the single merge into `main`.
+
+**MUST NOT open a PR into `main` whose only content is ledger
+bookkeeping.** A row deletion is not worth a merge commit and a wheel
+build (5b), and it never needs one — when a decision lands after the run
+has ended, the **next** run collects it for free: step 2 re-verifies every
+row and marks one whose fix already shipped as **stale**, and step 1e
+deletes rows for PRs that merged after the fact. Both fold the deletion
+into that run's own single PR.
+
+A row that is one run stale costs one re-verification, which step 2
+performs anyway. A second merge into `main` costs a wheel build and
+breaks the one-merge-per-run property outright. Those are not close.
+
+The failure this prevents is concrete: the run of 2026-08-13 was collapsed
+into a single PR, kept its rows because that PR was unmerged, and so
+needed a **second** PR after the merge purely to delete them — two merges
+into `main` and two wheel builds for one run's worth of work.
 
 Also delete rows that step 2 found **stale**, noting in 6c that they were
 already fixed elsewhere rather than fixed here. Do **not** delete a row that
@@ -802,9 +855,10 @@ rather than a path audit. Body:
 - **Applied** — the fixes, with `file:line` and commit SHA.
 - **In flight** — judgment-band PRs left open, with their PR number, their
   base (`main`, or the PR they are stacked on and why), and the question
-  outstanding. Their backlog rows are still present by design (6a); this
-  section says why, and it is what step 1e of the next run reads to pick
-  them back up.
+  outstanding. Say for each whether its row was deleted here (the PR
+  carries both) or kept (the PR can merge apart from the ledger) — that is
+  6a's test, and this section is what step 1e of the next run reads to
+  pick the work back up.
 - **Re-triaged** — items selected but left open, with the sharpened reason.
   This is the section that earns the run its keep: a second impasse on the
   same item is far more informative than the first.
@@ -823,9 +877,15 @@ check as `/audit-and-fix` step 9x, and it applies here for the same
 reason: 6c tells you to *append* new out-of-scope items but never makes
 you verify the mapping is total. Assign every item this run touched, and
 every new finding it noticed, exactly one disposition — **resolved** (row
-deleted, fix merged) / **in flight** (row kept, PR linked) / **re-triaged**
-(row kept, text sharpened) / **new row** (id) / **not a finding** (reason).
+deleted in the PR that carries its fix) / **in flight** (row kept because
+its PR can merge apart from the ledger, PR linked) / **re-triaged** (row
+kept, text sharpened) / **new row** (id) / **not a finding** (reason).
 An item you cannot assign is the defect the check exists to catch.
+
+Note that **resolved** is decided by 6a's separability test, not by
+whether the merge button has been pressed yet. A collapsed single-PR run
+resolves its items *in that PR*; expecting to come back later and delete
+the rows is what produces a second merge into `main`.
 
 The two failure modes named in step 9x apply verbatim: consolidating
 several findings into one readable row drops the ones the merged prose
@@ -936,7 +996,14 @@ Keep the derive-never-enumerate property:
 - **A run that produces exactly one PR** — fine, and it is already the
   shape 5b converges on: one chain, one merge into `main`. Do not split a
   single coherent change into a stack to make the stack look used; do not
-  un-chain a multi-class run to avoid a stack.
+  un-chain a multi-class run to avoid a stack. Remember that a single PR
+  is all-or-nothing, so its ledger deletions go **in** it (6a) — the one
+  way to turn a one-PR run into a two-merge run is to leave the paperwork
+  for afterwards.
+- **A new kind of bookkeeping** (a new status file, a new index) — route
+  it by 6a's separability test, not by adding a case here: if it can only
+  be correct once the run's fixes land, it ships in the same PR as those
+  fixes. Bookkeeping never earns its own merge into `main`.
 - **A repo that stops building a wheel on `push: main`** — 5b's second
   reason weakens but the first does not. The version-bump rule alone still
   makes siblings off `main` conflict pairwise, so keep the chain.
