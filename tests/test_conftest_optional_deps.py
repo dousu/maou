@@ -19,6 +19,8 @@ _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 _is_optional_dep_error = _mod._is_optional_dep_error
 _check_import_attr_error = _mod._check_import_attr_error
+_format_uncollected_summary = _mod.format_uncollected_summary
+_pytest_make_collect_report = _mod.pytest_make_collect_report
 
 
 class TestIsOptionalDepError:
@@ -153,3 +155,89 @@ class TestCheckImportAttrError:
             side_effect=RuntimeError("something else"),
         ):
             assert _check_import_attr_error(exc) is None
+
+
+class TestFormatUncollectedSummary:
+    """Tests for the uncollected-module terminal summary.
+
+    A collect-phase skip drops a whole module, which pytest's
+    tail reports as a single skip.  These tests pin that the
+    drop is stated explicitly instead.
+    """
+
+    def test_empty_when_nothing_was_dropped(self) -> None:
+        """No modules dropped means no summary at all."""
+        assert _format_uncollected_summary({}) == []
+
+    def test_names_dep_module_count_and_paths(self) -> None:
+        """The summary must name the dep, the count and the paths."""
+        lines = _format_uncollected_summary(
+            {
+                "torch": {
+                    "tests/a/test_one.py",
+                    "tests/a/test_two.py",
+                }
+            }
+        )
+        text = "\n".join(lines)
+        assert "torch" in text
+        assert "2 module(s) skipped entirely" in text
+        assert "tests/a/test_one.py" in text
+        assert "tests/a/test_two.py" in text
+
+    def test_reports_every_dependency(self) -> None:
+        """Each missing dependency gets its own line."""
+        lines = _format_uncollected_summary(
+            {
+                "torch": {"tests/a/test_one.py"},
+                "gradio": {"tests/b/test_two.py"},
+            }
+        )
+        text = "\n".join(lines)
+        assert "torch" in text
+        assert "gradio" in text
+
+    def test_collect_hook_records_the_dropped_module(
+        self,
+    ) -> None:
+        """The collect hook must feed the summary accumulator.
+
+        Without this the summary stays empty in exactly the
+        situation it exists for.
+        """
+        recorded: dict[str, set[str]] = _mod._UNCOLLECTED_BY_DEP
+        before = {
+            dep: set(paths) for dep, paths in recorded.items()
+        }
+        try:
+            recorded.clear()
+
+            class _Report:
+                outcome = "failed"
+                longrepr = "ModuleNotFoundError: No module named 'torch'"
+
+            class _Collector:
+                path = Path("tests/a/test_dropped.py")
+
+            gen = _pytest_make_collect_report(_Collector())
+            next(gen)
+            with pytest.raises(StopIteration):
+                gen.send(_FakeOutcome(_Report()))
+
+            assert recorded == {
+                "torch": {str(Path("tests/a/test_dropped.py"))}
+            }
+        finally:
+            recorded.clear()
+            recorded.update(before)
+
+
+class _FakeOutcome:
+    """Stand-in for the pluggy result handed to a hookwrapper."""
+
+    def __init__(self, result: object) -> None:
+        self._result = result
+
+    def get_result(self) -> object:
+        """Return the wrapped report."""
+        return self._result

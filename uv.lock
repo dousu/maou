@@ -1498,7 +1498,7 @@ wheels = [
 
 [[package]]
 name = "maou"
-version = "0.89.11"
+version = "0.89.12"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
