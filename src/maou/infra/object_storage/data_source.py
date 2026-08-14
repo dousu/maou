@@ -42,7 +42,7 @@ class ObjectStorageDataSource(
             max_workers: int = 8,
             max_cached_bytes: int = 100 * 1024 * 1024,
             sample_ratio: float | None = None,
-            enable_bundling: bool = True,
+            enable_bundling: bool = False,
             bundle_size_gb: float = 1.0,
         ) -> None:
             self.__page_manager = cls_ref.PageManager(
@@ -405,7 +405,12 @@ class ObjectStorageDataSource(
             sample_ratio (float | None): サンプリング割合 (0.01-1.0, None=全データ)
             max_workers (int): 並列ダウンロード数 (デフォルト: 8)
             max_cached_bytes (int):
-              キャッシュの上限サイズ (バイト単位，デフォルト100MB)
+              並列ダウンロードのチャンク幅の元になる値 (バイト単位，
+              デフォルト100MB)．1チャンクの上限は
+              ``max_cached_bytes / max_workers`` で決まる．
+              **キャッシュの上限ではない** — このクラスに
+              キャッシュ退避の機構は無い (退避予算として使うのは
+              ``BigQueryDataSource`` の同名引数の方)
             array_type (str): 配列タイプ ("hcpe" or "preprocessing")
             enable_bundling (bool): バンドリング機能を有効にするかどうか (デフォルト: False)
             bundle_size_gb (float): バンドルサイズ (GB) (デフォルト: 1.0)
