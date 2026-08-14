@@ -12,8 +12,12 @@ import logging
 import time
 from collections.abc import Generator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    import polars as pl
 
 from maou.interface.data_io import load_hcpe_df
 from maou.interface.data_schema import convert_hcpe_df_to_numpy
@@ -147,6 +151,60 @@ class StreamingHcpeDataSource(DataSource):
                 t_total,
             )
             yield fp.name, arr
+
+    def iter_batches_df(
+        self,
+    ) -> Generator[tuple[str, pl.DataFrame], None, None]:
+        """ファイル単位で Polars DataFrame を yield する．
+
+        この実装は **HCPE スキーマ決め打ち**である．2026-08-14 まで
+        ``preprocess.DataSource`` の**既定実装**として基底に置かれて
+        いたもので，``preprocessing`` 型のソースが override を忘れると
+        黙って誤ったスキーマを当てていた (backlog 行 N6-2)．基底の
+        既定実装を廃して abstract にし，本体を「HCPE 専用であることが
+        クラス名から明らかな」唯一の継承者であるここへ移した．
+
+        Yields:
+            tuple[str, pl.DataFrame]: (ファイル名, DataFrame)
+        """
+        try:
+            import polars as pl
+        except ImportError:
+            raise ImportError(
+                "polars is required for DataFrame iteration. "
+                "Install with: uv add polars"
+            )
+
+        from maou.domain.data.schema import (
+            get_hcpe_polars_schema,
+        )
+
+        schema = get_hcpe_polars_schema()
+
+        for name, array in self.iter_batches():
+            # structured array を列ごとの list へ展開する
+            data = {}
+            assert array.dtype.names is not None
+            assert array.dtype.fields is not None
+            for field in array.dtype.names:
+                field_data = array[field]
+                field_dtype = array.dtype.fields[field][0]
+
+                # バイナリ列 (uint8 の多次元) は bytes へ畳む
+                if field == "hcp" or (
+                    field_dtype.shape
+                    and field_dtype.base == np.dtype("uint8")
+                ):
+                    data[field] = [
+                        bytes(row)
+                        if hasattr(row, "__iter__")
+                        else bytes([row])
+                        for row in field_data
+                    ]
+                else:
+                    data[field] = field_data.tolist()
+
+            yield name, pl.DataFrame(data, schema=schema)
 
     def total_pages(self) -> int:
         """バッチ(ファイル)数を返す."""

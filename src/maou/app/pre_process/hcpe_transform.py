@@ -73,9 +73,16 @@ class DataSource(abc.ABC):
     ``ABCMeta`` を使っていなかったので，これらのデコレータは
     documentation 以上の意味を持たなかった．
 
-    注意: 抽象メソッドは 3 本ある (``__len__`` / ``iter_batches`` /
-    ``total_pages``)．``total_pages`` は具象 ``iter_batches_df`` の
-    **下**にあるので見落としやすい．
+    注意: 抽象メソッドは 4 本ある (``__len__`` / ``iter_batches`` /
+    ``iter_batches_df`` / ``total_pages``)．
+
+    ``iter_batches_df`` は 2026-08-14 まで**具象の既定実装**を持って
+    いたが，その本体は ``get_hcpe_polars_schema()`` 決め打ちで，
+    ``preprocessing`` 型のソースが override を忘れると黙って誤った
+    スキーマを当てていた (backlog 行 N6-2)．既定実装を消して abstract に
+    することで，その取り違えが**構築時に**捕まるようにしてある．
+    HCPE 決め打ちの本体は，唯一それを着ていた HCPE 専用クラス
+    ``StreamingHcpeDataSource`` に移した．
     """
 
     @abc.abstractmethod
@@ -92,60 +99,20 @@ class DataSource(abc.ABC):
             tuple[str, np.ndarray]: (batch_name, numpy_array)
         """
 
+    @abc.abstractmethod
     def iter_batches_df(
         self,
     ) -> Generator[tuple[str, pl.DataFrame], None, None]:
         """Iterate over batches as Polars DataFrames (modern)．
 
-        Default implementation converts numpy arrays to DataFrames．
-        Subclasses can override for more efficient implementations．
+        **既定実装は無い．** 実装は自身の ``array_type`` に合った
+        スキーマを当てる責務を負う — 基底が HCPE 決め打ちの既定実装を
+        提供していた頃は，``preprocessing`` 型のソースが override を
+        忘れると黙って誤動作した (backlog 行 N6-2)．
 
         Yields:
             tuple[str, pl.DataFrame]: (batch_name, polars_dataframe)
         """
-        try:
-            import polars as pl
-        except ImportError:
-            raise ImportError(
-                "polars is required for DataFrame iteration. "
-                "Install with: uv add polars"
-            )
-
-        from maou.domain.data.schema import (
-            get_hcpe_polars_schema,
-        )
-
-        schema = get_hcpe_polars_schema()
-
-        # Default: convert numpy arrays to DataFrames
-        import numpy as np
-
-        for name, array in self.iter_batches():
-            # Convert structured array to dict of lists
-            data = {}
-            assert array.dtype.names is not None
-            assert array.dtype.fields is not None
-            for field in array.dtype.names:
-                field_data = array[field]
-                field_dtype = array.dtype.fields[field][0]
-
-                # Handle binary fields (convert uint8 arrays to bytes)
-                if field == "hcp" or (
-                    field_dtype.shape
-                    and field_dtype.base == np.dtype("uint8")
-                ):
-                    # Multi-dimensional uint8 field like hcp - convert to bytes
-                    data[field] = [
-                        bytes(row)
-                        if hasattr(row, "__iter__")
-                        else bytes([row])
-                        for row in field_data
-                    ]
-                else:
-                    data[field] = field_data.tolist()
-
-            df = pl.DataFrame(data, schema=schema)
-            yield name, df
 
     @abc.abstractmethod
     def total_pages(self) -> int:

@@ -14,7 +14,7 @@ from typing import (
 
 import numpy as np
 
-from maou.interface import learn, preprocess
+from maou.interface import learn
 from maou.interface.data_io import (
     COLUMNAR_CONVERTERS,
     ColumnarBatch,
@@ -44,9 +44,23 @@ class MissingFileDataConfig(Exception):
     pass
 
 
-class FileDataSource(
-    learn.LearningDataSource, preprocess.DataSource
-):
+class FileDataSource(learn.LearningDataSource):
+    """学習経路 (``learn.LearningDataSource``) 用のファイルデータソース．
+
+    **pre-process 経路のソースではない．** 2026-08-14 まで
+    ``preprocess.DataSource`` も継承していたが，その役割は
+    ``StreamingHcpeDataSource`` (``console/pre_process.py`` が構築する)
+    へ移っており，継承だけが残っていた (backlog 行 D14(b))．
+    pre-process にファイル群を渡すときは ``StreamingHcpeDataSource`` を
+    使うこと — 全ファイルを初期化時にロードしない分ピークメモリが低い．
+
+    ``iter_batches`` / ``iter_batches_df`` / ``total_pages`` は具象
+    メソッドとして残してある．``benchmark_polars_io.py`` など，ABC を
+    経由せずこのクラスを直接使う呼び出し側があるためで，これらは
+    ``array_type`` で hcpe / preprocessing / stage1 / stage2 を分岐する
+    **汎用**の実装である (HCPE 専用ではない)．
+    """
+
     class FileDataSourceSpliter(
         learn.LearningDataSource.DataSourceSpliter
     ):

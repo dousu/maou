@@ -12,8 +12,8 @@ import polars as pl
 from maou.app.pre_process.hcpe_transform import PreProcess
 from maou.domain.data.rust_io import save_hcpe_df
 from maou.domain.data.schema import create_empty_hcpe_df
-from maou.infra.file_system.file_data_source import (
-    FileDataSource,
+from maou.infra.file_system.streaming_hcpe_source import (
+    StreamingHcpeDataSource,
 )
 
 
@@ -76,10 +76,7 @@ def test_preprocess_basic_transformation(
     output_dir.mkdir()
 
     # Create datasource
-    datasource = FileDataSource(
-        file_paths=input_paths,
-        array_type="hcpe",
-    )
+    datasource = StreamingHcpeDataSource(file_paths=input_paths)
 
     # Create preprocessing option
     option = PreProcess.PreProcessOption(
@@ -131,10 +128,7 @@ def test_preprocess_with_multiple_input_files(
     output_dir.mkdir()
 
     # Create datasource
-    datasource = FileDataSource(
-        file_paths=input_paths,
-        array_type="hcpe",
-    )
+    datasource = StreamingHcpeDataSource(file_paths=input_paths)
 
     # Run preprocessing
     option = PreProcess.PreProcessOption(
@@ -162,10 +156,7 @@ def test_preprocess_parallel_workers(tmp_path: Path) -> None:
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
-    datasource = FileDataSource(
-        file_paths=input_paths,
-        array_type="hcpe",
-    )
+    datasource = StreamingHcpeDataSource(file_paths=input_paths)
 
     # Use multiple workers
     option = PreProcess.PreProcessOption(
@@ -195,10 +186,7 @@ def test_preprocess_with_large_batch_size(
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
-    datasource = FileDataSource(
-        file_paths=input_paths,
-        array_type="hcpe",
-    )
+    datasource = StreamingHcpeDataSource(file_paths=input_paths)
 
     option = PreProcess.PreProcessOption(
         output_dir=output_dir,
@@ -266,10 +254,7 @@ def test_preprocess_with_input_splitting(
     output_dir = tmp_path / "output"
     output_dir.mkdir()
 
-    datasource = FileDataSource(
-        file_paths=split_paths,
-        array_type="hcpe",
-    )
+    datasource = StreamingHcpeDataSource(file_paths=split_paths)
 
     option = PreProcess.PreProcessOption(
         output_dir=output_dir,
@@ -302,8 +287,8 @@ def test_search_value_directory_is_applied(
     baseline_dir = tmp_path / "baseline"
     baseline_dir.mkdir()
     PreProcess(
-        datasource=FileDataSource(
-            file_paths=input_paths, array_type="hcpe"
+        datasource=StreamingHcpeDataSource(
+            file_paths=input_paths
         ),
         feature_store=None,
     ).transform(
@@ -328,8 +313,8 @@ def test_search_value_directory_is_applied(
     ).write_ipc(values_dir / "a.feather", compression="lz4")
 
     PreProcess(
-        datasource=FileDataSource(
-            file_paths=input_paths, array_type="hcpe"
+        datasource=StreamingHcpeDataSource(
+            file_paths=input_paths
         ),
         feature_store=None,
         search_value_paths=[values_dir],

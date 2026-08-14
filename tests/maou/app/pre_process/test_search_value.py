@@ -578,13 +578,20 @@ class _NoDataSource(DataSource):
     ``total_pages`` は「触られないから」という理由で長らく欠けていた．
     ``DataSource`` が ``abc.ABC`` になったので，欠けたままだと構築時に
     ``TypeError`` になる — それが ABC を入れた目的そのものなので，
-    ダミーであっても抽象メソッドは全部埋める．
+    ダミーであっても抽象メソッドは全部埋める．2026-08-14 に
+    ``iter_batches_df`` も abstract になったので (backlog 行 N6-2)，
+    ここにも足してある．
     """
 
     def __len__(self) -> int:
         return 0
 
     def iter_batches(self) -> Iterator[tuple[str, np.ndarray]]:
+        return iter(())
+
+    def iter_batches_df(
+        self,
+    ) -> Iterator[tuple[str, pl.DataFrame]]:
         return iter(())
 
     def total_pages(self) -> int:
