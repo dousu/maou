@@ -1,5 +1,6 @@
 ---
-status: pending
+status: applied
+applied_in: 3e0a498
 date: 2026-08-14
 target: [docs/testing-guide.md]
 risk: low
