@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import torch
@@ -647,3 +648,108 @@ class TestAdaptiveBatchIntegration:
         # controller.update() が呼ばれ，steps が 4 に変化していること
         assert loop.gradient_accumulation_steps == 4
         assert controller.update.call_count >= 1
+
+
+class _FakeCudaStream:
+    """順序保証の呼び出しだけを記録する ``torch.cuda.Stream`` の代役．"""
+
+    def __init__(self, name: str, log: list[str]) -> None:
+        self.name = name
+        self._log = log
+
+    def synchronize(self) -> None:
+        self._log.append(f"synchronize:{self.name}")
+
+    def wait_stream(self, other: _FakeCudaStream) -> None:
+        self._log.append(
+            f"wait_stream:{self.name}<-{other.name}"
+        )
+
+
+class TestIterateCudaOverlapOrdering:
+    """``_iterate_cuda_overlap`` がホストを止めずに順序を保つこと．
+
+    backlog 行 Deferred 6 の回帰テスト．元の実装は
+    ``stream.synchronize()`` で**ホスト**をブロックしており，この
+    メソッドが実装している prefetch の大部分を自分で潰していた．
+
+    **trap**: 「ホストを止めない」だけが目的なら同期行を削除しても
+    通ってしまうが，それでは計算ストリームが未完了の転送先を読む．
+    そこで ``compute_stream.wait_stream(transfer_stream)`` が
+    prefetch したバッチごとに 1 度呼ばれることまで固定する．
+    """
+
+    @staticmethod
+    def _run(
+        num_batches: int,
+    ) -> tuple[list[tuple[int, TrainingContext]], list[str]]:
+        log: list[str] = []
+        transfer = _FakeCudaStream("transfer", log)
+        compute = _FakeCudaStream("compute", log)
+
+        @contextmanager
+        def fake_stream_ctx(
+            stream: _FakeCudaStream,
+        ) -> Iterator[None]:
+            log.append(f"enter:{stream.name}")
+            yield
+            log.append(f"exit:{stream.name}")
+
+        loop = _make_loop()
+        dataset = _SimpleBatchDataset(num_batches)
+        dataloader = torch.utils.data.DataLoader(
+            dataset, batch_size=None, num_workers=0
+        )
+        with (
+            patch("torch.cuda.Stream", return_value=transfer),
+            patch(
+                "torch.cuda.current_stream",
+                return_value=compute,
+            ),
+            patch("torch.cuda.stream", fake_stream_ctx),
+        ):
+            results = list(
+                loop._iterate_cuda_overlap(
+                    dataloader, epoch_idx=0
+                )
+            )
+        return results, log
+
+    def test_host_is_never_blocked(self) -> None:
+        """ホスト側の ``synchronize()`` は 1 度も起きない．"""
+        results, log = self._run(3)
+
+        assert [idx for idx, _ in results] == [0, 1, 2]
+        assert [
+            e for e in log if e.startswith("synchronize:")
+        ] == []
+
+    def test_device_side_ordering_is_kept(self) -> None:
+        """prefetch したバッチごとに device 側の依存が 1 本入る．"""
+        _, log = self._run(3)
+
+        assert [
+            e for e in log if e.startswith("wait_stream:")
+        ] == [
+            "wait_stream:compute<-transfer",
+            "wait_stream:compute<-transfer",
+        ]
+
+    def test_wait_follows_the_transfer_it_guards(
+        self,
+    ) -> None:
+        """待機は，守っている転送の**後**に入る．"""
+        _, log = self._run(2)
+
+        assert log == [
+            "enter:transfer",
+            "exit:transfer",
+            "wait_stream:compute<-transfer",
+        ]
+
+    def test_single_batch_needs_no_ordering(self) -> None:
+        """バッチが 1 つなら prefetch が無いので待機も要らない．"""
+        results, log = self._run(1)
+
+        assert [idx for idx, _ in results] == [0]
+        assert log == []

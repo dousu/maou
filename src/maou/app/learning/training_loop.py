@@ -456,8 +456,15 @@ class TrainingLoop:
             # デフォルトストリームで現在のバッチを学習（H2D転送とオーバーラップ）
             yield batch_idx, current_ctx
 
-            # 次バッチの転送完了を待機
-            stream.synchronize()
+            # 次バッチの転送完了を待つ．``stream.synchronize()`` は
+            # **ホスト**をブロックするため，このメソッドが実装している
+            # prefetch の大部分を自分で潰していた (backlog 行 Deferred 6)．
+            # ``wait_stream`` は同じ順序保証を device 側で与える — 計算
+            # ストリームは転送ストリームがこの時点に到達するまで後続の
+            # 作業を始めない — 一方でホストは次バッチの発行へ進める．
+            # allocator の再利用ハザードは上の ``_record_stream`` が
+            # 別途カバーしているので，順序保証はこの 1 本で足りる．
+            compute_stream.wait_stream(stream)
             current_ctx = next_ctx
             batch_idx += 1
 

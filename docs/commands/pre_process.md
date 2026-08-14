@@ -55,9 +55,12 @@ exclusion and warns when extras are missing.【F:src/maou/infra/console/pre_proc
 ## Execution flow
 
 1. **Datasource resolution** – The CLI checks provider exclusivity, instantiates
-   a `DataSource` (local `FileDataSource`, `BigQueryDataSource`, `GCSDataSource`,
-   or `S3DataSource`), and pins `array_type="hcpe"` so only HCPE tensors enter
-   the workflow.【F:src/maou/infra/console/pre_process.py†L66-L360】
+   a `DataSource` (local `StreamingHcpeDataSource`, `BigQueryDataSource`,
+   `GCSDataSource`, or `S3DataSource`), and pins `array_type="hcpe"` so only HCPE
+   tensors enter the workflow. The local source streams one file at a time rather
+   than loading them all up front, so peak memory is one file rather than the whole
+   input; `FileDataSource` is the *learning* path's source and is not a
+   `preprocess.DataSource`.【F:src/maou/infra/console/pre_process.py†L66-L360】
 2. **Interface normalization** – `maou.interface.preprocess.transform` ensures
    the optional `--output-dir` is a directory, validates the worker count, and
    builds `PreProcess.PreProcessOption` plus the optional feature store.

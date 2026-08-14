@@ -19,6 +19,9 @@ from maou.infra.bigquery.bq_feature_store import (
 from maou.infra.file_system.file_data_source import (
     FileDataSource,
 )
+from maou.infra.file_system.streaming_hcpe_source import (
+    StreamingHcpeDataSource,
+)
 from maou.infra.s3.s3_data_source import S3DataSource
 from maou.infra.s3.s3_feature_store import S3FeatureStore
 
@@ -182,9 +185,8 @@ class TestIntegrationPreProcess:
                 max_workers=1,
             )
         )
-        datasource = FileDataSource(
-            file_paths=input_paths,
-            array_type="hcpe",
+        datasource = StreamingHcpeDataSource(
+            file_paths=input_paths
         )
         PreProcess(
             datasource=datasource,
@@ -256,9 +258,8 @@ class TestIntegrationPreProcess:
                 max_workers=1,
             )
         )
-        datasource = FileDataSource(
-            file_paths=input_paths,
-            array_type="hcpe",
+        datasource = StreamingHcpeDataSource(
+            file_paths=input_paths
         )
         PreProcess(
             datasource=datasource,
