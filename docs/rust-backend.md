@@ -806,4 +806,7 @@ for features, targets in dataloader:
 - Backend: Arrow IPC (Rust)
 - Size: LZ4 compressed (2-3x compression on typical game data)
 
-**Note**: Both formats are currently supported．Gradual migration recommended．
+**Note**: 移行は完了しており，`.npy` は**もう受け付けない**．
+`FileDataSource` / object storage / BigQuery キャッシュのいずれも
+`Only .feather files are supported` で拒否する．`.npy` で保存した
+データは `.feather` へ変換してから使うこと．
