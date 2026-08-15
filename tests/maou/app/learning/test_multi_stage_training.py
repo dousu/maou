@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import math
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -1065,4 +1066,205 @@ class TestStage3ModelAdapter:
         for key in network.state_dict():
             assert not key.startswith("_orig_mod."), (
                 f"Unexpected prefix in key: {key}"
+            )
+
+
+class TestStageRunLogText:
+    """Stage 1/2 の共通ループが出すログ文言を固定する回帰テスト．
+
+    `run_stage1_with_training_loop` と `run_stage2_with_training_loop` は
+    `_run_stage_with_training_loop` を `stage_label` / `metric_label` で
+    パラメータ化して共有している．統合前はステージ名とメトリクス名が
+    書式文字列そのものに埋め込まれていたため，パラメータの取り違えは
+    型でも既存の assertion でも検出できない．レンダリング後の文言を
+    直接固定して，統合が文言を変えていないことを保証する．
+    """
+
+    @staticmethod
+    def _capturing_logger(
+        name: str,
+    ) -> tuple[logging.Logger, list[str]]:
+        """レンダリング後のメッセージを溜めるロガーを作る．
+
+        ``caplog`` はリポジトリ側のログ設定 (独自ハンドラ) の下では
+        これらのレコードを拾えないため，実行関数の ``logger=`` 引数に
+        専用ロガーを注入して直接捕まえる．
+        """
+        captured: list[str] = []
+
+        class _ListHandler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(record.getMessage())
+
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.INFO)
+        logger.addHandler(_ListHandler())
+        return logger, captured
+
+    def _run_stage1(self) -> list[str]:
+        from maou.app.learning.multi_stage_training import (
+            run_stage1_with_training_loop,
+        )
+
+        components = _make_stage_components(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            lr_scheduler_name="warmup_cosine_decay",
+        )
+        config = _make_stage_config(
+            stage=TrainingStage.REACHABLE_SQUARES,
+            accuracy_threshold=0.0,
+        )
+        logger, captured = self._capturing_logger(
+            "test_stage_log_text.stage1"
+        )
+        run_stage1_with_training_loop(
+            components=components,
+            config=config,
+            device=torch.device("cpu"),
+            logger=logger,
+        )
+        return captured
+
+    def _run_stage2(self) -> list[str]:
+        from maou.app.learning.multi_stage_training import (
+            run_stage2_with_training_loop,
+        )
+
+        components = _make_stage_components(
+            stage=TrainingStage.LEGAL_MOVES,
+            lr_scheduler_name="warmup_cosine_decay",
+        )
+        config = _make_stage_config(
+            stage=TrainingStage.LEGAL_MOVES,
+            accuracy_threshold=0.0,
+        )
+        logger, captured = self._capturing_logger(
+            "test_stage_log_text.stage2"
+        )
+        run_stage2_with_training_loop(
+            components=components,
+            config=config,
+            device=torch.device("cpu"),
+            logger=logger,
+        )
+        return captured
+
+    def test_stage1_log_labels(self) -> None:
+        """Stage 1 のログが "Stage 1" と "Accuracy" を使う．"""
+        messages = self._run_stage1()
+
+        assert any(
+            m.startswith("Starting Stage 1 (TrainingLoop): ")
+            for m in messages
+        )
+        assert any(
+            m.startswith("Stage 1 Epoch 1/1: Loss=")
+            and ", Accuracy=" in m
+            for m in messages
+        )
+        assert any(
+            m.startswith("Stage 1 Epoch 1: LR = ")
+            for m in messages
+        )
+        assert any(
+            m.startswith(
+                "Stage 1 Accuracy threshold achieved! ("
+            )
+            for m in messages
+        )
+        # ラベルの取り違えが起きていないこと
+        assert not any(
+            m.startswith(("Stage 2", "Starting Stage 2"))
+            for m in messages
+        )
+        assert not any(", F1=" in m for m in messages)
+
+    def test_stage2_log_labels(self) -> None:
+        """Stage 2 のログが "Stage 2" と "F1" を使う．"""
+        messages = self._run_stage2()
+
+        assert any(
+            m.startswith("Starting Stage 2 (TrainingLoop): ")
+            for m in messages
+        )
+        assert any(
+            m.startswith("Stage 2 Epoch 1/1: Loss=")
+            and ", F1=" in m
+            for m in messages
+        )
+        assert any(
+            m.startswith("Stage 2 Epoch 1: LR = ")
+            for m in messages
+        )
+        assert any(
+            m.startswith("Stage 2 F1 threshold achieved! (")
+            for m in messages
+        )
+        # ラベルの取り違えが起きていないこと
+        assert not any(
+            m.startswith(("Stage 1", "Starting Stage 1"))
+            for m in messages
+        )
+        assert not any(", Accuracy=" in m for m in messages)
+
+
+class TestStageRunHeadTypeAssertion:
+    """ヘッド型の取り違えを共通ループが検出することを固定する．
+
+    統合前は各ステージが自分のヘッド型をリテラルで assert していた．
+    共通ループでは `head_type` パラメータになったため，Stage 1 に
+    Stage 2 のヘッドを渡すような取り違えを検出できることと，
+    エラーメッセージが型名を正しく載せることを固定する．
+    """
+
+    def test_stage1_rejects_stage2_head(self) -> None:
+        """Stage 1 に LegalMovesHead を渡すと型名付きで落ちる．"""
+        from maou.app.learning.multi_stage_training import (
+            run_stage1_with_training_loop,
+        )
+
+        components = _make_stage_components(
+            stage=TrainingStage.LEGAL_MOVES,
+        )
+        config = _make_stage_config(
+            stage=TrainingStage.REACHABLE_SQUARES,
+        )
+
+        with pytest.raises(
+            AssertionError,
+            match=(
+                r"Expected ReachableSquaresHead, "
+                r"got LegalMovesHead"
+            ),
+        ):
+            run_stage1_with_training_loop(
+                components=components,
+                config=config,
+                device=torch.device("cpu"),
+            )
+
+    def test_stage2_rejects_stage1_head(self) -> None:
+        """Stage 2 に ReachableSquaresHead を渡すと型名付きで落ちる．"""
+        from maou.app.learning.multi_stage_training import (
+            run_stage2_with_training_loop,
+        )
+
+        components = _make_stage_components(
+            stage=TrainingStage.REACHABLE_SQUARES,
+        )
+        config = _make_stage_config(
+            stage=TrainingStage.LEGAL_MOVES,
+        )
+
+        with pytest.raises(
+            AssertionError,
+            match=(
+                r"Expected LegalMovesHead, "
+                r"got ReachableSquaresHead"
+            ),
+        ):
+            run_stage2_with_training_loop(
+                components=components,
+                config=config,
+                device=torch.device("cpu"),
             )

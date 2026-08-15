@@ -831,6 +831,74 @@ def _yield_kif_batches(
         )
 
 
+def _yield_stage_batches(
+    columnar_batch: ColumnarBatch,
+    *,
+    batch_size: int,
+    shuffle: bool,
+    rng: np.random.Generator,
+    target_field: str,
+    flatten_target: bool,
+) -> Generator[
+    tuple[
+        tuple[torch.Tensor, torch.Tensor],
+        torch.Tensor,
+    ],
+    None,
+    None,
+]:
+    """ColumnarBatchからStage1/Stage2Dataset互換のバッチTensorをyieldする．
+
+    Stage 1 と Stage 2 は特徴量が同一で，教師信号を取り出す
+    ``ColumnarBatch`` の属性名と，それを平坦化するかどうかだけが異なる．
+
+    Args:
+        columnar_batch: 変換元のColumnarBatch
+        batch_size: バッチサイズ
+        shuffle: インデックスをシャッフルするか
+        rng: 乱数生成器
+        target_field: 教師信号を取り出すColumnarBatchの属性名
+        flatten_target: 教師信号を (N, ...) → (N, -1) へ平坦化するか
+
+    Yields:
+        ((board_tensor, pieces_tensor), target_tensor)
+    """
+    n = len(columnar_batch)
+    if n == 0:
+        return
+
+    assert getattr(columnar_batch, target_field) is not None
+
+    indices = np.arange(n)
+    if shuffle:
+        rng.shuffle(indices)
+
+    for start in range(0, n, batch_size):
+        batch_indices = indices[start : start + batch_size]
+        batch = columnar_batch.slice(batch_indices)
+
+        board_tensor = torch.from_numpy(
+            batch.board_positions
+        ).clone()
+        pieces_tensor = torch.from_numpy(
+            batch.pieces_in_hand
+        ).clone()
+
+        target_array = getattr(batch, target_field)
+        assert target_array is not None
+        target_tensor = torch.from_numpy(target_array)
+        if flatten_target:
+            # (N, 9, 9) → (N, 81)
+            target_tensor = target_tensor.flatten(start_dim=1)
+        # Convert to float for BCE
+        target_tensor = target_tensor.float()
+
+        yield (
+            (board_tensor, pieces_tensor),
+            target_tensor,
+        )
+
+
 def _yield_stage1_batches(
     columnar_batch: ColumnarBatch,
     *,
@@ -856,39 +924,14 @@ def _yield_stage1_batches(
     Yields:
         ((board_tensor, pieces_tensor), reachable_squares_tensor)
     """
-    n = len(columnar_batch)
-    if n == 0:
-        return
-
-    assert columnar_batch.reachable_squares is not None
-
-    indices = np.arange(n)
-    if shuffle:
-        rng.shuffle(indices)
-
-    for start in range(0, n, batch_size):
-        batch_indices = indices[start : start + batch_size]
-        batch = columnar_batch.slice(batch_indices)
-
-        board_tensor = torch.from_numpy(
-            batch.board_positions
-        ).clone()
-        pieces_tensor = torch.from_numpy(
-            batch.pieces_in_hand
-        ).clone()
-
-        assert batch.reachable_squares is not None
-        # (N, 9, 9) → (N, 81) and convert to float for BCE
-        reachable_tensor = (
-            torch.from_numpy(batch.reachable_squares)
-            .flatten(start_dim=1)
-            .float()
-        )
-
-        yield (
-            (board_tensor, pieces_tensor),
-            reachable_tensor,
-        )
+    yield from _yield_stage_batches(
+        columnar_batch,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        rng=rng,
+        target_field="reachable_squares",
+        flatten_target=True,
+    )
 
 
 def _yield_stage2_batches(
@@ -916,33 +959,11 @@ def _yield_stage2_batches(
     Yields:
         ((board_tensor, pieces_tensor), legal_moves_tensor)
     """
-    n = len(columnar_batch)
-    if n == 0:
-        return
-
-    assert columnar_batch.legal_moves_label is not None
-
-    indices = np.arange(n)
-    if shuffle:
-        rng.shuffle(indices)
-
-    for start in range(0, n, batch_size):
-        batch_indices = indices[start : start + batch_size]
-        batch = columnar_batch.slice(batch_indices)
-
-        board_tensor = torch.from_numpy(
-            batch.board_positions
-        ).clone()
-        pieces_tensor = torch.from_numpy(
-            batch.pieces_in_hand
-        ).clone()
-
-        assert batch.legal_moves_label is not None
-        legal_moves_tensor = torch.from_numpy(
-            batch.legal_moves_label
-        ).float()
-
-        yield (
-            (board_tensor, pieces_tensor),
-            legal_moves_tensor,
-        )
+    yield from _yield_stage_batches(
+        columnar_batch,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        rng=rng,
+        target_field="legal_moves_label",
+        flatten_target=False,
+    )

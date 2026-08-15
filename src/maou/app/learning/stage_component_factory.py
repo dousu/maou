@@ -701,33 +701,16 @@ class StageComponentFactory:
             stage_name="Stage 1",
         )
 
-        effective_lr = (
-            LossOptimizerFactory.compute_effective_lr(
-                learning_rate,
-                actual_batch_size,
-                base_batch_size,
-            )
-        )
-        optimizer = LossOptimizerFactory.create_optimizer(
+        return StageComponentFactory._assemble_stage_components(
             model,
-            effective_lr,
-            momentum,
+            pipeline,
+            learning_rate=learning_rate,
+            actual_batch_size=actual_batch_size,
+            base_batch_size=base_batch_size,
             optimizer_name=optimizer_name,
-            weight_decay=0.0,
-        )
-        lr_scheduler = SchedulerFactory.create_scheduler(
-            optimizer,
+            momentum=momentum,
             lr_scheduler_name=lr_scheduler_name,
-            max_epochs=total_epochs,
-            steps_per_epoch=len(pipeline.train_dataloader),
-        )
-        return StageComponents(
-            model=model,
-            train_dataloader=pipeline.train_dataloader,
-            val_dataloader=pipeline.val_dataloader,
-            loss_fn=pipeline.loss_fn,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
+            total_epochs=total_epochs,
         )
 
     @staticmethod
@@ -791,6 +774,51 @@ class StageComponentFactory:
             stage_name="Stage 2",
         )
 
+        return StageComponentFactory._assemble_stage_components(
+            model,
+            pipeline,
+            learning_rate=learning_rate,
+            actual_batch_size=actual_batch_size,
+            base_batch_size=base_batch_size,
+            optimizer_name=optimizer_name,
+            momentum=momentum,
+            lr_scheduler_name=lr_scheduler_name,
+            total_epochs=total_epochs,
+        )
+
+    @staticmethod
+    def _assemble_stage_components(
+        model: torch.nn.Module,
+        pipeline: StageDataPipeline,
+        *,
+        learning_rate: float,
+        actual_batch_size: int,
+        base_batch_size: int,
+        optimizer_name: str,
+        momentum: float,
+        lr_scheduler_name: str | None,
+        total_epochs: int,
+    ) -> StageComponents:
+        """モデルとパイプラインから StageComponents を組み立てる．
+
+        Stage1/Stage2 のビルダーで完全に同一だった末尾処理
+        (effective LR の算出，optimizer と scheduler の生成，
+        StageComponents への詰め替え) を共有する．
+
+        Args:
+            model: ヘッドを載せ終えたモデル．
+            pipeline: データパイプライン．
+            learning_rate: 学習率．
+            actual_batch_size: 実際のバッチサイズ(effective LR 用)．
+            base_batch_size: 基準バッチサイズ(effective LR 計算用)．
+            optimizer_name: オプティマイザ名．
+            momentum: モメンタム．
+            lr_scheduler_name: 学習率スケジューラ名．
+            total_epochs: 総エポック数．
+
+        Returns:
+            対象ステージのコンポーネント一式．
+        """
         effective_lr = (
             LossOptimizerFactory.compute_effective_lr(
                 learning_rate,

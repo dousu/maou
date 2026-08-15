@@ -12,10 +12,11 @@ accuracy thresholds,with fail-fast error handling if thresholds aren't met.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 import torch
 from torch import nn
@@ -373,6 +374,189 @@ class TruncatedStageModel(torch.nn.Module):
         return logits, dummy_value
 
 
+class _StageMetricCallback(Protocol):
+    """Stage 1/2 の epoch メトリクスを蓄積するコールバックの構造．
+
+    `Stage1AccuracyCallback` と `Stage2F1Callback` が満たす最小の
+    インターフェース．epoch ごとのメトリクス取得はステージによって
+    メソッド名が異なるため，`metric_getter` として外から与える．
+    """
+
+    def reset(self) -> None: ...
+
+    def get_average_loss(self) -> float: ...
+
+
+_HeadT = TypeVar("_HeadT", bound=nn.Module)
+_CallbackT = TypeVar("_CallbackT", bound=_StageMetricCallback)
+
+
+def _run_stage_with_training_loop(
+    *,
+    components: StageComponents,
+    config: StageConfig,
+    device: torch.device,
+    logger: logging.Logger | None,
+    gradient_accumulation_steps: int,
+    head_type: type[_HeadT],
+    callback_factory: Callable[[], _CallbackT],
+    metric_getter: Callable[[_CallbackT], float],
+    stage_label: str,
+    metric_label: str,
+) -> tuple[StageResult, _HeadT]:
+    """TrainingLoop を使用して Stage 1/2 を学習する共通ループ．
+
+    Stage 1 と Stage 2 はヘッドの型・メトリクスコールバック・
+    メトリクス取得メソッド・ログの見出し 2 種だけが異なり，
+    学習ループ自体は同一である．TrainingLoop の実装も同一で，
+    `Stage1TrainingLoop` は `RawLogitsTrainingLoop` の別名である
+    (`training_loop.py`)．
+
+    Args:
+        components: 対象ステージのコンポーネント一式．
+        config: 対象ステージの学習制御パラメータ．
+        device: 学習デバイス (CPU or CUDA)．
+        logger: ロガー．
+        gradient_accumulation_steps: 勾配蓄積ステップ数．
+        head_type: 期待するヘッドの型 (取り違え検出用)．
+        callback_factory: メトリクスコールバックを生成する呼び出し可能．
+        metric_getter: コールバックから epoch メトリクスを取り出す関数．
+        stage_label: ログに出すステージ名 ("Stage 1" など)．
+        metric_label: ログに出すメトリクス名 ("Accuracy" など)．
+
+    Returns:
+        (StageResult, head) のタプル．
+        ヘッドはチェックポイント保存に使用される．
+    """
+    from maou.app.learning.callbacks import (
+        LRSchedulerStepCallback,
+    )
+    from maou.app.learning.training_loop import (
+        RawLogitsTrainingLoop,
+    )
+
+    _logger = logger or logging.getLogger(__name__)
+
+    # model から head を取得
+    model = components.model
+    head = model.head  # type: ignore[union-attr]
+    assert isinstance(head, head_type), (
+        f"Expected {head_type.__name__}, got {type(head).__name__}"
+    )
+
+    # Callbacks
+    metric_callback = callback_factory()
+    callbacks: list = [metric_callback]
+
+    # LR Scheduler (optional)
+    if components.lr_scheduler is not None:
+        callbacks.append(
+            LRSchedulerStepCallback(components.lr_scheduler)
+        )
+
+    # TrainingLoop 作成
+    training_loop = RawLogitsTrainingLoop(
+        model=model,
+        device=device,
+        optimizer=components.optimizer,
+        loss_fn_policy=components.loss_fn,
+        loss_fn_value=torch.nn.MSELoss(),
+        policy_loss_ratio=1.0,
+        value_loss_ratio=0.0,
+        callbacks=callbacks,
+        logger=_logger,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+    )
+
+    # Epoch loop
+    _logger.info(
+        "Starting %s (TrainingLoop): max_epochs=%d, "
+        "threshold=%.1f%%",
+        stage_label,
+        config.max_epochs,
+        config.accuracy_threshold * 100,
+    )
+
+    best_metric = 0.0
+    final_loss = 0.0
+
+    for epoch in range(config.max_epochs):
+        # IterableDataset のエポックシード更新
+        ds = components.train_dataloader.dataset
+        if hasattr(ds, "set_epoch"):
+            ds.set_epoch(epoch)
+
+        metric_callback.reset()
+
+        training_loop.run_epoch(
+            dataloader=components.train_dataloader,
+            epoch_idx=epoch,
+            progress_bar=True,
+            train_mode=True,
+        )
+
+        epoch_metric = metric_getter(metric_callback)
+        epoch_loss = metric_callback.get_average_loss()
+        final_loss = epoch_loss
+
+        _logger.info(
+            "%s Epoch %d/%d: Loss=%.4f, %s=%.2f%%",
+            stage_label,
+            epoch + 1,
+            config.max_epochs,
+            epoch_loss,
+            metric_label,
+            epoch_metric * 100,
+        )
+
+        if components.optimizer.param_groups:
+            current_lr = components.optimizer.param_groups[0][
+                "lr"
+            ]
+            _logger.info(
+                "%s Epoch %d: LR = %.6f",
+                stage_label,
+                epoch + 1,
+                current_lr,
+            )
+
+        best_metric = max(best_metric, epoch_metric)
+
+        # Threshold check (early stopping)
+        if epoch_metric >= config.accuracy_threshold:
+            _logger.info(
+                "%s %s threshold achieved! (%.2f%% >= %.2f%%)",
+                stage_label,
+                metric_label,
+                epoch_metric * 100,
+                config.accuracy_threshold * 100,
+            )
+            return (
+                StageResult(
+                    stage=config.stage,
+                    achieved_accuracy=epoch_metric,
+                    final_loss=final_loss,
+                    epochs_trained=epoch + 1,
+                    threshold_met=True,
+                ),
+                head,
+            )
+
+    # Max epochs reached
+    threshold_met = best_metric >= config.accuracy_threshold
+
+    return (
+        StageResult(
+            stage=config.stage,
+            achieved_accuracy=best_metric,
+            final_loss=final_loss,
+            epochs_trained=config.max_epochs,
+            threshold_met=threshold_met,
+        ),
+        head,
+    )
+
+
 def run_stage1_with_training_loop(
     *,
     components: StageComponents,
@@ -398,127 +582,20 @@ def run_stage1_with_training_loop(
         ヘッドはチェックポイント保存に使用される．
     """
     from maou.app.learning.callbacks import (
-        LRSchedulerStepCallback,
         Stage1AccuracyCallback,
     )
-    from maou.app.learning.training_loop import (
-        Stage1TrainingLoop,
-    )
 
-    _logger = logger or logging.getLogger(__name__)
-
-    # model から head を取得
-    model = components.model
-    reachable_head = model.head  # type: ignore[union-attr]
-    assert isinstance(reachable_head, ReachableSquaresHead), (
-        f"Expected ReachableSquaresHead, got {type(reachable_head).__name__}"
-    )
-
-    # Callbacks
-    accuracy_callback = Stage1AccuracyCallback()
-    callbacks: list = [accuracy_callback]
-
-    # LR Scheduler (optional)
-    if components.lr_scheduler is not None:
-        callbacks.append(
-            LRSchedulerStepCallback(components.lr_scheduler)
-        )
-
-    # TrainingLoop 作成
-    training_loop = Stage1TrainingLoop(
-        model=model,
+    return _run_stage_with_training_loop(
+        components=components,
+        config=config,
         device=device,
-        optimizer=components.optimizer,
-        loss_fn_policy=components.loss_fn,
-        loss_fn_value=torch.nn.MSELoss(),
-        policy_loss_ratio=1.0,
-        value_loss_ratio=0.0,
-        callbacks=callbacks,
-        logger=_logger,
+        logger=logger,
         gradient_accumulation_steps=gradient_accumulation_steps,
-    )
-
-    # Epoch loop
-    _logger.info(
-        "Starting Stage 1 (TrainingLoop): max_epochs=%d, "
-        "threshold=%.1f%%",
-        config.max_epochs,
-        config.accuracy_threshold * 100,
-    )
-
-    best_accuracy = 0.0
-    final_loss = 0.0
-
-    for epoch in range(config.max_epochs):
-        # IterableDataset のエポックシード更新
-        ds = components.train_dataloader.dataset
-        if hasattr(ds, "set_epoch"):
-            ds.set_epoch(epoch)
-
-        accuracy_callback.reset()
-
-        training_loop.run_epoch(
-            dataloader=components.train_dataloader,
-            epoch_idx=epoch,
-            progress_bar=True,
-            train_mode=True,
-        )
-
-        epoch_accuracy = accuracy_callback.get_epoch_accuracy()
-        epoch_loss = accuracy_callback.get_average_loss()
-        final_loss = epoch_loss
-
-        _logger.info(
-            "Stage 1 Epoch %d/%d: Loss=%.4f, Accuracy=%.2f%%",
-            epoch + 1,
-            config.max_epochs,
-            epoch_loss,
-            epoch_accuracy * 100,
-        )
-
-        if components.optimizer.param_groups:
-            current_lr = components.optimizer.param_groups[0][
-                "lr"
-            ]
-            _logger.info(
-                "Stage 1 Epoch %d: LR = %.6f",
-                epoch + 1,
-                current_lr,
-            )
-
-        best_accuracy = max(best_accuracy, epoch_accuracy)
-
-        # Threshold check (early stopping)
-        if epoch_accuracy >= config.accuracy_threshold:
-            _logger.info(
-                "Stage 1 Accuracy threshold achieved! "
-                "(%.2f%% >= %.2f%%)",
-                epoch_accuracy * 100,
-                config.accuracy_threshold * 100,
-            )
-            return (
-                StageResult(
-                    stage=config.stage,
-                    achieved_accuracy=epoch_accuracy,
-                    final_loss=final_loss,
-                    epochs_trained=epoch + 1,
-                    threshold_met=True,
-                ),
-                reachable_head,
-            )
-
-    # Max epochs reached
-    threshold_met = best_accuracy >= config.accuracy_threshold
-
-    return (
-        StageResult(
-            stage=config.stage,
-            achieved_accuracy=best_accuracy,
-            final_loss=final_loss,
-            epochs_trained=config.max_epochs,
-            threshold_met=threshold_met,
-        ),
-        reachable_head,
+        head_type=ReachableSquaresHead,
+        callback_factory=Stage1AccuracyCallback,
+        metric_getter=lambda cb: cb.get_epoch_accuracy(),
+        stage_label="Stage 1",
+        metric_label="Accuracy",
     )
 
 
@@ -546,128 +623,19 @@ def run_stage2_with_training_loop(
         (StageResult, LegalMovesHead) のタプル．
         ヘッドはチェックポイント保存に使用される．
     """
-    from maou.app.learning.callbacks import (
-        LRSchedulerStepCallback,
-        Stage2F1Callback,
-    )
-    from maou.app.learning.training_loop import (
-        RawLogitsTrainingLoop,
-    )
+    from maou.app.learning.callbacks import Stage2F1Callback
 
-    _logger = logger or logging.getLogger(__name__)
-
-    # model から head を取得
-    model = components.model
-    legal_moves_head = model.head  # type: ignore[union-attr]
-    assert isinstance(legal_moves_head, LegalMovesHead), (
-        f"Expected LegalMovesHead, got {type(legal_moves_head).__name__}"
-    )
-
-    # Callbacks
-    f1_callback = Stage2F1Callback()
-    callbacks: list = [f1_callback]
-
-    # LR Scheduler (optional)
-    if components.lr_scheduler is not None:
-        callbacks.append(
-            LRSchedulerStepCallback(components.lr_scheduler)
-        )
-
-    # TrainingLoop 作成
-    training_loop = RawLogitsTrainingLoop(
-        model=model,
+    return _run_stage_with_training_loop(
+        components=components,
+        config=config,
         device=device,
-        optimizer=components.optimizer,
-        loss_fn_policy=components.loss_fn,
-        loss_fn_value=torch.nn.MSELoss(),
-        policy_loss_ratio=1.0,
-        value_loss_ratio=0.0,
-        callbacks=callbacks,
-        logger=_logger,
+        logger=logger,
         gradient_accumulation_steps=gradient_accumulation_steps,
-    )
-
-    # Epoch loop
-    _logger.info(
-        "Starting Stage 2 (TrainingLoop): max_epochs=%d, "
-        "threshold=%.1f%%",
-        config.max_epochs,
-        config.accuracy_threshold * 100,
-    )
-
-    best_f1 = 0.0
-    final_loss = 0.0
-
-    for epoch in range(config.max_epochs):
-        # IterableDataset のエポックシード更新
-        ds = components.train_dataloader.dataset
-        if hasattr(ds, "set_epoch"):
-            ds.set_epoch(epoch)
-
-        f1_callback.reset()
-
-        training_loop.run_epoch(
-            dataloader=components.train_dataloader,
-            epoch_idx=epoch,
-            progress_bar=True,
-            train_mode=True,
-        )
-
-        epoch_f1 = f1_callback.get_epoch_f1()
-        epoch_loss = f1_callback.get_average_loss()
-        final_loss = epoch_loss
-
-        _logger.info(
-            "Stage 2 Epoch %d/%d: Loss=%.4f, F1=%.2f%%",
-            epoch + 1,
-            config.max_epochs,
-            epoch_loss,
-            epoch_f1 * 100,
-        )
-
-        if components.optimizer.param_groups:
-            current_lr = components.optimizer.param_groups[0][
-                "lr"
-            ]
-            _logger.info(
-                "Stage 2 Epoch %d: LR = %.6f",
-                epoch + 1,
-                current_lr,
-            )
-
-        best_f1 = max(best_f1, epoch_f1)
-
-        # Threshold check (early stopping)
-        if epoch_f1 >= config.accuracy_threshold:
-            _logger.info(
-                "Stage 2 F1 threshold achieved! "
-                "(%.2f%% >= %.2f%%)",
-                epoch_f1 * 100,
-                config.accuracy_threshold * 100,
-            )
-            return (
-                StageResult(
-                    stage=config.stage,
-                    achieved_accuracy=epoch_f1,
-                    final_loss=final_loss,
-                    epochs_trained=epoch + 1,
-                    threshold_met=True,
-                ),
-                legal_moves_head,
-            )
-
-    # Max epochs reached
-    threshold_met = best_f1 >= config.accuracy_threshold
-
-    return (
-        StageResult(
-            stage=config.stage,
-            achieved_accuracy=best_f1,
-            final_loss=final_loss,
-            epochs_trained=config.max_epochs,
-            threshold_met=threshold_met,
-        ),
-        legal_moves_head,
+        head_type=LegalMovesHead,
+        callback_factory=Stage2F1Callback,
+        metric_getter=lambda cb: cb.get_epoch_f1(),
+        stage_label="Stage 2",
+        metric_label="F1",
     )
 
 
