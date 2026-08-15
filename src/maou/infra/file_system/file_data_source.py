@@ -40,6 +40,21 @@ _DF_TO_NUMPY_CONVERTERS: dict[
 }
 
 
+#: structured dtype のフィールド名 → :class:`ColumnarBatch` の属性名．
+#:
+#: ``id`` は ColumnarBatch に対応物が無いので**意図的に載せていない**
+#: (呼び出し側でゼロ埋めされる)．
+_STRUCTURED_TO_COLUMNAR_FIELD: dict[str, str] = {
+    "boardIdPositions": "board_positions",
+    "piecesInHand": "pieces_in_hand",
+    "moveLabel": "move_label",
+    "moveWinRate": "move_win_rate",
+    "resultValue": "result_value",
+    "reachableSquares": "reachable_squares",
+    "legalMovesLabel": "legal_moves_label",
+}
+
+
 class MissingFileDataConfig(Exception):
     pass
 
@@ -452,55 +467,60 @@ class FileDataSource(learn.LearningDataSource):
                 n = 1
             array = np.empty(n, dtype=self._structured_dtype)
 
-            if "id" in dtype_names:
-                array["id"] = np.zeros(n, dtype=np.uint64)
-
-            array["boardIdPositions"] = batch.board_positions[
-                selection
-            ]
-            array["piecesInHand"] = batch.pieces_in_hand[
-                selection
-            ]
-
-            if (
-                batch.move_label is not None
-                and "moveLabel" in dtype_names
-            ):
-                array["moveLabel"] = batch.move_label[selection]
-
-            if (
-                batch.move_win_rate is not None
-                and "moveWinRate" in dtype_names
-            ):
-                array["moveWinRate"] = batch.move_win_rate[
-                    selection
-                ]
-
-            if (
-                batch.result_value is not None
-                and "resultValue" in dtype_names
-            ):
-                array["resultValue"] = batch.result_value[
-                    selection
-                ]
-
-            if (
-                batch.reachable_squares is not None
-                and "reachableSquares" in dtype_names
-            ):
-                array["reachableSquares"] = (
-                    batch.reachable_squares[selection]
-                )
-
-            if (
-                batch.legal_moves_label is not None
-                and "legalMovesLabel" in dtype_names
-            ):
-                array["legalMovesLabel"] = (
-                    batch.legal_moves_label[selection]
-                )
+            # dtype のフィールドを**漏れなく**走査する．以前は
+            # 「``batch`` が値を持つときだけ書く」条件付き代入を
+            # フィールドごとに並べており，dtype に有って batch に
+            # 無い列 (preprocessing dtype は ``moveWinRate`` を無条件に
+            # 含むが，``moveWinRate`` 列を持たない旧 .feather から
+            # 作った ColumnarBatch では ``None``) が
+            # ``np.empty`` の**未初期化メモリのまま**返っていた．
+            # ``KifDataset`` は列の有無を dtype 名から判定するため，
+            # そのメモリ (NaN を含む) をそのまま訓練ターゲットとして
+            # torch に渡していた．
+            for name in dtype_names:
+                source = self._columnar_field(batch, name)
+                if source is None:
+                    # batch が供給しない列はゼロで埋める．
+                    # ``id`` は ColumnarBatch に対応物が無いので
+                    # 常にこちらを通る (従来どおりゼロ埋め)．
+                    array[name] = 0
+                else:
+                    array[name] = source[selection]
 
             return array
+
+        @staticmethod
+        def _columnar_field(
+            batch: ColumnarBatch, dtype_field: str
+        ) -> np.ndarray | None:
+            """structured dtype のフィールド名に対応する列を返す．
+
+            対応物が無い (``id``) か，``batch`` がその列を持たない
+            場合は ``None`` を返す．
+
+            名前の対応は機械的に導けない (``board_positions`` を
+            camelCase 化しても ``boardIdPositions`` にはならない) ため
+            明示的な表で持つ．``ColumnarBatch`` にフィールドを足して
+            ここを更新し忘れると黙ってゼロ埋めになるので，
+            ``tests/maou/infra/file_system/test_file_data_source.py``
+            の網羅テストが表の欠落を落とす．
+
+            Args:
+                batch: 変換元の ColumnarBatch
+                dtype_field: structured dtype 側のフィールド名
+
+            Returns:
+                対応する列，または ``None``
+            """
+            attr = _STRUCTURED_TO_COLUMNAR_FIELD.get(
+                dtype_field
+            )
+            if attr is None:
+                return None
+            value = getattr(batch, attr, None)
+            return (
+                value if isinstance(value, np.ndarray) else None
+            )
 
     def __init__(
         self,

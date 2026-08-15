@@ -4,21 +4,26 @@ Updated to use DataFrame-based I/O with Polars.
 Simplified from original numpy-based tests to focus on DataFrame functionality.
 """
 
+import dataclasses
 import logging
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 import pytest
 
+from maou.domain.data.columnar_batch import ColumnarBatch
 from maou.domain.data.rust_io import (
     save_hcpe_df,
     save_preprocessing_df,
 )
 from maou.domain.data.schema import (
+    MOVE_LABELS_NUM,
     create_empty_hcpe_df,
     create_empty_preprocessing_df,
 )
 from maou.infra.file_system.file_data_source import (
+    _STRUCTURED_TO_COLUMNAR_FIELD,
     FileDataSource,
 )
 
@@ -932,3 +937,155 @@ class TestBatchCountMatchesTotalPages:
         batches = list(datasource.iter_batches())
 
         assert len(batches) == datasource.total_pages() == 2
+
+
+class TestColumnarFieldsAreNeverUninitialized:
+    """dtype に有って ColumnarBatch に無い列がゼロで埋まること．
+
+    `/audit-backlog` 2026-08-15 / 新規所見 N10．
+    ``_columnar_batch_to_structured_array`` は ``np.empty`` で確保した
+    うえでフィールドごとに条件付き代入をしていたため，
+    **dtype に有って ``batch`` に無い列は未初期化メモリのまま**返って
+    いた．``get_preprocessing_dtype()`` は ``moveWinRate`` を無条件に
+    含む一方，``moveWinRate`` 列を持たない旧 .feather から作った
+    ``ColumnarBatch`` は ``move_win_rate is None`` になる．
+    ``KifDataset`` は列の有無を dtype 名から判定するので，その未初期化
+    メモリ (NaN を含む) をそのまま訓練ターゲットとして torch に渡す．
+    """
+
+    @staticmethod
+    def _manager(tmp_path: Path) -> FileDataSource.FileManager:
+        path = _create_varied_preprocessing_file(
+            tmp_path, rows=4
+        )
+        return FileDataSource.FileManager(
+            file_paths=[path],
+            array_type="preprocessing",
+            bit_pack=False,
+        )
+
+    @staticmethod
+    def _dirty_the_heap(nbytes: int) -> None:
+        """``np.empty`` が拾いやすい位置に NaN を置く．
+
+        修正を外したときにこのテストが**確実に**落ちるようにするための
+        仕込みである．未初期化メモリの中身は本来不定なので，NaN で
+        埋めた同サイズのバッファを確保してすぐ手放し，直後の
+        ``np.empty`` が同じ領域を再利用するように仕向ける．
+        """
+        for _ in range(4):
+            junk = np.full(
+                nbytes // 4, np.nan, dtype=np.float32
+            )
+            del junk
+
+    def test_missing_move_win_rate_is_zero_filled(
+        self, tmp_path: Path
+    ) -> None:
+        """旧データ (moveWinRate 列なし) でもゼロが返ること．"""
+        manager = self._manager(tmp_path)
+        rows = 4
+        batch = ColumnarBatch(
+            board_positions=np.ones(
+                (rows, 9, 9), dtype=np.uint8
+            ),
+            pieces_in_hand=np.ones((rows, 14), dtype=np.uint8),
+            move_label=np.full(
+                (rows, MOVE_LABELS_NUM),
+                0.25,
+                dtype=np.float16,
+            ),
+            result_value=np.full(
+                (rows,), 0.5, dtype=np.float16
+            ),
+            move_win_rate=None,
+        )
+
+        self._dirty_the_heap(rows * MOVE_LABELS_NUM * 4)
+        array = manager._columnar_batch_to_structured_array(
+            batch
+        )
+
+        move_win_rate = array["moveWinRate"]
+        assert not np.isnan(move_win_rate).any(), (
+            "moveWinRate に NaN が漏れている "
+            "(np.empty の未初期化メモリがそのまま返っている)"
+        )
+        assert (move_win_rate == 0).all()
+
+    def test_missing_field_is_zero_filled_for_single_record(
+        self, tmp_path: Path
+    ) -> None:
+        """1件取得の経路でも同じであること．
+
+        ``_columnar_to_structured_record`` は同じ変換に委譲するので，
+        一括変換だけ直して 1 件取得が漏れる事故は構造的に起きないが，
+        訓練が実際に通るのはこちらなので固定しておく．
+        """
+        manager = self._manager(tmp_path)
+        rows = 3
+        batch = ColumnarBatch(
+            board_positions=np.zeros(
+                (rows, 9, 9), dtype=np.uint8
+            ),
+            pieces_in_hand=np.zeros((rows, 14), dtype=np.uint8),
+            move_label=np.zeros(
+                (rows, MOVE_LABELS_NUM), dtype=np.float16
+            ),
+            result_value=np.zeros((rows,), dtype=np.float16),
+            move_win_rate=None,
+        )
+
+        self._dirty_the_heap(MOVE_LABELS_NUM * 4)
+        record = manager._columnar_batch_to_structured_array(
+            batch, row=1
+        )
+
+        assert not np.isnan(record["moveWinRate"]).any()
+        assert (record["moveWinRate"] == 0).all()
+
+    def test_id_is_still_zero_filled(
+        self, tmp_path: Path
+    ) -> None:
+        """``id`` は ColumnarBatch に対応物が無くゼロのままであること．
+
+        表に載せていないフィールドがゼロ埋め側へ落ちる経路の固定．
+        """
+        manager = self._manager(tmp_path)
+        batch = ColumnarBatch(
+            board_positions=np.ones((2, 9, 9), dtype=np.uint8),
+            pieces_in_hand=np.ones((2, 14), dtype=np.uint8),
+            move_label=np.ones(
+                (2, MOVE_LABELS_NUM), dtype=np.float16
+            ),
+            result_value=np.ones((2,), dtype=np.float16),
+            move_win_rate=np.ones(
+                (2, MOVE_LABELS_NUM), dtype=np.float32
+            ),
+        )
+
+        array = manager._columnar_batch_to_structured_array(
+            batch
+        )
+
+        assert (array["id"] == 0).all()
+
+    def test_every_columnar_field_is_mapped(self) -> None:
+        """``ColumnarBatch`` の全フィールドが表に載っていること．
+
+        名前の対応は機械的に導けない (``board_positions`` を camelCase
+        化しても ``boardIdPositions`` にはならない) ので表で持っている．
+        表を更新し忘れると，その列は「batch が供給しない列」として
+        **黙ってゼロ埋め**され，訓練ターゲットが静かに全ゼロになる．
+        追加を検知するのはこのテストだけなので網羅を固定する．
+        """
+        mapped = set(_STRUCTURED_TO_COLUMNAR_FIELD.values())
+        declared = {
+            field.name
+            for field in dataclasses.fields(ColumnarBatch)
+        }
+
+        assert declared - mapped == set(), (
+            "ColumnarBatch に追加されたフィールドが "
+            "_STRUCTURED_TO_COLUMNAR_FIELD に無い"
+        )
