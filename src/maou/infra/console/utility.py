@@ -685,7 +685,7 @@ def benchmark_dataloader(
 @click.option(
     "--adaptive-batch-measurement-interval",
     type=click.IntRange(min=1),
-    default=1,
+    default=5,
     show_default=True,
     help="Optimizer steps between GNS measurements.",
 )

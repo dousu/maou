@@ -29,7 +29,7 @@
 | `--adaptive-batch-max-steps INT` | `8` | Maximum gradient accumulation steps for adaptive batch. |
 | `--adaptive-batch-interval INT` | `50` | Number of optimizer steps between adaptive batch size adjustments. 学習初期は GNS 推定が不安定なため，ウォームアップ期間として大きめの値(100-200)を設定すると安定します． |
 | `--adaptive-batch-smoothing FLOAT` | `0.1` | EMA smoothing factor for GNS estimates. 0 に近いほど安定，1 に近いほど追従性が高い． |
-| `--adaptive-batch-measurement-interval INT` | `1` | GNS 計測の optimizer step 間隔．計測中は勾配スナップショット分の追加メモリを使用するため，大規模モデル(100M+ params)では 5-10 を推奨． |
+| `--adaptive-batch-measurement-interval INT` | `5` | GNS 計測の optimizer step 間隔．計測 1 回につきパラメータテンソルごとに `.item()` による host-device 同期が走り，勾配スナップショット分の追加メモリも使用する．大規模モデル(100M+ params)では 5-10 を推奨． |
 | `--dataloader-workers INT` | interface default `0` | Worker processes for PyTorch DataLoaders. Negative values raise `ValueError`.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--pin-memory` | `false` | Toggles pinned host memory for faster GPU transfers.【F:src/maou/interface/learn.py†L158-L177】 |
 | `--prefetch-factor INT` | interface default `4` | Number of batches prefetched per worker; must be positive.【F:src/maou/interface/learn.py†L158-L177】 |

@@ -214,11 +214,12 @@ def _build_adaptive_batch_config(
 @click.option(
     "--adaptive-batch-measurement-interval",
     type=click.IntRange(min=1),
-    default=1,
+    default=5,
     show_default=True,
     help=(
         "Optimizer steps between GNS measurements."
-        " Higher values reduce memory overhead (gradient snapshot)."
+        " Higher values reduce memory overhead (gradient snapshot)"
+        " and host-device syncs."
         " Recommended: 5-10 for large models (100M+ params)."
     ),
 )
