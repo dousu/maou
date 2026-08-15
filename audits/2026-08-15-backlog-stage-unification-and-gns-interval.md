@@ -10,11 +10,12 @@ path:
   - src/maou/app/learning/adaptive_batch.py
   - src/maou/infra/console/learn_model.py
   - src/maou/infra/console/utility.py
+  - src/maou/app/learning/training_loop.py
   - docs/commands/learn_model.md
 scope: python
 level: medium
 last_sha: 377e1e3
-record_sha: 57f0664
+record_sha: a57ad2c
 ---
 
 # backlog consumption — Stage1/Stage2 の統合と，GNS 計測間隔の既定値
@@ -23,13 +24,21 @@ record_sha: 57f0664
 ([2026-08-15 writeable-contract-and-decisions](2026-08-15-backlog-writeable-contract-and-decisions.md))
 が「決定済みだが未実装」として残した 2 件を出荷した run である．
 
-**backlog は 5 行で始まり 4 行で終わった** — 15 run ぶりに行が 1 本減った．
-減らせた理由は本 run が賢かったからではなく，**過去 4 run の設計判断が
-在庫を作っていたから**である: 5 行のうち 3 行 (Deferred 2 / D13 / O9) は
-すでに「人間待ちではないただの作業」で，本 run はそのうち最も大きい
-Deferred 2 (~585 行) を消化しただけである．
+**backlog は 5 行で始まり 3 行で終わった** — 15 run ぶりに行が減り，しかも
+2 本消えた．内訳は 2 通りある:
 
-**自動帯は空 (15 run 連続)．** 5 行すべてが P4 以上だった．
+- **Deferred 2** は，過去 4 run の設計判断が作った「人間待ちではないただの
+  作業」の在庫を消化しただけ (5 行のうち 3 行が既にその状態だった)．
+- **Deferred 5** は，本 run の再検証が **G1 の前提そのものを崩した**結果で
+  ある．3 run 連続で「GPU で測れないから」と塞がれていたが，経路が
+  クラスとして到達不能である以上**測る対象が無い**．これを 3d で問い，
+  ユーザが「到達不能な今のうちに同期を除去する」を選んだ．
+
+後者が本 run の実質である — **ゲートは再検証で外れることがあり，
+外れたゲートは同じ run 内で消化まで行ける**．
+
+**自動帯は空 (15 run 連続)．** 5 行すべてが P4 以上で，出荷した 3 件も
+全て P4 (判断帯) である．
 
 ## Classification
 
@@ -37,7 +46,7 @@ Deferred 2 (~585 行) を消化しただけである．
 |---|---|---|---|---|---|---|
 | **B-1** | Deferred 2 | `src/maou/app/learning` | **P4** | 挙動不変を意図した refactor だが ~585 行．「全出力が同一か」への正直な答えが "probably" なので**フェイルセーフで P4** (ladder の「迷ったら上」)．P3 を主張するには等価性の証明が要り，それは本 run の予算を超える | **なし** (G3 は 2026-08-15 にユーザが retire) | **confirmed** |
 | **B-2** | Deferred 7 の緩和策 | `app/learning` + `infra/console` | **P4** | フラグを渡していない既存の実行で GNS 計測頻度が 1/5 になる．データは読める，起動行は有効なので P5/P6 ではない | **なし** | **changed shape** |
-| — | Deferred 5 | `src/maou/app/learning` | P4 | — | **G1** | **confirmed** |
+| **B-3** | Deferred 5 | `src/maou/app/learning` | **P4** | 全ゼロマスク行の警告ログが消えるので diagnostics だけの変更に見えるが，警告の消失は観測可能な差である．数値結果は厳密に同一 | **G1 → retire** (3d の回答が前提を崩した — 到達不能な経路なので測る対象が無い) | **confirmed** |
 | — | D13 (2)(3)(4) | `infra/file_system` → `app/learning` | P4/P6 | — | **G2** | **confirmed** |
 | — | O9 | `src/maou/infra/bigquery` | P4 | — | **G1 (縮小済み)** | **confirmed** |
 
@@ -56,6 +65,7 @@ Deferred 2 (~585 行) を消化しただけである．
 |---|---|---|---|
 | **Deferred 2** — 全消化，**行を削除** | `app/learning` | Stage1/Stage2 の重複 4 組を共通実装へ | `fdbc990` |
 | **Deferred 7** — **緩和策のみ**，行は残す | `app/learning` + `infra/console` | `measurement_interval` の既定 1 → 5 (4 箇所) + doc + 回帰テスト | `57f0664` |
+| **Deferred 5** — 全消化，**行を削除** | `app/learning` | マスキング経路から per-batch host sync 2 つを除去 | `a57ad2c` |
 
 ## Applied
 
@@ -84,25 +94,75 @@ Deferred 2 (~585 行) を消化しただけである．
 | (iii) | `infra/console/learn_model.py:217` | **本番経路を決めるのはここ** |
 | (iv) | `infra/console/utility.py:688` | `benchmark-training` の同名オプション |
 
+**B-3 (`a57ad2c`) — 休眠マスキング経路の per-batch host sync を除去**
+
+`_compute_policy_loss` (`training_loop.py:1105`) のマスキング腕から
+`if not has_legal.all():` (CUDA テンソルに対する `Tensor.__bool__`) と
+`int((~has_legal).sum().item())` の **2 つの同期を除去**した．
+
+**分岐そのものが冗長だった**のが要点である．`safe_mask =
+mask_bool | ~has_legal.unsqueeze(1)` は `has_legal` が全 True のとき
+`~has_legal` が全 False なので `mask_bool` と**厳密に一致**する．
+つまり `else` 腕は `if` 腕の特殊ケースにすぎず，無条件に `safe_mask` を
+作れば両方を同じ式で覆える．**数値結果は 2 つの場合とも変わらない**．
+
+**全ゼロマスク行の警告ログは廃止した** — 件数を出すには `.item()` が要り，
+それが同期そのものだからである．診断を戻す場合は per-batch で同期しない
+形にすべき旨をコメントに残した．
+
 ## Decisions asked
 
 3d の `AskUserQuestion` は **受理 1 問 + 設計判断 1 問**．G4 の行は 1 つも
 無いので (2026-08-14 の 3 run で全て retire 済み)，設計判断の枠は
 「ゲートが塞いでいる行を人間待ちから外せる問い」に充てた．
 
-TBD_ANSWERS
+### Q1 — 受理 (B-1 + B-2)
+
+**ユーザは質問を待たずに「#506 の内容は確認しました。マージ許可します」と
+回答した**ので，受理の問いは `AskUserQuestion` の形では上げていない．
+提示していた選択肢は「両方マージ / B-1 だけ / B-2 だけ / どちらも却下」で，
+結果は**両方受理**である．
+
+### Q2 — 設計判断: Deferred 5 の休眠マスキング経路 (kind: 設計判断)
+
+**問い**: `training_loop.py:1117`/`:1122` の per-batch host-device sync を
+どう扱うか．本 run の再検証で休眠の根拠が 3 重に固まっていた:
+(1) `TrainingContext` の構築点は `:523` の 1 つだけで 9 行上の `:514` で
+`legal_move_mask` が `None` にハードコード，(2) `src/` に産出者ゼロ
+(非 None を渡すのは `tests/` の 3 箇所のみ)，(3) Stage1/Stage2 が使う
+`RawLogitsTrainingLoop._compute_policy_loss` (`:1170`) はマスク処理を
+丸ごと迂回するのでクラスとして到達不能．**つまりどの向きでも「GPU で
+測る」必要が実は無くなっていた** — これが 3 run 塞いでいた G1 の前提を
+崩した点である．
+
+| 選択肢 | 結果 |
+|---|---|
+| **(a) 同期を今すぐ除去する** (推奨として提示) | **採用** |
+| (b) 休眠経路ごと削除する | 却下 |
+| (c) 現状維持 (mask 配線と同時に GPU で測って直す) | 却下 |
+
+**この 1 問が Deferred 5 行を丸ごと消化可能にした**．(a) は「到達不能な
+今のうちに直しておけば，将来 mask を配線したとき既に sync が無い状態から
+始められる」という向きで，(b) のように `docstring :497-502` が「将来経路の
+ために残している」と明言しているコードを捨てる代償を払わない．
+
+**同 run 内で実装まで到達した** (下記 B-3)．決定を行に書いて次 run に
+送る形にはならなかった．
+
+### 予算に入らなかった設計判断
+
+**なし** — G4 の行は 1 つも無く，残る 3 行 (Deferred 7 の本丸 / D13 / O9)
+はいずれも**設計が決定済みで人間待ちではない**．次 run が問うべき設計判断は
+現時点で存在しない．次 run は D13 (2)(3)(4) から通常作業として始められる．
 
 ## In flight
 
-TBD_INFLIGHT
+**なし**．判断帯の 2 件はユーザが同一セッション内で受理し，Q2 の設計判断も
+同 run 内で実装まで到達したので，[PR #506](https://github.com/dousu/maou/pull/506)
+はそのままマージされた．
 
 ## Re-triaged
 
-- **Deferred 5** (P4 + G1) — 行番号の移動なしを再確認 (`:1117` の同期，
-  `:1122` の 2 つ目の同期，`:514` のハードコード `None`，`:523` の唯一の
-  `TrainingContext` 構築，`:1183` の別名)．**この run では出荷していない**．
-  休眠の根拠は 2 重 (産出者ゼロ + `RawLogitsTrainingLoop` がマスク処理を
-  クラスとして迂回) で，前 run から変わっていない．
 - **D13 (2)(3)(4)** (P4/P6 + G2) — 行番号の移動なしを再確認．設計も
   writeability 契約も決定済みで**人間待ちではない**．G2 の作業量が
   B-1 (~585 行) と同居できなかっただけである．**次 run の先頭候補**．

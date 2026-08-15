@@ -16,7 +16,7 @@ work remains.
 | Path | Scope | Status | Level | Last SHA | Record | Open items |
 |---|---|---|---|---|---|---|
 | `src/maou/domain/game_graph` | python | done | high | `2686689` | [2026-08-08](2026-08-08-src-maou-domain-game-graph.md) | 0 |
-| `src/maou/app/learning` | python | done | high | `52d9bd2` | [2026-08-08](2026-08-08-src-maou-app-learning.md) | 2 deferred |
+| `src/maou/app/learning` | python | done | high | `52d9bd2` | [2026-08-08](2026-08-08-src-maou-app-learning.md) | 1 deferred |
 | `src/maou/infra/file_system` | python | done | high | `1c6a442` | [2026-08-10](2026-08-10-src-maou-infra-file-system.md) | 0 |
 
 ## Blocked
@@ -261,11 +261,17 @@ Records of runs that resolved rows deleted from here:
   消費側 suite も回して **862 passed** (G3 は発生せず)．
 
 - [2026-08-15 backlog stage-unification-and-gns-interval](2026-08-15-backlog-stage-unification-and-gns-interval.md)
-  (**Deferred 2 の 1 行を削除**)．**15 run ぶりに backlog の行が 1 本減った**
-  run である．減った理由は本 run が新しく何かを解いたからではなく，
-  **過去 4 run の設計判断が「人間待ちではないただの作業」の在庫を作って
-  いた**からで，5 行のうち 3 行 (Deferred 2 / D13 / O9) が既にその状態に
-  あった．そのうち最大の Deferred 2 (~585 行) を消化した．
+  (**Deferred 2 と Deferred 5 の 2 行を削除**)．**15 run ぶりに backlog の
+  行が減り，しかも 2 本消えた** run である．内訳は 2 通り: **Deferred 2** は
+  過去 4 run の設計判断が作った「人間待ちではないただの作業」の在庫を
+  消化しただけ (5 行のうち 3 行が既にその状態にあった)．**Deferred 5** は
+  **本 run の再検証が G1 の前提そのものを崩した**結果で，3 run 連続で
+  「GPU で測れないから」と塞がれていたが，経路がクラスとして到達不能で
+  ある以上**測る対象が無い**．これを 3d で問い，ユーザが
+  **「到達不能な今のうちに同期を除去する」**を選んだ (却下されたのは
+  「休眠経路ごと削除」と「現状維持」)．**ゲートは再検証で外れることが
+  あり，外れたゲートは同じ run 内で消化まで行ける**というのが本 run の
+  実質である．
   5 行を再検証して **stale 0 / changed shape 1 / confirmed 4**，
   **行番号の移動は 5 行すべてでゼロ** (前 run 以降 `src/` へのコミットが
   無かったため — 2 run 連続)．**自動帯は空** (15 run 連続)．
@@ -276,6 +282,16 @@ Records of runs that resolved rows deleted from here:
   差異が存在しないと前 run が確定させたため — 2026-08-14 の設計判断のうち
   この部分は不要になっていた)．**B-2** (`57f0664`) が
   `measurement_interval` の既定を 4 箇所すべてで 1 → 5 にした．
+  **B-3** (`a57ad2c`) が `_compute_policy_loss` のマスキング腕から
+  per-batch host sync 2 つ (`if not has_legal.all():` の
+  `Tensor.__bool__` と `int((~has_legal).sum().item())`) を除去した —
+  `safe_mask = mask_bool | ~has_legal.unsqueeze(1)` は `has_legal` が
+  全 True のとき `mask_bool` と厳密に一致するので**分岐自体が冗長**で
+  あり，数値結果は変わらない (全ゼロ行の警告ログは廃止．診断を戻す場合は
+  per-batch で同期しない形にすべき旨をコメントに残した)．
+  回帰テストは `Tensor.item` / `Tensor.__bool__` を例外に差し替えて
+  経路を通すことで**同期の不在を CPU 上で直接検証**しており，
+  旧分岐形に戻すと 2 本が落ちることを確認済み．
   **Deferred 7 は "changed shape"** — 前 run が「既定は 3 箇所」と書いたが
   実際は **4 箇所**で，`infra/console/utility.py:688`
   (`benchmark-training` の同名オプション) が数えられていなかった．
@@ -287,8 +303,9 @@ Records of runs that resolved rows deleted from here:
   `test_gradient_noise_scale.py::test_reset_between_cycles` が
   **既定が 1 であることに暗黙に依存**していたことが判明し，同 commit で
   意図どおり `measurement_interval=1` を明示する形に直した．
-  D13 と O9 は**人間待ちではないが枠に入らなかった**ので行は残る
-  (D13 が次 run の先頭候補)．環境: 素のコンテナから
+  残る 3 行 (Deferred 7 の本丸 / D13 / O9) は**いずれも設計が決定済みで
+  人間待ちではなく**，枠に入らなかっただけである — **G4 も未回答の設計判断も
+  現時点でゼロ**なので，次 run は D13 (2)(3)(4) から通常作業として始められる．環境: 素のコンテナから
   `uv sync --extra cpu` をやり直した際，既定の `UV_HTTP_TIMEOUT=30` では
   torch の依存取得がタイムアウトするので `UV_HTTP_TIMEOUT=300` が要る．
   QA は全て実行できた (**2016 passed**，G3 は発生せず)．
@@ -302,7 +319,6 @@ withheld pending a decision, **not** a decision never to fix it.
 
 | Found by | Target | Item |
 |---|---|---|
-| [2026-08-08 app/learning](2026-08-08-src-maou-app-learning.md) Deferred 5 | `src/maou/app/learning` | `training_loop.py:1110` per-batch host-device sync — `if not has_legal.all():` calls `Tensor.__bool__` on a CUDA tensor, a full pipeline stall once per batch, to guard a warning. **Now dormant, not fixed** (2026-08-09, backlog `tier-3-contracts`): the record's premise "Stage 3 always ships a `legal_move_mask`, so the branch is always taken" no longer holds — no data path supplies a mask, so `_compute_policy_loss` never enters the masking arm and the sync does not execute. The code is unchanged and the stall returns the moment a real legal-move mask is wired in; fix it **then**, together with whatever produces the mask, and measure on GPU. **2026-08-13 に dormant の証明を強化** ([記録](2026-08-13-backlog-bundling-knobs-and-loss-aliasing.md)): `TrainingContext` の構築箇所は `training_loop.py:516` の 1 つだけで，その 3 行上 `:507` に `legal_move_mask: torch.Tensor \| None = None` と**ハードコードされている**．`src/` 全体に産出者はゼロ (`stage2_data_generation.py:247` の Rust `legal_move_masks()` はデータ生成用で `TrainingContext` に届かない)．`_unpack_batch` の docstring `:497-502` も「将来経路のために残している」と明言．**P4 + G1**． **2026-08-14 の 2 回目の run にユーザが「GPU で測れなくても意味論的に等価な変更は出荷してよい」と回答** (`/audit-backlog` step 3d, [記録](2026-08-14-backlog-decided-work-second-pass.md), Deferred 5/6/7 を 1 問で governs)．**ただし本行の G1 は retire されない** — この修正は意味論的に自明な置換ではなく，産出者がゼロで休眠中という前提の上に立つ性能改善なので，**legal_move_mask を実際に配線する変更と同時に，GPU 上で測って直す**という方針は不変．回答は Deferred 6 だけを人間待ちから外した．**P4 + G1** は不変． **2026-08-15 の再検証で行番号を更新** (前 run の `wait_stream` 化でファイルが伸びたため，全体 **+7**)．同期は **`:1117`** (`if not has_legal.all():`，記録の `:1110`)，`has_legal` の生成は `:1116`，**2 つ目の同期 `int((~has_legal).sum().item())` が `:1122`** にある (前の記述はこれを数えていなかった)．`_compute_policy_loss` の def は `:1105`，ハードコードの `legal_move_mask: torch.Tensor \| None = None` は **`:514`** (`:507`)，唯一の `TrainingContext(...)` 構築は **`:523`** (`:516`)．**産出者ゼロを再確認** — `src/` の全ヒットは宣言・読み出し・不在の明記のみで，非 None を与えるのは `tests/maou/app/learning/test_callbacks.py` の 3 箇所だけ．**休眠の根拠が 1 つ強くなった**: `RawLogitsTrainingLoop._compute_policy_loss` (`:1170`，クラスは `:1160`) はマスク処理を丸ごと迂回するので，Stage1/Stage2 からはデータ以前に**クラスとして**到達不能である．**P4 + G1** は不変． **2026-08-15 の 3 回目の run で再検証: 行番号の移動なし** (`:1117` の `if not has_legal.all():`，`:1122` の 2 つ目の同期 `int((~has_legal).sum().item())`，`_compute_policy_loss` の def `:1105`，`:514` のハードコード `legal_move_mask: torch.Tensor | None = None`，唯一の `TrainingContext(...)` 構築 `:523`，`training_loop.py:1183` の別名 — すべて記録どおり)．**P4 + G1** は不変． |
 | [2026-08-08 app/learning](2026-08-08-src-maou-app-learning.md) Deferred 7 | `src/maou/app/learning` | `gradient_noise_scale.py:150,189-192,247` — one GPU sync per parameter tensor per micro-batch (`.item()` inside `for param in model.parameters()`): 60-300 syncs per micro-batch on a ResNet/ViT backbone whenever adaptive batch is on. Accumulating into a device scalar changes when the value materializes, and GNS feeds the adaptive batch controller — needs a numerical equivalence check. **2026-08-13 に再確認** ([記録](2026-08-13-backlog-bundling-knobs-and-loss-aliasing.md)): 3 箇所とも健在 (`:150` / `:188-192` / `:246-248`)．加えて `g.clone()` (`:151`/`:193`) が勾配の全複製をパラメータ毎に確保する．緩和策の `should_measure` (`:115-122`) はあるが **`measurement_interval` の既定は `1`** (`:85`) なので，caller が上書きしない限り毎 optimizer step で走る．値は `compute()` → `b_noise` → `training_loop.py:1024-1031` で Python float として消費され `gradient_accumulation_steps` を書き換えるため，controller 側を tensor 値に作り替えないと同期は遅延できない．**P4 + G1**． **2026-08-14 の 2 回目の run にユーザが「GPU で測れなくても意味論的に等価な変更は出荷してよい」と回答** (`/audit-backlog` step 3d, [記録](2026-08-14-backlog-decided-work-second-pass.md), Deferred 5/6/7 を 1 問で governs)．**ただし本行の G1 は retire されない** — device スカラーへの蓄積は値が materialize するタイミングを変え，その値が `gradient_accumulation_steps` を書き換えるので，**数値等価性の確認が必要**であり「意味論的に自明な等価変換」には当たらない．**P4 + G1** は不変． **2026-08-15 の再検証: `gradient_noise_scale.py` の行番号は全て記録どおりで移動なし** — `measurement_interval: int = 1` `:85` (clamp は `:88-89`)，`should_measure` `:115-122`，第 1 マイクロバッチ経路の `.item()` `:150` と `g.clone()` `:151`，蓄積経路の `.item()` `:189`/`:192` と `g.clone()` `:193`，`compute()` の `.item()` `:247` (式は `:246-248`)．**消費側だけ +7 ずれている**: `b_noise` の生成は `:304`，`GNSEstimate` として返すのが `:307`，消費は `_maybe_update_adaptive_batch` (**`:1018`**) の **`:1031-1038`** (記録の `:1024-1031`) で，`self.gradient_accumulation_steps = new_steps` は `:1038`．鎖は健在．**P4 + G1** は不変． **2026-08-15 の 2 回目の run にユーザが緩和策の設計判断を回答: 「`measurement_interval` の既定を上げる」** (`/audit-backlog` step 3d, [記録](2026-08-15-backlog-writeable-contract-and-decisions.md))．本丸 (device スカラー化) を GPU 環境まで待つ間，既定値を上げて毎 optimizer step の sync を減らす．却下されたのは「既定は `1` のまま本丸を待つ」と「既定を廃して caller に必須指定させる」(`GradientNoiseScale` の署名が変わる P6)． **ただし実装直前の調査で "changed shape" が判明した — 質問時に述べた「1 行で contained」は誤りである**．`measurement_interval` の既定は **3 箇所**にあり，本番経路を決めているのは**クラス既定ではなく CLI 既定**である: (i) `gradient_noise_scale.py:85` `measurement_interval: int = 1`，(ii) `adaptive_batch.py:68` `measurement_interval: int = 1`，(iii) **`infra/console/learn_model.py:217` の `--adaptive-batch-measurement-interval` `default=1`**．CLI は `:984` で `measurement_interval=adaptive_batch_measurement_interval` と**常に明示的に渡す**ので，(i)(ii) だけ変えても**本番経路の挙動は 1 ミリも変わらない**．したがって決定を実現するには (iii) を変える必要があり，**CLI オプションの既定変更 → CLAUDE.md の MUST により `docs/commands/learn_model.md` の更新が伴う** (この doc 更新はコードから一意に決まるので P2 の drift correction 相当)．この run では**実装していない** — ユーザが「1 行で contained」という説明のもとで回答したため，受理済みの PR #505 に CLI 既定 + doc の変更を後から足すのは受理の範囲を超えると判断した． **値の選択の材料** (次 run 向け): リポジトリ自身の推奨は既に存在する — `gradient_noise_scale.py` の docstring `:76-78` が「大規模モデル(数百M〜数Bパラメータ)では 5〜10 を推奨」と書き，`learn_model.py:222` の help も "Recommended: 5-10 for large models (100M+ params)" と書き，`training_benchmark.py:2310` の `_recommend_measurement_interval` は **1 / 5 / 10** のいずれかを返す．**推奨は 5** (リポジトリ自身の推奨帯の下限で，sync を 5 倍減らしつつ既存のガイダンスと矛盾しない)． **残る作業**: (iii) を主とする既定値の変更 + `docs/commands/learn_model.md` の更新 + 回帰テスト，および本丸の device スカラー化 (**G1 は残る** — 数値等価性を測れない)．**P4** は不変 (既定を渡していない既存の実行は挙動が変わる)． **2026-08-15 の 3 回目の run で緩和策を出荷した** ([記録](2026-08-15-backlog-stage-unification-and-gns-interval.md))．**前 run の scope 訂正がさらに 1 箇所不足していた** — 既定は 3 箇所ではなく **4 箇所**で，前 run が数えていない **`infra/console/utility.py:688`** (`benchmark-training` の同名オプション，`utility.py:1365` が常に明示的に渡す) も `default=1` だった．4 箇所すべてを `5` にし (`gradient_noise_scale.py:85` / `adaptive_batch.py:68` / `learn_model.py:217` / `utility.py:688`)，`docs/commands/learn_model.md:32` の既定セルを drift correction として追随させ (`reviews/2026-08-15-gns-measurement-interval-default.md`)，回帰テスト 5 本を追加した．**値は 5** — リポジトリ自身の推奨帯 (docstring `:76-78` / CLI help / `_recommend_measurement_interval` が返す 1/5/10) の下限である．回帰テストは**クラス既定と CLI 既定を別々に**検証しており，「クラス既定だけ直して CLI 既定を 1 のまま残す」という罠を無効化テストで確認済み (CLI 既定だけを 1 に戻すと 2 本が落ちる)．**副産物の発見**: `tests/.../test_gradient_noise_scale.py::test_reset_between_cycles` は `measurement_interval` を渡しておらず**既定が 1 であることに暗黙に依存**していた (2 サイクル目の計測がスキップされて落ちる)．検証したいのは「サイクル間で内部状態がリセットされること」なので `measurement_interval=1` を明示する形に直した — 既定変更が実際に挙動を変えることの独立した証拠でもある． **残るのは本丸の device スカラー化のみ** (`.item()` `:150`/`:189`/`:192`/`:247`，`g.clone()` `:151`/`:193` の per-parameter 同期を device スカラーへ蓄積する)．**G1 は不変** — 値が materialize するタイミングが変わり，その値が `training_loop.py:1038` で `gradient_accumulation_steps` を書き換えるので，数値等価性の確認が要る．**P4** は不変． |
 
 ### Out-of-scope backlog
