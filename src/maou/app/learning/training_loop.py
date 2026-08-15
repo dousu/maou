@@ -1112,28 +1112,24 @@ class TrainingLoop:
 
         if context.legal_move_mask is not None:
             mask_bool = context.legal_move_mask.bool()
-            # 全ゼロマスク行の防御: log_softmax([-inf,...]) = NaN を防止
+            # 全ゼロマスク行の防御: log_softmax([-inf,...]) = NaN を防止．
+            # 全ゼロ行はマスクを適用しない(元のlogitsを保持)．
             has_legal = mask_bool.any(dim=1)
-            if not has_legal.all():
-                logger = logging.getLogger(__name__)
-                logger.warning(
-                    "Found %d samples with all-zero legal_move_mask; "
-                    "skipping masking for those samples to avoid NaN",
-                    int((~has_legal).sum().item()),
-                )
-                # 全ゼロ行はマスクを適用しない(元のlogitsを保持)
-                safe_mask = mask_bool | ~has_legal.unsqueeze(1)
-                masked_logits = (
-                    context.outputs_policy.masked_fill(
-                        ~safe_mask, float("-inf")
-                    )
-                )
-            else:
-                masked_logits = (
-                    context.outputs_policy.masked_fill(
-                        ~mask_bool, float("-inf")
-                    )
-                )
+            # `has_legal` が全 True なら `~has_legal` は全 False なので
+            # `safe_mask` は `mask_bool` と厳密に一致する．したがって
+            # 「全ゼロ行があるか」で分岐する必要は無く，無条件に
+            # `safe_mask` を作れば両方の場合を同じ式で覆える．
+            #
+            # 分岐を残さないのは per-batch の host-device 同期を避ける
+            # ためである: `if not has_legal.all():` は CUDA テンソルに
+            # 対する `Tensor.__bool__` で，件数を出す `.item()` と併せて
+            # バッチごとにパイプラインを 2 度止めていた．
+            # このため全ゼロ行の警告ログは廃止した — 診断を戻す場合も
+            # **バッチごとに同期しない形**にすること．
+            safe_mask = mask_bool | ~has_legal.unsqueeze(1)
+            masked_logits = context.outputs_policy.masked_fill(
+                ~safe_mask, float("-inf")
+            )
         else:
             masked_logits = context.outputs_policy
 

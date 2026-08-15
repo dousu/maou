@@ -753,3 +753,146 @@ class TestIterateCudaOverlapOrdering:
 
         assert [idx for idx, _ in results] == [0]
         assert log == []
+
+
+def _legal_only_nll(
+    log_probs: torch.Tensor, targets: torch.Tensor
+) -> torch.Tensor:
+    """マスクされた位置 (-inf) を無視して合法手だけを見る素朴な loss．"""
+    finite = torch.where(
+        torch.isneginf(log_probs),
+        torch.zeros_like(log_probs),
+        log_probs,
+    )
+    return -(targets * finite).sum() / targets.shape[0]
+
+
+class TestComputePolicyLossNoHostSync:
+    """マスキング経路が per-batch の host-device 同期を起こさないことを固定する．
+
+    `_compute_policy_loss` のマスキング腕は，かつて全ゼロマスク行の件数を
+    警告に出すために `if not has_legal.all():` (CUDA テンソルに対する
+    `Tensor.__bool__`) と `int((~has_legal).sum().item())` の 2 つの同期を
+    バッチごとに行っていた (backlog `audits/coverage.md` Deferred 5)．
+
+    同期は「値をホストへ持ってくる」ことでしか起きないので，
+    `Tensor.item` と `Tensor.__bool__` を例外に差し替えて経路を通せば，
+    同期の不在を CPU 上でも直接検証できる．
+    """
+
+    @staticmethod
+    def _make_loop() -> TrainingLoop:
+        model = torch.nn.Linear(4, 8)
+        return TrainingLoop(
+            model=model,
+            device=torch.device("cpu"),
+            optimizer=torch.optim.SGD(
+                model.parameters(), lr=1e-3
+            ),
+            # 非合法手は -inf になるので，KLDivLoss だと
+            # 0 * (-inf) が NaN になり本題 (同期の有無) が見えなくなる．
+            # 合法手の log 確率だけを見る素朴な loss を使う．
+            loss_fn_policy=_legal_only_nll,
+            loss_fn_value=torch.nn.MSELoss(),
+            policy_loss_ratio=1.0,
+            value_loss_ratio=0.0,
+            policy_target_mode=PolicyTargetMode.MOVE_LABEL,
+        )
+
+    @staticmethod
+    def _make_context(
+        *, logits: torch.Tensor, mask: torch.Tensor
+    ) -> TrainingContext:
+        n, num_moves = logits.shape
+        # moveLabel モードの教師は (N, num_moves) の頻度分布
+        labels = torch.ones(n, num_moves, dtype=torch.float32)
+        return TrainingContext(
+            batch_idx=0,
+            epoch_idx=0,
+            inputs=torch.zeros(n, 4),
+            labels_policy=labels,
+            labels_value=torch.zeros(n, 1),
+            legal_move_mask=mask,
+            outputs_policy=logits,
+            loss=torch.tensor(0.0),
+        )
+
+    @contextmanager
+    def _ban_host_sync(self) -> Iterator[None]:
+        """`Tensor.item` / `Tensor.__bool__` の呼び出しを禁止する．"""
+
+        def _boom(*args: object, **kwargs: object) -> object:
+            raise AssertionError(
+                "host-device sync in _compute_policy_loss"
+            )
+
+        with (
+            patch.object(torch.Tensor, "item", _boom),
+            patch.object(torch.Tensor, "__bool__", _boom),
+        ):
+            yield
+
+    def test_no_sync_with_all_zero_mask_row(self) -> None:
+        """全ゼロマスク行があっても同期せずに計算できる．"""
+        loop = self._make_loop()
+        logits = torch.randn(3, 8)
+        mask = torch.ones(3, 8, dtype=torch.bool)
+        mask[1] = False  # 全ゼロ行
+
+        with self._ban_host_sync():
+            loss = loop._compute_policy_loss(
+                self._make_context(logits=logits, mask=mask)
+            )
+
+        assert loss.dim() == 0
+        assert torch.isfinite(loss)
+
+    def test_no_sync_without_all_zero_mask_row(self) -> None:
+        """全ゼロ行が無い通常の場合も同期しない．"""
+        loop = self._make_loop()
+        logits = torch.randn(3, 8)
+        mask = torch.zeros(3, 8, dtype=torch.bool)
+        mask[:, :4] = True
+
+        with self._ban_host_sync():
+            loss = loop._compute_policy_loss(
+                self._make_context(logits=logits, mask=mask)
+            )
+
+        assert loss.dim() == 0
+        assert torch.isfinite(loss)
+
+    def test_all_zero_row_keeps_original_logits(self) -> None:
+        """全ゼロ行はマスクされず元の logits が保たれる．
+
+        分岐を畳んだあとも「全ゼロ行だけ素通し，他の行は通常どおり
+        マスク」という意味論が変わっていないことを固定する．
+        """
+        loop = self._make_loop()
+        logits = torch.randn(2, 8)
+        mask = torch.zeros(2, 8, dtype=torch.bool)
+        mask[0, :3] = True  # 通常行
+        # mask[1] は全ゼロ行
+
+        captured: dict[str, torch.Tensor] = {}
+        real_log_softmax = torch.nn.functional.log_softmax
+
+        def _spy(
+            x: torch.Tensor, **kwargs: object
+        ) -> torch.Tensor:
+            captured["masked_logits"] = x
+            return real_log_softmax(x, **kwargs)  # type: ignore[arg-type]
+
+        with patch.object(
+            torch.nn.functional, "log_softmax", _spy
+        ):
+            loop._compute_policy_loss(
+                self._make_context(logits=logits, mask=mask)
+            )
+
+        masked = captured["masked_logits"]
+        # 全ゼロ行は 1 つも -inf にならない (元の logits のまま)
+        assert torch.equal(masked[1], logits[1])
+        # 通常行は非合法手だけが -inf になる
+        assert torch.equal(masked[0, :3], logits[0, :3])
+        assert torch.isneginf(masked[0, 3:]).all()
