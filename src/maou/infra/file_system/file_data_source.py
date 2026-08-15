@@ -389,21 +389,6 @@ class FileDataSource(learn.LearningDataSource):
                 batch, row=idx
             )[0]
 
-        def get_items(
-            self, indices: list[int]
-        ) -> list[np.ndarray]:
-            """Get multiple items as numpy structured arrays．
-
-            Converts DataFrame rows to numpy format for backward compatibility．
-
-            Args:
-                indices: List of global indices
-
-            Returns:
-                List of numpy structured arrays
-            """
-            return [self.get_item(idx) for idx in indices]
-
         def iter_batches(
             self,
         ) -> Generator[tuple[str, np.ndarray], None, None]:
@@ -580,19 +565,6 @@ class FileDataSource(learn.LearningDataSource):
 
     def __len__(self) -> int:
         return len(self.indicies)
-
-    def get_items(self, indices: list[int]) -> list[np.ndarray]:
-        """複数のインデックスのレコードをバッチで取得する．
-
-        Args:
-            indices: 取得するインデックスのリスト(FileDataSourceのインデックス空間)
-
-        Returns:
-            レコードのリスト(入力のインデックス順)
-        """
-        # FileDataSourceのインデックスをFileManagerのグローバルインデックスに変換
-        global_indices = [self.indicies[idx] for idx in indices]
-        return self.__file_manager.get_items(global_indices)
 
     def iter_batches(
         self,

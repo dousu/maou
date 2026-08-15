@@ -31,6 +31,13 @@ B_noise は Critical Batch Size (CBS) の近似であり，
 
 メモリオーバーヘッド:
     モデルパラメータ1コピー分(prev_grads snapshot) + スカラー数個
+
+host-device 同期:
+    勾配統計はパラメータごとに **デバイス上の float64 スカラー**へ蓄積し，
+    Python の float へ materialize するのは :meth:`compute` の 1 箇所だけで
+    ある．蓄積を float64 で行うのは，加算順序と dtype 変換を素朴な
+    ``.item()`` 逐次加算と厳密に一致させ，計測値が bit 単位で変わらない
+    ようにするためである(:func:`_accumulate_device_scalar` 参照)．
 """
 
 import logging
@@ -40,6 +47,36 @@ from dataclasses import dataclass
 import torch
 
 logger = logging.getLogger(__name__)
+
+
+def _accumulate_device_scalar(
+    total: torch.Tensor | None,
+    value: torch.Tensor,
+) -> torch.Tensor:
+    """デバイス上の float64 スカラーへ加算する．
+
+    ``.item()`` を呼ばないので host-device 同期を起こさない．
+
+    累算を float64 で行うことが**数値等価性の要**である．素朴な実装
+    (``acc += value.item()``) は Python の float すなわち float64 の
+    逐次加算なので，同じ順序で float64 加算を行う本関数の結果は
+    それと bit 単位で一致する．累算器を float32 にすると一致しない．
+
+    Args:
+        total: これまでの累算値．``None`` なら ``value`` から開始する．
+        value: 加算する 0 次元テンソル(任意の浮動小数点 dtype)．
+
+    Returns:
+        float64 の 0 次元テンソル．
+    """
+    contribution = value.to(dtype=torch.float64)
+    if total is None:
+        total = torch.zeros(
+            (),
+            dtype=torch.float64,
+            device=contribution.device,
+        )
+    return total + contribution.to(total.device)
 
 
 @dataclass
@@ -74,9 +111,10 @@ class GradientNoiseScaleEstimator:
         physical_batch_size: DataLoader の物理バッチサイズ．
         measurement_interval: GNS を計測する optimizer step 間隔．
             1 なら毎ステップ計測する．計測中はモデルパラメータ1コピー分の
-            追加メモリを使用し，パラメータテンソルごとに `.item()` による
-            host-device 同期が走るため，既定は 5 である．大規模モデル
+            追加メモリを使用するため，既定は 5 である．大規模モデル
             (数百M〜数Bパラメータ)では 5〜10 を推奨する．
+            なお host-device 同期は計測サイクルあたり 1 回だけで，
+            パラメータ数には依存しない(モジュール docstring 参照)．
     """
 
     def __init__(
@@ -90,8 +128,10 @@ class GradientNoiseScaleEstimator:
             1, measurement_interval
         )
 
-        # accumulation cycle 内の状態
-        self._sum_micro_norm_sq: float = 0.0
+        # accumulation cycle 内の状態．
+        # _sum_micro_norm_sq はデバイス上の float64 スカラーで保持し，
+        # compute() で 1 度だけ host へ materialize する．
+        self._sum_micro_norm_sq: torch.Tensor | None = None
         self._prev_grads: list[torch.Tensor | None] | None = (
             None
         )
@@ -141,20 +181,24 @@ class GradientNoiseScaleEstimator:
 
         if accumulation_step == 0:
             # cycle の最初: param.grad がこの micro-batch の勾配そのもの
-            micro_norm_sq = 0.0
+            micro_norm_sq: torch.Tensor | None = None
             prev_grads: list[torch.Tensor | None] = []
             has_grad = False
             for param in model.parameters():
                 if param.grad is not None:
                     has_grad = True
                     g = param.grad.detach()
-                    micro_norm_sq += g.pow(2).sum().item()
+                    micro_norm_sq = _accumulate_device_scalar(
+                        micro_norm_sq, g.pow(2).sum()
+                    )
                     prev_grads.append(g.clone())
                 else:
                     prev_grads.append(None)
-            if not has_grad:
+            if not has_grad or micro_norm_sq is None:
                 return
-            self._sum_micro_norm_sq += micro_norm_sq
+            self._sum_micro_norm_sq = _accumulate_device_scalar(
+                self._sum_micro_norm_sq, micro_norm_sq
+            )
             self._prev_grads = prev_grads
         else:
             if self._prev_grads is None:
@@ -168,7 +212,7 @@ class GradientNoiseScaleEstimator:
             # prev_grads はすべてのパラメータに対応するエントリを持つ
             # (grad=None のパラメータも含む)ため，idx は全パラメータで
             # インクリメントする
-            micro_norm_sq = 0.0
+            micro_norm_sq = None
             new_prev: list[torch.Tensor | None] = []
             params = list(model.parameters())
             if len(self._prev_grads) != len(params):
@@ -186,15 +230,27 @@ class GradientNoiseScaleEstimator:
                     prev = self._prev_grads[idx]
                     if prev is not None:
                         diff = g - prev
-                        micro_norm_sq += (
-                            diff.pow(2).sum().item()
+                        micro_norm_sq = (
+                            _accumulate_device_scalar(
+                                micro_norm_sq,
+                                diff.pow(2).sum(),
+                            )
                         )
                     else:
-                        micro_norm_sq += g.pow(2).sum().item()
+                        micro_norm_sq = (
+                            _accumulate_device_scalar(
+                                micro_norm_sq, g.pow(2).sum()
+                            )
+                        )
                     new_prev.append(g.clone())
                 else:
                     new_prev.append(None)
-            self._sum_micro_norm_sq += micro_norm_sq
+            if micro_norm_sq is not None:
+                self._sum_micro_norm_sq = (
+                    _accumulate_device_scalar(
+                        self._sum_micro_norm_sq, micro_norm_sq
+                    )
+                )
             self._prev_grads = new_prev
 
         # accumulation_step は 0-indexed なので +1 で処理済み micro-batch 数になる．
@@ -238,19 +294,42 @@ class GradientNoiseScaleEstimator:
             self._reset()
             return None
 
-        # 蓄積済み勾配の二乗ノルムをパラメータごとに計算
-        mean_grad_norm_sq = 0.0
+        # 蓄積済み勾配の二乗ノルムをパラメータごとに計算．
+        # ここでも host へは落とさず，デバイス上の float64 スカラーへ蓄積する．
+        mean_grad_norm_sq_device: torch.Tensor | None = None
         has_grad = False
         for param in model.parameters():
             if param.grad is not None:
                 has_grad = True
-                mean_grad_norm_sq += (
-                    param.grad.detach().pow(2).sum().item()
+                mean_grad_norm_sq_device = (
+                    _accumulate_device_scalar(
+                        mean_grad_norm_sq_device,
+                        param.grad.detach().pow(2).sum(),
+                    )
                 )
 
-        if not has_grad:
+        if not has_grad or mean_grad_norm_sq_device is None:
             self._reset()
             return None
+
+        # cycle 全体でここが唯一の host-device 同期である．
+        # 2 つのスカラーを stack して 1 回で materialize することで，
+        # 同期回数をパラメータ数にも micro-batch 数にも依存させない．
+        sum_micro_norm_sq_device = self._sum_micro_norm_sq
+        if sum_micro_norm_sq_device is None:
+            sum_micro_norm_sq_device = torch.zeros(
+                (),
+                dtype=torch.float64,
+                device=mean_grad_norm_sq_device.device,
+            )
+        sum_micro_norm_sq, mean_grad_norm_sq = torch.stack(
+            [
+                sum_micro_norm_sq_device.to(
+                    mean_grad_norm_sq_device.device
+                ),
+                mean_grad_norm_sq_device,
+            ]
+        ).tolist()
 
         if (
             not math.isfinite(mean_grad_norm_sq)
@@ -264,7 +343,7 @@ class GradientNoiseScaleEstimator:
             return None
 
         k = self._micro_batch_count
-        s = self._sum_micro_norm_sq
+        s = sum_micro_norm_sq
         g = mean_grad_norm_sq
         b = self._physical_batch_size
 
@@ -325,6 +404,6 @@ class GradientNoiseScaleEstimator:
 
     def _reset(self) -> None:
         """accumulation cycle の状態をリセットする(内部用)．"""
-        self._sum_micro_norm_sq = 0.0
+        self._sum_micro_norm_sq = None
         self._prev_grads = None
         self._micro_batch_count = 0
