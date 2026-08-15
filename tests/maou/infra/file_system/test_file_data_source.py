@@ -135,6 +135,46 @@ def test_file_data_source_indexing(tmp_path: Path) -> None:
     assert last_record is not None
 
 
+def test_batch_retrieval_api_stays_removed(
+    tmp_path: Path,
+) -> None:
+    """バッチ取得 API が再導入されていないことを固定する．
+
+    ``FileDataSource.__getitems__`` / ``FileManager.get_items`` は
+    DataLoader のバッチ取得を速くする狙いで一度導入され，
+    **2.8 倍の性能退行**で棄却された
+    (docs/adr-003-training-performance-optimization-attempts.md §5)．
+    ところが revert が不完全で ``get_items`` だけが残っており，
+    「バッチで取得する」と称しながら中身は ``get_item`` の Python
+    ループという名前と実装の食い違いを 2 年ぶんの読者に見せていた
+    (呼び出し側は ``src/`` ``tests/`` ともにゼロ)．
+
+    残骸を消して revert を完了させたので，同じ形が名前だけ変えて
+    戻ってこないよう，**不在そのもの**を固定する．真にバッチ化する
+    なら ``ColumnarBatch`` を直接スライスする経路
+    (audits backlog D13) であって，要素ごとのループの再導入ではない．
+    """
+    file_paths, _ = _create_preprocessing_files(
+        tmp_path, file_count=2, rows_per_file=5
+    )
+    datasource = FileDataSource(
+        file_paths=file_paths,
+        array_type="preprocessing",
+    )
+
+    for removed in ("get_items", "__getitems__"):
+        assert not hasattr(datasource, removed), (
+            f"棄却済みのバッチ取得 API {removed} が復活している "
+            "(ADR-003 §5)"
+        )
+
+    # 要素ごとの取得は当然そのまま使える — 消したのは何もバッチ化して
+    # いなかった包み紙だけである．
+    assert [datasource[i] is not None for i in range(10)] == [
+        True
+    ] * 10
+
+
 def test_file_data_source_train_test_split(
     tmp_path: Path,
 ) -> None:
