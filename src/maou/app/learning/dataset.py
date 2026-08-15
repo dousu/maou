@@ -239,30 +239,38 @@ class KifDataset(Dataset, Sized):
         return torch.from_numpy(np_array)
 
 
-class Stage1Dataset(Dataset, Sized):
-    """Dataset for Stage 1 (reachable squares) training.
+class _StageDataset(Dataset, Sized):
+    """Common dataset for the multi-stage pre-training stages.
 
-    This dataset is used for the first stage of multi-stage training，
-    where the model learns which board squares pieces can move to.
-    The target is a 9×9 binary map indicating reachable squares.
+    Stage 1 と Stage 2 は特徴量 (盤面・持ち駒) が同一で，教師信号の
+    フィールド名と，そのフィールドを平坦化するかどうかだけが異なる．
+    サブクラスは `_stage_label` / `_target_field` / `_flatten_target`
+    を定義する．
     """
 
     logger: logging.Logger = logging.getLogger(__name__)
+
+    #: ログに出すステージ名 ("Stage 1" など)．
+    _stage_label: str
+    #: 教師信号を取り出す structured array のフィールド名．
+    _target_field: str
+    #: 教師信号を 1 次元へ平坦化するかどうか．
+    _flatten_target: bool
 
     def __init__(
         self,
         *,
         datasource: DataSource,
     ):
-        """Initialize Stage 1 dataset.
+        """Initialize the stage dataset.
 
         Args:
-            datasource: Data source providing Stage 1 training data
-                with schema defined by get_stage1_dtype()
+            datasource: Data source providing the stage's training data
         """
         self.__datasource = datasource
         self.logger.info(
-            f"Stage 1 Dataset: {len(self.__datasource)} samples"
+            f"{self._stage_label} Dataset: "
+            f"{len(self.__datasource)} samples"
         )
 
     def __len__(self) -> int:
@@ -284,7 +292,7 @@ class Stage1Dataset(Dataset, Sized):
                 - features: (board_tensor，pieces_in_hand_tensor)
                     - board_tensor: (9，9) uint8 tensor
                     - pieces_in_hand_tensor: (14，) uint8 tensor
-                - target: (81，) float32 tensor of binary labels
+                - target: 1-D float32 tensor of binary labels
         """
         data = self.__datasource[idx]
 
@@ -300,92 +308,51 @@ class Stage1Dataset(Dataset, Sized):
                 expected_dtype=np.uint8,
             )
         )
-        reachable_squares_tensor = (
-            KifDataset._structured_field_to_tensor(
-                data,
-                field_name="reachableSquares",
-                expected_dtype=np.uint8,
-            )
-            .flatten()
-            .float()
-        )  # (9，9) -> (81，) and convert to float for BCE
+        target_tensor = KifDataset._structured_field_to_tensor(
+            data,
+            field_name=self._target_field,
+            expected_dtype=np.uint8,
+        )
+        if self._flatten_target:
+            # (9，9) -> (81，)
+            target_tensor = target_tensor.flatten()
+        # Convert to float for BCE loss
+        target_tensor = target_tensor.float()
 
         return (
             (board_tensor, pieces_in_hand_tensor),
-            reachable_squares_tensor,
+            target_tensor,
         )
 
 
-class Stage2Dataset(Dataset, Sized):
+class Stage1Dataset(_StageDataset):
+    """Dataset for Stage 1 (reachable squares) training.
+
+    This dataset is used for the first stage of multi-stage training，
+    where the model learns which board squares pieces can move to.
+    The target is a 9×9 binary map indicating reachable squares，
+    flattened to (81，).
+
+    The data source is expected to provide the schema defined by
+    get_stage1_dtype().
+    """
+
+    _stage_label = "Stage 1"
+    _target_field = "reachableSquares"
+    _flatten_target = True
+
+
+class Stage2Dataset(_StageDataset):
     """Dataset for Stage 2 (legal moves) training.
 
     This dataset is used for the second stage of multi-stage training，
     where the model learns which moves are legal in a given position.
     The target is a MOVE_LABELS_NUM-dimensional binary vector indicating legal moves.
+
+    The data source is expected to provide the schema defined by
+    get_stage2_dtype().
     """
 
-    logger: logging.Logger = logging.getLogger(__name__)
-
-    def __init__(
-        self,
-        *,
-        datasource: DataSource,
-    ):
-        """Initialize Stage 2 dataset.
-
-        Args:
-            datasource: Data source providing Stage 2 training data
-                with schema defined by get_stage2_dtype()
-        """
-        self.__datasource = datasource
-        self.logger.info(
-            f"Stage 2 Dataset: {len(self.__datasource)} samples"
-        )
-
-    def __len__(self) -> int:
-        return len(self.__datasource)
-
-    def __getitem__(
-        self, idx: int
-    ) -> tuple[
-        tuple[torch.Tensor, torch.Tensor],  # features
-        torch.Tensor,  # target
-    ]:
-        """Get a single training sample.
-
-        Args:
-            idx: Sample index
-
-        Returns:
-            Tuple of (features，target):
-                - features: (board_tensor，pieces_in_hand_tensor)
-                    - board_tensor: (9，9) uint8 tensor
-                    - pieces_in_hand_tensor: (14，) uint8 tensor
-                - target: (MOVE_LABELS_NUM，) float32 tensor of binary labels
-        """
-        data = self.__datasource[idx]
-
-        board_tensor = KifDataset._structured_field_to_tensor(
-            data,
-            field_name="boardIdPositions",
-            expected_dtype=np.uint8,
-        )
-        pieces_in_hand_tensor = (
-            KifDataset._structured_field_to_tensor(
-                data,
-                field_name="piecesInHand",
-                expected_dtype=np.uint8,
-            )
-        )
-        legal_moves_tensor = (
-            KifDataset._structured_field_to_tensor(
-                data,
-                field_name="legalMovesLabel",
-                expected_dtype=np.uint8,
-            ).float()
-        )  # Convert to float for BCE loss
-
-        return (
-            (board_tensor, pieces_in_hand_tensor),
-            legal_moves_tensor,
-        )
+    _stage_label = "Stage 2"
+    _target_field = "legalMovesLabel"
+    _flatten_target = False

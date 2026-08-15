@@ -74,15 +74,16 @@ class GradientNoiseScaleEstimator:
         physical_batch_size: DataLoader の物理バッチサイズ．
         measurement_interval: GNS を計測する optimizer step 間隔．
             1 なら毎ステップ計測する．計測中はモデルパラメータ1コピー分の
-            追加メモリを使用するため，大規模モデル(数百M〜数Bパラメータ)
-            では 5〜10 を推奨する．
+            追加メモリを使用し，パラメータテンソルごとに `.item()` による
+            host-device 同期が走るため，既定は 5 である．大規模モデル
+            (数百M〜数Bパラメータ)では 5〜10 を推奨する．
     """
 
     def __init__(
         self,
         *,
         physical_batch_size: int,
-        measurement_interval: int = 1,
+        measurement_interval: int = 5,
     ) -> None:
         self._physical_batch_size = physical_batch_size
         self._measurement_interval = max(

@@ -99,10 +99,17 @@ class TestGradientNoiseScaleEstimator:
         assert result3 is not None
 
     def test_reset_between_cycles(self) -> None:
-        """compute 後に内部状態がリセットされることを確認する．"""
+        """compute 後に内部状態がリセットされることを確認する．
+
+        検証したいのは連続する 2 サイクルが独立に計算できることなので，
+        計測を毎サイクル走らせる必要がある．``measurement_interval``
+        の既定は 5 (host-device 同期を減らすため) であり，既定に任せると
+        2 サイクル目が計測をスキップして本題が検証できない．
+        """
         model = _make_simple_model()
         estimator = GradientNoiseScaleEstimator(
             physical_batch_size=32,
+            measurement_interval=1,
         )
 
         # Run first cycle

@@ -59,13 +59,15 @@ class AdaptiveBatchConfig:
         measurement_interval: GNS を計測する optimizer step 間隔．
             adjustment_interval より大きい場合，調整ウィンドウ内で
             GNS 計測が不足するため警告が出力される．
+            計測 1 回につきパラメータテンソルごとの host-device 同期が
+            走るため，既定は 5 である．
     """
 
     min_accumulation_steps: int = 2
     max_accumulation_steps: int = 8
     adjustment_interval: int = 50
     smoothing_factor: float = 0.1
-    measurement_interval: int = 1
+    measurement_interval: int = 5
 
     def __post_init__(self) -> None:
         """バリデーション．"""
