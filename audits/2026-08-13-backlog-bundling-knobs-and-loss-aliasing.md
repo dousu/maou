@@ -137,6 +137,30 @@ Version: `0.89.9` → `0.89.10` (object_storage) → `0.89.11` (callbacks)．
 いずれも**診断が誤っていた**ケースに限った訂正で，worklist state
 (`RESOLVED` 等) は書いていない．
 
+**Correction** (2026-08-15, `033d49f`): この run が
+`2026-08-08-src-maou-app-learning.md` の Deferred 2 に追記した訂正 (i)
+— 「**4 本目の軸**として使う `TrainingLoop` サブクラスが違う
+(`Stage1TrainingLoop` vs `RawLogitsTrainingLoop`)．装飾ではなく挙動の
+軸なので，『差分は装飾だけ』という前提で統合を設計すると取り落とす」
+— は**誤り**である．`training_loop.py:1183` は
+`Stage1TrainingLoop = RawLogitsTrainingLoop` という**モジュール level の
+別名**であり，`git log -S` によればこの別名は **2026-08-09 の
+`568863f`**「全 1 の legal_move_mask を targets タプルから外す」で
+導入されている — すなわち**本 run (2026-08-13) の時点で既に別名だった**．
+`multi_stage_training.py` の 2 箇所は**同じクラスを構築している**ので，
+挙動の軸は存在しない．
+
+見落とした理由は，2 つの構築箇所の**名前が違うことだけを確認し，
+その名前の定義を読まなかった**ため．別名は定義側にしか現れないので，
+利用箇所の grep では区別がつかない．**「2 つの名前が違う」は
+「2 つのクラスが違う」の証拠にならない** — 定義を引くまでは，
+それは仮説である．
+
+この誤りには下流の影響がある: 2026-08-14 にユーザが下した設計判断
+「`TrainingLoop` サブクラスは戦略として注入する」は，この訂正を
+根拠に提示された選択肢なので，**存在しない差異のための設計**に
+なっている (`audits/coverage.md` の Deferred 2 行に反映済み)．
+
 ## Doc findings
 
 - [`reviews/2026-08-13-rust-backend-bundling-example.md`](../reviews/2026-08-13-rust-backend-bundling-example.md)
