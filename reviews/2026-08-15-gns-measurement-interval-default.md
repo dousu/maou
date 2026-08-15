@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in: PENDING_SHA
+applied_in: 57f0664
 date: 2026-08-15
 target: [docs/commands/learn_model.md]
 risk: low
