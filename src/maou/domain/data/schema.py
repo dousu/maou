@@ -790,6 +790,12 @@ def _explode_list_column(
 
     Falls back to to_list() if null values are present.
 
+    返す配列は **必ず C-contiguous かつ writeable** である．
+    polars の ``to_numpy()`` は dtype 変換が不要なとき Arrow バッファの
+    read-only ビューを返すため，その場合だけコピーを取ってこの契約を満たす．
+    ``torch.from_numpy()`` はストレージを共有するので，read-only のまま
+    下流へ渡すとテンソル化の時点で撥ねられる (``KifDataset._numpy_to_tensor``)．
+
     Args:
         series: Polars Series of List type
         n: Number of rows
@@ -798,7 +804,7 @@ def _explode_list_column(
         nest_depth: Number of explode() calls (1 for List, 2 for List[List])
 
     Returns:
-        numpy.ndarray with shape (n, *shape)
+        numpy.ndarray with shape (n, *shape)．C-contiguous かつ writeable．
     """
     if series.null_count() > 0:
         # Fallback: null rows present, use to_list() with zero-fill
@@ -820,7 +826,13 @@ def _explode_list_column(
         col = col.explode()
     result = col.to_numpy().reshape(n, *shape)
     if result.dtype != dtype:
+        # astype はコピーを作るので writeable が保証される．
         result = result.astype(dtype)
+    elif not result.flags.writeable:
+        # polars 側 dtype が目標 dtype と一致すると astype が挟まらず，
+        # Arrow バッファの read-only ビューがそのまま出てくる．
+        # 契約 (writeable) を満たすためここでだけコピーする．
+        result = np.array(result, copy=True)
     return result
 
 

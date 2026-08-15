@@ -32,9 +32,14 @@ class ColumnarBatch:
     フィールドアクセス時のメモリコピーが不要になり，
     ``torch.from_numpy()`` のゼロコピー変換が可能になる．
 
+    **各フィールドの契約は C-contiguous かつ writeable である．**
+    ``torch.from_numpy()`` はストレージを共有するため read-only 配列を
+    受け付けない (``KifDataset._numpy_to_tensor`` が ``ValueError`` で撥ねる)．
+    この保証は最上流の ``schema._explode_list_column`` が与えている．
+
     Attributes:
-        board_positions: 盤面の駒ID配列．shape: ``(N, 9, 9)``，dtype: ``uint8``，C-contiguous．
-        pieces_in_hand: 持ち駒配列．shape: ``(N, 14)``，dtype: ``uint8``，C-contiguous．
+        board_positions: 盤面の駒ID配列．shape: ``(N, 9, 9)``，dtype: ``uint8``，C-contiguous かつ writeable．
+        pieces_in_hand: 持ち駒配列．shape: ``(N, 14)``，dtype: ``uint8``，C-contiguous かつ writeable．
         move_label: 指し手ラベル配列．shape: ``(N, MOVE_LABELS_NUM)``，dtype: ``float16``．
             preprocessing用．Stage1/Stage2では ``None``．
         result_value: 対局結果値．shape: ``(N,)``，dtype: ``float16``．
