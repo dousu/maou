@@ -236,3 +236,118 @@ class TestConvertHcpeDfToNumpy:
             array["ratings"][0],
             np.array([0, 0], dtype=np.uint16),
         )
+
+
+class TestExplodeListColumnWriteability:
+    """`_explode_list_column` の writeable 契約 (D13(1)) の回帰テスト．
+
+    **これらのテストは polars 側 dtype を目標 dtype と一致させて書く必要がある．**
+    Python の list から dtype 指定なしで組んだ DataFrame は int64/float64 になり，
+    `_explode_list_column` の `astype` 分岐が必ず走ってコピーが生まれるため，
+    writeable を主張しても空虚になる．罠は「dtype が一致して astype が
+    挟まらない」経路にしかない．
+    """
+
+    def test_matching_dtype_fast_path_is_writeable(
+        self,
+    ) -> None:
+        """polars 側 dtype が目標と一致しても writeable な配列が返る．"""
+        import polars as pl
+
+        from maou.domain.data.schema import _explode_list_column
+
+        series = pl.Series(
+            "piecesInHand",
+            [[1] * 14, [2] * 14],
+            dtype=pl.List(pl.UInt8),
+        )
+        # 前提: astype が挟まらない経路であること (挟まると罠を踏まない)
+        assert series.explode().to_numpy().dtype == np.uint8
+
+        result = _explode_list_column(
+            series, 2, (14,), np.dtype(np.uint8)
+        )
+
+        assert result.dtype == np.uint8
+        assert result.flags.writeable
+        assert result.flags.c_contiguous
+        # コピーであること: 書き込んでも polars 側は変わらない
+        result[0, 0] = 99
+        assert series.explode().to_numpy()[0] == 1
+
+    def test_nested_matching_dtype_is_writeable(self) -> None:
+        """nest_depth=2 (boardIdPositions) でも writeable が保証される．"""
+        import polars as pl
+
+        from maou.domain.data.schema import _explode_list_column
+
+        series = pl.Series(
+            "boardIdPositions",
+            [[[1] * 9 for _ in range(9)]],
+            dtype=pl.List(pl.List(pl.UInt8)),
+        )
+        assert (
+            series.explode().explode().to_numpy().dtype
+            == np.uint8
+        )
+
+        result = _explode_list_column(
+            series, 1, (9, 9), np.dtype(np.uint8), nest_depth=2
+        )
+
+        assert result.flags.writeable
+        assert result.flags.c_contiguous
+
+    def test_float32_matching_dtype_is_writeable(self) -> None:
+        """moveWinRate (List(Float32) → float32) も writeable になる．"""
+        import polars as pl
+
+        from maou.domain.data.schema import _explode_list_column
+
+        series = pl.Series(
+            "moveWinRate",
+            [[0.5] * 4],
+            dtype=pl.List(pl.Float32),
+        )
+        assert series.explode().to_numpy().dtype == np.float32
+
+        result = _explode_list_column(
+            series, 1, (4,), np.dtype(np.float32)
+        )
+
+        assert result.flags.writeable
+
+    def test_astype_path_still_writeable(self) -> None:
+        """dtype 変換が挟まる経路 (moveLabel) の writeable は不変．"""
+        import polars as pl
+
+        from maou.domain.data.schema import _explode_list_column
+
+        series = pl.Series(
+            "moveLabel", [[1.0] * 4], dtype=pl.List(pl.Float32)
+        )
+
+        result = _explode_list_column(
+            series, 1, (4,), np.dtype(np.float16)
+        )
+
+        assert result.dtype == np.float16
+        assert result.flags.writeable
+
+    def test_null_fallback_path_is_writeable(self) -> None:
+        """null を含む fallback 経路も writeable を返す．"""
+        import polars as pl
+
+        from maou.domain.data.schema import _explode_list_column
+
+        series = pl.Series(
+            "piecesInHand",
+            [[1] * 14, None],
+            dtype=pl.List(pl.UInt8),
+        )
+
+        result = _explode_list_column(
+            series, 2, (14,), np.dtype(np.uint8)
+        )
+
+        assert result.flags.writeable

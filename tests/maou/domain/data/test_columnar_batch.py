@@ -736,3 +736,103 @@ class TestConvertStage2DfToColumnar:
         np.testing.assert_array_equal(
             batch.legal_moves_label[0], expected
         )
+
+
+class TestColumnarBatchWriteabilityContract:
+    """ColumnarBatch の全フィールドが writeable であることの回帰テスト (D13(1))．
+
+    `torch.from_numpy()` はストレージを共有するので read-only 配列を受け付けず，
+    `KifDataset._numpy_to_tensor` が `ValueError` で撥ねる．
+    polars の `to_numpy()` は dtype 変換が要らないとき Arrow の read-only ビューを
+    返すため，`_make_*_df` が **明示的な polars dtype** を持つことがこのテストの
+    非空虚性の条件である (dtype 指定なしの list なら astype が挟まって必ず通る)．
+    """
+
+    def _assert_writeable(
+        self, batch: ColumnarBatch, names: list[str]
+    ) -> None:
+        for name in names:
+            field = getattr(batch, name)
+            if field is None:
+                continue
+            assert field.flags.writeable, (
+                f"{name} が read-only で返っている "
+                "(torch.from_numpy が撥ねる)"
+            )
+            assert field.flags.c_contiguous, (
+                f"{name} が C-contiguous でない"
+            )
+
+    def test_preprocessing_batch_fields_are_writeable(
+        self,
+    ) -> None:
+        batch = convert_preprocessing_df_to_columnar(
+            _make_preprocessing_df(4)
+        )
+        self._assert_writeable(
+            batch,
+            [
+                "board_positions",
+                "pieces_in_hand",
+                "move_label",
+                "result_value",
+            ],
+        )
+
+    def test_preprocessing_with_move_win_rate_is_writeable(
+        self,
+    ) -> None:
+        df = _make_preprocessing_df(3).with_columns(
+            pl.Series(
+                "moveWinRate",
+                [[0.5] * MOVE_LABELS_NUM for _ in range(3)],
+                dtype=pl.List(pl.Float32),
+            )
+        )
+        batch = convert_preprocessing_df_to_columnar(df)
+
+        assert batch.move_win_rate is not None
+        self._assert_writeable(batch, ["move_win_rate"])
+
+    def test_stage1_batch_fields_are_writeable(self) -> None:
+        batch = convert_stage1_df_to_columnar(
+            _make_stage1_df(4)
+        )
+        self._assert_writeable(
+            batch,
+            [
+                "board_positions",
+                "pieces_in_hand",
+                "reachable_squares",
+            ],
+        )
+
+    def test_stage2_batch_fields_are_writeable(self) -> None:
+        batch = convert_stage2_df_to_columnar(
+            _make_stage2_df(4)
+        )
+        self._assert_writeable(
+            batch,
+            [
+                "board_positions",
+                "pieces_in_hand",
+                "legal_moves_label",
+            ],
+        )
+
+    def test_sliced_batch_stays_writeable(self) -> None:
+        """スライス後も writeable — 直接スライス経路が踏む形．"""
+        batch = convert_preprocessing_df_to_columnar(
+            _make_preprocessing_df(8)
+        )
+        sliced = batch.slice(np.array([1, 3, 5]))
+
+        self._assert_writeable(
+            sliced,
+            [
+                "board_positions",
+                "pieces_in_hand",
+                "move_label",
+                "result_value",
+            ],
+        )
