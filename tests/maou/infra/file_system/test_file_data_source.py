@@ -21,6 +21,7 @@ from maou.domain.data.schema import (
     MOVE_LABELS_NUM,
     create_empty_hcpe_df,
     create_empty_preprocessing_df,
+    get_preprocessing_dtype,
 )
 from maou.infra.file_system.file_data_source import (
     _STRUCTURED_TO_COLUMNAR_FIELD,
@@ -1129,3 +1130,255 @@ class TestColumnarFieldsAreNeverUninitialized:
             "ColumnarBatch に追加されたフィールドが "
             "_STRUCTURED_TO_COLUMNAR_FIELD に無い"
         )
+
+
+class TestColumnarRecord:
+    """``FileDataSource.columnar_record`` — 訓練ホットパスの速い口．
+
+    `/audit-backlog` 2026-08-15 / backlog 行 D13 (2)(4)．
+    ``__getitem__`` は訓練サンプル 1 件ごとに
+    ``np.empty(9,081B)`` を確保して 8 フィールドを memcpy していた
+    (batch 1024 で約 9.3MB/バッチ)．``columnar_record`` は
+    ``ColumnarBatch`` のビューを辞書で返すのでその確保とコピーが
+    消える．
+
+    ここで固定したいのは速さではなく**等価性**である — 速い口と
+    従来の structured 経路が同じ値・同じキー集合を返すこと，そして
+    返る配列が確かにビュー (コピーでない) であること．
+    """
+
+    def _manager(
+        self, tmp_path: Path
+    ) -> "FileDataSource.FileManager":
+        path = _create_varied_preprocessing_file(
+            tmp_path, rows=6
+        )
+        return FileDataSource.FileManager(
+            file_paths=[path],
+            array_type="preprocessing",
+            bit_pack=False,
+        )
+
+    def test_matches_the_structured_record(
+        self, tmp_path: Path
+    ) -> None:
+        """速い口と ``get_item`` が全フィールドで一致すること．
+
+        characterization test — 修正前の ``get_item`` の出力を
+        そのまま基準にしているので，「挙動不変」の根拠になる．
+        """
+        manager = self._manager(tmp_path)
+
+        for idx in range(6):
+            record = manager.columnar_record(idx)
+            assert record is not None
+            structured = manager.get_item(idx)
+            for name in structured.dtype.names or ():
+                assert (
+                    record[name] == structured[name]
+                ).all(), f"field {name} differs at row {idx}"
+
+    def test_key_set_equals_structured_dtype_names(
+        self, tmp_path: Path
+    ) -> None:
+        """キー集合が structured dtype の名前集合と一致すること．
+
+        **trap**: ``KifDataset`` は列の有無を ``dtype.names`` で
+        判定して教師の要素数を決める．速い口が「batch が実際に
+        持っている列」だけを返すと，``moveWinRate`` 列を持たない
+        旧 ``.feather`` で structured 経路は 3 要素 (ゼロ埋め)，
+        速い口は 2 要素になり，**同じデータで教師の形が経路によって
+        変わる**．キー集合を dtype 側に固定することでそれを塞ぐ．
+        """
+        manager = self._manager(tmp_path)
+
+        record = manager.columnar_record(0)
+        assert record is not None
+        structured = manager.get_item(0)
+
+        assert set(record) == set(structured.dtype.names or ())
+
+    def test_fields_are_views_not_copies(
+        self, tmp_path: Path
+    ) -> None:
+        """batch が供給する列がビューで返ること．
+
+        この所見そのもの — サンプル毎のコピーを無くすのが目的なので，
+        ``np.shares_memory`` が False になったら修正の意味が消える．
+        """
+        manager = self._manager(tmp_path)
+        batch = manager._file_entries[0].cached_columnar
+        assert batch is not None
+
+        record = manager.columnar_record(3)
+        assert record is not None
+
+        for dtype_field, attr in (
+            ("boardIdPositions", "board_positions"),
+            ("piecesInHand", "pieces_in_hand"),
+            ("moveLabel", "move_label"),
+            ("resultValue", "result_value"),
+        ):
+            source = getattr(batch, attr)
+            assert np.shares_memory(
+                record[dtype_field], source
+            ), f"{dtype_field} was copied instead of viewed"
+
+    def test_fields_are_writeable_and_contiguous(
+        self, tmp_path: Path
+    ) -> None:
+        """全フィールドが C-contiguous かつ writeable であること．
+
+        ``KifDataset._numpy_to_tensor`` は read-only も
+        非 contiguous も ``ValueError`` で撥ねる (``torch.from_numpy``
+        がストレージを共有するため)．ビューを返す以上，元バッチの
+        writeability 契約がそのまま効いていることを固定する．
+        """
+        manager = self._manager(tmp_path)
+
+        record = manager.columnar_record(2)
+        assert record is not None
+
+        for name, value in record.items():
+            assert value.flags.c_contiguous, (
+                f"{name} is not C-contiguous"
+            )
+            assert value.flags.writeable, (
+                f"{name} is not writeable"
+            )
+
+    def test_shapes_match_the_structured_fields(
+        self, tmp_path: Path
+    ) -> None:
+        """shape が structured array の当該フィールドと同じであること．
+
+        **trap**: 1 次元列を ``source[row]`` で取るとスカラーになり，
+        ``resultValue`` が 0 次元配列でなくなる．``.item()`` は
+        どちらでも通るので，値の比較だけでは検出できない．
+        """
+        manager = self._manager(tmp_path)
+
+        record = manager.columnar_record(1)
+        assert record is not None
+        structured = manager.get_item(1)
+
+        for name in structured.dtype.names or ():
+            assert (
+                record[name].shape == structured[name].shape
+            ), f"field {name} shape differs"
+            assert isinstance(record[name], np.ndarray), (
+                f"field {name} is not an ndarray"
+            )
+
+    def test_missing_columns_are_zero_filled(self) -> None:
+        """batch が供給しない列がゼロ埋めされること．
+
+        ``id`` は ``ColumnarBatch`` に対応物が無いので常にこちらを
+        通る．``np.empty`` の未初期化メモリが漏れると訓練ターゲットに
+        NaN が混じるので，structured 経路と同じくゼロで埋める．
+        """
+        manager = FileDataSource.FileManager.__new__(
+            FileDataSource.FileManager
+        )
+        manager._structured_dtype = np.dtype(
+            get_preprocessing_dtype()
+        )
+        batch = ColumnarBatch(
+            board_positions=np.ones((2, 9, 9), dtype=np.uint8),
+            pieces_in_hand=np.ones((2, 14), dtype=np.uint8),
+            move_label=np.ones(
+                (2, MOVE_LABELS_NUM), dtype=np.float16
+            ),
+            result_value=np.ones(2, dtype=np.float16),
+        )
+
+        record = manager._columnar_batch_to_record(batch, 0)
+
+        assert record["id"] == 0
+        # moveWinRate 列を持たない旧データ相当．dtype には有るので
+        # キーは残り，値はゼロ (structured 経路と同じ)．
+        assert "moveWinRate" in record
+        assert not record["moveWinRate"].any()
+
+    def test_negative_index_selects_the_last_row(
+        self, tmp_path: Path
+    ) -> None:
+        """負のインデックスが末尾行を指すこと．
+
+        **trap**: 素朴に ``arr[row : row + 1]`` と書くと
+        ``row == -1`` で空スライスになる．
+        ``_columnar_to_structured_record`` と同じ正規化規則を持つ
+        ことを固定する．
+        """
+        manager = self._manager(tmp_path)
+        batch = manager._file_entries[0].cached_columnar
+        assert batch is not None
+
+        last = manager._columnar_batch_to_record(batch, -1)
+        expected = manager.get_item(5)
+
+        for name in expected.dtype.names or ():
+            assert (last[name] == expected[name]).all(), (
+                f"field {name} differs for the negative index"
+            )
+
+    def test_hcpe_path_returns_none(
+        self, tmp_path: Path
+    ) -> None:
+        """hcpe 経路では ``None`` を返してフォールバックさせること．
+
+        hcpe は structured array を直接キャッシュしており
+        ``cached_array[local_idx]`` が既にビューなので，辞書を
+        組み直す意味が無い．
+        """
+        file_paths, _ = _create_hcpe_files(
+            tmp_path, file_count=1, rows_per_file=4
+        )
+        datasource = FileDataSource(
+            file_paths=file_paths, array_type="hcpe"
+        )
+
+        assert datasource.columnar_record(0) is None
+
+    def test_datasource_applies_the_index_mapping(
+        self, tmp_path: Path
+    ) -> None:
+        """``indicies`` の写像が ``__getitem__`` と揃っていること．
+
+        **trap**: ``FileDataSource`` は分割後の部分集合を
+        ``indicies`` で表す．速い口が生インデックスをそのまま
+        ``FileManager`` へ渡すと，**訓練と検証で別の行を読む**．
+        """
+        path = _create_varied_preprocessing_file(
+            tmp_path, rows=6
+        )
+        datasource = FileDataSource(
+            file_paths=[path],
+            array_type="preprocessing",
+            indicies=[4, 2, 0],
+        )
+
+        for idx in range(3):
+            record = datasource.columnar_record(idx)
+            assert record is not None
+            structured = datasource[idx]
+            for name in structured.dtype.names or ():
+                assert (
+                    record[name] == structured[name]
+                ).all(), f"field {name} differs at idx {idx}"
+
+    def test_datasource_rejects_out_of_range(
+        self, tmp_path: Path
+    ) -> None:
+        """範囲外は ``__getitem__`` と同じく ``IndexError`` にすること."""
+        path = _create_varied_preprocessing_file(
+            tmp_path, rows=3
+        )
+        datasource = FileDataSource(
+            file_paths=[path], array_type="preprocessing"
+        )
+
+        with pytest.raises(IndexError):
+            datasource.columnar_record(3)
+        with pytest.raises(IndexError):
+            datasource.columnar_record(-1)

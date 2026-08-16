@@ -729,66 +729,6 @@ for name, df in gcs_datasource.iter_batches_df():
 `iter_batches()` は `ColumnarBatch` を structured array に変換して返すため，
 DataFrame のまま扱える場面では `iter_batches_df()` の方が変換 1 回分安い．
 
-### PyTorch Dataset with Polars DataFrames (Phase 5)
-
-The project now supports using Polars DataFrames directly with PyTorch Dataset and DataLoader:
-
-```python
-import polars as pl
-from torch.utils.data import DataLoader
-
-from maou.app.learning.polars_datasource import PolarsDataFrameSource
-from maou.app.learning.dataset import KifDataset
-from maou.domain.data.rust_io import load_preprocessing_df
-
-# Load preprocessing data as Polars DataFrame
-df = load_preprocessing_df("training_data.feather")
-
-# Create Polars-backed DataSource
-datasource = PolarsDataFrameSource(
-    dataframe=df,
-    array_type="preprocessing",
-)
-
-# Use with existing KifDataset (no code changes needed!)
-dataset = KifDataset(
-    datasource=datasource,
-)
-
-# Create DataLoader as usual
-dataloader = DataLoader(
-    dataset,
-    batch_size=256,
-    shuffle=True,
-    num_workers=4,
-    pin_memory=True,
-)
-
-# Training loop works identically
-for features, targets in dataloader:
-    board, pieces = features
-    # moveWinRate 列があれば 3 要素 (無ければ 2 要素)
-    move_label, result_value, *rest = targets
-    move_win_rate = rest[0] if rest else None
-    # ... training code ...
-```
-
-**Benefits of Polars Dataset:**
-
-1. **Zero-Copy Efficiency**: Direct conversion from Polars → numpy → PyTorch tensors
-2. **Memory Efficient**: Polars DataFrames use less memory than numpy structured arrays
-3. **Modern API**: Leverage Polars for data filtering/preprocessing before training
-4. **Compatible**: Works with existing Dataset and DataLoader code without changes
-
-**Supported Data Types:**
-
-| array_type | Schema | Dataset Class | Status |
-|------------|--------|---------------|--------|
-| `"preprocessing"` | Full training data | `KifDataset` | ✅ Tested |
-| `"stage1"` | Reachable squares | `Stage1Dataset` | ✅ Compatible |
-| `"stage2"` | Legal moves | `Stage2Dataset` | ✅ Compatible |
-| `"hcpe"` | Game records | `KifDataset` (with transform) | ✅ Compatible |
-
 ## File Format Migration
 
 **Legacy Format:**

@@ -364,6 +364,89 @@ class FileDataSource(learn.LearningDataSource):
                     )
                 return entry.cached_array[local_idx]
 
+        def columnar_record(
+            self, idx: int
+        ) -> dict[str, np.ndarray] | None:
+            """1 レコードを列ごとのビューの辞書として返す．
+
+            契約は :meth:`maou.app.learning.dataset.DataSource.columnar_record`
+            を参照．内部が SOA (``ColumnarBatch``) のときだけ辞書を
+            返し，structured array を直接キャッシュしている hcpe 経路
+            では ``None`` を返す (そちらは既に
+            ``entry.cached_array[local_idx]`` がビューなので，組み直す
+            意味が無い)．
+
+            Args:
+                idx: Global index across all files
+
+            Returns:
+                フィールド名 → ビューの辞書．非対応なら ``None``
+            """
+            if not self._use_columnar:
+                return None
+            file_idx = bisect.bisect_right(self._cum_upper, idx)
+            local_idx = idx - self._cum_lower[file_idx]
+            entry = self._file_entries[file_idx]
+            if entry.cached_columnar is None:
+                raise RuntimeError(
+                    f"Columnar batch not loaded for file {entry.name}"
+                )
+            return self._columnar_batch_to_record(
+                entry.cached_columnar, local_idx
+            )
+
+        def _columnar_batch_to_record(
+            self, batch: ColumnarBatch, row: int
+        ) -> dict[str, np.ndarray]:
+            """ColumnarBatch の 1 行を列ごとのビューの辞書にする．
+
+            :meth:`_columnar_batch_to_structured_array` と**同じ
+            dtype 駆動のループ**で作る — キー集合が structured dtype
+            の ``dtype.names`` と一致していないと，消費側 (列の有無を
+            ``dtype.names`` で判定している ``KifDataset``) の挙動が
+            2 つの経路で食い違うためである．違いは書き込み先だけで，
+            あちらは ``np.empty`` へ memcpy し，こちらはビューを
+            そのまま辞書に入れる．
+
+            ``batch`` が供給しない列 (``id`` と，``moveWinRate`` 列を
+            持たない旧 ``.feather``) はあちらと同じくゼロで埋める．
+            ここだけは確保が要るが，``id`` は 0 次元の 8B であり，
+            ``moveWinRate`` は旧データでしか通らない．
+
+            Args:
+                batch: 変換元の ColumnarBatch
+                row: 行インデックス (負値は末尾からと解釈する)
+
+            Returns:
+                フィールド名 → 配列の辞書
+            """
+            assert self._structured_dtype is not None
+            assert self._structured_dtype.names is not None
+            assert self._structured_dtype.fields is not None
+            fields = self._structured_dtype.fields
+            n = len(batch)
+            # 負のインデックスを正規化する
+            # (:meth:`_columnar_batch_to_structured_array` と同じ規則)．
+            start = row if row >= 0 else row + n
+            record: dict[str, np.ndarray] = {}
+            for name in self._structured_dtype.names:
+                field_dtype = fields[name][0]
+                source = self._columnar_field(batch, name)
+                if source is None:
+                    base, shape = field_dtype.subdtype or (
+                        field_dtype,
+                        (),
+                    )
+                    record[name] = np.zeros(shape, dtype=base)
+                    continue
+                # ``source[start]`` は 1 次元列でスカラーになって
+                # しまうので，長さ 1 のスライスを取ってから先頭軸を
+                # 落とす．どちらもビューであり，スカラーフィールドは
+                # 0 次元配列として structured array 側と形が揃う．
+                sliced = source[start : start + 1]
+                record[name] = sliced.reshape(sliced.shape[1:])
+            return record
+
         def _columnar_to_structured_record(
             self, batch: ColumnarBatch, idx: int
         ) -> np.ndarray:
@@ -562,6 +645,37 @@ class FileDataSource(learn.LearningDataSource):
             raise IndexError(f"Index {idx} out of range.")
 
         return self.__file_manager.get_item(self.indicies[idx])
+
+    def columnar_record(
+        self, idx: int
+    ) -> dict[str, np.ndarray] | None:
+        """1 レコードを列ごとのビューの辞書として返す．
+
+        契約は :meth:`maou.app.learning.dataset.DataSource.columnar_record`
+        を参照．``.feather`` を SOA (``ColumnarBatch``) で保持している
+        preprocessing / stage1 / stage2 ではビューの辞書を返し，
+        structured array を直接持つ hcpe では ``None`` を返して
+        呼び出し側を :meth:`__getitem__` へ落とす．
+
+        これが :meth:`__getitem__` の代わりに使われると，訓練サンプル
+        1 件ごとの ``np.empty`` (preprocessing で 9,081B) と 8 フィールド
+        分の memcpy が消える (batch 1024 で約 9.3MB/バッチ)．
+
+        Args:
+            idx: インデックス
+
+        Returns:
+            フィールド名 → ビューの辞書．hcpe 経路では ``None``
+
+        Raises:
+            IndexError: idx が範囲外の場合
+        """
+        if idx < 0 or idx >= len(self.indicies):
+            raise IndexError(f"Index {idx} out of range.")
+
+        return self.__file_manager.columnar_record(
+            self.indicies[idx]
+        )
 
     def __len__(self) -> int:
         return len(self.indicies)
