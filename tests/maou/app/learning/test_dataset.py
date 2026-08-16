@@ -646,3 +646,27 @@ class TestColumnarFastPath:
         assert not np.shares_memory(
             slow_board.numpy(), batch.board_positions
         )
+
+
+def test_polars_datasource_stays_removed() -> None:
+    """``PolarsDataFrameSource`` が再導入されていないことを固定する．
+
+    `/audit-backlog` 2026-08-16．``polars_datasource.py`` は
+    ``_PolarsRow`` / ``_PolarsField`` / ``_FakeDtype`` の 3 つの shim で
+    structured array のフィールドアクセスを**模して**おり，
+    production からの呼び出しはゼロだった．学習 ABC に列アクセサを
+    足した際 (backlog 行 D13)，ABC を継承していないこのクラスだけが
+    ``KifDataset`` 側に ``isinstance`` ガードを要求する唯一の理由に
+    なっていたので，ユーザの判断で削除した．
+
+    同じ形が名前を変えて戻ってこないよう**不在そのもの**を固定する．
+    Polars DataFrame を学習に載せたいなら ``FileDataSource``
+    (``ColumnarBatch`` を経由し，列アクセサの契約を実装している) が
+    正しい入口であって，structured array の模造ではない．
+    """
+    import importlib
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module(
+            "maou.app.learning.polars_datasource"
+        )
