@@ -3,11 +3,12 @@ kind: backlog
 date: 2026-08-16
 path:
   - src/maou/app/learning/dataset.py
+  - src/maou/app/learning/polars_datasource.py
   - src/maou/infra/file_system/file_data_source.py
 scope: python
 level: medium
 last_sha: f617055
-record_sha: 7c0157b
+record_sha: 654986c
 ---
 
 # backlog consumption — 学習 ABC への列アクセサ追加 (D13 の完了)
@@ -93,6 +94,8 @@ D13 の G2 は 4 run にわたり「作業量が枠に入らない」と読ま�
 
 ## Applied
 
+### (1) 列アクセサの追加 (`7c0157b`，D13)
+
 `src/maou/app/learning/dataset.py`:
 
 - `DataSource.columnar_record(idx) -> dict[str, np.ndarray] | None`
@@ -139,30 +142,66 @@ batch 駆動で組むと速い口だけが 2 要素になり，**同じデータ
 取ってから先頭軸を落とす形にして，ビューのまま structured array と
 shape を揃えた．
 
+### (2) `PolarsDataFrameSource` の削除 (`654986c`，Q2 の実装)
+
+**P6** (公開名の削除)．`src/` を消すので版を上げる — 直前の同種の削除
+(`380866c` の `get_items`) にならい `feat!:` + **minor** bump とした
+(1.0 以前なので破壊的変更の置き場は minor である)．
+
+- `src/maou/app/learning/polars_datasource.py` を削除 (365 行)．
+- `tests/maou/app/learning/test_polars_datasource.py` を削除 (232 行)．
+- `docs/rust-backend.md` の
+  「PyTorch Dataset with Polars DataFrames (Phase 5)」節を削除 (61 行)．
+- 不在を固定する回帰テストを 1 本追加 (`get_items` の
+  `test_batch_retrieval_api_stays_removed` と同じ形)．
+
+**呼び出し側がゼロであることの再確認**: `src/` 全体でのヒットは定義
+ファイル自身のみ．`benchmark_polars_io.py:386` の `polars_datasource` は
+**ローカル変数名**であって `FileDataSource` のインスタンスである
+(同名の別物 — grep だけで判断すると誤る)．
+
 ## Decisions asked
 
-`AskUserQuestion` は **受理 1 問のみ**．**設計判断の枠は使っていない** —
-開始時点で G4 の行がゼロで，本 run の実装中にも新しい未定点が出なかった
-ためである (`.claude/commands/audit-backlog.md` 3d の「G4 の行があるなら
-設計判断を最低 1 件載せる」は，G4 がゼロなので発動しない)．
+`AskUserQuestion` は **受理 1 問 + 設計判断 1 問**．**開始時点では設計判断が
+ゼロ** (G4 の行が無い) だったが，D13 の実装中に**新しい未定点が 1 つ表面化**
+したのでそちらに 1 枠を充てた．2 件とも回答を得ている．
 
 | # | 種類 | 問うたこと | 選択肢 | ユーザの回答 |
 |---|---|---|---|---|
-| Q1 | 受理 | D13 の修正 (PR #508) を受け入れるか | (a) マージする / (b) 現状維持 | (記入は § 追記 を参照) |
+| Q1 | 受理 | D13 の修正 (PR #508) を受け入れるか | (a) マージする **(推奨)** / (b) 現状維持 (PR を閉じる) | **(a) マージする** |
+| Q2 | 設計判断 | `PolarsDataFrameSource` の扱い | (a) 削除する **(推奨)** / (b) `DataSource` を実装させる / (c) 現状のまま残す | **(a) 削除する** |
 
-Q1 が受理を問う形になったのは，`.claude/commands/audit-backlog.md` の
-split test の**両方の半分が成立しなかった**からである — 口の設計は
-2026-08-15 に決まっており，実装の分岐は残っていない．したがって
-「書いてから受理を問う」側が正しい．
+**Q1 が受理を問う形になった理由**．`.claude/commands/audit-backlog.md` の
+split test の**両方の半分が成立しなかった** — 口の設計は 2026-08-15 に
+決まっており，実装の分岐は残っていない．したがって「書いてから受理を問う」
+側が正しい．
 
-**予算に入らなかった設計判断は無い** (問うべき設計判断がゼロだった)．
+**Q2 が設計判断になった理由**．`PolarsDataFrameSource` は
+`_PolarsRow` / `_PolarsField` / `_FakeDtype` の 3 つの shim で structured
+array のフィールドアクセスを**模して**おり，ABC を継承していない．本 run が
+学習 ABC に列アクセサを足したことで，このクラスが `KifDataset` 側に
+`isinstance` ガードを要求する**唯一の理由**になった — 「消すか，契約を
+実装させるか，模造のまま残すか」は 3 つの異なる製品であり，どれを選ぶかは
+利用者のものである．
+
+**Q2 が governs する範囲**: この 1 つの回答で，`polars_datasource.py` の
+削除と，`docs/rust-backend.md` の Phase 5 節の去就と，`isinstance` ガードを
+将来落とせるかどうかが同時に決まる．
+
+**Q2 は同 run 内で実装した** (`654986c`) — 削除が 365 + 232 行 + doc 61 行で
+contained だったため．§ Applied (2) を参照．
+
+**予算に入らなかった設計判断は無い** (4 問枠に対し 2 問で足りた)．
 
 ## In flight
 
-なし (ユーザが同一セッション内で回答した場合)．未回答のまま
-セッションが終わった場合は PR #508 が判断帯の PR として残り，
-D13 の行は**この PR の中で削除済み**なので，PR ごと閉じれば行も戻る
-(collapsed run の separability test — 6a)．
+**なし**．3d の 2 問とも**同一セッション内でユーザが回答した**ので，
+判断帯の PR を開いたまま引き継ぐ状態は発生していない．PR #508 は
+Q1 の回答 (マージする) を受けて `main` へマージした．
+
+なお D13 の行は**この PR の中で削除してある** (collapsed run なので
+削除と修正が分岐し得ない — 6a の separability test)．PR ごと閉じれば
+行も戻る構成だった．
 
 ## Re-triaged
 
@@ -191,29 +230,45 @@ D13 の行は**この PR の中で削除済み**なので，PR ごと閉じれ�
 
 ## Doc findings
 
-**なし**．`docs/` を横断して確認したが，学習 `DataSource` の抽象メソッド
-集合を列挙している durable doc は存在しない．`docs/rust-backend.md:727-729`
-が触れているのは `iter_batches()` (本 run で不変)，
-`docs/adr-003-training-performance-optimization-attempts.md` は
+**D13 (1) の側は drift なし**．`docs/` を横断して確認したが，学習
+`DataSource` の抽象メソッド集合を列挙している durable doc は存在しない．
+`docs/rust-backend.md:727-729` が触れているのは `iter_batches()` (本 run で
+不変)，`docs/adr-003-training-performance-optimization-attempts.md` は
 バッチ取得 API の**過去形の記録**なので編集しない (`get_items` の削除は
-前 run で済んでおり，ADR の記述を偽にしていない)．`reviews/*.md` の
-起票は無し．
+前 run で済んでおり，ADR の記述を偽にしていない)．
+
+**Q2 の実装で 1 件発生**:
+[reviews/2026-08-16-rust-backend-polars-dataset-section.md](../reviews/2026-08-16-rust-backend-polars-dataset-section.md)
+— `docs/rust-backend.md` の Phase 5 節の削除．**status: applied**
+(`applied_in: 654986c`)．**P2 の standing approval で適用した** — 節の構成が
+丸ごと `PolarsDataFrameSource` に従属しており，クラスが無くなった以上
+「節を残す書き方」が存在しないので，訂正後の本文 (= 削除) は一意に決まる．
+
+**置き換えの案内文は書いていない**．「Polars DataFrame を学習に載せる
+正しい入口は `FileDataSource` である」といった文はあれば有用だが，
+どこに何行でどの経路を推して書くかに複数の書き方があり**一意には
+決まらない** — それは新しい指針であって drift correction ではないので，
+P2 の 2 つ目のテストに落ちる．必要なら別提案とする．
 
 ## Out of scope
 
-本 run が新たに気づいた所見として，`coverage.md` の out-of-scope backlog
-に追加すべきものは**無い**．
+**新規所見 N11 を 1 件起票した** (`coverage.md` の out-of-scope backlog)．
 
-ただし記録として残す観察が 1 つある — **`PolarsDataFrameSource`
-(`src/maou/app/learning/polars_datasource.py:54`) は production から
-呼ばれておらず，`_PolarsRow` / `_PolarsField` / `_FakeDtype` の 3 つの
-shim で structured array のフィールドアクセスを模している**．本 run は
-これを壊さないために `_columnar_capable` の `isinstance` 判定を入れて
-おり (無条件に `columnar_record` を呼ぶと `AttributeError` になる)，
-回帰テスト `test_duck_typed_source_still_works` で固定した．**所見として
-起票していない**のは，「消すか残すか」は記録の対象範囲外の判断であり，
-かつ本 run の変更で壊れていないためである．`app/learning` の
-`/audit-and-fix` がこの path を掃くときに扱うのが筋である．
+**N11** — `src/maou/domain/data/polars_tensor.py` の
+`polars_row_to_hcpe_arrays` (モジュール全体で 40 行) が **Q2 の削除で
+到達不能になった**．削除前も唯一の呼び出し側が `polars_datasource.py`
+だったため，`src/` `tests/` ともに呼び出し側はゼロである．
+`src/maou/app/common/data_io_service.py:35` に
+"Direct integration with PyTorch via polars_tensor module" という
+**docstring の言及だけ**が残り，指す先が無い記述になっている．
+
+**同じ run で黙って広げなかった理由**は step 4a の scope 境界である．
+ユーザが 3d で判断したのは `PolarsDataFrameSource` の扱いであって当該
+モジュールではない．3d は 1 run に 1 回しか問わないので，2 度目を
+問う代わりに**行として起票して次 run に渡す**方を選んだ (step 4a の
+2 つの解のうち「re-triage」側)．向きは (a) モジュールごと削除 /
+(b) 残す の 2 つで，**P6 + G4**．削除するなら 40 行 + docstring 1 行で
+contained である．
 
 ## Environment notes
 
@@ -235,7 +290,50 @@ shim で structured array のフィールドアクセスを模している**．�
   最後の 1 つは**最初は空虚だった** — 値の一致だけを見ていたので
   `_StageDataset` が遅い経路に留まっても通っていた．
   `np.shares_memory` による経路の直接観測を足して落ちるようにした．
+- **無効化テストの手順そのものに 1 度失敗した**．最初の周回で各無効化の
+  後始末に `git checkout <file>` を使ってしまい，**まだ commit していない
+  修正ごと HEAD に戻していた**ので，2 周目以降は「無効化を当てた状態」では
+  なく「修正が無い状態」を測っていた (落ちた本数は多かったので気付きにくい)．
+  修正済みファイルを別途退避してから復元する形に改め，9 通りすべてを
+  測り直している．本記録の本数はやり直した後のものである．
+- git の pre-commit hook がコンテナに入っていなかったので
+  `uv run pre-commit run --from-ref f617055 --to-ref HEAD` で明示実行し，
+  全 hook Passed (trim / end-of-files / toml / large-files / uv-lock /
+  test / mypy / check-cli-docs / ruff-check / ruff-format)．
 
-## 追記 — ユーザの回答
+## Reconciliation (6d)
 
-(この節は 3d の回答を受けて埋める)
+本 run が触れた項目 + 新規所見 = **4**
+
+| 内訳 | 数 | 中身 |
+|---|---|---|
+| resolved (行を削除，修正と同じ PR) | 1 | D13 |
+| in flight | 0 | — |
+| decided (行に決定を書き G4 retire，未実装) | 0 | — |
+| re-triaged (行を残し文言を鋭く) | 1 | O9 |
+| new row | 1 | N11 (`polars_tensor.py` の到達不能化) |
+| not a finding | 1 | Q2 の `PolarsDataFrameSource` — **同 run 内で決定と実装の両方が済んだ**ので行にならない |
+
+`2 = 1 (resolved) + 1 (re-triaged)`，これに新規 1 行と行にならなかった
+1 件が加わる．**backlog 行は 2 → 2** (D13 が消え N11 が入った) で
+数の上では動いていないが，**動いたのは行数ではなく完了した作業である** —
+4 run にわたり先頭候補だった行が消え，代わりに入ったのは 40 行の
+contained な残骸である．
+
+## 追記 — ユーザの回答 (3d)
+
+**Q1 「マージする」** — PR #508 を `main` へマージした．本 run の
+`main` への マージはこの 1 回だけである．
+
+**Q2 「削除する」** — `PolarsDataFrameSource` を削除した (`654986c`)．
+設計判断を得た同じ run 内で実装まで到達しているので，行は起こしていない．
+却下されたのは (b)「`DataSource` を実装させる」(`__getitem__` が
+`np.ndarray` でなく `_PolarsRow` を返すため契約に合わせるには戻り値の
+作り直しか `type: ignore` が要り，shim 3 つはそのまま残る) と
+(c)「現状のまま残す」(`isinstance` ガードが恒久的に必要になる)．
+
+**この run が `isinstance` ガードを残した理由**は不変である — Q2 は
+`PolarsDataFrameSource` を消したが，`tests/maou/app/learning/test_stage_datasets.py:17`
+の `MockDataSource` も ABC を継承しない duck-typed なソースであり，
+`KifDataset` / `_StageDataset` に渡されている．ガードを落とせるのは
+duck-typed な呼び出し側がゼロになったときである．

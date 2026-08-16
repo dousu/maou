@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in: pending
+applied_in: 654986c
 date: 2026-08-16
 target: [docs/rust-backend.md]
 risk: low
