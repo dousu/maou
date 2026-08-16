@@ -6,6 +6,7 @@ import abc
 import pathlib
 
 import numpy as np
+import polars as pl
 import pytest
 import torch
 from torch.utils.data import DataLoader
@@ -14,8 +15,10 @@ from maou.app.common.data_io_service import DataIOService
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.domain.data.array_io import save_preprocessing_df
 from maou.domain.data.schema import (
+    MOVE_LABELS_NUM,
     convert_numpy_to_preprocessing_df,
     create_empty_preprocessing_array,
+    create_empty_preprocessing_df,
 )
 
 
@@ -321,3 +324,325 @@ class TestDataSourceIsAbstract:
 
         with pytest.raises(TypeError):
             LearningDataSource()  # type: ignore[abstract]
+
+
+# ============================================================================
+# /audit-backlog 2026-08-15 — backlog 行 D13 (2)(4) の回帰テスト
+# ============================================================================
+
+
+def _varied_preprocessing_df(rows: int) -> pl.DataFrame:
+    """全フィールドが行ごとに異なる preprocessing DataFrame を作る．
+
+    ``create_empty_preprocessing_df`` のままだと全部ゼロなので，
+    フィールドの取り違えや脱落があっても等価性テストが通ってしまう
+    (characterization test の非空虚性が保てない)．
+    """
+    return create_empty_preprocessing_df(rows).with_columns(
+        [
+            pl.Series("id", list(range(rows))),
+            pl.Series(
+                "boardIdPositions",
+                [
+                    [
+                        [
+                            (r * 81 + c * 9 + k) % 256
+                            for k in range(9)
+                        ]
+                        for c in range(9)
+                    ]
+                    for r in range(rows)
+                ],
+            ),
+            pl.Series(
+                "piecesInHand",
+                [
+                    [(r * 14 + k) % 256 for k in range(14)]
+                    for r in range(rows)
+                ],
+            ),
+            pl.Series(
+                "moveLabel",
+                [
+                    [
+                        float((r + k) % 7)
+                        for k in range(MOVE_LABELS_NUM)
+                    ]
+                    for r in range(rows)
+                ],
+            ),
+            pl.Series(
+                "moveWinRate",
+                [
+                    [
+                        float((r + k) % 5)
+                        for k in range(MOVE_LABELS_NUM)
+                    ]
+                    for r in range(rows)
+                ],
+            ),
+            pl.Series(
+                "resultValue",
+                [float(r % 3) - 1.0 for r in range(rows)],
+            ),
+        ]
+    )
+
+
+class _StructuredOnly(DataSource):
+    """列アクセサを持たないソース (ABC の既定実装のまま)．
+
+    同じデータを **structured array 経路だけ**で読ませるための
+    ラッパー．速い口を持つソースと突き合わせることで，
+    「2 つの経路が同じサンプルを返す」を同一データ上で固定できる．
+    """
+
+    def __init__(self, inner: DataSource) -> None:
+        self._inner = inner
+
+    def __getitem__(self, idx: int) -> np.ndarray:
+        return self._inner[idx]
+
+    def __len__(self) -> int:
+        return len(self._inner)
+
+
+def _preprocessing_source(
+    tmp_path: pathlib.Path, rows: int
+) -> DataSource:
+    from maou.infra.file_system.file_data_source import (
+        FileDataSource,
+    )
+
+    path = tmp_path / "varied.feather"
+    save_preprocessing_df(_varied_preprocessing_df(rows), path)
+    return FileDataSource(
+        file_paths=[path], array_type="preprocessing"
+    )
+
+
+class TestColumnarFastPath:
+    """列アクセサ経由のサンプル生成が structured 経路と等価であること．
+
+    `/audit-backlog` 2026-08-15 / backlog 行 D13 (2)(4)．
+    ``KifDataset`` は ``DataSource.columnar_record`` があればそちらを
+    使い，無ければ従来の structured array 経路へ落ちる．固定したい
+    のは **2 つの経路が同じサンプルを返すこと**と，**ABC の既定実装が
+    従来のソースを壊さないこと**である．
+    """
+
+    def test_abc_default_returns_none(self) -> None:
+        """列アクセサは既定で ``None`` を返し，抽象にはしないこと．
+
+        BigQuery / ObjectStorage / テストの fake は override して
+        いない．抽象メソッドに**すると**それら全部が構築不能になる
+        ので，既定実装であることごと固定する．
+        """
+        source = _ArrayDataSource(
+            create_empty_preprocessing_array(1)
+        )
+
+        assert source.columnar_record(0) is None
+        assert (
+            "columnar_record"
+            not in DataSource.__abstractmethods__
+        )
+
+    def test_columnar_and_structured_paths_agree(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """同じデータを 2 経路で読んで同じサンプルが返ること．
+
+        characterization test — 右辺 (``_StructuredOnly``) は修正前の
+        ``KifDataset`` がやっていたことそのものなので，「挙動不変」の
+        根拠になる．
+        """
+        source = _preprocessing_source(tmp_path, 4)
+        fast = KifDataset(datasource=source)
+        slow = KifDataset(datasource=_StructuredOnly(source))
+
+        assert len(fast) == len(slow) == 4
+        for idx in range(4):
+            (fb, fp), ft = fast[idx]
+            (sb, sp), st = slow[idx]
+            assert torch.equal(fb, sb), (
+                f"board differs at {idx}"
+            )
+            assert torch.equal(fp, sp), (
+                f"pieces differ at {idx}"
+            )
+            assert len(ft) == len(st), (
+                f"target arity differs at {idx}: "
+                f"{len(ft)} vs {len(st)}"
+            )
+            for tidx, (f, s) in enumerate(zip(ft, st)):
+                assert torch.equal(f, s), (
+                    f"target {tidx} differs at row {idx}"
+                )
+
+    def test_fast_path_shares_the_batch_storage(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """速い口のテンソルが元バッチとストレージを共有すること．
+
+        この所見そのもの — 共有していなければサンプル毎のコピーが
+        まだ残っているということで，修正の意味が消える．
+        ``_StructuredOnly`` 経由では共有され**ない**ことも併せて
+        固定し，このテストが経路を取り違えていないことを示す．
+        """
+        source = _preprocessing_source(tmp_path, 4)
+        entry = (
+            source._FileDataSource__file_manager._file_entries[  # type: ignore[attr-defined]
+                0
+            ]
+        )
+        batch = entry.cached_columnar
+        assert batch is not None
+
+        (board, pieces), _ = KifDataset(datasource=source)[2]
+        assert np.shares_memory(
+            board.numpy(), batch.board_positions
+        )
+        assert np.shares_memory(
+            pieces.numpy(), batch.pieces_in_hand
+        )
+
+        (slow_board, _), _ = KifDataset(
+            datasource=_StructuredOnly(source)
+        )[2]
+        assert not np.shares_memory(
+            slow_board.numpy(), batch.board_positions
+        )
+
+    def test_duck_typed_source_still_works(self) -> None:
+        """ABC を継承しないソースでも従来どおり動くこと．
+
+        **trap**: ``PolarsDataFrameSource`` は structured array では
+        なく ``_PolarsRow`` を返すので ABC を正直には名乗れない．
+        ``self.__datasource.columnar_record(idx)`` を無条件に呼ぶと
+        そこで ``AttributeError`` になる．契約の実装有無は構築時に
+        ``isinstance`` で判定している．
+        """
+        data = create_empty_preprocessing_array(2)
+        data["boardIdPositions"] = 1
+        data["piecesInHand"] = 2
+
+        class _DuckTyped:
+            def __getitem__(self, idx: int) -> np.ndarray:
+                return data[idx]
+
+            def __len__(self) -> int:
+                return len(data)
+
+        dataset = KifDataset(datasource=_DuckTyped())  # type: ignore[arg-type]
+
+        (board, _), _ = dataset[0]
+        assert board.shape == (9, 9)
+
+    def test_missing_named_fields_still_raise(self) -> None:
+        """フィールド名を持たない配列は従来どおり ``ValueError`` にすること．
+
+        ``dtype.names is None`` のガードは速い口の導入で
+        :func:`_record_fields` へ移した．移し忘れると，名前の無い
+        配列が ``"boardIdPositions" not in None`` で ``TypeError`` に
+        化ける．
+        """
+        dataset = KifDataset(
+            datasource=_ArrayDataSource(
+                np.zeros((2, 3), dtype=np.uint8)
+            )
+        )
+
+        with pytest.raises(
+            ValueError, match="lacks named fields"
+        ):
+            dataset[0]
+
+    def test_stage_dataset_uses_the_fast_path(
+        self, tmp_path: pathlib.Path
+    ) -> None:
+        """``_StageDataset`` 側も速い口を通り，同じ値を返すこと．
+
+        ``KifDataset`` だけを直すと stage1/stage2 の事前学習だけが
+        サンプル毎のコピーを払い続ける．
+        """
+        from maou.app.learning.dataset import Stage1Dataset
+        from maou.domain.data.rust_io import save_stage1_df
+        from maou.domain.data.schema import (
+            create_empty_stage1_df,
+        )
+        from maou.infra.file_system.file_data_source import (
+            FileDataSource,
+        )
+
+        rows = 3
+        df = create_empty_stage1_df(rows).with_columns(
+            [
+                pl.Series("id", list(range(rows))),
+                pl.Series(
+                    "boardIdPositions",
+                    [
+                        [
+                            [
+                                (r + c + k) % 256
+                                for k in range(9)
+                            ]
+                            for c in range(9)
+                        ]
+                        for r in range(rows)
+                    ],
+                ),
+                pl.Series(
+                    "piecesInHand",
+                    [
+                        [(r + k) % 256 for k in range(14)]
+                        for r in range(rows)
+                    ],
+                ),
+                pl.Series(
+                    "reachableSquares",
+                    [
+                        [
+                            [(r * c * k) % 2 for k in range(9)]
+                            for c in range(9)
+                        ]
+                        for r in range(rows)
+                    ],
+                ),
+            ]
+        )
+        path = tmp_path / "stage1.feather"
+        save_stage1_df(df, path)
+
+        source = FileDataSource(
+            file_paths=[path], array_type="stage1"
+        )
+        assert source.columnar_record(0) is not None
+
+        fast = Stage1Dataset(datasource=source)
+        slow = Stage1Dataset(datasource=_StructuredOnly(source))
+
+        for idx in range(rows):
+            (fb, fp), ft = fast[idx]
+            (sb, sp), st = slow[idx]
+            assert torch.equal(fb, sb)
+            assert torch.equal(fp, sp)
+            assert torch.equal(ft, st)
+
+        # 値の一致だけでは経路を判別できない (両経路は同じ値を返すのが
+        # 正しいため)．``_StageDataset`` が実際に速い口を通っている
+        # ことは，元バッチとのストレージ共有でしか観測できない．
+        batch = (
+            source._FileDataSource__file_manager._file_entries[  # type: ignore[attr-defined]
+                0
+            ].cached_columnar
+        )
+        assert batch is not None
+        (fast_board, _), _ = fast[1]
+        (slow_board, _), _ = slow[1]
+        assert np.shares_memory(
+            fast_board.numpy(), batch.board_positions
+        )
+        assert not np.shares_memory(
+            slow_board.numpy(), batch.board_positions
+        )
