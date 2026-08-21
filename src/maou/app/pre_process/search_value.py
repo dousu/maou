@@ -48,22 +48,30 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 #: 出力 feather のスキーマ．``id`` は前処理出力の ``id`` と同じ Zobrist hash．
 #:
-#: ``playouts`` / ``stop`` / ``elapsedMs`` は**律速の切り分け用**に持つ．
-#: 本番実行そのものが計測になるので，別途 A/B を組まなくても「時間が playout に
-#: 行っているのか詰み探索に行っているのか」を後から追える．
-#: ``elapsedMs`` は 0.82.0 で追加したため**古い出力には無い**
-#: (`_with_current_schema` が null で補う)．
+#: ``playouts`` / ``stop`` / ``elapsedMs`` / ``warmupMs`` は**律速の切り分け用**
+#: に持つ．本番実行そのものが計測になるので，別途 A/B を組まなくても「時間が
+#: playout に行っているのか詰み探索に行っているのか」を後から追える．
+#: ``elapsedMs`` は 0.82.0 で，``warmupMs`` は 0.97.0 で追加したため**古い出力
+#: には無い** (`_with_current_schema` が null で補う)．
+#:
+#: ``warmupMs`` を別に持つのは，**``elapsedMs`` が探索本体だけで 1 局面の総
+#: コストではない**ためである．root の同期評価とノードプールの確保は計測区間
+#: の外 (Rust 側 ``warmup_ms``) にあり，この経路は保持木を引き継がないので
+#: **局面ごとに払われる**．``elapsedMs`` だけで所要時間を外挿すると下限を
+#: 見積もることになる．
 SEARCH_VALUE_SCHEMA: dict[str, pl.DataType] = {
     "id": pl.UInt64(),
     "searchWinRate": pl.Float32(),
     "playouts": pl.Int32(),
     "stop": pl.String(),
     "elapsedMs": pl.Int32(),
+    "warmupMs": pl.Int32(),
 }
 
 #: 前処理が ``resultValue`` の差し替えに実際に使う列．
 #:
-#: 診断列 (``playouts`` / ``stop`` / ``elapsedMs``) は前処理では読まない．
+#: 診断列 (``playouts`` / ``stop`` / ``elapsedMs`` / ``warmupMs``) は前処理では
+#: 読まない．
 #: **読み込み時点でこの 2 列へ射影する**ので，診断列の構成が違うファイル
 #: (``elapsedMs`` を持たない 0.82.0 より前の出力など) 同士でも union できる．
 SEARCH_VALUE_REQUIRED_SCHEMA: dict[str, pl.DataType] = {
@@ -89,6 +97,9 @@ class SearchValueOption:
         time_ms: 1 局面あたりの時間上限 (ミリ秒)．
         threads: 探索スレッド数．
         batch_size: 評価バッチサイズ．GPU では 64 以上．
+        node_capacity: 探索木のノードプール容量．None なら playout 予算から
+            決める (`_node_capacity`)．Rust 既定の 2^20 は予算に対して 3 桁
+            過剰で，確保が 1 局面あたりの固定費になる．
         root_dfpn: ルート並行 dfpn 詰み探索を行うか．
         root_dfpn_nodes: ルート dfpn のノード予算 (None で Rust 既定 2,000,000)．
         root_dfpn_depth: ルート dfpn の深さ上限 (None で Rust 既定)．
@@ -127,6 +138,7 @@ class SearchValueOption:
     time_ms: int | None = None
     threads: int = 1
     batch_size: int = 8
+    node_capacity: int | None = None
     root_dfpn: bool = True
     root_dfpn_nodes: int | None = None
     root_dfpn_depth: int | None = None
@@ -143,6 +155,38 @@ class SearchValueOption:
     overwrite: bool = False
     flush_interval: int = 500
     shard_rows: int = 5_000_000
+
+
+#: `--node-capacity` を省いたときにノードプールへ足す余裕 (ノード数)．
+#:
+#: ノードは「未展開の子へ降りた playout」1 回につき 1 個しか確保されない
+#: ので，必要数は playout 予算で上から押さえられる．この余裕は root の
+#: 1 個と，CAS 競合に負けて捨てられるノード (Rust 側 `leaked_nodes`) を
+#: まとめて呑むためのもの．
+NODE_CAPACITY_MARGIN: int = 4096
+
+
+def _node_capacity(option: SearchValueOption) -> int:
+    """1 局面あたりのノードプール容量を決める．
+
+    Rust 既定の 2^20 (ノード約 48 B なので約 50MB) は playout 予算に対して
+    3 桁過剰である．**この経路は保持木を引き継がない**ため確保は局面ごとに
+    払われ，しかも計測区間の外 (`warmupMs`) にあるので `elapsedMs` には
+    出ないまま壁時計に乗る．
+
+    容量を絞っても探索は変わらない — ノードプールの GC はプールが**枯渇
+    したときにしか**走らないので，必要数を上回っている限り木は同一になる．
+    上回っているかは実行後の `gc_runs` で観測する (発火したら警告する)．
+
+    Args:
+        option: 実行オプション．
+
+    Returns:
+        ノードプール容量 (ノード数)．
+    """
+    if option.node_capacity is not None:
+        return option.node_capacity
+    return 2 * option.max_playouts + NODE_CAPACITY_MARGIN
 
 
 #: 探索値のディレクトリ指定で拾う拡張子．
@@ -612,8 +656,9 @@ def apply_search_values(
 def _with_current_schema(df: pl.DataFrame) -> pl.DataFrame:
     """古い出力を現行スキーマへ揃える．
 
-    `elapsedMs` は 0.82.0 で追加した．**既に走っている実行の出力を捨てさせない**
-    ため，欠けている列は null で補って `--resume` を継続できるようにする．
+    `elapsedMs` は 0.82.0 で，`warmupMs` は 0.97.0 で追加した．**既に走って
+    いる実行の出力を捨てさせない**ため，欠けている列は null で補って
+    `--resume` を継続できるようにする．
 
     Args:
         df: 読み込んだ既存出力．
@@ -646,6 +691,7 @@ def _frame(
     playouts: list[int],
     stops: list[str],
     elapsed_ms: list[int],
+    warmup_ms: list[int],
 ) -> pl.DataFrame:
     """探索結果の列から `SEARCH_VALUE_SCHEMA` の DataFrame を作る．
 
@@ -655,6 +701,8 @@ def _frame(
         playouts: 消化した playout 数．
         stops: 停止理由．
         elapsed_ms: 1 局面あたりの探索時間 (ミリ秒)．
+        warmup_ms: 1 局面あたりの計測区間外コスト (ミリ秒)．root の同期
+            評価とノードプール確保．
 
     Returns:
         `SEARCH_VALUE_SCHEMA` の DataFrame．
@@ -671,6 +719,9 @@ def _frame(
             "stop": pl.Series("stop", stops, dtype=pl.String),
             "elapsedMs": pl.Series(
                 "elapsedMs", elapsed_ms, dtype=pl.Int32
+            ),
+            "warmupMs": pl.Series(
+                "warmupMs", warmup_ms, dtype=pl.Int32
             ),
         },
         schema=SEARCH_VALUE_SCHEMA,
@@ -1026,6 +1077,13 @@ class SearchValueCollector:
         playouts: list[int] = []
         stops: list[str] = []
         elapsed: list[int] = []
+        warmup: list[int] = []
+        # プール容量は探索を変えない範囲で絞る (`_node_capacity`)．正しく
+        # 上回れているかは観測で確かめる: GC が 1 度でも走ったら木が刈られて
+        # おり，刈られなかった実行と値が比較できなくなる．
+        node_capacity = _node_capacity(option)
+        gc_runs = 0
+        max_nodes_used = 0
         # 2 段構え．flush は小さな `pending_*` を足すだけで既存には触れず
         # (クラッシュ保護は flush_interval 粒度のまま)，累積が `shard_rows` に
         # 達したら**メモリ上の行から** `part_*` を 1 枚書いて pending を消す．
@@ -1042,6 +1100,7 @@ class SearchValueCollector:
                 playouts[lo:hi],
                 stops[lo:hi],
                 elapsed[lo:hi],
+                warmup[lo:hi],
             )
 
         def flush(*, final: bool) -> None:
@@ -1091,6 +1150,7 @@ class SearchValueCollector:
                 sfen,
                 max_playouts=option.max_playouts,
                 time_ms=option.time_ms,
+                node_capacity=node_capacity,
                 root_dfpn=option.root_dfpn,
                 root_dfpn_nodes=option.root_dfpn_nodes,
                 root_dfpn_depth=option.root_dfpn_depth,
@@ -1105,6 +1165,11 @@ class SearchValueCollector:
             playouts.append(int(result.playouts))
             stops.append(str(result.stop))
             elapsed.append(int(result.elapsed_ms))
+            warmup.append(int(result.warmup_ms))
+            gc_runs += int(result.gc_runs)
+            max_nodes_used = max(
+                max_nodes_used, int(result.nodes_used)
+            )
             # 途中経過を落とさない: 実運用では数十万局面を数日かけて回すので，
             # 最後にしか書かないと中断で全損する (--resume はここに依存する)
             if n % option.flush_interval == 0:
@@ -1118,7 +1183,22 @@ class SearchValueCollector:
 
         flush(final=True)
 
-        fresh = _frame(ids, win_rates, playouts, stops, elapsed)
+        if gc_runs:
+            # 容量の見積りが外れている．GC は木を刈るので，刈られなかった
+            # 実行と探索値を並べられない (教師データとしては混ぜられない)
+            logger.warning(
+                "Node pool GC ran %d time(s) at capacity %d "
+                "(max nodes used %d). GC prunes the tree, so these "
+                "values are not comparable with a run that never "
+                "collected. Raise --node-capacity and redo them.",
+                gc_runs,
+                node_capacity,
+                max_nodes_used,
+            )
+
+        fresh = _frame(
+            ids, win_rates, playouts, stops, elapsed, warmup
+        )
         # `merged` は集計にしか使わない (書き出しはシャード済み)．`_merge` は
         # id 重複を最後の防波堤として潰すので，件数の整合もここで取れる．
         merged = _merge(done, fresh)
@@ -1127,6 +1207,10 @@ class SearchValueCollector:
             "total": str(len(merged)),
             "mean_win_rate": f"{np.mean(win_rates):.4f}",
             "mean_elapsed_ms": f"{np.mean(elapsed):.0f}",
+            "mean_warmup_ms": f"{np.mean(warmup):.0f}",
+            "node_capacity": str(node_capacity),
+            "max_nodes_used": str(max_nodes_used),
+            "gc_runs": str(gc_runs),
             "output": str(option.output_path),
         }
 

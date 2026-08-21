@@ -23,8 +23,9 @@ from maou.infra.console.common import handle_exception
     type=click.Path(path_type=Path),
     required=True,
     help="Directory to write shards into (part_NNNNNNNN.feather, each "
-    "holding id, searchWinRate, playouts, stop, elapsedMs). Every flush "
-    "adds one shard instead of rewriting the whole output, so the cost "
+    "holding id, searchWinRate, playouts, stop, elapsedMs, warmupMs). "
+    "Every flush adds one shard instead of rewriting the whole output, "
+    "so the cost "
     "per flush stays flat as the run grows. Pass the directory to "
     "`maou pre-process --search-value-path`.",
 )
@@ -85,6 +86,19 @@ from maou.infra.console.common import handle_exception
     default=8,
     show_default=True,
     help="Evaluation batch size. Use 64 or more on GPU.",
+)
+@click.option(
+    "--node-capacity",
+    type=click.IntRange(min=2),
+    default=None,
+    help="Search tree node pool capacity. Left unset it is derived from "
+    "--playouts, which is what you want: one node is allocated per "
+    "playout that descends into an unexpanded child, so the Rust "
+    "default of 2^20 (about 50MB) is three orders of magnitude over "
+    "budget, and this path reallocates it for every position. That "
+    "cost lands in warmupMs, outside elapsedMs. Shrinking it does not "
+    "change the search -- the pool is only collected when it runs out "
+    "-- and gc_runs in the summary reports whether it ever did.",
 )
 @click.option(
     "--root-dfpn/--no-root-dfpn",
@@ -215,6 +229,7 @@ def search_values(
     time_ms: int | None,
     threads: int,
     batch_size: int,
+    node_capacity: int | None,
     root_dfpn: bool,
     root_dfpn_nodes: int | None,
     root_dfpn_depth: int | None,
@@ -261,6 +276,7 @@ def search_values(
         time_ms=time_ms,
         threads=threads,
         batch_size=batch_size,
+        node_capacity=node_capacity,
         root_dfpn=root_dfpn,
         root_dfpn_nodes=root_dfpn_nodes,
         root_dfpn_depth=root_dfpn_depth,
