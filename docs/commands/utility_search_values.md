@@ -145,7 +145,7 @@ maou utility search-values --output-path search_values/ --resume ...
 | Option | Default | Description |
 |---|---|---|
 | `--input-path PATH` | required | HCPE (`.feather`) のディレクトリまたはファイル．再帰的に走査する． |
-| `--output-path PATH` | required | **シャードを書き出すディレクトリ**．確定シャードは `part_NNNNNNNN.feather` (`id` / `searchWinRate` / `playouts` / `stop` / `elapsedMs`)．`--flush-interval` ごとの途中結果は小さな `pending_NNNNNNNN.feather` として足され，`--shard-rows` に達した時点で 1 枚の `part_` へまとめられて消える．**累積全体を書き直さない**ので，1 回の書き込みコストが行数によらず一定になる (旧実装は書き込み量が行数の二乗で伸び，18.7M 行では合計 5.9 時間に達した)．単一ファイルを渡すと移行手順付きの**エラー**になる． |
+| `--output-path PATH` | required | **シャードを書き出すディレクトリ**．確定シャードは `part_NNNNNNNN.feather` (`id` / `searchWinRate` / `playouts` / `stop` / `elapsedMs` / `warmupMs`)．`--flush-interval` ごとの途中結果は小さな `pending_NNNNNNNN.feather` として足され，`--shard-rows` に達した時点で 1 枚の `part_` へまとめられて消える．**累積全体を書き直さない**ので，1 回の書き込みコストが行数によらず一定になる (旧実装は書き込み量が行数の二乗で伸び，18.7M 行では合計 5.9 時間に達した)．単一ファイルを渡すと移行手順付きの**エラー**になる． |
 | `--model-path PATH` | optional | ONNX モデル．未指定なら決定論的な mock 評価器 (API 検証用．**値に意味は無い**)． |
 | `--min-ply INT` | `60` | この手数以上の局面のみ対象にする．記憶は中終盤に集中し，序盤の局面は多数の対局で共有されて教師が平均化されるので手を入れる必要が無い． |
 | `--max-positions INT` | `0` | 対象局面数の上限 (`0` で無制限)．GPU 予算に合わせる．標本抽出は `--seed` で決まりラベルに依存しない． |
@@ -154,6 +154,7 @@ maou utility search-values --output-path search_values/ --resume ...
 | `--time-ms INT` | optional | 1 局面あたりの時間上限 (ミリ秒)． |
 | `--threads INT` | `1` | 探索スレッド数． |
 | `--batch-size INT` | `8` | 評価バッチサイズ．GPU では 64 以上． |
+| `--node-capacity INT` | `--playouts` から導出 (`2 × playouts + 4096`) | 探索木のノードプール容量．ノードは**未展開の子へ降りた playout 1 回につき 1 個**しか確保されないので，必要数は playout 予算で上から押さえられる (実測: `--playouts 800` で `nodes_used` = 801)．Rust 既定の 2^20 は約 1,300 倍にあたり，1 ノード約 48 B なので**約 50MB を局面ごとに確保し直す**．この用途は保持木を引き継がないため毎回払われ，しかも**そのコストは `elapsedMs` でなく `warmupMs` に乗る**．絞っても探索は変わらない — プールの GC は**枯渇したときにしか**走らないため，必要数を上回っていれば木は同一になる (実測で `winrate` / `playouts` / `stop` / 最善手が一致)．上回れているかは要約の `gc_runs` が示す (0 なら不変)． |
 | `--root-dfpn / --no-root-dfpn` | `True` | ルート並行 dfpn 詰み探索． |
 | `--root-dfpn-nodes INT` | Rust 既定 (2,000,000) | ルート dfpn のノード予算．`--min-ply 60` は戦術的に濃い局面を狙って選ぶので，詰み探索が壁時計を支配しうる．下げて切り分ける． |
 | `--root-dfpn-depth INT` | Rust 既定 | ルート dfpn の深さ上限． |
@@ -195,6 +196,7 @@ Searching positions:  12%|█▏  | 122093/1000000 [2:41:07<19:19:02, 12.6pos/s,
 | `playouts` | `Int32` | 実際に消化した playout 数． |
 | `stop` | `String` | 探索の停止理由 (`playout_limit` / `root_proven` など)． |
 | `elapsedMs` | `Int32` | 1 局面あたりの探索時間 (ミリ秒)．**律速の切り分け用**．0.82.0 以前の出力には無く null になる． |
+| `warmupMs` | `Int32` | 1 局面あたりの**計測区間外**コスト (ミリ秒)．root の同期評価とノードプール確保．**`elapsedMs` と足して初めて 1 局面の総コストになる**．0.96.0 以前の出力には無く null になる． |
 
 ## Cost (実測)
 
@@ -211,21 +213,55 @@ GPU によって 2.7 倍ずれる．
 **この用途は自己対局と違って木の再利用が効かず，毎回 root から探索を立ち上げる**
 ため，公称のスループットは出ない．
 
+### `elapsedMs` だけで外挿しない
+
+上の節は「公称 playouts/s からの割り算を根拠にしない」と言っているが，**実測値を
+使ってなお外す道がある** — `elapsedMs` は探索本体だけで，**1 局面の総コストでは
+ない**．root の同期評価とノードプールの確保は計測区間の外にあり `warmupMs` に
+乗る．そしてこの用途は保持木を引き継がないので，**それは局面ごとに払われる**．
+
+L4 での実測 (2026-08-20，warmup 後の 50 局面，`--playouts 800`):
+
+| dfpn TT プール | `elapsedMs` median | 備考 |
+|---|---|---|
+| 無効 (`DFPN_TT_POOL_BYTES=0`) | 184.0 ms | 局面ごとの TT 確保 352MB が覆っている |
+| 有効 (既定) | **75.5 ms** | 800 playouts なので **10,596 playouts/s** |
+
+有効時の 75.5 ms は `docs/performance.md` の L4 batch 64 = 10,257 playouts/s と
+一致する．**184 ms がこれを覆い隠していた**．
+
+ここから `5.3M × 75.5 ms = 111 時間` と出したくなるが，これは**下限**である．
+`warmupMs` を足していないためで，真の値は `111 時間 × (1 + warmupMs / 75.5)`
+になる．DevContainer (mock 評価器，`--playouts 800`) では:
+
+| `--node-capacity` | `warmupMs` median | `elapsedMs` median |
+|---|---|---|
+| Rust 既定 2^20 | **23 ms** | 21 ms |
+| `--playouts` から導出 (5,696) | **0 ms** | 22 ms |
+
+**局面あたりコストの過半が `elapsedMs` の外にあり，`elapsedMs` だけを見ていると
+この 2 倍差はまったく見えない**．導出値が既定になったので現在は前者を踏まない
+が，**所要時間を見積もるときは両方を足すこと**．
+
 ## 律速の切り分け
 
-出力には `playouts` / `stop` / `elapsedMs` を記録しているので，
+出力には `playouts` / `stop` / `elapsedMs` / `warmupMs` を記録しているので，
 **本番実行そのものが計測になる**．別途 A/B を組まなくても後から追える．
 
 ```bash
 uv run python -c "
 import polars as pl
 import glob
+# how='diagonal' は必須: 列は版数で増えてきたので (elapsedMs は 0.82.0,
+# warmupMs は 0.97.0)，蓄積の途中で版数をまたいだ出力は列構成が揃わない
 d = pl.concat([pl.read_ipc(f, memory_map=False)
-               for f in sorted(glob.glob('search_values/*.feather'))])
+               for f in sorted(glob.glob('search_values/*.feather'))],
+              how='diagonal')
 print(d.group_by('stop').len().sort('len', descending=True).to_dicts())
 print('playouts 中央値', d['playouts'].median(),
       '/ 800 未満の割合', (d['playouts'] < 800).mean())
-print('elapsedMs 中央値', d['elapsedMs'].median())"
+print('elapsedMs 中央値', d['elapsedMs'].median(),
+      '/ warmupMs 中央値', d['warmupMs'].median())"
 ```
 
 - `stop` が `root_proven` 中心 / `playouts` が 800 に届かない
@@ -234,6 +270,9 @@ print('elapsedMs 中央値', d['elapsedMs'].median())"
 - `playouts` が 800 に張り付いていて `elapsedMs` が大きい
   → **評価バッチが埋まっていない可能性**．`--pad-buckets` /
   `--threads` を上げる / `--batch-size` を下げるを試す
+- `warmupMs` が `elapsedMs` に対して無視できない
+  → **探索の外に固定費がある**．`--node-capacity` を明示していれば
+  外して大きすぎないか見る．残りは root の同期評価 1 回分
 
 いずれも**教師の質を変えうる**ので，速度だけで既定を決めない
 (詰みが証明された局面の探索値は 0/1 の真値になり教師として最良)．

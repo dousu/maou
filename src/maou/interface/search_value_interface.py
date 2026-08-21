@@ -24,6 +24,7 @@ def collect_search_values(
     time_ms: int | None = None,
     threads: int = 1,
     batch_size: int = 8,
+    node_capacity: int | None = None,
     root_dfpn: bool = True,
     root_dfpn_nodes: int | None = None,
     root_dfpn_depth: int | None = None,
@@ -54,6 +55,8 @@ def collect_search_values(
         time_ms: 1 局面あたりの時間上限 (ミリ秒)．
         threads: 探索スレッド数．
         batch_size: 評価バッチサイズ．
+        node_capacity: 探索木のノードプール容量 (None で playout 予算から
+            決める)．
         root_dfpn: ルート並行 dfpn 詰み探索を行うか．
         root_dfpn_nodes: ルート dfpn のノード予算 (None で Rust 既定)．
         root_dfpn_depth: ルート dfpn の深さ上限 (None で Rust 既定)．
@@ -98,6 +101,7 @@ def collect_search_values(
         time_ms=time_ms,
         threads=threads,
         batch_size=batch_size,
+        node_capacity=node_capacity,
         root_dfpn=root_dfpn,
         root_dfpn_nodes=root_dfpn_nodes,
         root_dfpn_depth=root_dfpn_depth,

@@ -566,7 +566,7 @@ impl SearchEngine {
     ///
     /// 引数・返り値の意味は関数 [`search`] と同じ (評価器系オプションは
     /// コンストラクタで固定済みのため受け取らない)．探索中は GIL を解放する．
-    #[pyo3(signature = (sfen, *, moves=None, max_playouts=None, time_ms=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, defensive_mate=None, root_defensive_mate_nodes=None, leaf_defensive_mate_nodes=None, defensive_mate_threads=None))]
+    #[pyo3(signature = (sfen, *, moves=None, max_playouts=None, time_ms=None, node_capacity=None, root_dfpn=None, root_dfpn_nodes=None, root_dfpn_depth=None, leaf_mate=None, leaf_mate_nodes=None, leaf_mate_threads=None, defensive_mate=None, root_defensive_mate_nodes=None, leaf_defensive_mate_nodes=None, defensive_mate_threads=None))]
     #[allow(clippy::too_many_arguments)]
     fn search(
         &self,
@@ -575,6 +575,7 @@ impl SearchEngine {
         moves: Option<Vec<String>>,
         max_playouts: Option<u64>,
         time_ms: Option<u64>,
+        node_capacity: Option<u32>,
         root_dfpn: Option<bool>,
         root_dfpn_nodes: Option<u64>,
         root_dfpn_depth: Option<u32>,
@@ -594,6 +595,9 @@ impl SearchEngine {
             batch_size: self.batch_size,
             ..SearchOptions::default()
         };
+        if let Some(v) = node_capacity {
+            options.node_capacity = v;
+        }
         if let Some(v) = root_dfpn {
             options.root_dfpn = v;
         }

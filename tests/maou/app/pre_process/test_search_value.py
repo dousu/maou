@@ -15,6 +15,7 @@ import pytest
 
 from maou.app.pre_process.hcpe_transform import DataSource
 from maou.app.pre_process.search_value import (
+    NODE_CAPACITY_MARGIN,
     PENDING_PATTERN,
     SEARCH_VALUE_REQUIRED_SCHEMA,
     SEARCH_VALUE_SCHEMA,
@@ -23,6 +24,7 @@ from maou.app.pre_process.search_value import (
     SearchValueOption,
     _merge,
     _next_index,
+    _node_capacity,
     _ordered_value_paths,
     _ply_of,
     _with_current_schema,
@@ -146,6 +148,9 @@ def _values(
             ),
             "elapsedMs": pl.Series(
                 "elapsedMs", [120] * len(ids), dtype=pl.Int32
+            ),
+            "warmupMs": pl.Series(
+                "warmupMs", [7] * len(ids), dtype=pl.Int32
             ),
         },
         schema=SEARCH_VALUE_SCHEMA,
@@ -339,6 +344,54 @@ class TestOverwriteGuard:
         assert result["searched"] == "0"
 
 
+class TestNodeCapacity:
+    """ノードプール容量を playout 予算から決める規則を固定する．
+
+    ノードは「未展開の子へ降りた playout」1 回につき 1 個しか確保されない
+    ので，予算が必要数の上界になる．**上回っていれば GC は走らず探索は
+    不変**という前提でこの縮小が正当化されるため，予算を下回る既定値を
+    返してはならない．
+    """
+
+    def _option(self, **kwargs: object) -> SearchValueOption:
+        return SearchValueOption(
+            input_path=Path("in"),
+            output_path=Path("out"),
+            **kwargs,  # type: ignore[arg-type]
+        )
+
+    def test_derives_from_the_playout_budget(self) -> None:
+        assert (
+            _node_capacity(self._option(max_playouts=800))
+            == 2 * 800 + NODE_CAPACITY_MARGIN
+        )
+
+    def test_stays_above_the_playout_budget(self) -> None:
+        """予算を下回ると GC が走り，木が刈られて値が比較できなくなる．"""
+        for budget in (1, 800, 100_000):
+            assert (
+                _node_capacity(
+                    self._option(max_playouts=budget)
+                )
+                > budget
+            )
+
+    def test_explicit_value_wins(self) -> None:
+        assert (
+            _node_capacity(
+                self._option(max_playouts=800, node_capacity=32)
+            )
+            == 32
+        )
+
+    def test_is_far_below_the_rust_default(self) -> None:
+        """既定 2^20 のままだと 1 局面あたり約 50MB を確保し直す．"""
+        assert (
+            _node_capacity(self._option(max_playouts=800))
+            < (1 << 20) // 100
+        )
+
+
 class TestOlderOutputFormat:
     """0.82.0 より前の出力 (``elapsedMs`` 無し) を捨てさせない．
 
@@ -372,6 +425,18 @@ class TestOlderOutputFormat:
         )
         assert sorted(merged["id"].to_list()) == [1, 2, 3]
         assert merged["elapsedMs"].null_count() == 2
+
+    def test_backfills_warmup_ms(self) -> None:
+        """``warmupMs`` は 0.97.0 で足した．
+
+        既に走っている実行の出力 (この列が無い) を `--resume` で
+        続けられること．
+        """
+        old = _values([1, 2], [0.4, 0.6]).drop("warmupMs")
+        out = _with_current_schema(old)
+        assert list(out.columns) == list(SEARCH_VALUE_SCHEMA)
+        assert out["warmupMs"].null_count() == 2
+        assert out["elapsedMs"].to_list() == [120, 120]
 
 
 class TestLoadSearchValues:
@@ -787,6 +852,26 @@ class TestShardedOutput:
                 self._option(old, resume=True)
             )
         assert old.exists(), "エラー時に既存を消してはいけない"
+
+    def test_carries_pending_written_before_warmup_ms(
+        self, tmp_path: Path
+    ) -> None:
+        """0.96.0 以前が残した `pending_*` を引き継げること．
+
+        `--resume` は中断のたびに使われるので，列が増えた版へ上げた直後は
+        **新旧の列構成が 1 回の実行の中で同居する**．引き継ぎで落ちると，
+        まだ確定していない行 (最大 `--shard-rows` 分) が失われる．
+        """
+        out = tmp_path / "sv"
+        out.mkdir()
+        old = _values([11, 22], [0.25, 0.75]).drop("warmupMs")
+        old.write_ipc(out / "pending_00000001.feather")
+        carry = SearchValueCollector()._read_pending(
+            [out / "pending_00000001.feather"]
+        )
+        assert list(carry.columns) == list(SEARCH_VALUE_SCHEMA)
+        assert carry["warmupMs"].null_count() == 2
+        assert sorted(carry["id"].to_list()) == [11, 22]
 
     def test_resume_reads_a_legacy_file_moved_into_the_dir(
         self, tmp_path: Path
