@@ -5,6 +5,12 @@
 - Launches a **Gradio browser UI for reviewing and interactively analyzing a
   game record** (CSA / KIF) together with an `maou analyze-game` JSON report.
   Design document: `docs/design/game-analysis/gui.md`.
+- The UI is a **three-column workbench** rendered as a single `gr.HTML`
+  panel — no tabs. Left rail: blunder jump list (win-rate loss above an
+  adjustable threshold) over the move list; centre: the board with branch
+  breadcrumb and navigation; right rail: eval graph, candidate moves, and the
+  analysis panel. Everything is visible at once. Designed for laptop widths
+  (1280-1440px); the workbench has a `min-width` of 1280px.
 - Viewer features:
   - Board view (SVG) with last-move highlight and **candidate-move arrows**
     (best move in red with rank labels, others in blue with opacity scaled by
@@ -12,10 +18,18 @@
   - **Win-rate / eval graph with selectable perspective** (sente / gote ×
     win rate / eval; the JSON stores side-to-move values and the UI
     converts them — the gote view is the mirror of the sente view), with
-    mate markers (★) and a current-position indicator. Plotly-based.
+    blunder markers (●), mate markers (★) and a current-position indicator.
+    Rendered as inline SVG; **clicking the plot jumps to that ply**, and the
+    ● / ★ markers jump individually.
   - Move list (Japanese notation, engine match ✓, sente win rate / eval,
     win-rate loss, mate ★) — clicking a row jumps to the position after that
-    move.
+    move. Moves at or above the blunder threshold are shown in red.
+  - **Blunder jump list**: moves whose win-rate loss is at or above an
+    adjustable threshold (default `0.10`, editable in place). This is a
+    single filter, not a good/bad classification — no 疑問手 / 悪手 badges,
+    numbers only. Clicking a row jumps to the position **before** that move,
+    so it lines up with the candidate-move arrows. The threshold drives both
+    this list and the red highlighting in the move list.
   - Per-position candidate table (rank / move / visits / win rate
     (side-to-move) / prior / proven value) — clicking a row plays that move
     as a variation.
@@ -41,10 +55,25 @@
   - **Whole-game analysis**: analyze every mainline position with progress
     display and cooperative cancellation; the result updates the graph /
     move list and is downloadable as an analyze-game compatible JSON report.
+    The analysis panel keeps a progress bar and a status line visible at all
+    times.
   - The engine is loaded once per server process and search events are
     serialized (`concurrency_limit=1`). Without `--model-path` a
     deterministic **mock evaluator** is used (development verification only —
     clearly labeled in the UI).
+- **Keyboard shortcuts**:
+
+  | Key | Action |
+  | --- | --- |
+  | `←` / `→` | Previous / next move |
+  | `⇧←` / `⇧→` | Previous / next blunder |
+  | `Home` / `End` | Initial / final position |
+  | `B` | Back to the mainline |
+  | `Space` | Analyze the current position |
+  | `1`-`5` | Branch on that candidate move |
+  | `L` | Toggle the legal-move list |
+  | `Esc` | Clear the board selection |
+
 - Requires the `visualize` extra (`uv sync --extra visualize`). Viewing a
   pre-computed report needs no model or GPU; in-GUI analysis quality requires
   a real ONNX model (`--model-path`).
@@ -101,13 +130,20 @@ uv run maou analyze-gui
 ## Implementation references
 
 - CLI: `src/maou/infra/console/analyze_gui.py`
-- Gradio server (Blocks wiring, click bridge, engine events):
+- Gradio server (Blocks wiring, `data-action` bridges, engine events):
   `src/maou/infra/visualization/analysis_gui_server.py`
-- Interface adapter (board SVG / graph / tables / perspective conversion /
+- Interface adapter (board SVG / tables / perspective conversion /
   click state machine / breadcrumb): `src/maou/interface/analysis_gui.py`
+- Workbench HTML assembly (three-column layout, eval-graph SVG, blunder
+  list): `src/maou/interface/analysis_workbench.py`
+- Workbench styling and browser wiring (delegated listeners, shortcuts):
+  `src/maou/static/analysis_workbench.css` / `analysis_workbench.js`
 - Use cases (kifu → per-ply snapshots, report validation, variation tree):
   `src/maou/app/analysis/analysis_session.py`; resident engine:
   `src/maou/app/analysis/interactive_analyzer.py`
-- Multi-arrow board rendering and click targets: `ArrowSpec` /
-  `interactive` in `src/maou/domain/visualization/board_renderer.py`
+- Multi-arrow board rendering, click targets and theming: `ArrowSpec` /
+  `interactive` / `BoardTheme` in
+  `src/maou/domain/visualization/board_renderer.py`. The default
+  `SVGBoardRenderer()` output is unchanged; the workbench passes
+  `MODERNIST_BOARD_THEME`.
 - Design document: `docs/design/game-analysis/gui.md`
