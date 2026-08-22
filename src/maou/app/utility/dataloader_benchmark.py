@@ -4,7 +4,6 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import TypeAlias
 
 import torch
 from torch.utils.data import DataLoader
@@ -61,7 +60,7 @@ class BenchmarkConfig:
             )
 
 
-InputStructure: TypeAlias = (
+type InputStructure = (
     torch.Tensor
     | tuple["InputStructure", ...]
     | list["InputStructure"]

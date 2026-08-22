@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal
 
 import torch
 from torch import nn
@@ -34,7 +34,7 @@ DEFAULT_BOARD_VOCAB_SIZE = 256
 BOARD_EMBEDDING_DIM = 32
 DEFAULT_HAND_PROJECTION_DIM = 32
 
-ModelInputs: TypeAlias = torch.Tensor | Sequence[torch.Tensor]
+type ModelInputs = torch.Tensor | Sequence[torch.Tensor]
 PIECES_IN_HAND_VECTOR_SIZE = len(shogi.MAX_PIECES_IN_HAND) * 2
 
 

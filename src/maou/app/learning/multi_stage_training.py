@@ -16,7 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, TypeVar
+from typing import TYPE_CHECKING, Protocol
 
 import torch
 from torch import nn
@@ -387,23 +387,22 @@ class _StageMetricCallback(Protocol):
     def get_average_loss(self) -> float: ...
 
 
-_HeadT = TypeVar("_HeadT", bound=nn.Module)
-_CallbackT = TypeVar("_CallbackT", bound=_StageMetricCallback)
-
-
-def _run_stage_with_training_loop(
+def _run_stage_with_training_loop[
+    HeadT: nn.Module,
+    CallbackT: _StageMetricCallback,
+](
     *,
     components: StageComponents,
     config: StageConfig,
     device: torch.device,
     logger: logging.Logger | None,
     gradient_accumulation_steps: int,
-    head_type: type[_HeadT],
-    callback_factory: Callable[[], _CallbackT],
-    metric_getter: Callable[[_CallbackT], float],
+    head_type: type[HeadT],
+    callback_factory: Callable[[], CallbackT],
+    metric_getter: Callable[[CallbackT], float],
     stage_label: str,
     metric_label: str,
-) -> tuple[StageResult, _HeadT]:
+) -> tuple[StageResult, HeadT]:
     """TrainingLoop を使用して Stage 1/2 を学習する共通ループ．
 
     Stage 1 と Stage 2 はヘッドの型・メトリクスコールバック・

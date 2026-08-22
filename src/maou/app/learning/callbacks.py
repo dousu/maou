@@ -3,7 +3,7 @@ import math
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol, TypeAlias
+from typing import Protocol
 
 import torch
 from torch.utils.tensorboard import (
@@ -19,7 +19,7 @@ from maou.app.learning.resource_monitor import (
     SystemResourceMonitor,
 )
 
-ModelInputs: TypeAlias = torch.Tensor | Sequence[torch.Tensor]
+type ModelInputs = torch.Tensor | Sequence[torch.Tensor]
 
 
 def _safe_average(total: float, count: int) -> float | None:
