@@ -137,7 +137,8 @@ uv run maou analyze-gui
 - Workbench HTML assembly (three-column layout, eval-graph SVG, blunder
   list): `src/maou/interface/analysis_workbench.py`
 - Workbench styling and browser wiring (delegated listeners, shortcuts):
-  `src/maou/static/analysis_workbench.css` / `analysis_workbench.js`
+  `src/maou/infra/visualization/static/analysis_workbench.css` /
+  `analysis_workbench.js`
 - Use cases (kifu → per-ply snapshots, report validation, variation tree):
   `src/maou/app/analysis/analysis_session.py`; resident engine:
   `src/maou/app/analysis/interactive_analyzer.py`

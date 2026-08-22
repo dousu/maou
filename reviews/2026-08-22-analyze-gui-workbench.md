@@ -1,6 +1,6 @@
 ---
 status: applied
-applied_in: ba354890
+applied_in: baa8000
 date: 2026-08-22
 target: [docs/design/game-analysis/gui.md, docs/commands/analyze_gui.md]
 risk: medium

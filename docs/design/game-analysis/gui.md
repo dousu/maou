@@ -70,7 +70,7 @@ maou analyze-gui
 | infra/visualization | `src/maou/infra/visualization/analysis_gui_server.py` | gr.Blocks 構築・イベント配線・サーバー起動 |
 | interface | `src/maou/interface/analysis_gui.py` | 表示整形 (SVG/テーブル/日本語表記/クリック状態機械/パンくず)．`usi_to_japanese` 等を再利用 |
 | interface | `src/maou/interface/analysis_workbench.py` | ワークベンチ HTML の組み立て (3 カラム 1 枚・評価値グラフ SVG・悪手リスト) |
-| static | `src/maou/static/analysis_workbench.{css,js}` | Modernist テーマのスコープ付き CSS・委譲リスナー・ショートカット配線 |
+| infra/visualization | `src/maou/infra/visualization/static/analysis_workbench.{css,js}` | Modernist テーマのスコープ付き CSS・委譲リスナー・ショートカット配線 |
 | app | `src/maou/app/analysis/analysis_session.py` | 棋譜ロード・分岐木 (`VariationTree`)・合法手列挙 |
 | app | `src/maou/app/analysis/interactive_analyzer.py` | 常駐エンジン (`InteractiveAnalyzer`)・1 局面/全局面解析・レポート組み立て |
 | domain | `src/maou/domain/visualization/board_renderer.py` | 複数矢印拡張・クリック標的 rect・選択/行き先の塗り |
