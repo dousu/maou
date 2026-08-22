@@ -452,6 +452,17 @@ class TestAnalysis:
         assert "この局面のエンジン評価" in html
         assert "先手視点" in html
 
+    def test_candidate_tooltip_carries_prior(self) -> None:
+        """prior と確定値は列ではなく行のホバーで拾える．"""
+        server = _make_server(
+            kifu_path=MINI_CSA, default_playouts=8
+        )
+        _, _, html = self._analyze(
+            server, "analyze", AnalysisProgress()
+        )
+        assert "prior " in html
+        assert 'class="mw-candidate' in html
+
     def test_analyze_all_generates_report(self) -> None:
         """全局面解析が analyze-game 互換レポートを生成する．"""
         server = _make_server(

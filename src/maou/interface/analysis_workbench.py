@@ -733,6 +733,30 @@ def _eval_graph(
     )
 
 
+def _candidate_tooltip(row: list[str]) -> str:
+    """候補手行のホバー文言 (prior / 確定値) を作る．
+
+    レール幅の都合で列としては出さず，ホバーで拾えるようにする
+    (docs/design/game-analysis/gui.md §7，user 決定 2026-08-22)．
+
+    Args:
+        row: :func:`analysis_gui.node_candidates_table` の 1 行
+            (順位/指し手/訪問数/勝率/prior/確定値)．
+
+    Returns:
+        ツールチップ文字列．
+    """
+    parts = [
+        f"順位 {row[0]}",
+        f"訪問数 {row[2]}",
+        f"勝率(手番) {row[3]}",
+        f"prior {row[4] or '-'}",
+    ]
+    if len(row) > 5 and row[5]:
+        parts.append(f"確定値 {row[5]}")
+    return " ／ ".join(parts)
+
+
 def _candidates(
     tree: VariationTree,
     options: WorkbenchOptions,
@@ -790,6 +814,7 @@ def _candidates(
         )
         items.append(
             f'<button type="button" class="{classes}" '
+            f'title="{_esc(_candidate_tooltip(row))}" '
             f'data-action="cand:{index}">'
             f'<span class="mw-candidate-rank">{_esc(rank)}</span>'
             f'<span class="mw-move">{_esc(label)}</span>'

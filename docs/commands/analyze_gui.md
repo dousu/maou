@@ -15,12 +15,13 @@
   - Board view (SVG) with last-move highlight and **candidate-move arrows**
     (best move in red with rank labels, others in blue with opacity scaled by
     visit count; optional PV chain arrows for the best move).
-  - **Win-rate / eval graph with selectable perspective** (sente / gote ×
-    win rate / eval; the JSON stores side-to-move values and the UI
-    converts them — the gote view is the mirror of the sente view), with
-    blunder markers (●), mate markers (★) and a current-position indicator.
-    Rendered as inline SVG; **clicking the plot jumps to that ply**, and the
-    ● / ★ markers jump individually.
+  - **Win-rate / eval graph, sente perspective** (win rate or eval,
+    selectable; the JSON stores side-to-move values and the UI converts
+    them). There is no gote toggle — the gote view is the mirror of the
+    sente one. Blunder markers (●), mate markers (★) and a
+    current-position indicator are drawn on it. Rendered as inline SVG;
+    **clicking the plot jumps to that ply**, and the ● / ★ markers jump
+    individually.
   - Move list (Japanese notation, engine match ✓, sente win rate / eval,
     win-rate loss, mate ★) — clicking a row jumps to the position after that
     move. Moves at or above the blunder threshold are shown in red.
@@ -30,14 +31,16 @@
     numbers only. Clicking a row jumps to the position **before** that move,
     so it lines up with the candidate-move arrows. The threshold drives both
     this list and the red highlighting in the move list.
-  - Per-position candidate table (rank / move / visits / win rate
-    (side-to-move) / prior / proven value) — clicking a row plays that move
-    as a variation.
+  - Per-position candidate list (rank / move / visits / win rate
+    (side-to-move); prior and proven value on hover) — clicking a row plays
+    that move as a variation.
   - Position info: SFEN and USI `position` string for hand-off to other
-    tools, per-move notes (engine best vs played, recorded time / comments),
-    and the engine evaluation of the current position (win rate / eval in
-    side-to-move and sente perspectives) whenever an analysis is cached —
-    including freshly analyzed variation positions.
+    tools, the recorded time and comment of the current move, and the engine
+    evaluation of the current position (win rate / eval in side-to-move and
+    sente perspectives, above the candidate list) whenever an analysis is
+    cached — including freshly analyzed variation positions. The engine-best
+    vs played comparison is carried by the move list (✓ / loss column) and
+    the blunder list.
   - Files can be loaded at startup (CLI flags) or uploaded from the UI.
 - Interactive analysis features:
   - **Board click input**: click a piece (or a piece in hand) then a
