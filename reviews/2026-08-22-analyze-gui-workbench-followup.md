@@ -1,5 +1,6 @@
 ---
-status: pending
+status: applied
+applied_in: e243614
 date: 2026-08-22
 target: [docs/design/game-analysis/gui.md, docs/commands/analyze_gui.md]
 risk: low
@@ -55,3 +56,11 @@ docs を直す」の二択で，user が後者を選んだ (2026-08-22)．
   1 本」の決定には触れない．
 - 後手視点トグルを将来入れたくなった場合は本提案を上書きする形で
   再提案する (変換関数が残っているので実装コストは小さい)．
+
+## 適用
+
+user 承認 (2026-08-22) を受けて `e243614` で docs と実装 (`title` の
+追加) を同時に反映した．前段の
+`reviews/2026-08-22-analyze-gui-workbench.md` は docs を別コミットに
+分けたが，本提案は docs 修正が 4 箇所と小さく，実装 (ホバー) と
+対で読めた方がよいので 1 コミットにまとめている．
