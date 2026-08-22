@@ -57,6 +57,7 @@ from maou.domain.board.shogi import (
 from maou.domain.visualization.board_renderer import (
     ArrowSpec,
     BoardPosition,
+    BoardTheme,
     MoveArrow,
     SVGBoardRenderer,
 )
@@ -296,6 +297,7 @@ def snapshot_board_svg(
     selected_squares: list[int] | None = None,
     destination_squares: list[int] | None = None,
     interactive: bool = False,
+    theme: BoardTheme | None = None,
 ) -> str:
     """スナップショット局面の盤面 SVG を返す (分岐局面にも使える)．
 
@@ -308,6 +310,7 @@ def snapshot_board_svg(
         selected_squares: クリック選択中として塗るマス (row-major)．
         destination_squares: 行き先候補として塗るマス (row-major)．
         interactive: クリック標的 rect を重ねるか．
+        theme: 盤面テーマ．None で既定 (従来の配色)．
 
     Returns:
         SVG 文字列．
@@ -334,7 +337,7 @@ def snapshot_board_svg(
         )
 
     turn = Turn.BLACK if snapshot.turn == "b" else Turn.WHITE
-    return SVGBoardRenderer().render(
+    return SVGBoardRenderer(theme).render(
         position,
         highlight_squares=highlights,
         turn=turn,
@@ -1011,6 +1014,7 @@ def node_board_svg(
     click_state: ClickState | None = None,
     legal: list[LegalMoveInfo] | None = None,
     interactive: bool = False,
+    theme: BoardTheme | None = None,
 ) -> str:
     """現在ノードの盤面 SVG (解析キャッシュの候補手矢印付き) を返す．"""
     node = current_node(tree)
@@ -1029,6 +1033,7 @@ def node_board_svg(
         selected_squares=selected,
         destination_squares=destinations,
         interactive=interactive,
+        theme=theme,
     )
 
 
@@ -1061,13 +1066,20 @@ def candidate_usi(
     return None
 
 
-def _evaluation_note(
+def evaluation_note(
     analysis: dict[str, Any] | None, turn: str
 ) -> str | None:
     """現局面の解析キャッシュから局面評価行 (Markdown) を作る．
 
     勝率/評価値は手番視点 (生値) と先手視点の両方を併記する
     (候補手テーブルは手番視点，グラフは先手/後手視点のため)．
+
+    Args:
+        analysis: ノードの解析キャッシュ (未解析は None)．
+        turn: 手番 ("b" / "w")．
+
+    Returns:
+        評価行の Markdown．未解析・評価値欠落のときは None．
     """
     if not analysis:
         return None
@@ -1100,7 +1112,7 @@ def node_position_info(
     現局面のエンジン評価行 (勝率/評価値) を末尾に付ける．
     """
     node = current_node(tree)
-    evaluation = _evaluation_note(
+    evaluation = evaluation_note(
         node.analysis, node.snapshot.turn
     )
     if node.is_mainline:

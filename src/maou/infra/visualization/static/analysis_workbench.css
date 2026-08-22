@@ -1,0 +1,844 @@
+/* 棋譜解析 GUI (analyze-gui) ワークベンチのスタイル．
+
+   Modernist デザインシステム (Archivo・赤単色・角丸ゼロ・2px 罫) を
+   #maou-workbench 配下にスコープして適用する．Gradio 本体のテーマを
+   汚さないよう，トークンはルート要素に閉じ，クラスは mw- 接頭辞を持つ． */
+
+#maou-workbench {
+  --mw-bg: #f3f2f2;
+  --mw-text: #201e1d;
+  --mw-accent: #ec3013;
+  --mw-divider: rgba(32, 30, 29, 0.4);
+
+  --mw-neutral-100: #f8f4f4;
+  --mw-neutral-200: #eae7e7;
+  --mw-neutral-300: #d7d3d3;
+  --mw-neutral-400: #bab6b6;
+  --mw-neutral-600: #7d7979;
+  --mw-neutral-700: #605d5d;
+  --mw-neutral-800: #444141;
+
+  --mw-accent-100: #fff2ef;
+  --mw-accent-600: #dd2b0f;
+  --mw-accent-700: #ae1800;
+  --mw-accent-800: #7c1405;
+
+  --mw-sans: "Archivo", "Noto Sans JP", system-ui, sans-serif;
+  --mw-serif: "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif;
+
+  font-family: var(--mw-sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--mw-text);
+  background: var(--mw-neutral-100);
+  min-width: 1280px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+#maou-workbench *,
+#maou-workbench *::before,
+#maou-workbench *::after {
+  box-sizing: border-box;
+}
+
+/* Gradio の既定余白と幅上限を外し，ワークベンチを画面幅いっぱいに置く．
+   Gradio 6 は .main.fillable に max-width を掛け，gr.HTML を .block /
+   .html-container / .prose で包んで余白を足すので，ワークベンチを含む
+   ものだけを :has() で狙って打ち消す． */
+.gradio-container:has(#maou-workbench),
+.main:has(#maou-workbench),
+.wrap:has(#maou-workbench),
+.column:has(#maou-workbench) {
+  max-width: 100% !important;
+  padding: 0 !important;
+}
+
+.block:has(#maou-workbench),
+.html-container:has(#maou-workbench) {
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.prose:has(#maou-workbench) {
+  max-width: none !important;
+}
+
+/* ── 共通部品 ───────────────────────────────────────────── */
+
+#maou-workbench .mw-kbd {
+  font-family: var(--mw-sans);
+  font-size: 10px;
+  font-weight: 600;
+  border: 1px solid var(--mw-divider);
+  padding: 1px 5px;
+  line-height: 1.5;
+}
+
+#maou-workbench .mw-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  font-family: var(--mw-sans);
+  font-weight: 800;
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  color: var(--mw-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0;
+  padding: 8px 14px;
+}
+
+#maou-workbench .mw-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+#maou-workbench .mw-btn-primary {
+  background: var(--mw-accent);
+  color: var(--mw-bg);
+}
+
+#maou-workbench .mw-btn-primary:hover:not(:disabled) {
+  background: var(--mw-accent-600);
+}
+
+#maou-workbench .mw-btn-secondary {
+  border-color: var(--mw-divider);
+}
+
+#maou-workbench .mw-btn-secondary:hover:not(:disabled) {
+  background: rgba(32, 30, 29, 0.07);
+}
+
+#maou-workbench .mw-btn-ghost {
+  color: var(--mw-accent);
+  padding-inline: 4px;
+  font-size: 12px;
+}
+
+#maou-workbench .mw-btn-ghost:hover {
+  background: rgba(236, 48, 19, 0.1);
+}
+
+#maou-workbench .mw-btn-block {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+#maou-workbench .mw-tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+#maou-workbench .mw-tag-accent {
+  background: var(--mw-accent-100);
+  color: var(--mw-accent-800);
+}
+
+#maou-workbench .mw-tag-neutral {
+  background: var(--mw-neutral-100);
+  color: var(--mw-neutral-800);
+}
+
+#maou-workbench .mw-tag-outline {
+  border: 1px solid var(--mw-accent);
+  color: var(--mw-accent);
+}
+
+#maou-workbench .mw-seg {
+  display: inline-flex;
+  border: 1px solid var(--mw-divider);
+}
+
+#maou-workbench .mw-seg-opt {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font-family: inherit;
+}
+
+#maou-workbench .mw-seg-opt + .mw-seg-opt {
+  border-left: 1px solid var(--mw-divider);
+}
+
+#maou-workbench .mw-seg-opt[aria-pressed="true"] {
+  background: var(--mw-accent);
+  color: var(--mw-bg);
+}
+
+#maou-workbench .mw-seg-opt:not([aria-pressed="true"]):hover {
+  background: rgba(32, 30, 29, 0.07);
+}
+
+#maou-workbench .mw-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mw-neutral-700);
+}
+
+#maou-workbench .mw-move {
+  font-family: var(--mw-serif);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+#maou-workbench :focus-visible {
+  outline: 2px solid var(--mw-accent);
+  outline-offset: -2px;
+}
+
+/* ── ヘッダー ───────────────────────────────────────────── */
+
+#maou-workbench .mw-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 2px solid var(--mw-divider);
+}
+
+#maou-workbench .mw-brand {
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+
+#maou-workbench .mw-brand span {
+  color: var(--mw-accent);
+}
+
+#maou-workbench .mw-source {
+  font-size: 12px;
+  color: var(--mw-neutral-700);
+}
+
+#maou-workbench .mw-header-right {
+  margin-left: auto;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+#maou-workbench .mw-shortcuts {
+  font-size: 11px;
+  color: var(--mw-neutral-700);
+}
+
+/* ── サマリ帯 ───────────────────────────────────────────── */
+
+#maou-workbench .mw-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-bottom: 2px solid var(--mw-divider);
+}
+
+#maou-workbench .mw-summary-cell {
+  padding: 12px 20px;
+  border-right: 1px solid var(--mw-divider);
+  min-width: 0;
+}
+
+#maou-workbench .mw-summary-cell:last-child {
+  border-right: 0;
+}
+
+#maou-workbench .mw-kicker {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--mw-accent);
+}
+
+#maou-workbench .mw-summary-value {
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+#maou-workbench .mw-summary-sub {
+  font-size: 12px;
+  color: var(--mw-neutral-700);
+  margin-top: 2px;
+}
+
+/* ── 3 カラム本体 ───────────────────────────────────────── */
+
+#maou-workbench .mw-main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 284px minmax(0, 1fr) 304px;
+  min-height: 0;
+}
+
+#maou-workbench .mw-rail-left {
+  border-right: 1px solid var(--mw-divider);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#maou-workbench .mw-center {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--mw-divider);
+  min-width: 0;
+}
+
+#maou-workbench .mw-rail-right {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#maou-workbench .mw-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--mw-divider);
+}
+
+#maou-workbench .mw-section-head-split {
+  border-top: 2px solid var(--mw-divider);
+}
+
+#maou-workbench .mw-note {
+  font-size: 11px;
+  color: var(--mw-neutral-700);
+}
+
+/* 悪手ジャンプリスト */
+
+#maou-workbench .mw-blunder {
+  display: grid;
+  grid-template-columns: 54px 1fr 52px;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--mw-divider);
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  font-family: inherit;
+  color: inherit;
+}
+
+#maou-workbench .mw-blunder:hover {
+  background: var(--mw-accent-100);
+}
+
+#maou-workbench .mw-blunder-ply {
+  font-size: 12px;
+  color: var(--mw-neutral-700);
+}
+
+#maou-workbench .mw-blunder-loss {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mw-accent-700);
+  text-align: right;
+}
+
+#maou-workbench .mw-empty {
+  padding: 12px 16px;
+  font-size: 12px;
+  color: var(--mw-neutral-700);
+  border-bottom: 1px solid var(--mw-divider);
+}
+
+/* 棋譜リスト */
+
+#maou-workbench .mw-kifu-head {
+  display: grid;
+  grid-template-columns: 40px 1fr 56px 40px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--mw-divider);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mw-neutral-600);
+}
+
+#maou-workbench .mw-kifu-list {
+  flex: 1;
+  min-height: 240px;
+  overflow-y: auto;
+}
+
+#maou-workbench .mw-kifu-row {
+  display: grid;
+  grid-template-columns: 40px 1fr 56px 40px;
+  align-items: center;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--mw-divider);
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border-top: 0;
+  border-right: 0;
+  font-family: inherit;
+  color: inherit;
+}
+
+#maou-workbench .mw-kifu-row:hover {
+  background: var(--mw-neutral-200);
+}
+
+#maou-workbench .mw-kifu-row.is-current {
+  background: var(--mw-accent-100);
+  border-left-color: var(--mw-accent);
+}
+
+#maou-workbench .mw-kifu-ply {
+  font-size: 12px;
+  color: var(--mw-neutral-700);
+}
+
+#maou-workbench .mw-kifu-loss {
+  font-size: 12px;
+  text-align: right;
+  color: var(--mw-neutral-700);
+}
+
+#maou-workbench .mw-kifu-loss.is-blunder {
+  color: var(--mw-accent-700);
+  font-weight: 600;
+}
+
+#maou-workbench .mw-kifu-match {
+  font-size: 12px;
+  text-align: center;
+  color: var(--mw-neutral-700);
+}
+
+/* ── 中央カラム ─────────────────────────────────────────── */
+
+#maou-workbench .mw-position-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--mw-divider);
+  font-size: 13px;
+}
+
+#maou-workbench .mw-position-bar .mw-elapsed {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--mw-neutral-700);
+}
+
+#maou-workbench .mw-position-bar .mw-comment {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--mw-neutral-700);
+}
+
+#maou-workbench .mw-breadcrumb-sep {
+  color: var(--mw-neutral-600);
+}
+
+#maou-workbench .mw-board {
+  padding: 20px;
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+}
+
+#maou-workbench .mw-board svg {
+  max-width: 100%;
+  height: auto;
+}
+
+#maou-workbench .mw-navbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 20px 14px;
+}
+
+#maou-workbench .mw-scrubber {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 10px;
+}
+
+/* 罫は 2px でも掴めるように，track 自体は 16px の透明な当たり判定に
+   する (JS は track の getBoundingClientRect で手数を出すので，幅を
+   変えなければ対応関係は変わらない) */
+#maou-workbench .mw-scrubber-track {
+  flex: 1;
+  height: 16px;
+  background: transparent;
+  position: relative;
+  cursor: pointer;
+}
+
+#maou-workbench .mw-scrubber-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 7px;
+  height: 2px;
+  background: var(--mw-divider);
+}
+
+#maou-workbench .mw-scrubber-fill {
+  position: absolute;
+  left: 0;
+  top: 7px;
+  height: 2px;
+  background: var(--mw-accent);
+}
+
+#maou-workbench .mw-scrubber-thumb {
+  position: absolute;
+  top: 2px;
+  width: 2px;
+  height: 12px;
+  background: var(--mw-accent);
+}
+
+#maou-workbench .mw-scrubber-count {
+  font-size: 12px;
+  color: var(--mw-neutral-700);
+}
+
+#maou-workbench .mw-center-foot {
+  margin-top: auto;
+}
+
+#maou-workbench .mw-hint-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  border-top: 1px solid var(--mw-divider);
+  background: var(--mw-neutral-200);
+  font-size: 12px;
+  color: var(--mw-neutral-700);
+}
+
+#maou-workbench .mw-hint-bar .mw-hint-right {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+#maou-workbench .mw-hint-bar.is-active {
+  background: var(--mw-accent-100);
+  color: var(--mw-accent-800);
+}
+
+#maou-workbench .mw-promotion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+#maou-workbench .mw-strings {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  border-top: 1px solid var(--mw-divider);
+  font-size: 12px;
+  color: var(--mw-neutral-700);
+}
+
+#maou-workbench .mw-strings code {
+  color: var(--mw-text);
+  font-family: var(--mw-sans);
+  max-width: 30ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+#maou-workbench .mw-strings .mw-strings-right {
+  margin-left: auto;
+}
+
+/* 合法手一覧 (盤面クリックの代替入力) */
+
+#maou-workbench .mw-legal {
+  border-top: 1px solid var(--mw-divider);
+  padding: 10px 20px;
+  max-height: 168px;
+  overflow-y: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#maou-workbench .mw-legal-move {
+  font-family: var(--mw-serif);
+  font-weight: 600;
+  font-size: 13px;
+  padding: 3px 8px;
+  border: 1px solid var(--mw-divider);
+  cursor: pointer;
+  background: transparent;
+  color: inherit;
+}
+
+#maou-workbench .mw-legal-move:hover {
+  background: var(--mw-accent-100);
+}
+
+/* ── 右レール ───────────────────────────────────────────── */
+
+#maou-workbench .mw-graph {
+  padding: 12px 14px 8px;
+}
+
+#maou-workbench .mw-graph svg {
+  display: block;
+  width: 100%;
+}
+
+#maou-workbench .mw-graph-point {
+  cursor: pointer;
+}
+
+#maou-workbench .mw-graph-legend {
+  font-size: 11px;
+  color: var(--mw-neutral-700);
+  padding: 2px;
+}
+
+#maou-workbench .mw-candidate {
+  display: grid;
+  grid-template-columns: 20px 1fr 48px 48px;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--mw-divider);
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  font-family: inherit;
+  color: inherit;
+}
+
+#maou-workbench .mw-candidate:hover {
+  background: var(--mw-accent-100);
+}
+
+#maou-workbench .mw-candidate.is-best {
+  background: var(--mw-accent-100);
+}
+
+#maou-workbench .mw-candidate-rank {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--mw-neutral-600);
+}
+
+#maou-workbench .mw-candidate.is-best .mw-candidate-rank {
+  color: var(--mw-accent-700);
+}
+
+#maou-workbench .mw-candidate-visits {
+  font-size: 12px;
+  text-align: right;
+  color: var(--mw-neutral-700);
+}
+
+#maou-workbench .mw-candidate-winrate {
+  font-size: 12px;
+  text-align: right;
+  font-weight: 600;
+}
+
+#maou-workbench .mw-eval-line {
+  padding: 6px 16px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--mw-neutral-700);
+  border-bottom: 1px solid var(--mw-divider);
+}
+
+#maou-workbench .mw-eval-line strong {
+  color: var(--mw-text);
+  font-weight: 600;
+}
+
+#maou-workbench .mw-candidate-hint {
+  padding: 6px 16px;
+  font-size: 11px;
+  color: var(--mw-neutral-700);
+  border-bottom: 2px solid var(--mw-divider);
+}
+
+#maou-workbench .mw-analysis {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#maou-workbench .mw-budget {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#maou-workbench .mw-budget input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--mw-divider);
+  border-radius: 0;
+  padding: 5px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: inherit;
+  background: transparent;
+}
+
+#maou-workbench .mw-btn-row {
+  display: flex;
+  gap: 8px;
+}
+
+#maou-workbench .mw-btn-row .mw-btn {
+  flex: 1;
+  justify-content: center;
+  font-size: 12px;
+}
+
+#maou-workbench .mw-analyze-all {
+  border-top: 1px solid var(--mw-divider);
+  padding-top: 12px;
+}
+
+#maou-workbench .mw-analyze-all-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+#maou-workbench .mw-analyze-all-head strong {
+  font-weight: 600;
+}
+
+#maou-workbench .mw-progress {
+  height: 4px;
+  background: var(--mw-divider);
+  margin: 8px 0;
+  position: relative;
+}
+
+#maou-workbench .mw-progress-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 4px;
+  background: var(--mw-accent);
+}
+
+#maou-workbench .mw-status {
+  font-size: 11px;
+  color: var(--mw-neutral-700);
+  min-height: 1.5em;
+}
+
+#maou-workbench .mw-status.is-error {
+  color: var(--mw-accent-700);
+}
+
+/* ── 未読込プレースホルダ ───────────────────────────────── */
+
+#maou-workbench .mw-placeholder {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 64px 20px;
+  text-align: center;
+  color: var(--mw-neutral-700);
+}
+
+/* セクション見出しに埋め込む小さな数値入力 */
+
+#maou-workbench .mw-threshold,
+#maou-workbench .mw-topn {
+  width: 3.4em;
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: inherit;
+  padding: 0 2px;
+  text-align: center;
+}
+
+#maou-workbench .mw-topn {
+  width: 2.6em;
+}
+
+#maou-workbench .mw-threshold::-webkit-outer-spin-button,
+#maou-workbench .mw-threshold::-webkit-inner-spin-button,
+#maou-workbench .mw-topn::-webkit-outer-spin-button,
+#maou-workbench .mw-topn::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+#maou-workbench .mw-threshold,
+#maou-workbench .mw-topn {
+  appearance: textfield;
+}
+
+#maou-workbench .mw-threshold:hover,
+#maou-workbench .mw-topn:hover,
+#maou-workbench .mw-threshold:focus,
+#maou-workbench .mw-topn:focus {
+  border-color: var(--mw-divider);
+}
+
+#maou-workbench .mw-candidate-opts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
