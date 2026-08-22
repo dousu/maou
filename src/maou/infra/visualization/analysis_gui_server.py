@@ -1,14 +1,16 @@
 """棋譜解析 GUI (analyze-gui) の Gradio サーバー (インフラ層)．
 
-gr.Blocks の構築とイベント配線のみを担い，表示整形は interface 層
-(:mod:`maou.interface.analysis_gui`)，セッション状態・分岐木・エンジン
-呼び出しは app 層に委譲する (interface 経由)．セッション状態
-(:class:`SessionView` / 分岐木 / クリック状態) は plain data で
-``gr.State`` に保持する (ブラウザセッションごとに独立)．
+画面は 3 カラムのワークベンチ 1 枚 (gr.HTML) で，レイアウトと表示整形は
+interface 層 (:mod:`maou.interface.analysis_workbench`) が担う．本モジュールは
+gr.Blocks の構築とイベント配線，およびアクション文字列の解釈だけを行う．
+セッション状態 (:class:`SessionView` / 分岐木 / クリック状態 / 表示
+オプション) は plain data で ``gr.State`` に保持する (ブラウザセッション
+ごとに独立)．
 
-エンジン (:class:`InteractiveAnalyzer`) はサーバープロセスで 1 個を
-共有し，探索系イベントは ``concurrency_id="engine"`` +
-``concurrency_limit=1`` で直列化する
+UI 操作は ``data-action`` 文字列として JS から届く
+(static/analysis_workbench.js)．レーンは 4 本に分け，探索系は
+``concurrency_id="engine"`` + ``concurrency_limit=1`` で直列化し，
+キャンセルだけは実行中でも通るよう別レーンに置く
 (docs/design/game-analysis/gui.md §11)．
 """
 
@@ -19,14 +21,17 @@ import logging
 import os
 import tempfile
 import threading
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import gradio as gr
-import plotly.graph_objects as go
 
-from maou.interface import analysis_gui
+from maou.infra.visualization.game_graph_shared import (
+    load_static_file,
+)
+from maou.interface import analysis_gui, analysis_workbench
 from maou.interface.analysis_gui import (
     ClickState,
     EngineSettings,
@@ -34,83 +39,57 @@ from maou.interface.analysis_gui import (
     SessionView,
     VariationTree,
 )
+from maou.interface.analysis_workbench import (
+    AnalysisProgress,
+    WorkbenchOptions,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-_EMPTY_BOARD_HTML = (
-    "<p>棋譜が読み込まれていません．下の「棋譜/レポートの読み込み」"
-    "からファイルを読み込んでください．</p>"
-)
-
-# Gradio 6 では JS から Textbox の値を変更しても .input()/.change() が
-# 発火しない (game_graph_shared.py 参照)．gr.HTML の server_functions +
-# js_on_load で JS → Python を直接呼び出し，trigger("change") で
-# .change() コールバックを発火する．
-_BOARD_CLICK_JS_ON_LOAD = (
-    "window.__maou_board_click = "
-    "{server: server, trigger: trigger};"
-)
-
-# 盤面 SVG のクリック標的 ([data-click] rect) の委譲リスナー．
-# gr.HTML は innerHTML 差し替えのため，永続する外側コンテナ
-# (#board-display) に 1 回だけリスナーを付ける．
-_HEAD_SCRIPTS = """
-<script>
-(function() {
-    function onBoardClick(e) {
-        var target = e.target.closest('[data-click]');
-        if (!target) return;
-        var bridge = window.__maou_board_click;
-        if (!bridge || !bridge.server) {
-            console.warn('[maou] board click bridge not ready');
-            return;
-        }
-        bridge.server.handle_board_click(target.getAttribute('data-click'))
-            .then(function(ok) { if (ok) bridge.trigger('change'); })
-            .catch(function(err) {
-                console.error('[maou] board click failed:', err);
-            });
-    }
-    function attach() {
-        var container = document.getElementById('board-display');
-        if (!container || container._maouClickAttached) return;
-        container._maouClickAttached = true;
-        container.addEventListener('click', onBoardClick);
-    }
-    var observer = new MutationObserver(attach);
-    function start() {
-        observer.observe(document.body, {childList: true, subtree: true});
-        attach();
-    }
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', start);
-    } else {
-        start();
-    }
-})();
-</script>
-"""
-
 _CUSTOM_CSS = ".maou-hidden {display: none !important;}"
 
+# 各レーンの js_on_load．server / trigger を JS 側の共有オブジェクトに
+# 公開する (game_graph_shared.py と同じ Gradio 6 ブリッジ方式)．
+_LANES = ("nav", "engine", "engineAll", "cancel", "download")
 
-def _empty_figure() -> go.Figure:
-    """データ未読込時のプレースホルダ Figure を返す．"""
-    fig = go.Figure()
-    fig.update_layout(
-        xaxis={"visible": False},
-        yaxis={"visible": False},
-        height=320,
-        margin={"l": 20, "r": 20, "t": 30, "b": 20},
+
+def _js_on_load(lane: str) -> str:
+    """レーン名に対応する js_on_load スニペットを返す．"""
+    return (
+        "window.__maou_wb = window.__maou_wb || {};"
+        f"window.__maou_wb.{lane} = "
+        "{server: server, trigger: trigger};"
     )
-    return fig
+
+
+def _head_scripts() -> str:
+    """ワークベンチの CSS / JS を head に注入する HTML を返す．
+
+    gr.HTML は innerHTML で差し替わるため ``<script>`` が実行されない．
+    CSS も head に置いて再描画ごとの重複注入を防ぐ (game_graph_server と
+    同じ方針)．
+    """
+    css = load_static_file("analysis_workbench.css")
+    js = load_static_file("analysis_workbench.js")
+    fonts = (
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
+        "family=Archivo:wght@400;600;800&family=Noto+Sans+JP:wght@400;500;700"
+        '&family=Shippori+Mincho:wght@600;700&display=swap">'
+    )
+    return f"{fonts}<style>{css}</style><script>{js}</script>"
 
 
 def _clamp_ply(view: SessionView | None, ply: Any) -> int:
-    """スライダー値を有効なスナップショット番号に丸める．"""
+    """アクション値を有効なスナップショット番号に丸める．"""
     if view is None:
         return 0
-    return max(0, min(int(ply), view.document.n_moves))
+    try:
+        value = int(ply)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(value, view.document.n_moves))
 
 
 def _file_path(file_obj: Any) -> Path | None:
@@ -121,13 +100,34 @@ def _file_path(file_obj: Any) -> Path | None:
     return Path(str(name))
 
 
+def _make_bridge(
+    buffer: dict[str, str],
+) -> Callable[[str], bool]:
+    """アクション受け渡し用の server_function を作る．
+
+    WARNING: バッファはクロージャとして全ブラウザセッションで共有される
+    (game_graph_server.py の ``_pending`` と同じ制約．ローカル解析ツール
+    として単一利用者を前提とする)．
+    """
+
+    def handle_action(value: str) -> bool:
+        """JS から呼ばれる server_function．"""
+        if not value:
+            return False
+        buffer["value"] = str(value)
+        return True
+
+    return handle_action
+
+
 class AnalysisGuiServer:
     """棋譜解析 GUI の Gradio サーバー．
 
     Attributes:
-        num_candidates: 候補手表示数の上限 (スライダー最大値)．
+        num_candidates: 候補手表示数の上限．
         initial_view: CLI 引数から構築した初期セッション (任意)．
         initial_tree: 初期セッションの分岐木 (任意)．
+        initial_options: CLI 引数から決まる初期表示オプション．
     """
 
     def __init__(
@@ -168,13 +168,26 @@ class AnalysisGuiServer:
                 num_candidates=self.num_candidates
             )
         )
-        self._default_playouts = default_playouts
         self._default_time_ms = (
             default_time_ms
             if default_time_ms is not None
             else analysis_gui.DEFAULT_TIME_MS
         )
         self._cancel_event = threading.Event()
+        self._render_count = 0
+        self.initial_options = WorkbenchOptions(
+            top_n=min(5, self.num_candidates),
+            budget_mode=(
+                "playouts"
+                if default_playouts is not None
+                else "time"
+            ),
+            budget_value=(
+                default_playouts
+                if default_playouts is not None
+                else self._default_time_ms
+            ),
+        )
         self.initial_view: SessionView | None = None
         self.initial_tree: VariationTree | None = None
         if kifu_path is not None:
@@ -196,589 +209,337 @@ class AnalysisGuiServer:
             )
 
     # ------------------------------------------------------------------
-    # 表示ヘルパ
+    # 表示
     # ------------------------------------------------------------------
 
-    def _engine_note(self) -> str:
-        """エンジン設定の説明行 (mock 明示) を返す．"""
-        settings = self._analyzer.settings
+    def _engine_label(self) -> str:
+        """ヘッダーに出すエンジン表示名を返す．"""
         if self._analyzer.is_mock:
-            return (
-                "⚠️ **mock 評価器** (開発検証専用．実モデルは "
-                "`--model-path` で指定)"
-            )
-        return f"エンジン: `{settings.model_path}`"
+            return "mock 評価器（開発検証専用）"
+        return f"エンジン: {self._analyzer.settings.model_path}"
+
+    def _render(
+        self,
+        view: SessionView | None,
+        tree: VariationTree | None,
+        click: ClickState | None,
+        options: WorkbenchOptions,
+        progress: AnalysisProgress,
+    ) -> str:
+        """ワークベンチ HTML を組み立てる (再描画ごとに刻印を進める)．"""
+        self._render_count += 1
+        return analysis_workbench.render_workbench(
+            view,
+            tree,
+            click or ClickState(),
+            options,
+            progress,
+            engine_label=self._engine_label(),
+            is_mock=self._analyzer.is_mock,
+            max_candidates=self.num_candidates,
+            render_stamp=str(self._render_count),
+        )
 
     def _budget(
-        self, budget_mode: str, budget_value: Any
+        self, options: WorkbenchOptions
     ) -> tuple[int | None, int | None]:
-        """予算 UI の値を (time_ms, max_playouts) にする．"""
-        try:
-            value = int(budget_value)
-        except (TypeError, ValueError):
-            value = 0
+        """予算オプションを (time_ms, max_playouts) にする．"""
+        value = int(options.budget_value)
         if value <= 0:
             return self._default_time_ms, None
-        if budget_mode == "playouts":
+        if options.budget_mode == "playouts":
             return None, value
         return value, None
 
-    def _render_node(
+    # ------------------------------------------------------------------
+    # ナビゲーション・入力レーン
+    # ------------------------------------------------------------------
+
+    def _apply_option(
+        self, options: WorkbenchOptions, rest: str
+    ) -> WorkbenchOptions:
+        """``opt:{name}:{value}`` を表示オプションに反映する．"""
+        name, _, raw = rest.partition(":")
+        try:
+            if name == "ymode":
+                if raw in ("winrate", "eval_cp"):
+                    return replace(options, y_mode=raw)
+            elif name == "budgetmode":
+                if raw in ("time", "playouts"):
+                    return replace(options, budget_mode=raw)
+            elif name == "budget":
+                return replace(
+                    options, budget_value=max(1, int(raw))
+                )
+            elif name == "threshold":
+                return replace(
+                    options,
+                    threshold=min(1.0, max(0.0, float(raw))),
+                )
+            elif name == "topn":
+                return replace(
+                    options,
+                    top_n=min(
+                        self.num_candidates, max(1, int(raw))
+                    ),
+                )
+            elif name == "arrows":
+                return replace(options, show_arrows=raw == "1")
+            elif name == "pv":
+                return replace(options, show_pv=raw == "1")
+        except ValueError:
+            logger.warning("不正なオプション値です: %s", rest)
+        return options
+
+    def _goto(
+        self, tree: VariationTree, node_id: int | None
+    ) -> None:
+        """指定ノードへ移動する (None は現状維持)．"""
+        if node_id is not None:
+            analysis_gui.goto_node(tree, node_id)
+
+    def _navigate(
         self,
+        view: SessionView,
+        tree: VariationTree,
+        action: str,
+        rest: str,
+    ) -> None:
+        """``nav:*`` / ``goto:*`` / ``blunder:*`` を分岐木に適用する．"""
+        node = analysis_gui.current_node(tree)
+        if action == "goto":
+            self._goto(
+                tree, tree.mainline_ids[_clamp_ply(view, rest)]
+            )
+        elif rest == "first":
+            self._goto(tree, tree.mainline_ids[0])
+        elif rest == "last":
+            self._goto(tree, tree.mainline_ids[-1])
+        elif rest == "prev":
+            self._goto(tree, node.parent_id)
+        elif rest == "next":
+            if node.children:
+                self._goto(
+                    tree,
+                    next(
+                        (
+                            cid
+                            for cid in node.children
+                            if tree.nodes[cid].is_mainline
+                        ),
+                        node.children[0],
+                    ),
+                )
+        elif rest == "mainline":
+            self._goto(
+                tree,
+                analysis_gui.mainline_ancestor(tree).node_id,
+            )
+
+    def _jump_blunder(
+        self,
+        view: SessionView,
+        tree: VariationTree,
+        options: WorkbenchOptions,
+        forward: bool,
+    ) -> str:
+        """前/次の悪手に移動する．見つからなければ理由を返す．"""
+        target = analysis_workbench.neighbouring_blunder(
+            view,
+            options.threshold,
+            analysis_gui.mainline_ply(tree),
+            forward=forward,
+        )
+        if target is None:
+            return (
+                "次の悪手はありません"
+                if forward
+                else "前の悪手はありません"
+            )
+        self._goto(tree, tree.mainline_ids[target])
+        return ""
+
+    def _advance(
+        self, tree: VariationTree, usi: str | None
+    ) -> str:
+        """1 手進める (分岐の共通経路)．失敗理由を返す．"""
+        if not usi:
+            return ""
+        try:
+            analysis_gui.advance_move(tree, usi)
+        except ValueError as e:
+            return f"指せません: {e}"
+        return ""
+
+    def _on_action(
+        self,
+        action: str,
         view: SessionView | None,
         tree: VariationTree | None,
         click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
+        options: WorkbenchOptions,
+        progress: AnalysisProgress,
     ) -> tuple[Any, ...]:
-        """現在ノードの表示系出力 13 要素 (node_outputs) を作る．
+        """ナビゲーション・入力・表示オプションのアクションを適用する．
 
-        戻り値の順序: (tree, click, board, plot, candidates, sfen,
-        position, note, breadcrumb, dropdown 更新, click 状態表示,
-        成るボタン可視更新, 成らずボタン可視更新)．
-        成/不成の可視は gr.Row でなくボタン単位で更新する
-        (Gradio 6 では Row への visible 更新が効かない)．
+        Returns:
+            ``(tree, click, options, progress, html)``．
         """
-        if view is None or tree is None:
-            return (
-                tree,
-                ClickState(),
-                _EMPTY_BOARD_HTML,
-                _empty_figure(),
-                [],
-                "",
-                "",
-                "",
-                "",
-                gr.update(choices=[], value=None),
-                "",
-                gr.update(visible=False),
-                gr.update(visible=False),
-            )
         click = click or ClickState()
-        snapshot = analysis_gui.current_node(tree).snapshot
-        legal = analysis_gui.node_legal_moves(tree)
-        board = analysis_gui.node_board_svg(
-            tree,
-            show_candidates=bool(show_arrows),
-            show_pv=bool(show_pv),
-            top_n=int(top_n),
-            click_state=click,
-            legal=legal,
-            interactive=True,
-        )
-        fig = analysis_gui.eval_figure(
-            view, analysis_gui.mainline_ply(tree), y_mode
-        )
-        candidates = analysis_gui.node_candidates_table(
-            tree, int(top_n)
-        )
-        sfen, position_str, note = (
-            analysis_gui.node_position_info(view, tree)
-        )
-        breadcrumb = analysis_gui.breadcrumb_markdown(tree)
-        dropdown = gr.update(
-            choices=analysis_gui.legal_move_choices(
-                snapshot, legal
-            ),
-            value=None,
-        )
-        click_status = analysis_gui.click_status_text(
-            snapshot, click
-        )
-        promo_visible = bool(click.pending_usis)
+        verb, _, rest = action.partition(":")
+        error = ""
+
+        if verb == "opt":
+            options = self._apply_option(options, rest)
+        elif verb == "toggle" and rest == "legal":
+            options = replace(
+                options, legal_open=not options.legal_open
+            )
+        elif verb == "clear":
+            click = ClickState()
+        elif view is not None and tree is not None:
+            if verb in ("nav", "goto"):
+                self._navigate(view, tree, verb, rest)
+                click = ClickState()
+            elif verb == "blunder":
+                error = self._jump_blunder(
+                    view, tree, options, forward=rest == "next"
+                )
+                click = ClickState()
+            elif verb == "board":
+                click, error = self._board_click(
+                    tree, click, rest
+                )
+            elif verb == "promote":
+                usi = (
+                    click.pending_usis[0 if rest == "1" else 1]
+                    if len(click.pending_usis) == 2
+                    else None
+                )
+                error = self._advance(tree, usi)
+                click = ClickState()
+            elif verb == "play":
+                error = self._advance(tree, rest)
+                click = ClickState()
+            elif verb == "cand":
+                error = self._play_candidate(
+                    tree, rest, options
+                )
+                click = ClickState()
+            elif verb == "pv":
+                error = self._play_pv(tree)
+                click = ClickState()
+
+        if error:
+            progress = replace(
+                progress, status=error, is_error=True
+            )
+        elif progress.is_error:
+            progress = replace(
+                progress, status="", is_error=False
+            )
         return (
             tree,
             click,
-            board,
-            fig,
-            candidates,
-            sfen,
-            position_str,
-            note,
-            breadcrumb,
-            dropdown,
-            click_status,
-            gr.update(visible=promo_visible),
-            gr.update(visible=promo_visible),
+            options,
+            progress,
+            self._render(view, tree, click, options, progress),
         )
 
-    def _nav_outputs(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-    ) -> tuple[Any, ...]:
-        """node_outputs + スライダー更新 (14 要素) を作る．
-
-        現在ノードが本譜上ならスライダー値を追随させ，分岐中は
-        変更しない (スライダーは本譜ナビゲーション専用)．
-        """
-        rendered = self._render_node(
-            view,
-            tree,
-            click,
-            show_arrows,
-            show_pv,
-            top_n,
-            y_mode,
-        )
-        slider: Any = gr.update()
-        if tree is not None:
-            node = analysis_gui.current_node(tree)
-            if node.is_mainline:
-                slider = gr.update(value=node.snapshot.ply)
-        return (*rendered, slider)
-
-    # ------------------------------------------------------------------
-    # ナビゲーション系イベントハンドラ
-    # ------------------------------------------------------------------
-
-    def _on_slider(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-        ply: Any,
-    ) -> tuple[Any, ...]:
-        """スライダー操作: 本譜の該当局面へ移動する (選択は解除)．"""
-        if view is not None and tree is not None:
-            ply_int = _clamp_ply(view, ply)
-            analysis_gui.goto_node(
-                tree, tree.mainline_ids[ply_int]
-            )
-        return self._render_node(
-            view,
-            tree,
-            ClickState(),
-            show_arrows,
-            show_pv,
-            top_n,
-            y_mode,
-        )
-
-    def _on_display(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-    ) -> tuple[Any, ...]:
-        """表示オプション変更: 現在ノードを再描画する．"""
-        return self._render_node(
-            view,
-            tree,
-            click,
-            show_arrows,
-            show_pv,
-            top_n,
-            y_mode,
-        )
-
-    def _goto_and_render(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        node_id: int | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-    ) -> tuple[Any, ...]:
-        """指定ノードへ移動して nav_outputs を返す (選択は解除)．"""
-        if tree is not None and node_id is not None:
-            analysis_gui.goto_node(tree, node_id)
-        return self._nav_outputs(
-            view,
-            tree,
-            ClickState(),
-            show_arrows,
-            show_pv,
-            top_n,
-            y_mode,
-        )
-
-    def _on_first(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-    ) -> tuple[Any, ...]:
-        """最初へ: root (初期局面) に移動する．"""
-        node_id = (
-            tree.mainline_ids[0] if tree is not None else None
-        )
-        return self._goto_and_render(
-            view,
-            tree,
-            node_id,
-            show_arrows,
-            show_pv,
-            top_n,
-            y_mode,
-        )
-
-    def _on_last(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-    ) -> tuple[Any, ...]:
-        """最後へ: 本譜の最終局面に移動する．"""
-        node_id = (
-            tree.mainline_ids[-1] if tree is not None else None
-        )
-        return self._goto_and_render(
-            view,
-            tree,
-            node_id,
-            show_arrows,
-            show_pv,
-            top_n,
-            y_mode,
-        )
-
-    def _on_prev(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-    ) -> tuple[Any, ...]:
-        """前へ: 親ノードに移動する (分岐中もそのまま遡れる)．"""
-        node_id: int | None = None
-        if tree is not None:
-            node = analysis_gui.current_node(tree)
-            node_id = (
-                node.parent_id
-                if node.parent_id is not None
-                else node.node_id
-            )
-        return self._goto_and_render(
-            view,
-            tree,
-            node_id,
-            show_arrows,
-            show_pv,
-            top_n,
-            y_mode,
-        )
-
-    def _on_next(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-    ) -> tuple[Any, ...]:
-        """次へ: 子ノードに移動する (本譜の子を優先)．"""
-        node_id: int | None = None
-        if tree is not None:
-            node = analysis_gui.current_node(tree)
-            if node.children:
-                node_id = next(
-                    (
-                        cid
-                        for cid in node.children
-                        if tree.nodes[cid].is_mainline
-                    ),
-                    node.children[0],
-                )
-            else:
-                node_id = node.node_id
-        return self._goto_and_render(
-            view,
-            tree,
-            node_id,
-            show_arrows,
-            show_pv,
-            top_n,
-            y_mode,
-        )
-
-    def _on_back_mainline(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-    ) -> tuple[Any, ...]:
-        """本譜へ戻る: 分岐点の本譜側ノードに移動する．"""
-        node_id: int | None = None
-        if tree is not None:
-            node_id = analysis_gui.mainline_ancestor(
-                tree
-            ).node_id
-        return self._goto_and_render(
-            view,
-            tree,
-            node_id,
-            show_arrows,
-            show_pv,
-            top_n,
-            y_mode,
-        )
-
-    def _on_move_select(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-        evt: gr.SelectData,
-    ) -> tuple[Any, ...]:
-        """棋譜テーブルの行クリック: その手の後の本譜局面へ移動する．"""
-        node_id: int | None = None
-        if view is not None and tree is not None:
-            ply = _clamp_ply(view, evt.index[0] + 1)
-            node_id = tree.mainline_ids[ply]
-        return self._goto_and_render(
-            view,
-            tree,
-            node_id,
-            show_arrows,
-            show_pv,
-            top_n,
-            y_mode,
-        )
-
-    # ------------------------------------------------------------------
-    # 指し手入力系イベントハンドラ (分岐)
-    # ------------------------------------------------------------------
-
-    def _play_usi(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        usi: str | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-    ) -> tuple[Any, ...]:
-        """指し手 1 手を現在ノードから進める (分岐の共通経路)．"""
-        if view is None or tree is None:
-            raise gr.Error("棋譜を読み込んでください")
-        if usi:
-            try:
-                analysis_gui.advance_move(tree, usi)
-            except ValueError as e:
-                raise gr.Error(f"指せません: {e}") from e
-        return self._nav_outputs(
-            view,
-            tree,
-            ClickState(),
-            show_arrows,
-            show_pv,
-            top_n,
-            y_mode,
-        )
-
-    def _on_play_dropdown(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-        usi: str | None,
-    ) -> tuple[Any, ...]:
-        """合法手 Dropdown + 「指す」ボタン (フォールバック入力)．"""
-        return self._play_usi(
-            view, tree, usi, show_arrows, show_pv, top_n, y_mode
-        )
-
-    def _on_candidate_select(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-        evt: gr.SelectData,
-    ) -> tuple[Any, ...]:
-        """候補手テーブルの行クリック: その手で分岐して進める．"""
-        usi: str | None = None
-        if tree is not None:
-            node = analysis_gui.current_node(tree)
-            usi = analysis_gui.candidate_usi(
-                node.analysis, int(evt.index[0]), int(top_n)
-            )
-        return self._play_usi(
-            view, tree, usi, show_arrows, show_pv, top_n, y_mode
-        )
-
-    def _on_pv_play(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-    ) -> tuple[Any, ...]:
-        """PV 再生: 現在ノードの解析 PV を分岐として一括で進める．"""
-        if view is None or tree is None:
-            raise gr.Error("棋譜を読み込んでください")
-        node = analysis_gui.current_node(tree)
-        pv = list((node.analysis or {}).get("pv") or [])
-        if not pv:
-            raise gr.Error(
-                "この局面に解析 PV がありません "
-                "(先に「この局面を解析」を実行してください)"
-            )
-        for usi in pv:
-            try:
-                analysis_gui.advance_move(tree, usi)
-            except ValueError:
-                logger.warning(
-                    "PV の指し手を適用できません: %s", usi
-                )
-                break
-        return self._nav_outputs(
-            view,
-            tree,
-            ClickState(),
-            show_arrows,
-            show_pv,
-            top_n,
-            y_mode,
-        )
-
-    def _apply_board_click(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        value: str,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-    ) -> tuple[Any, ...]:
+    def _board_click(
+        self, tree: VariationTree, click: ClickState, value: str
+    ) -> tuple[ClickState, str]:
         """盤面クリック 1 回分を状態機械に適用する．"""
-        if view is None or tree is None or not value:
-            return self._nav_outputs(
-                view,
-                tree,
-                click,
-                show_arrows,
-                show_pv,
-                top_n,
-                y_mode,
-            )
-        click = click or ClickState()
         node = analysis_gui.current_node(tree)
         legal = analysis_gui.node_legal_moves(tree)
         new_click, usi = analysis_gui.handle_board_click(
             legal, click, value, node.snapshot.turn
         )
-        if usi is not None:
-            try:
-                analysis_gui.advance_move(tree, usi)
-            except ValueError as e:
-                raise gr.Error(f"指せません: {e}") from e
-            new_click = ClickState()
-        return self._nav_outputs(
-            view,
-            tree,
-            new_click,
-            show_arrows,
-            show_pv,
-            top_n,
-            y_mode,
-        )
+        if usi is None:
+            return new_click, ""
+        error = self._advance(tree, usi)
+        return ClickState(), error
 
-    def _on_promotion_choice(
+    def _play_candidate(
         self,
+        tree: VariationTree,
+        rest: str,
+        options: WorkbenchOptions,
+    ) -> str:
+        """候補手 N 番目でその手に分岐する．"""
+        node = analysis_gui.current_node(tree)
+        try:
+            index = int(rest)
+        except ValueError:
+            return ""
+        usi = analysis_gui.candidate_usi(
+            node.analysis, index, options.top_n
+        )
+        if usi is None:
+            return "その順位の候補手はありません"
+        return self._advance(tree, usi)
+
+    def _play_pv(self, tree: VariationTree) -> str:
+        """現在ノードの解析 PV を分岐として一括で進める．"""
+        node = analysis_gui.current_node(tree)
+        pv = list((node.analysis or {}).get("pv") or [])
+        if not pv:
+            return (
+                "この局面に解析 PV がありません "
+                "（先に「この局面を解析」を実行してください）"
+            )
+        for usi in pv:
+            if self._advance(tree, usi):
+                logger.warning(
+                    "PV の指し手を適用できません: %s", usi
+                )
+                break
+        return ""
+
+    # ------------------------------------------------------------------
+    # 解析レーン (エンジン)
+    # ------------------------------------------------------------------
+
+    def _on_analyze(
+        self,
+        action: str,
         view: SessionView | None,
         tree: VariationTree | None,
         click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-        *,
-        promote: bool,
+        options: WorkbenchOptions,
+        progress: AnalysisProgress,
     ) -> tuple[Any, ...]:
-        """成/不成の確認ボタン: 保留中の指し手を確定する．"""
-        click = click or ClickState()
-        usi: str | None = None
-        if len(click.pending_usis) == 2:
-            usi = click.pending_usis[0 if promote else 1]
-        return self._play_usi(
-            view, tree, usi, show_arrows, show_pv, top_n, y_mode
-        )
+        """1 局面解析 (キャッシュ再利用 / reanalyze で上書き)．
 
-    # ------------------------------------------------------------------
-    # 解析系イベントハンドラ (エンジン)
-    # ------------------------------------------------------------------
-
-    def _analyze_current(
-        self,
-        view: SessionView | None,
-        tree: VariationTree | None,
-        click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-        budget_mode: str,
-        budget_value: Any,
-        *,
-        force: bool,
-    ) -> tuple[Any, ...]:
-        """現在ノードの 1 局面解析 (キャッシュ再利用 / force で上書き)．"""
+        Returns:
+            ``(tree, progress, html)``．
+        """
+        force = action == "reanalyze"
         if view is None or tree is None:
-            raise gr.Error("棋譜を読み込んでください")
+            progress = replace(
+                progress,
+                status="棋譜を読み込んでください",
+                is_error=True,
+            )
+            return (
+                tree,
+                progress,
+                self._render(
+                    view, tree, click, options, progress
+                ),
+            )
         node = analysis_gui.current_node(tree)
         if node.analysis is not None and not force:
-            status = (
-                "この局面は解析済みです (キャッシュ表示中．"
-                "「再解析」で上書きできます)"
+            progress = replace(
+                progress,
+                status=(
+                    "この局面は解析済みです"
+                    "（「再解析」で上書きできます）"
+                ),
+                is_error=False,
             )
         else:
-            time_ms, playouts = self._budget(
-                budget_mode, budget_value
-            )
+            time_ms, playouts = self._budget(options)
             try:
                 record = self._analyzer.analyze_position(
                     view.document,
@@ -788,27 +549,31 @@ class AnalysisGuiServer:
                     max_playouts=playouts,
                 )
             except ValueError as e:
-                raise gr.Error(
-                    f"解析に失敗しました: {e}"
-                ) from e
+                progress = replace(
+                    progress,
+                    status=f"解析に失敗しました: {e}",
+                    is_error=True,
+                )
+                return (
+                    tree,
+                    progress,
+                    self._render(
+                        view, tree, click, options, progress
+                    ),
+                )
             node.analysis = record
-            status = (
-                f"解析完了: {record['playouts']} playouts / "
-                f"{record['elapsed_ms']} ms"
+            progress = replace(
+                progress,
+                status=(
+                    f"解析完了: {record['playouts']} playouts / "
+                    f"{record['elapsed_ms']} ms"
+                ),
+                is_error=False,
             )
-            if self._analyzer.is_mock:
-                status += " ⚠️ mock 評価器 (開発検証専用)"
         return (
-            *self._nav_outputs(
-                view,
-                tree,
-                click,
-                show_arrows,
-                show_pv,
-                top_n,
-                y_mode,
-            ),
-            status,
+            tree,
+            progress,
+            self._render(view, tree, click, options, progress),
         )
 
     def _on_analyze_all(
@@ -816,42 +581,48 @@ class AnalysisGuiServer:
         view: SessionView | None,
         tree: VariationTree | None,
         click: ClickState | None,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
-        budget_mode: str,
-        budget_value: Any,
+        options: WorkbenchOptions,
+        progress: AnalysisProgress,
     ) -> Any:
         """全局面解析 (ジェネレータ: 進捗を逐次 yield，キャンセル対応)．
 
-        出力順: (state, *nav_outputs, move_df, summary_md,
-        report_download, analyze_status)．
+        Yields:
+            ``(view, progress, html, report_file)``．
         """
         if view is None or tree is None:
-            raise gr.Error("棋譜を読み込んでください")
-        self._cancel_event.clear()
-        time_ms, playouts = self._budget(
-            budget_mode, budget_value
-        )
-        n = view.document.n_moves
-        noop_nav = tuple(gr.update() for _ in range(14))
-
-        def _progress(
-            message: str,
-        ) -> tuple[Any, ...]:
-            return (
-                gr.update(),
-                *noop_nav,
-                gr.update(),
-                gr.update(),
-                gr.update(),
-                message,
+            progress = replace(
+                progress,
+                status="棋譜を読み込んでください",
+                is_error=True,
             )
+            yield (
+                view,
+                progress,
+                self._render(
+                    view, tree, click, options, progress
+                ),
+                gr.update(),
+            )
+            return
 
-        yield _progress(f"全局面解析を開始します (全 {n} 局面)")
+        self._cancel_event.clear()
+        time_ms, playouts = self._budget(options)
+        total = view.document.n_moves
+        progress = AnalysisProgress(
+            running=True,
+            done=0,
+            total=total,
+            status=f"全局面解析を開始します（全 {total} 局面）",
+        )
+        yield (
+            view,
+            progress,
+            self._render(view, tree, click, options, progress),
+            gr.update(),
+        )
+
         positions: list[dict[str, Any]] = []
-        for i, total, record in self._analyzer.analyze_mainline(
+        for i, count, record in self._analyzer.analyze_mainline(
             view.document,
             time_ms=time_ms,
             max_playouts=playouts,
@@ -859,30 +630,38 @@ class AnalysisGuiServer:
         ):
             positions.append(record)
             tree.nodes[tree.mainline_ids[i]].analysis = record
-            yield _progress(
-                f"全局面解析中 … {i + 1}/{total} 局面"
-            )
-
-        if len(positions) < n:
-            status = (
-                f"キャンセルしました ({len(positions)}/{n} 局面まで"
-                "解析済み．結果は各局面のキャッシュに反映されています)"
+            progress = replace(
+                progress,
+                done=i + 1,
+                total=count,
+                status=f"全局面解析中 … {i + 1}/{count} 局面",
             )
             yield (
-                gr.update(),
-                *self._nav_outputs(
-                    view,
-                    tree,
-                    click,
-                    show_arrows,
-                    show_pv,
-                    top_n,
-                    y_mode,
+                view,
+                progress,
+                self._render(
+                    view, tree, click, options, progress
                 ),
                 gr.update(),
+            )
+
+        if len(positions) < total:
+            progress = replace(
+                progress,
+                running=False,
+                status=(
+                    f"キャンセルしました（{len(positions)}/{total} "
+                    "局面まで解析済み．結果は各局面のキャッシュに"
+                    "残っています）"
+                ),
+            )
+            yield (
+                view,
+                progress,
+                self._render(
+                    view, tree, click, options, progress
+                ),
                 gr.update(),
-                gr.update(),
-                status,
             )
             return
 
@@ -894,31 +673,82 @@ class AnalysisGuiServer:
             max_playouts=playouts,
         )
         new_view = replace(view, report=report)
-        report_path = self._write_report_file(report)
-        status = f"全局面解析が完了しました (全 {n} 局面)"
-        if self._analyzer.is_mock:
-            status += " ⚠️ mock 評価器 (開発検証専用)"
+        progress = replace(
+            progress,
+            running=False,
+            done=total,
+            status=(
+                f"全局面解析が完了しました（全 {total} 局面）．"
+                "レポート JSON を下の読み込みパネルに置きました．"
+            ),
+        )
         yield (
             new_view,
-            *self._nav_outputs(
-                new_view,
-                tree,
-                click,
-                show_arrows,
-                show_pv,
-                top_n,
-                y_mode,
+            progress,
+            self._render(
+                new_view, tree, click, options, progress
             ),
-            analysis_gui.move_table(new_view),
-            analysis_gui.summary_markdown(new_view),
-            gr.update(value=report_path, visible=True),
-            status,
+            self._write_report_file(report),
         )
 
-    def _on_cancel(self) -> str:
+    def _on_cancel(
+        self,
+        view: SessionView | None,
+        tree: VariationTree | None,
+        click: ClickState | None,
+        options: WorkbenchOptions,
+        progress: AnalysisProgress,
+    ) -> tuple[Any, ...]:
         """全局面解析のキャンセル要求 (実行中の 1 局面は完了を待つ)．"""
         self._cancel_event.set()
-        return "キャンセルを要求しました (実行中の局面の完了後に停止します)"
+        progress = replace(
+            progress,
+            status=(
+                "キャンセルを要求しました"
+                "（実行中の局面の完了後に停止します）"
+            ),
+        )
+        return (
+            progress,
+            self._render(view, tree, click, options, progress),
+        )
+
+    def _on_save(
+        self,
+        view: SessionView | None,
+        tree: VariationTree | None,
+        click: ClickState | None,
+        options: WorkbenchOptions,
+        progress: AnalysisProgress,
+    ) -> tuple[Any, ...]:
+        """現在のレポートを JSON ファイルに書き出す．"""
+        if view is None or view.report is None:
+            progress = replace(
+                progress,
+                status=(
+                    "保存できるレポートがありません"
+                    "（全局面解析を実行してください）"
+                ),
+                is_error=True,
+            )
+            return (
+                progress,
+                self._render(
+                    view, tree, click, options, progress
+                ),
+                gr.update(),
+            )
+        path = self._write_report_file(view.report)
+        progress = replace(
+            progress,
+            status="レポート JSON を下の読み込みパネルに置きました",
+            is_error=False,
+        )
+        return (
+            progress,
+            self._render(view, tree, click, options, progress),
+            path,
+        )
 
     @staticmethod
     def _write_report_file(report: dict[str, Any]) -> str:
@@ -938,15 +768,12 @@ class AnalysisGuiServer:
         self,
         kifu_file: Any,
         report_file: Any,
-        show_arrows: bool,
-        show_pv: bool,
-        top_n: Any,
-        y_mode: str,
+        options: WorkbenchOptions,
     ) -> tuple[Any, ...]:
-        """棋譜 (+ レポート) を読み込み，全出力を更新する．
+        """棋譜 (+ レポート) を読み込み，全状態を作り直す．
 
-        出力順: (state, *node_outputs, ply_slider, move_df,
-        summary_md, load_status)．
+        Returns:
+            ``(view, tree, click, progress, html)``．
         """
         kifu_path = _file_path(kifu_file)
         if kifu_path is None:
@@ -972,31 +799,30 @@ class AnalysisGuiServer:
         tree = analysis_gui.build_variation_tree(
             view.document, view.report
         )
-        status = (
-            f"読み込みました: {kifu_path.name} "
-            f"({view.document.n_moves} 手"
-            + (
-                ", 解析レポートあり"
+        progress = AnalysisProgress(
+            total=view.document.n_moves,
+            done=(
+                view.document.n_moves
                 if view.report is not None
-                else ", 解析レポートなし"
-            )
-            + ")"
+                else 0
+            ),
+            status=(
+                f"読み込みました: {kifu_path.name}"
+                f"（{view.document.n_moves} 手"
+                + (
+                    "，解析レポートあり）"
+                    if view.report is not None
+                    else "，解析レポートなし）"
+                )
+            ),
         )
+        click = ClickState()
         return (
             view,
-            *self._render_node(
-                view,
-                tree,
-                ClickState(),
-                show_arrows,
-                show_pv,
-                top_n,
-                y_mode,
-            ),
-            gr.update(maximum=view.document.n_moves, value=0),
-            analysis_gui.move_table(view),
-            analysis_gui.summary_markdown(view),
-            status,
+            tree,
+            click,
+            progress,
+            self._render(view, tree, click, options, progress),
         )
 
     # ------------------------------------------------------------------
@@ -1007,217 +833,36 @@ class AnalysisGuiServer:
         """gr.Blocks を構築して返す．"""
         view = self.initial_view
         tree = self.initial_tree
-        initial_max = (
-            view.document.n_moves if view is not None else 1
-        )
-        initial_top_n = min(5, self.num_candidates)
-        (
-            _tree,
-            _click,
-            initial_board,
-            initial_fig,
-            initial_candidates,
-            initial_sfen,
-            initial_position,
-            initial_note,
-            initial_breadcrumb,
-            _dd,
-            initial_click_status,
-            _promo1,
-            _promo2,
-        ) = self._render_node(
-            view,
-            tree,
-            ClickState(),
-            True,
-            False,
-            initial_top_n,
-            "winrate",
-        )
-        initial_choices: list[tuple[str, str]] = []
-        if view is not None and tree is not None:
-            snapshot = analysis_gui.current_node(tree).snapshot
-            initial_choices = analysis_gui.legal_move_choices(
-                snapshot, analysis_gui.node_legal_moves(tree)
-            )
-        initial_budget_mode = (
-            "playouts"
-            if self._default_playouts is not None
-            else "time"
-        )
-        initial_budget_value = (
-            self._default_playouts
-            if self._default_playouts is not None
-            else self._default_time_ms
+        options = self.initial_options
+        progress = AnalysisProgress(
+            total=view.document.n_moves
+            if view is not None
+            else 0,
+            done=(
+                view.document.n_moves
+                if view is not None and view.report is not None
+                else 0
+            ),
         )
 
         with gr.Blocks(title="maou 棋譜解析") as demo:
-            state = gr.State(view)
+            view_state = gr.State(view)
             tree_state = gr.State(tree)
             click_state = gr.State(ClickState())
-            gr.Markdown("# maou 棋譜解析 (analyze-gui)")
-            summary_md = gr.Markdown(
-                analysis_gui.summary_markdown(view)
-                if view is not None
-                else "棋譜未読込"
+            options_state = gr.State(options)
+            progress_state = gr.State(progress)
+
+            workbench = gr.HTML(
+                self._render(
+                    view, tree, ClickState(), options, progress
+                ),
+                elem_id="maou-workbench-slot",
             )
-            with gr.Row():
-                with gr.Column(scale=5):
-                    board_html = gr.HTML(
-                        initial_board, elem_id="board-display"
-                    )
-                    breadcrumb_md = gr.Markdown(
-                        initial_breadcrumb
-                    )
-                    click_status_md = gr.Markdown(
-                        initial_click_status
-                    )
-                    with gr.Row():
-                        promote_btn = gr.Button(
-                            "成る",
-                            variant="primary",
-                            visible=False,
-                        )
-                        nonpromote_btn = gr.Button(
-                            "成らず", visible=False
-                        )
-                    with gr.Row():
-                        btn_first = gr.Button("|◀ 最初")
-                        btn_prev = gr.Button("◀ 前")
-                        btn_next = gr.Button("次 ▶")
-                        btn_last = gr.Button("最後 ▶|")
-                        back_main_btn = gr.Button("本譜へ戻る")
-                    ply_slider = gr.Slider(
-                        minimum=0,
-                        maximum=initial_max,
-                        step=1,
-                        value=0,
-                        label="局面 (0 = 初期局面，本譜)",
-                    )
-                    with gr.Row():
-                        move_dd = gr.Dropdown(
-                            choices=initial_choices,
-                            value=None,
-                            label=(
-                                "指し手 (盤面クリックの代替入力)"
-                            ),
-                        )
-                        play_btn = gr.Button("指す")
-                        pv_btn = gr.Button("PV を分岐で再生")
-                    with gr.Row():
-                        arrows_cb = gr.Checkbox(
-                            value=True, label="候補手矢印"
-                        )
-                        pv_cb = gr.Checkbox(
-                            value=False,
-                            label="PV 矢印 (最善手)",
-                        )
-                        topn_slider = gr.Slider(
-                            minimum=1,
-                            maximum=self.num_candidates,
-                            step=1,
-                            value=initial_top_n,
-                            label="候補手数",
-                        )
-                    sfen_box = gr.Textbox(
-                        value=initial_sfen,
-                        label="SFEN",
-                        interactive=False,
-                    )
-                    position_box = gr.Textbox(
-                        value=initial_position,
-                        label="position 文字列",
-                        interactive=False,
-                    )
-                    note_md = gr.Markdown(initial_note)
-                with gr.Column(scale=7):
-                    with gr.Tab("グラフ"):
-                        y_mode = gr.Radio(
-                            choices=[
-                                ("勝率 (先手)", "winrate"),
-                                ("評価値 (先手)", "eval_cp"),
-                                (
-                                    "勝率 (後手)",
-                                    "winrate_gote",
-                                ),
-                                (
-                                    "評価値 (後手)",
-                                    "eval_cp_gote",
-                                ),
-                            ],
-                            value="winrate",
-                            label="縦軸 (後手視点は先手の鏡映)",
-                        )
-                        plot = gr.Plot(initial_fig)
-                    with gr.Tab("棋譜"):
-                        move_df = gr.Dataframe(
-                            headers=list(
-                                analysis_gui.MOVE_TABLE_HEADERS
-                            ),
-                            value=(
-                                analysis_gui.move_table(view)
-                                if view is not None
-                                else []
-                            ),
-                            interactive=False,
-                            label=(
-                                "行クリックでその手の局面へ移動"
-                            ),
-                        )
-                    with gr.Tab("候補手"):
-                        cand_df = gr.Dataframe(
-                            headers=list(
-                                analysis_gui.CANDIDATES_TABLE_HEADERS
-                            ),
-                            value=initial_candidates,
-                            interactive=False,
-                            label=(
-                                "現局面の候補手 (勝率は手番視点)．"
-                                "行クリックでその手に分岐"
-                            ),
-                        )
-                    with gr.Accordion(
-                        "解析 (エンジン)", open=True
-                    ):
-                        gr.Markdown(self._engine_note())
-                        with gr.Row():
-                            budget_mode = gr.Radio(
-                                choices=[
-                                    ("時間 (ms)", "time"),
-                                    ("playouts", "playouts"),
-                                ],
-                                value=initial_budget_mode,
-                                label="予算の種類",
-                            )
-                            budget_value = gr.Number(
-                                value=initial_budget_value,
-                                precision=0,
-                                label="予算値",
-                            )
-                        with gr.Row():
-                            analyze_btn = gr.Button(
-                                "この局面を解析",
-                                variant="primary",
-                            )
-                            reanalyze_btn = gr.Button(
-                                "再解析 (上書き)"
-                            )
-                        with gr.Row():
-                            analyze_all_btn = gr.Button(
-                                "全局面解析"
-                            )
-                            cancel_btn = gr.Button("キャンセル")
-                        analyze_status = gr.Markdown()
-                        report_download = gr.File(
-                            label=(
-                                "解析レポート JSON (ダウンロード)"
-                            ),
-                            visible=False,
-                            interactive=False,
-                        )
+
             with gr.Accordion(
                 "棋譜/レポートの読み込み",
                 open=view is None,
+                elem_id="maou-file-panel",
             ):
                 kifu_file = gr.File(
                     label="棋譜ファイル (.csa / .kif / .kifu)",
@@ -1233,208 +878,94 @@ class AnalysisGuiServer:
                 load_btn = gr.Button(
                     "読み込み", variant="primary"
                 )
-                load_status = gr.Markdown()
-
-            # --- 盤面クリックブリッジ (server_functions) ---
-            # WARNING: pending_click はクロージャとして全セッションに
-            # 共有される (game_graph_server.py の _pending と同じ制約．
-            # ローカル解析ツールとして単一利用者を前提とする)
-            pending_click: dict[str, str] = {}
-
-            def handle_board_click(value: str) -> bool:
-                """JS から呼ばれる server_function．"""
-                if not value:
-                    return False
-                pending_click["value"] = str(value)
-                return True
-
-            click_bridge = gr.HTML(
-                value="",
-                elem_id="board-click-bridge",
-                elem_classes=["maou-hidden"],
-                server_functions=[handle_board_click],
-                js_on_load=_BOARD_CLICK_JS_ON_LOAD,
-            )
-
-            # --- イベント配線 ---
-
-            ctx_inputs = [
-                state,
-                tree_state,
-                click_state,
-                arrows_cb,
-                pv_cb,
-                topn_slider,
-                y_mode,
-            ]
-            node_outputs = [
-                tree_state,
-                click_state,
-                board_html,
-                plot,
-                cand_df,
-                sfen_box,
-                position_box,
-                note_md,
-                breadcrumb_md,
-                move_dd,
-                click_status_md,
-                promote_btn,
-                nonpromote_btn,
-            ]
-            nav_outputs = [*node_outputs, ply_slider]
-
-            ply_slider.release(
-                self._on_slider,
-                inputs=[*ctx_inputs, ply_slider],
-                outputs=node_outputs,
-            )
-            for component in (
-                arrows_cb,
-                pv_cb,
-                topn_slider,
-                y_mode,
-            ):
-                component.change(
-                    self._on_display,
-                    inputs=ctx_inputs,
-                    outputs=node_outputs,
+                report_download = gr.File(
+                    label="解析レポート JSON (ダウンロード)",
+                    interactive=False,
                 )
 
-            btn_first.click(
-                self._on_first,
-                inputs=ctx_inputs,
-                outputs=nav_outputs,
-            )
-            btn_prev.click(
-                self._on_prev,
-                inputs=ctx_inputs,
-                outputs=nav_outputs,
-            )
-            btn_next.click(
-                self._on_next,
-                inputs=ctx_inputs,
-                outputs=nav_outputs,
-            )
-            btn_last.click(
-                self._on_last,
-                inputs=ctx_inputs,
-                outputs=nav_outputs,
-            )
-            back_main_btn.click(
-                self._on_back_mainline,
-                inputs=ctx_inputs,
-                outputs=nav_outputs,
-            )
-            move_df.select(
-                self._on_move_select,
-                inputs=ctx_inputs,
-                outputs=nav_outputs,
-            )
-            cand_df.select(
-                self._on_candidate_select,
-                inputs=ctx_inputs,
-                outputs=nav_outputs,
-            )
-            play_btn.click(
-                self._on_play_dropdown,
-                inputs=[*ctx_inputs, move_dd],
-                outputs=nav_outputs,
-            )
-            pv_btn.click(
-                self._on_pv_play,
-                inputs=ctx_inputs,
-                outputs=nav_outputs,
-            )
-            # server_functions ブリッジ経由の .change は value 更新のみ
-            # 反映され，gr.update の prop 更新 (visible / choices) が
-            # 適用されない (Gradio 6 実測)．prop 更新を含む再描画を
-            # 通常イベントとして .then で連鎖させて反映する
-            click_bridge.change(
-                lambda *args: self._apply_board_click(
-                    args[0],
-                    args[1],
-                    args[2],
-                    pending_click.pop("value", ""),
-                    *args[3:],
-                ),
-                inputs=ctx_inputs,
-                outputs=nav_outputs,
-            ).then(
-                self._on_display,
-                inputs=ctx_inputs,
-                outputs=node_outputs,
-            )
-            promote_btn.click(
-                lambda *args: self._on_promotion_choice(
-                    *args, promote=True
-                ),
-                inputs=ctx_inputs,
-                outputs=nav_outputs,
-            )
-            nonpromote_btn.click(
-                lambda *args: self._on_promotion_choice(
-                    *args, promote=False
-                ),
-                inputs=ctx_inputs,
-                outputs=nav_outputs,
-            )
+            buffers: dict[str, dict[str, str]] = {
+                lane: {} for lane in _LANES
+            }
+            bridges = {
+                lane: gr.HTML(
+                    value="",
+                    elem_id=f"maou-bridge-{lane}",
+                    elem_classes=["maou-hidden"],
+                    server_functions=[
+                        _make_bridge(buffers[lane])
+                    ],
+                    js_on_load=_js_on_load(lane),
+                )
+                for lane in _LANES
+            }
 
-            analyze_btn.click(
-                lambda *args: self._analyze_current(
-                    *args, force=False
+            ctx = [
+                view_state,
+                tree_state,
+                click_state,
+                options_state,
+                progress_state,
+            ]
+
+            bridges["nav"].change(
+                lambda *args: self._on_action(
+                    buffers["nav"].pop("value", ""), *args
                 ),
-                inputs=[*ctx_inputs, budget_mode, budget_value],
-                outputs=[*nav_outputs, analyze_status],
-                concurrency_limit=1,
-                concurrency_id="engine",
-            )
-            reanalyze_btn.click(
-                lambda *args: self._analyze_current(
-                    *args, force=True
-                ),
-                inputs=[*ctx_inputs, budget_mode, budget_value],
-                outputs=[*nav_outputs, analyze_status],
-                concurrency_limit=1,
-                concurrency_id="engine",
-            )
-            analyze_all_btn.click(
-                self._on_analyze_all,
-                inputs=[*ctx_inputs, budget_mode, budget_value],
+                inputs=ctx,
                 outputs=[
-                    state,
-                    *nav_outputs,
-                    move_df,
-                    summary_md,
+                    tree_state,
+                    click_state,
+                    options_state,
+                    progress_state,
+                    workbench,
+                ],
+            )
+            bridges["engine"].change(
+                lambda *args: self._on_analyze(
+                    buffers["engine"].pop("value", "analyze"),
+                    *args,
+                ),
+                inputs=ctx,
+                outputs=[tree_state, progress_state, workbench],
+                concurrency_limit=1,
+                concurrency_id="engine",
+            )
+            bridges["engineAll"].change(
+                self._on_analyze_all,
+                inputs=ctx,
+                outputs=[
+                    view_state,
+                    progress_state,
+                    workbench,
                     report_download,
-                    analyze_status,
                 ],
                 concurrency_limit=1,
                 concurrency_id="engine",
             )
-            cancel_btn.click(
+            bridges["cancel"].change(
                 self._on_cancel,
-                inputs=None,
-                outputs=analyze_status,
+                inputs=ctx,
+                outputs=[progress_state, workbench],
+            )
+            bridges["download"].change(
+                self._on_save,
+                inputs=ctx,
+                outputs=[
+                    progress_state,
+                    workbench,
+                    report_download,
+                ],
             )
 
             load_btn.click(
                 self._on_load,
-                inputs=[
-                    kifu_file,
-                    report_file,
-                    arrows_cb,
-                    pv_cb,
-                    topn_slider,
-                    y_mode,
-                ],
+                inputs=[kifu_file, report_file, options_state],
                 outputs=[
-                    state,
-                    *node_outputs,
-                    ply_slider,
-                    move_df,
-                    summary_md,
-                    load_status,
+                    view_state,
+                    tree_state,
+                    click_state,
+                    progress_state,
+                    workbench,
                 ],
             )
 
@@ -1484,6 +1015,6 @@ def launch_analysis_gui_server(
         server_name=server_name,
         server_port=port,
         share=share,
-        head=_HEAD_SCRIPTS,
+        head=_head_scripts(),
         css=_CUSTOM_CSS,
     )

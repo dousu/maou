@@ -67,6 +67,86 @@ class ArrowSpec:
 
 
 @dataclass(frozen=True)
+class BoardTheme:
+    """盤面 SVG の見た目 (寸法・配色・書体) をまとめた設定．
+
+    既定値は従来の描画 (暖色系・角丸・影あり) と一致するため，
+    引数なしの :class:`SVGBoardRenderer` の出力は変わらない．
+    別テーマは :data:`MODERNIST_BOARD_THEME` を参照．
+    """
+
+    cell_size: int = 50
+    hand_area_width: int = 150
+    gap: int = 30
+    margin: int = 20
+    header_height: int = 50
+    board_bg: str = "#f9f6f0"
+    grid_color: str = "#d4c5a9"
+    board_border_color: str = "#d4c5a9"
+    board_border_width: float = 2
+    black_piece_color: str = "#2c2c2c"
+    white_piece_color: str = "#c41e3a"
+    highlight_color: str = "rgba(0,112,243,0.12)"
+    selected_color: str = "rgba(255,152,0,0.35)"
+    destination_color: str = "rgba(76,175,80,0.28)"
+    hover_color: str = "rgba(0,112,243,0.08)"
+    hand_bg: str = "#fafafa"
+    hand_border_color: str = "#d4c5a9"
+    hand_border_width: float = 2
+    hand_title_bg: str = "#f5f5f5"
+    hand_font_size: int = 18
+    coord_color: str = "#666666"
+    badge_bg: str = "#ffffff"
+    badge_border: str = "#d4d4d4"
+    corner_radius: int = 6
+    outer_radius: int = 8
+    piece_font: str = '"Hiragino Mincho ProN", "Yu Mincho", "MS Mincho", serif'
+    ui_font: str = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    piece_font_size_ratio: float = 0.6
+    piece_shadow: bool = True
+    board_shadow: str = "0 4px 6px rgba(0,0,0,0.07)"
+    show_header: bool = True
+    show_coordinates: bool = True
+    coordinate_badges: bool = True
+    empty_hand_text: str = ""
+
+
+MODERNIST_BOARD_THEME = BoardTheme(
+    cell_size=52,
+    hand_area_width=88,
+    gap=28,
+    margin=18,
+    header_height=0,
+    board_bg="#f8f4f4",
+    grid_color="#bab6b6",
+    board_border_color="#201e1d",
+    black_piece_color="#201e1d",
+    white_piece_color="#ec3013",
+    highlight_color="rgba(236,48,19,0.12)",
+    selected_color="rgba(32,30,29,0.16)",
+    destination_color="rgba(236,48,19,0.26)",
+    hover_color="rgba(32,30,29,0.06)",
+    hand_bg="#f8f4f4",
+    hand_border_color="#bab6b6",
+    hand_border_width=1,
+    hand_title_bg="transparent",
+    hand_font_size=17,
+    coord_color="#7d7979",
+    corner_radius=0,
+    outer_radius=0,
+    piece_font='"Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif',
+    ui_font='"Archivo", "Noto Sans JP", system-ui, sans-serif',
+    piece_font_size_ratio=0.62,
+    piece_shadow=False,
+    board_shadow="",
+    show_header=False,
+    coordinate_badges=False,
+    empty_hand_text="なし",
+)
+"""棋譜解析 GUI (analyze-gui) のワークベンチ用テーマ (Modernist)．"""
+
+
+@dataclass(frozen=True)
 class BoardPosition:
     """不変な将棋盤の状態表現．
 
@@ -143,6 +223,32 @@ class SVGBoardRenderer:
     COLOR_ARROW = DEFAULT_ARROW_COLOR
     ARROW_WIDTH = DEFAULT_ARROW_WIDTH
 
+    def __init__(self, theme: BoardTheme | None = None) -> None:
+        """テーマを適用したレンダラーを作る．
+
+        寸法・配色はインスタンス属性としてクラス定数を覆う．
+        引数なしの場合は :class:`BoardTheme` の既定値 (= クラス定数と
+        同じ値) になるため，従来どおりの出力になる．
+
+        Args:
+            theme: 適用するテーマ．None で既定テーマ．
+        """
+        self.theme = theme or BoardTheme()
+        self.CELL_SIZE = self.theme.cell_size
+        self.BOARD_WIDTH = 9 * self.CELL_SIZE
+        self.BOARD_HEIGHT = 9 * self.CELL_SIZE
+        self.HAND_AREA_WIDTH = self.theme.hand_area_width
+        self.GAP_BETWEEN_HAND_AND_BOARD = self.theme.gap
+        self.MARGIN = self.theme.margin
+        self.HEADER_HEIGHT = self.theme.header_height
+        self.COLOR_BOARD_BG = self.theme.board_bg
+        self.COLOR_GRID = self.theme.grid_color
+        self.COLOR_BLACK_PIECE = self.theme.black_piece_color
+        self.COLOR_WHITE_PIECE = self.theme.white_piece_color
+        self.COLOR_HIGHLIGHT = self.theme.highlight_color
+        self.COLOR_SELECTED = self.theme.selected_color
+        self.COLOR_DESTINATION = self.theme.destination_color
+
     def render(
         self,
         position: BoardPosition,
@@ -199,7 +305,9 @@ class SVGBoardRenderer:
             self._draw_arrows(
                 arrows, position.pieces_in_hand, turn
             ),
-            self._draw_coordinates(),
+            self._draw_coordinates()
+            if self.theme.show_coordinates
+            else "",
         ]
         if interactive:
             svg_parts.append(
@@ -264,22 +372,40 @@ class SVGBoardRenderer:
         # ヘッダー (レコードID/手番バッジ) は盤面上端より上の負 y 領域
         # (y = MARGIN - 46 付近) に描画されるため，viewBox の y 原点を
         # -HEADER_HEIGHT にしてヘッダー帯を可視域に含める
+        theme = self.theme
+        svg_style = "max-width: 100%; height: auto;"
+        if theme.outer_radius:
+            svg_style += (
+                f" border-radius: {theme.outer_radius}px;"
+            )
+        if theme.board_shadow:
+            svg_style += f" box-shadow: {theme.board_shadow};"
+        shadow_filter = (
+            """
+        <filter id="piece-shadow" x="-50%" y="-50%" width="200%" height="200%">
+            <feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.3"/>
+        </filter>"""
+            if theme.piece_shadow
+            else ""
+        )
+        piece_filter = (
+            "\n            filter: url(#piece-shadow);"
+            if theme.piece_shadow
+            else ""
+        )
+
         return f"""<svg xmlns="http://www.w3.org/2000/svg"
                     width="{total_width}"
                     height="{total_height}"
                     viewBox="0 -{self.HEADER_HEIGHT} {total_width} {total_height}"
-                    style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.07);">
-    <defs>
-        <filter id="piece-shadow" x="-50%" y="-50%" width="200%" height="200%">
-            <feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.3"/>
-        </filter>{arrow_marker}
+                    style="{svg_style}">
+    <defs>{shadow_filter}{arrow_marker}
     </defs>
     <style>
         .piece {{
-            font-family: "Hiragino Mincho ProN", "Yu Mincho", "MS Mincho", serif;
+            font-family: {theme.piece_font};
             font-weight: 700;
-            text-anchor: middle;
-            filter: url(#piece-shadow);
+            text-anchor: middle;{piece_filter}
         }}
         .black-piece {{
             fill: {self.COLOR_BLACK_PIECE};
@@ -288,18 +414,18 @@ class SVGBoardRenderer:
             fill: {self.COLOR_WHITE_PIECE};
         }}
         .coord {{
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            font-family: {theme.ui_font};
             font-size: 12px;
-            fill: #666666;
+            fill: {theme.coord_color};
         }}
         .board-square {{
             transition: fill 0.15s ease;
         }}
         .board-square:hover {{
-            fill: rgba(0,112,243,0.08);
+            fill: {theme.hover_color};
         }}
         .header-text {{
-            font-family: "Hiragino Mincho ProN", "Yu Mincho", "MS Mincho", serif;
+            font-family: {theme.piece_font};
             font-size: 13px;
             font-weight: 600;
             fill: #1a1a1a;
@@ -330,6 +456,8 @@ class SVGBoardRenderer:
         Returns:
             ヘッダーのSVG文字列
         """
+        if not self.theme.show_header:
+            return ""
         if turn is None and record_id is None:
             return ""  # 表示情報がない場合は空文字列
 
@@ -421,7 +549,8 @@ class SVGBoardRenderer:
             f'width="{self.BOARD_WIDTH}" '
             f'height="{self.BOARD_HEIGHT}" '
             f'fill="{self.COLOR_BOARD_BG}" '
-            f'stroke="{self.COLOR_GRID}" stroke-width="2"/>'
+            f'stroke="{self.theme.board_border_color}" '
+            f'stroke-width="{self.theme.board_border_width}"/>'
         )
 
         # ホバーターゲット（各マスに透明な矩形を配置）
@@ -479,6 +608,11 @@ class SVGBoardRenderer:
         piece_parts = []
         selected_set = selected_set or set()
         destination_set = destination_set or set()
+        piece_font_size = round(
+            self.CELL_SIZE * self.theme.piece_font_size_ratio
+        )
+        # 文字の視覚的中心をマス中心に合わせるベースライン補正
+        baseline_offset = round(self.CELL_SIZE * 0.16)
 
         # 盤面のX座標開始位置
         board_x_start = (
@@ -535,7 +669,7 @@ class SVGBoardRenderer:
                     self.MARGIN
                     + row * self.CELL_SIZE
                     + self.CELL_SIZE / 2
-                    + 8
+                    + baseline_offset
                 )  # 中央揃え調整
 
                 color_class = (
@@ -544,7 +678,8 @@ class SVGBoardRenderer:
 
                 # 後手駒は180度回転
                 transform = (
-                    f'transform="rotate(180 {x} {y - 8})"'
+                    "transform="
+                    f'"rotate(180 {x} {y - baseline_offset})"'
                     if is_white
                     else ""
                 )
@@ -552,7 +687,8 @@ class SVGBoardRenderer:
                 piece_parts.append(
                     f'<text x="{x}" y="{y}" '
                     f'class="piece {color_class}" '
-                    f'font-size="30" {transform}>{symbol}</text>'
+                    f'font-size="{piece_font_size}" '
+                    f"{transform}>{symbol}</text>"
                 )
 
         return "\n".join(piece_parts)
@@ -615,21 +751,25 @@ class SVGBoardRenderer:
             is_black: 先手（黒）の持ち駒かどうか
         """
         parts = []
+        theme = self.theme
 
         # 持ち駒エリアの背景（視認性向上のため）
         parts.append(
             f'<rect x="{x_base}" y="{y_base}" '
             f'width="{self.HAND_AREA_WIDTH}" height="{self.BOARD_HEIGHT}" '
-            f'fill="#fafafa" stroke="#d4c5a9" stroke-width="2" '
-            f'rx="6" opacity="0.98"/>'
+            f'fill="{theme.hand_bg}" '
+            f'stroke="{theme.hand_border_color}" '
+            f'stroke-width="{theme.hand_border_width}" '
+            f'rx="{theme.corner_radius}" opacity="0.98"/>'
         )
 
         # タイトル背景バー
         parts.append(
             f'<rect x="{x_base}" y="{y_base}" '
             f'width="{self.HAND_AREA_WIDTH}" height="30" '
-            f'fill="#f5f5f5" stroke="#d4c5a9" stroke-width="1" '
-            f'rx="6"/>'
+            f'fill="{theme.hand_title_bg}" '
+            f'stroke="{theme.hand_border_color}" stroke-width="1" '
+            f'rx="{theme.corner_radius}"/>'
         )
 
         # タイトル
@@ -663,9 +803,19 @@ class SVGBoardRenderer:
             parts.append(
                 f'<text x="{x_base + self.HAND_AREA_WIDTH / 2}" '
                 f'y="{y_offset + display_index * 30}" '
-                f'class="piece {color_class}" font-size="18">{text}</text>'
+                f'class="piece {color_class}" '
+                f'font-size="{theme.hand_font_size}">{text}</text>'
             )
             display_index += 1
+
+        if display_index == 0 and theme.empty_hand_text:
+            parts.append(
+                f'<text x="{x_base + self.HAND_AREA_WIDTH / 2}" '
+                f'y="{y_offset}" '
+                f'class="piece {color_class}" '
+                f'font-size="{theme.hand_font_size}">'
+                f"{theme.empty_hand_text}</text>"
+            )
 
         return "\n".join(parts)
 
@@ -700,12 +850,14 @@ class SVGBoardRenderer:
             col_number = 9 - visual_col
 
             # 洗練された背景バッジ
-            coord_parts.append(
-                f'<rect x="{x - 10}" y="{y - 14}" '
-                f'width="20" height="18" '
-                f'fill="#ffffff" stroke="#d4d4d4" stroke-width="1" '
-                f'rx="3" opacity="0.95"/>'
-            )
+            if self.theme.coordinate_badges:
+                coord_parts.append(
+                    f'<rect x="{x - 10}" y="{y - 14}" '
+                    f'width="20" height="18" '
+                    f'fill="{self.theme.badge_bg}" '
+                    f'stroke="{self.theme.badge_border}" '
+                    f'stroke-width="1" rx="3" opacity="0.95"/>'
+                )
             coord_parts.append(
                 f'<text x="{x}" y="{y}" '
                 f'class="coord" text-anchor="middle" '
@@ -726,12 +878,14 @@ class SVGBoardRenderer:
             row_number = row + 1  # 1-9 (not 0-8)
 
             # 洗練された背景バッジ
-            coord_parts.append(
-                f'<rect x="{x - 10}" y="{y - 12}" '
-                f'width="20" height="18" '
-                f'fill="#ffffff" stroke="#d4d4d4" stroke-width="1" '
-                f'rx="3" opacity="0.95"/>'
-            )
+            if self.theme.coordinate_badges:
+                coord_parts.append(
+                    f'<rect x="{x - 10}" y="{y - 12}" '
+                    f'width="20" height="18" '
+                    f'fill="{self.theme.badge_bg}" '
+                    f'stroke="{self.theme.badge_border}" '
+                    f'stroke-width="1" rx="3" opacity="0.95"/>'
+                )
             coord_parts.append(
                 f'<text x="{x}" y="{y}" '
                 f'class="coord" text-anchor="middle" '
