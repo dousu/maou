@@ -329,7 +329,7 @@ def _blunder_rail(
         return head + (
             '<div class="mw-empty">しきい値以上の手はありません．</div>'
         )
-    rows = []
+    rows = ['<div class="mw-blunder-list">']
     for ply, label, loss in hits:
         target = blunder_target_ply(ply)
         rows.append(
@@ -340,6 +340,7 @@ def _blunder_rail(
             f'<span class="mw-blunder-loss">{loss:.3f}</span>'
             "</button>"
         )
+    rows.append("</div>")
     return head + "".join(rows)
 
 
