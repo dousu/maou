@@ -31,9 +31,14 @@
   color: var(--mw-text);
   background: var(--mw-neutral-100);
   min-width: 1280px;
-  min-height: 100vh;
+  /* 3 カラムを画面内に収め，各レールを内側でスクロールさせる．
+     height を切らないと棋譜 70 手・悪手 17 件でページ全体が 3800px に
+     伸び，棋譜リストと盤面が折り返しの下に出てしまう */
+  height: 100vh;
+  min-height: 680px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   font-size: 15px;
   line-height: 1.55;
 }
@@ -300,12 +305,14 @@
   flex-direction: column;
   border-right: 1px solid var(--mw-divider);
   min-width: 0;
+  overflow-y: auto;
 }
 
 #maou-workbench .mw-rail-right {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow-y: auto;
 }
 
 #maou-workbench .mw-section-head {
@@ -382,9 +389,17 @@
   color: var(--mw-neutral-600);
 }
 
+/* 悪手リストは件数がしきい値次第で増えるのでレールの 4 割までに抑え，
+   残りを棋譜リストに渡す (どちらも内側でスクロールする) */
+#maou-workbench .mw-blunder-list {
+  max-height: 40%;
+  overflow-y: auto;
+  border-bottom: 2px solid var(--mw-divider);
+}
+
 #maou-workbench .mw-kifu-list {
   flex: 1;
-  min-height: 240px;
+  min-height: 160px;
   overflow-y: auto;
 }
 

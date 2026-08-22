@@ -252,6 +252,15 @@ class TestRender:
         assert "polyline" in self._render(_view(report))
         assert "polyline" not in self._render(_view())
 
+    def test_blunder_rows_are_in_a_scroll_box(
+        self, report: dict[str, Any]
+    ) -> None:
+        """悪手行はスクロール可能な箱に入れる (レールを押し広げない)．"""
+        html = self._render(_view(report))
+        assert '<div class="mw-blunder-list">' in html
+        head = html.index('<div class="mw-blunder-list">')
+        assert html.index('class="mw-blunder"') > head
+
     def test_graph_cursor_lines_up_with_markers(
         self, report: dict[str, Any]
     ) -> None:
