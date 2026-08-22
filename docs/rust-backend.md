@@ -41,7 +41,7 @@ GitHub Releases にプリビルト wheel が配置されており，`uv pip inst
 
 ```python
 # Colab セル
-# Python バージョンに応じて cp311 または cp312 の wheel を指定
+# Python バージョンに応じて cp312 または cp313 の wheel を指定
 !pip install uv
 !uv pip install --system "maou[cuda] @ https://github.com/{owner}/{repo}/releases/download/latest/maou-0.2.0-cp312-cp312-manylinux_2_28_x86_64.whl"
 ```

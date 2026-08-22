@@ -32,7 +32,7 @@ jobs:
           # 既定の profile は py-ext (pyproject.toml [tool.maturin]) で LTO を
           # 切り debug-assertions/overflow-checks を有効にしている (開発時の
           # ビルド時間優先)．出荷 wheel はその逆を望むので --release を明示．
-          args: --release --out dist -i python3.11 python3.12 --features pyo3/extension-module,onnx-cuda,onnx-tensorrt
+          args: --release --out dist -i python3.12 python3.13 --features pyo3/extension-module,onnx-cuda,onnx-tensorrt
           # openssl-devel/perl は ort crate のバイナリ取得 (TLS) に必要
           before-script-linux: yum install -y clang lld openssl-devel perl
 
@@ -79,7 +79,7 @@ jobs:
           - **Commit**: ${{ github.sha }}
           - **Built at**: ${built_at}
           - **Platform**: manylinux_2_28 x86_64
-          - **Python**: CPython 3.11, 3.12
+          - **Python**: CPython 3.12, 3.13
           - **Cargo features**: onnx-cuda, onnx-tensorrt (単一配布 wheel．
             CPU-only 環境でもそのまま動作し，ONNX CPU 推論可)
           - GPU 実行時要件: \`pip install 'maou[tensorrt-infer] @ <wheel>'\` が
