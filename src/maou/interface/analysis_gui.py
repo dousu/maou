@@ -1066,13 +1066,20 @@ def candidate_usi(
     return None
 
 
-def _evaluation_note(
+def evaluation_note(
     analysis: dict[str, Any] | None, turn: str
 ) -> str | None:
     """現局面の解析キャッシュから局面評価行 (Markdown) を作る．
 
     勝率/評価値は手番視点 (生値) と先手視点の両方を併記する
     (候補手テーブルは手番視点，グラフは先手/後手視点のため)．
+
+    Args:
+        analysis: ノードの解析キャッシュ (未解析は None)．
+        turn: 手番 ("b" / "w")．
+
+    Returns:
+        評価行の Markdown．未解析・評価値欠落のときは None．
     """
     if not analysis:
         return None
@@ -1105,7 +1112,7 @@ def node_position_info(
     現局面のエンジン評価行 (勝率/評価値) を末尾に付ける．
     """
     node = current_node(tree)
-    evaluation = _evaluation_note(
+    evaluation = evaluation_note(
         node.analysis, node.snapshot.turn
     )
     if node.is_mainline:

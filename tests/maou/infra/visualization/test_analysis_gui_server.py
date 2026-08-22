@@ -441,6 +441,17 @@ class TestAnalysis:
         assert node.analysis["match"] is False
         assert node.analysis["candidates"]
 
+    def test_analyze_shows_evaluation_line(self) -> None:
+        """解析後は現局面のエンジン評価行が候補手パネルに出る．"""
+        server = _make_server(
+            kifu_path=MINI_CSA, default_playouts=8
+        )
+        _, _, html = self._analyze(
+            server, "analyze", AnalysisProgress()
+        )
+        assert "この局面のエンジン評価" in html
+        assert "先手視点" in html
+
     def test_analyze_all_generates_report(self) -> None:
         """全局面解析が analyze-game 互換レポートを生成する．"""
         server = _make_server(
@@ -500,6 +511,35 @@ class TestAnalysis:
         assert "キャンセル" in results[-1][1].status
         # レポートは生成されない (view 更新なし)
         assert view.report is None
+
+    def test_analyze_all_failure_clears_running(self) -> None:
+        """解析が例外で落ちても running を戻し，やり直せる状態にする．"""
+        server = _make_server(
+            kifu_path=MINI_CSA, default_playouts=8
+        )
+        view, tree = server.initial_view, server.initial_tree
+        assert view is not None and tree is not None
+
+        def _boom(*args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("engine died")
+            yield  # pragma: no cover - ジェネレータにするためだけ
+
+        server._analyzer.analyze_mainline = _boom  # type: ignore[method-assign]
+        results = list(
+            server._on_analyze_all(
+                view,
+                tree,
+                None,
+                server.initial_options,
+                AnalysisProgress(),
+            )
+        )
+        _, progress, html, _ = results[-1]
+        assert not progress.running
+        assert progress.is_error
+        assert "engine died" in progress.status
+        # 「キャンセル」ではなく「開始」に戻っている
+        assert 'data-action="analyzeall"' in html
 
     def test_cancel_sets_event(self) -> None:
         """キャンセルレーンはフラグを立ててステータスを返す．"""

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import html
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -103,6 +104,15 @@ def _fmt_loss(value: Any) -> str:
     if value is None:
         return ""
     return f"{float(value):.3f}"
+
+
+def _md_inline(text: str) -> str:
+    """Markdown の ``**強調**`` だけを HTML にする (他はエスケープ)．"""
+    return re.sub(
+        r"\*\*(.+?)\*\*",
+        r"<strong>\1</strong>",
+        _esc(text),
+    )
 
 
 # ----------------------------------------------------------------------
@@ -416,9 +426,19 @@ def _position_bar(
                 f'<span class="mw-elapsed">消費 '
                 f"{view.document.times[ply - 1]}s</span>"
             )
+        comment = ""
+        if (
+            0 < ply <= len(view.document.comments)
+            and view.document.comments[ply - 1]
+        ):
+            text = _esc(view.document.comments[ply - 1])
+            comment = (
+                f'<span class="mw-comment" title="{text}">'
+                f"コメント: {text}</span>"
+            )
         return (
             f'<div class="mw-position-bar">{tag}<span>{body}</span>'
-            f"{elapsed}</div>"
+            f"{comment}{elapsed}</div>"
         )
 
     ancestor = analysis_gui.mainline_ancestor(tree)
@@ -554,7 +574,13 @@ def _position_strings(
 def _graph_points(
     view: SessionView, y_mode: str
 ) -> list[tuple[int, float]]:
-    """グラフの (手数, 先手視点の値) 列を返す．"""
+    """グラフの (スナップショット番号, 先手視点の値) 列を返す．
+
+    レポートの ``positions[i].ply`` は «その手を指す直前の局面» なので，
+    x 軸 (スナップショット番号 = 盤面ナビの手数) では ``ply - 1`` に
+    当たる．こうしておくと現在位置の縦線・悪手の ●・詰みの ★ を
+    ジャンプ先と同じ x に置ける．
+    """
     if view.report is None:
         return []
     points: list[tuple[int, float]] = []
@@ -574,7 +600,9 @@ def _graph_points(
             value = sente_winrate(
                 float(position["winrate"]), side
             )
-        points.append((int(position["ply"]), value))
+        points.append(
+            (blunder_target_ply(int(position["ply"])), value)
+        )
     return points
 
 
@@ -585,7 +613,9 @@ def _eval_graph(
 ) -> str:
     """評価値グラフ (SVG) を作る．
 
-    縦軸は 0-1 に正規化した先手視点の値 (評価値表示は ±2000cp で
+    横軸はスナップショット番号 (盤面ナビの手数) で，`data-scrub` の
+    クリック → 手数の対応と現在位置の縦線と ● / ★ がすべて同じ x に
+    乗る．縦軸は 0-1 に正規化した先手視点の値 (評価値表示は ±2000cp で
     クリップして正規化する)．悪手・詰み発見を重ね，現在位置に縦線を
     引く．プロット領域のクリックでその手数へジャンプする．
     """
@@ -619,9 +649,9 @@ def _eval_graph(
     total = view.document.n_moves
     span = max(1, total)
 
-    def px(ply: int) -> float:
+    def px(snapshot: int) -> float:
         return _GRAPH_LEFT + (_GRAPH_RIGHT - _GRAPH_LEFT) * (
-            ply / span
+            snapshot / span
         )
 
     def py(value: float) -> float:
@@ -630,19 +660,19 @@ def _eval_graph(
         )
 
     polyline = " ".join(
-        f"{px(ply):.1f},{py(value):.1f}"
-        for ply, value in points
+        f"{px(snapshot):.1f},{py(value):.1f}"
+        for snapshot, value in points
     )
-    value_by_ply = dict(points)
+    value_by_snapshot = dict(points)
 
     marks: list[str] = []
     for ply, _, _ in blunders(view, options.threshold):
-        value = value_by_ply.get(ply)
+        target = blunder_target_ply(ply)
+        value = value_by_snapshot.get(target)
         if value is None:
             continue
-        target = blunder_target_ply(ply)
         marks.append(
-            f'<circle class="mw-graph-point" cx="{px(ply):.1f}" '
+            f'<circle class="mw-graph-point" cx="{px(target):.1f}" '
             f'cy="{py(value):.1f}" r="4" fill="var(--mw-accent)" '
             f'data-action="goto:{target}"><title>{ply}手目 悪手</title>'
             "</circle>"
@@ -653,14 +683,15 @@ def _eval_graph(
         if not position.get("mate_found"):
             continue
         ply = int(position["ply"])
-        value = value_by_ply.get(ply)
+        target = blunder_target_ply(ply)
+        value = value_by_snapshot.get(target)
         if value is None:
             continue
         marks.append(
-            f'<text class="mw-graph-point" x="{px(ply):.1f}" '
+            f'<text class="mw-graph-point" x="{px(target):.1f}" '
             f'y="{py(value) - 6:.1f}" text-anchor="middle" '
             f'font-size="11" fill="var(--mw-accent-700)" '
-            f'data-action="goto:{blunder_target_ply(ply)}">★'
+            f'data-action="goto:{target}">★'
             f"<title>{ply}手目 詰み発見</title></text>"
         )
 
@@ -726,14 +757,26 @@ def _candidates(
         'title="候補手の表示件数" data-action-input="opt:topn">'
         "</span></div>"
     )
+    node = analysis_gui.current_node(tree)
+    evaluation = analysis_gui.evaluation_note(
+        node.analysis, node.snapshot.turn
+    )
+    eval_line = (
+        f'<div class="mw-eval-line">{_md_inline(evaluation)}</div>'
+        if evaluation
+        else ""
+    )
     rows = analysis_gui.node_candidates_table(
         tree, options.top_n
     )
     if not rows:
-        return head + (
-            '<div class="mw-empty">この局面は未解析です．'
+        return (
+            head
+            + eval_line
+            + '<div class="mw-empty">この局面は未解析です．'
             "「この局面を解析」で候補手が出ます．</div>"
         )
+    head += eval_line
     items = []
     for index, row in enumerate(rows):
         rank, label, visits, winrate = (

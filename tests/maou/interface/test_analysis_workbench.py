@@ -1,6 +1,7 @@
 """analysis_workbench (ワークベンチ HTML 組み立て) のテスト．"""
 
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -250,6 +251,61 @@ class TestRender:
         """グラフはレポートがあるときだけ折れ線を描く．"""
         assert "polyline" in self._render(_view(report))
         assert "polyline" not in self._render(_view())
+
+    def test_graph_cursor_lines_up_with_markers(
+        self, report: dict[str, Any]
+    ) -> None:
+        """悪手の ● とジャンプ後の縦線が同じ x に乗る．
+
+        レポートの ``ply`` は «その手を指す直前の局面» なので，x 軸を
+        スナップショット番号 (= 盤面ナビの手数) に揃えておかないと
+        ● をクリックしたあと縦線が 1 目盛ずれる．
+        """
+        view = _view(report)
+        tree = build_variation_tree(view.document, view.report)
+        # 2 手目 (損失 0.30) の ● → ジャンプ先はスナップショット 1
+        goto_node(tree, tree.mainline_ids[1])
+        html = render_workbench(
+            view,
+            tree,
+            ClickState(),
+            OPTIONS,
+            PROGRESS,
+            engine_label="mock",
+            is_mock=True,
+        )
+        circle = re.search(
+            r'<circle class="mw-graph-point" cx="([\d.]+)"[^>]*'
+            r'data-action="goto:1"',
+            html,
+        )
+        assert circle is not None
+        cursor = re.search(
+            r'<line x1="([\d.]+)"[^>]*stroke="var\(--mw-accent\)"',
+            html,
+        )
+        assert cursor is not None
+        assert circle.group(1) == cursor.group(1)
+
+    def test_kifu_comment_is_shown(self) -> None:
+        """棋譜のコメントを局面帯に出す (旧 UI の注記から引き継ぎ)．"""
+        view = _view()
+        commented = replace(
+            view.document,
+            comments=["", "封じ手", "", ""],
+        )
+        tree = build_variation_tree(commented, None)
+        goto_node(tree, tree.mainline_ids[2])
+        html = render_workbench(
+            replace(view, document=commented),
+            tree,
+            ClickState(),
+            OPTIONS,
+            PROGRESS,
+            engine_label="mock",
+            is_mock=True,
+        )
+        assert "コメント: 封じ手" in html
 
     def test_escapes_player_names(self) -> None:
         """対局者名などの外部由来文字列をエスケープする．"""

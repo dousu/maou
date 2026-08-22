@@ -453,6 +453,16 @@
   color: var(--mw-neutral-700);
 }
 
+#maou-workbench .mw-position-bar .mw-comment {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--mw-neutral-700);
+}
+
 #maou-workbench .mw-breadcrumb-sep {
   color: var(--mw-neutral-600);
 }
@@ -484,25 +494,38 @@
   padding-left: 10px;
 }
 
+/* 罫は 2px でも掴めるように，track 自体は 16px の透明な当たり判定に
+   する (JS は track の getBoundingClientRect で手数を出すので，幅を
+   変えなければ対応関係は変わらない) */
 #maou-workbench .mw-scrubber-track {
   flex: 1;
-  height: 2px;
-  background: var(--mw-divider);
+  height: 16px;
+  background: transparent;
   position: relative;
   cursor: pointer;
+}
+
+#maou-workbench .mw-scrubber-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 7px;
+  height: 2px;
+  background: var(--mw-divider);
 }
 
 #maou-workbench .mw-scrubber-fill {
   position: absolute;
   left: 0;
-  top: 0;
+  top: 7px;
   height: 2px;
   background: var(--mw-accent);
 }
 
 #maou-workbench .mw-scrubber-thumb {
   position: absolute;
-  top: -5px;
+  top: 2px;
   width: 2px;
   height: 12px;
   background: var(--mw-accent);
@@ -663,6 +686,19 @@
 #maou-workbench .mw-candidate-winrate {
   font-size: 12px;
   text-align: right;
+  font-weight: 600;
+}
+
+#maou-workbench .mw-eval-line {
+  padding: 6px 16px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--mw-neutral-700);
+  border-bottom: 1px solid var(--mw-divider);
+}
+
+#maou-workbench .mw-eval-line strong {
+  color: var(--mw-text);
   font-weight: 600;
 }
 

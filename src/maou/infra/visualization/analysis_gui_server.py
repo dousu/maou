@@ -623,19 +623,45 @@ class AnalysisGuiServer:
         )
 
         positions: list[dict[str, Any]] = []
-        for i, count, record in self._analyzer.analyze_mainline(
-            view.document,
-            time_ms=time_ms,
-            max_playouts=playouts,
-            cancel=self._cancel_event,
-        ):
-            positions.append(record)
-            tree.nodes[tree.mainline_ids[i]].analysis = record
+        try:
+            for (
+                i,
+                count,
+                record,
+            ) in self._analyzer.analyze_mainline(
+                view.document,
+                time_ms=time_ms,
+                max_playouts=playouts,
+                cancel=self._cancel_event,
+            ):
+                positions.append(record)
+                tree.nodes[
+                    tree.mainline_ids[i]
+                ].analysis = record
+                progress = replace(
+                    progress,
+                    done=i + 1,
+                    total=count,
+                    status=f"全局面解析中 … {i + 1}/{count} 局面",
+                )
+                yield (
+                    view,
+                    progress,
+                    self._render(
+                        view, tree, click, options, progress
+                    ),
+                    gr.update(),
+                )
+        except Exception as e:
+            # running を落とさずに抜けるとボタンが「キャンセル」の
+            # ままになり，全局面解析をやり直せなくなる．エンジン側の
+            # 例外型は限定できないので広く捕まえてログに残す
+            logger.exception("全局面解析が失敗しました")
             progress = replace(
                 progress,
-                done=i + 1,
-                total=count,
-                status=f"全局面解析中 … {i + 1}/{count} 局面",
+                running=False,
+                status=f"全局面解析に失敗しました: {e}",
+                is_error=True,
             )
             yield (
                 view,
@@ -645,6 +671,7 @@ class AnalysisGuiServer:
                 ),
                 gr.update(),
             )
+            return
 
         if len(positions) < total:
             progress = replace(

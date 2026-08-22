@@ -57,15 +57,48 @@
     panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  function flash(el, message) {
+    var original = el.textContent;
+    el.textContent = message;
+    setTimeout(function () {
+      el.textContent = original;
+    }, 1200);
+  }
+
+  // navigator.clipboard は secure context (https / localhost) でしか
+  // 生えない．LAN 越しの http や --share の中継先では undefined に
+  // なるので，隠しテキストエリア + execCommand に落とす
+  function legacyCopy(text) {
+    var area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    var ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch (err) {
+      ok = false;
+    }
+    document.body.removeChild(area);
+    return ok;
+  }
+
   function copyText(text, el) {
-    if (!navigator.clipboard) return;
-    navigator.clipboard.writeText(text).then(function () {
-      var original = el.textContent;
-      el.textContent = 'コピーしました';
-      setTimeout(function () {
-        el.textContent = original;
-      }, 1200);
-    });
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(
+        function () {
+          flash(el, 'コピーしました');
+        },
+        function () {
+          flash(el, legacyCopy(text) ? 'コピーしました' : 'コピーできません');
+        }
+      );
+      return;
+    }
+    flash(el, legacyCopy(text) ? 'コピーしました' : 'コピーできません');
   }
 
   function onClick(e) {
@@ -143,6 +176,13 @@
     return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
   }
 
+  // Space / Enter でフォーカス中の要素を押せる必要があるので，
+  // その上では Space ショートカット (解析) を横取りしない
+  function isActivatable(el) {
+    if (!el || !el.closest) return false;
+    return !!el.closest('button, a[href], summary, [role="button"]');
+  }
+
   function onKeyDown(e) {
     if (!document.getElementById(WORKBENCH_ID)) return;
     if (isTypingTarget(e.target)) return;
@@ -159,6 +199,7 @@
       return;
     }
     if (e.key === ' ' || e.key === 'Spacebar') {
+      if (isActivatable(e.target)) return;
       e.preventDefault();
       send('analyze');
       return;
@@ -184,7 +225,12 @@
     if (!row) return;
     var list = row.closest('.mw-kifu-list');
     if (!list) return;
-    var top = row.offsetTop - list.clientHeight / 2 + row.clientHeight / 2;
+    // offsetTop は offsetParent 基準なので，リスト box との相対位置を
+    // 実測して現在の scrollTop に足す (リストの position 指定に依らない)
+    var offset =
+      row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    var top =
+      list.scrollTop + offset - list.clientHeight / 2 + row.clientHeight / 2;
     list.scrollTop = Math.max(0, top);
   }
 
