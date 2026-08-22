@@ -4,8 +4,10 @@ import pytest
 
 from maou.domain.board.shogi import PieceId, Turn
 from maou.domain.visualization.board_renderer import (
+    MODERNIST_BOARD_THEME,
     ArrowSpec,
     BoardPosition,
+    BoardTheme,
     MoveArrow,
     SVGBoardRenderer,
 )
@@ -600,3 +602,61 @@ class TestDropArrowSide:
             move_arrow=arrow,
         )
         assert 'x1="755.0"' in svg
+
+
+class TestBoardTheme:
+    """BoardTheme のテスト (既定テーマの非回帰と Modernist の差分)．"""
+
+    @staticmethod
+    def _position() -> BoardPosition:
+        board = [[0 for _ in range(9)] for _ in range(9)]
+        board[8][4] = int(PieceId.OU)  # 先手玉
+        board[0][4] = 16 + int(PieceId.OU)  # 後手玉
+        hand = [0 for _ in range(14)]
+        return BoardPosition(
+            board_id_positions=board,
+            pieces_in_hand=hand,
+        )
+
+    def test_default_theme_matches_no_argument(self) -> None:
+        """既定 BoardTheme を渡した出力は引数なしと一致する．"""
+        position = self._position()
+        assert SVGBoardRenderer().render(
+            position, turn=Turn.BLACK
+        ) == SVGBoardRenderer(BoardTheme()).render(
+            position, turn=Turn.BLACK
+        )
+
+    def test_default_theme_keeps_legacy_markers(self) -> None:
+        """既定テーマは従来の寸法・装飾をそのまま出す．
+
+        テーマ導入で `visualize` 等の既存出力が変わらないことを守る．
+        """
+        svg = SVGBoardRenderer().render(
+            self._position(), turn=Turn.BLACK
+        )
+        assert "border-radius: 8px;" in svg
+        assert "box-shadow: 0 4px 6px rgba(0,0,0,0.07);" in svg
+        assert 'filter id="piece-shadow"' in svg
+        assert "filter: url(#piece-shadow);" in svg
+        assert 'font-size="30"' in svg
+        assert 'stroke="#d4c5a9" stroke-width="2"' in svg
+        # 座標バッジ (白地 + 罫) を描く
+        assert 'fill="#ffffff" stroke="#d4d4d4"' in svg
+        # 手番バッジを含むヘッダー帯を描く
+        assert "先手番" in svg
+
+    def test_modernist_theme_differs(self) -> None:
+        """Modernist テーマは角丸・影・ヘッダー・座標バッジを落とす．"""
+        svg = SVGBoardRenderer(MODERNIST_BOARD_THEME).render(
+            self._position(), turn=Turn.BLACK
+        )
+        assert "border-radius" not in svg
+        assert "box-shadow" not in svg
+        assert "piece-shadow" not in svg
+        assert 'fill="#ffffff" stroke="#d4d4d4"' not in svg
+        assert "先手番" not in svg
+        # 52px セル・空の持ち駒表示・座標そのものは残る
+        assert 'font-size="32"' in svg
+        assert "なし" in svg
+        assert "持ち駒" in svg

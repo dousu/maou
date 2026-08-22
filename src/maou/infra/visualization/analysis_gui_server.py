@@ -8,7 +8,8 @@ gr.Blocks の構築とイベント配線，およびアクション文字列の�
 ごとに独立)．
 
 UI 操作は ``data-action`` 文字列として JS から届く
-(static/analysis_workbench.js)．レーンは 4 本に分け，探索系は
+(static/analysis_workbench.js)．レーンは 5 本
+(nav / engine / engineAll / cancel / download) に分け，探索系は
 ``concurrency_id="engine"`` + ``concurrency_limit=1`` で直列化し，
 キャンセルだけは実行中でも通るよう別レーンに置く
 (docs/design/game-analysis/gui.md §11)．

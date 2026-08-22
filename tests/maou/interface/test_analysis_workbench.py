@@ -33,6 +33,7 @@ MINI_CSA = RESOURCES / "mini.csa"
 
 OPTIONS = WorkbenchOptions()
 PROGRESS = AnalysisProgress()
+CLICK = ClickState()
 
 # mini.csa の本譜 (▲7六歩 △3四歩 ▲2六歩 △8四歩)
 MINI_MOVES = ["7g7f", "3c3d", "2g2f", "8c8d"]
@@ -169,7 +170,7 @@ class TestRender:
         view: SessionView | None,
         *,
         options: WorkbenchOptions = OPTIONS,
-        click: ClickState = ClickState(),
+        click: ClickState = CLICK,
         progress: AnalysisProgress = PROGRESS,
     ) -> str:
         tree = (
