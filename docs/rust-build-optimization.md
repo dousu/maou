@@ -99,8 +99,8 @@ main ブランチへの push をトリガーに wheel をビルドし，GitHub R
 
 | プラットフォーム | 用途 | 判定 |
 |---|---|---|
-| **`manylinux_2_28` x86_64 + CPython 3.12** | Codespaces (Ubuntu)，Colab (Ubuntu) | **必須** |
-| **`manylinux_2_28` x86_64 + CPython 3.11** | Python 3.11 環境 (Colab 等) | **必須** |
+| **`manylinux_2_28` x86_64 + CPython 3.13** | Colab のデフォルト Python (2026-08 時点) | **必須** |
+| **`manylinux_2_28` x86_64 + CPython 3.12** | Codespaces (Ubuntu)，DevContainer | **必須** |
 | macOS arm64 | ローカル開発 (Apple Silicon) | 当面不要(ローカルは sccache で対応) |
 | Windows x86_64 | Windows 開発者 | 当面不要 (下記の脚注参照) |
 
@@ -126,7 +126,7 @@ main ブランチへの push をトリガーに wheel をビルドし，GitHub R
   `winget install Microsoft.VCRedist.2015+.x64` で解決する．
   **CI では原理的に検出できない** — GitHub runner には最初から入っている．
 
-**補足**: `requires-python = ">=3.11,<3.13"` のため，CPython 3.11 と 3.12 の両方の wheel をビルドする．Colab のデフォルト Python バージョンに依存しない安全な選択とする．
+**補足**: `requires-python = ">=3.12,<3.14"` のため，CPython 3.12 と 3.13 の両方の wheel をビルドする．Colab のデフォルトは 3.13 だが，Codespaces / DevContainer は 3.12 なので，どちらか一方に賭けない選択とする．
 
 #### wheel の内容物
 
@@ -160,7 +160,7 @@ Colab 環境では Rust ツールチェインをインストールせず，プ�
 
 ```python
 # Colab セル
-# Python バージョンに応じて cp311 または cp312 の wheel を指定
+# Python バージョンに応じて cp312 または cp313 の wheel を指定
 !pip install uv
 !uv pip install --system "maou @ https://github.com/{owner}/{repo}/releases/download/latest/maou-0.2.0-cp312-cp312-manylinux_2_28_x86_64.whl"
 !uv pip install --system "maou[cuda]"  # GPU 依存の追加インストール
@@ -382,9 +382,10 @@ GitHub Actions でのビルドは DevContainer (2-core / 4GB RAM) より高ス�
 
 ### 1. Colab の Python バージョン → 解決済み
 
-CPython 3.11 と 3.12 の両方の wheel をビルドする．
-`requires-python = ">=3.11,<3.13"` のため両バージョンのサポートが必要であり，
-Colab のデフォルト Python バージョンに依存しない安全な選択とする．
+CPython 3.12 と 3.13 の両方の wheel をビルドする．
+`requires-python = ">=3.12,<3.14"` のため両バージョンのサポートが必要であり，
+Colab のデフォルト Python バージョンに依存しない安全な選択とする
+(2026-08 時点で Colab のデフォルトは 3.13)．
 レイヤー1のビルド対象プラットフォーム表に反映済み．
 
 ### 2. wheel の extras (torch 等) の取り扱い → 解決済み
@@ -472,7 +473,7 @@ Rust ビルドを完全にスキップする案．以下の理由で今回のス
 1. `.github/workflows/build-wheel.yml` を作成
    - トリガー: `push` (main ブランチ) + `workflow_dispatch`
    - `PyO3/maturin-action` で wheel ビルド (`--release`)
-   - ビルド対象: CPython 3.11 + 3.12，`manylinux_2_28` x86_64
+   - ビルド対象: CPython 3.12 + 3.13，`manylinux_2_28` x86_64
    - `sccache: 'true'` で CI キャッシュ有効化
    - `softprops/action-gh-release` で latest Release に配置(バージョンをピン留め)
    - Release ボディにコミット SHA とビルド日時を記載
