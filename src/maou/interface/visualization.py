@@ -11,6 +11,9 @@ from typing import Any
 
 from maou.app.visualization.data_retrieval import DataRetriever
 from maou.app.visualization.record_renderer import (
+    Distribution as Distribution,
+)
+from maou.app.visualization.record_renderer import (
     RecordRendererFactory,
 )
 from maou.app.visualization.search_index_protocol import (
@@ -395,18 +398,33 @@ class VisualizationInterface:
         """
         return self.search_index.get_all_ids(limit=limit)
 
-    def generate_analytics(
+    def get_distribution(
         self, records: list[dict[str, Any]]
-    ) -> Any | None:
-        """レコード群からデータ分析用のPlotly Figureを生成する．
+    ) -> Distribution | None:
+        """レコード群の分布データを取得する．
+
+        ワークベンチはこの数値列から SVG ヒストグラムを描く．
 
         Args:
             records: 分析対象のレコードリスト
 
         Returns:
-            Plotly Figureオブジェクト，またはデータがない場合はNone
+            Distribution．対象データが無い場合は None．
         """
-        return self.renderer.generate_analytics(records)
+        return self.renderer.get_distribution(records)
+
+    def get_record_value(
+        self, record: dict[str, Any]
+    ) -> float | None:
+        """分布上で強調する 1 レコードの値を取得する．
+
+        Args:
+            record: 対象レコード
+
+        Returns:
+            分布と同じ尺度の値．取れない場合は None．
+        """
+        return self.renderer.get_record_value(record)
 
     def _render_empty_message(self, message: str) -> str:
         """空メッセージ用のHTML．

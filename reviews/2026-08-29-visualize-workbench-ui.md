@@ -24,42 +24,47 @@ user から Claude Design の handoff バンドル
 analyze-gui (`analysis_workbench.css`) と同じ Modernist トークン
 (Archivo / 赤単色 `#ec3013` / 角丸ゼロ / 2px 罫) を
 `static/visualize_workbench.css` に `#viz-workbench` スコープで定義し，
-Gradio コンポーネントを 3 カラムに組み替えた．
-analyze-gui と違い gr.HTML 1 枚には**していない** — 検索・
-ページネーション・インデックス構築など既存のイベント配線を温存する
-ためレイアウトと CSS を変える方針とし，そのうえで **表示専用の
-パネルだけ** gr.HTML に置き換えた (user から「gr.HTML でもっと綺麗に
-できないか」との指摘を受けた 2 段目の作業)．
+3 カラムのワークベンチに組み替えた．実装は **analyze-gui と同じ gr.HTML 1 枚**に書き直した．
+user から 2 度の指摘 (「gr.HTML でもっと綺麗にできないか」→「見た目の
+品質が水準まで届いていない，gr.HTML 1 枚に書き直してイベント配線も
+やり直してほしい」) を受けての判断で，Gradio コンポーネントを CSS で
+寄せる方針は捨てている．
 
-置き換えたのは Gradio 固有の枠・行番号・セル箱がデザインに寄せられない
-4 つ:
+### 構成
 
-| 旧 | 新 | 見た目 |
+| 層 | 追加/変更 | 役割 |
 |---|---|---|
-| 結果一覧 `gr.Dataframe` | `gr.HTML` | 2px 罫の見出し + 1px 罫の行，選択行に accent |
-| レコード詳細 `gr.JSON` | `gr.HTML` | vz-kv のキー/値 2 段組 |
-| データセット統計 `gr.JSON` | `gr.HTML` | vz-kv の 2 列グリッド |
-| 局面統計 / 指し手一覧 (グラフ) | `gr.HTML` | 同上 |
+| interface | `visualize_workbench.py` (新規) | 状態 + 表示データ → ワークベンチ全体の HTML |
+| infra | `static/visualize_workbench.css` (全面書き直し) | モックのトークンと寸法をそのまま持つ唯一の定義元 |
+| infra | `static/visualize_workbench.js` (全面書き直し) | `data-action` の委譲・キー操作・再描画後の追従 |
+| infra | `gradio_server.py` | gr.HTML 1 枚 + `gr.State` + 2 レーンのブリッジ |
+| infra | `game_graph_server.py` | 同じワークベンチを描画 (スタンドアロン) |
+| app | `record_renderer.py` | `Distribution` を追加 (Plotly Figure を廃止) |
 
-HTML は `game_graph_shared.build_kv_html` /
-`build_stats_grid_html` / `build_row_table_html` が組む (値は
-`html.escape` 済み)．行クリックは `.select()` が使えないので，
-ゲームグラフと同じ `server_functions` + `js_on_load` ブリッジを
-新設した (`static/visualize_workbench.js`)．結果一覧の選択行は
-サーバーが返す HTML に載るので，レコード送りでも強調が追随する．
+イベント配線は analyze-gui と同じ方式に統一した．UI 操作は
+`data-action` 文字列として JS から届き，`server_functions` +
+`trigger("change")` のブリッジで `_on_action` に入り，状態を更新して
+HTML を返す．レーンは `nav` / `load` の 2 本に分け，読み込みが行送りを
+詰まらせないようにしてある．
 
-- トップバー: `MAOU VISUALIZE` / データ型セグメンテッドコントロール /
-  モードバッジ / ステータス (件数・パス) / 再構築・更新
-- レコードモード: 左レール 340px (データソース・検索・結果一覧) |
-  中央ステージ (盤面・レコード送り) | 右レール 420px
-  (レコード詳細・分布・データセット統計)
-- グラフモード: 左レール (パンくず・表示コントロール・凡例・
-  エクスポート) | 中央ステージ (グラフ) | 右レール (選択局面・
-  局面統計・指し手一覧・分岐分析)
+### ヒストグラム
 
-`maou visualize --array-type game-graph` はスタンドアロンの
-`game_graph_server.py` に分岐するため，そちらも同じワークベンチに
-揃えた (揃えないと同じコマンドで 2 つの見た目が出る)．
+モックの SVG (幅 16px・間隔 20px・ベースライン y=100・20 本) を
+数値で駆動する．現在レコードが属する階級だけ accent 色にし，残りは
+neutral-500 に落とす — モックの配色そのままである．
+Plotly はデータ型ごとに別の色 (青/緑/橙/紫) を使っていたので廃止し，
+app 層は描画非依存の `Distribution` (数値列 + 軸ラベル) だけを返す．
+
+### 削除したもの
+
+gr.Dataframe / gr.JSON / gr.Plot / gr.Accordion / gr.Dropdown /
+gr.Slider などのコンポーネントと，それらに紐づくタプル形状の
+ハンドラ (`_search_and_cache` / `_navigate_next_record` /
+`_check_indexing_status_with_transition` など計 22 メソッド)．
+`gradio_server.py` は 4,254 行から 1,668 行になった．
+Plotly 経路 (`generate_analytics`) と，その遅延 import 対策として
+前段で入れた `pandas` 先読み・`visualize` extra への `pandas` 追加も
+不要になったので戻した．
 
 ## Drift (訂正したい記述)
 
@@ -102,20 +107,8 @@ HTML は `game_graph_shared.build_kv_html` /
 - **analyze-gui と同じ gr.HTML 1 枚に作り替える**: 検索・ページ送り・
   バックグラウンドインデックス・ブリッジなど 2400 行のイベント配線を
   全部書き直すことになり，UI の見た目を揃える目的に対して割に合わない．
-- **ヒストグラムの配色も Modernist に寄せる**: 配色は app 層
-  (`record_renderer.py`) にあり，データ型ごとに色を変えて意味を持たせて
-  いる．シェルの restyle の範囲を超えるので手を付けていない．
-- **analyze-gui と同じ gr.HTML 1 枚に寄せ切る**: 上表の 4 つを置き換えた
-  時点で Gradio の chrome が残るのは入力系 (Dropdown / Slider / Number)
-  だけで，そこは CSS で足りている．入力を HTML 化すると値の往復まで
-  自前になり，得るものに対して壊す面が大きい．
-
-## 付随して直したもの (drift ではない)
-
-`gr.Dataframe` を全廃した副作用で **起動時に pandas を読むものが
-無くなり**，plotly の配列判定 (`sys.modules` の pandas を import せず
-参照する) がワーカースレッドの初回 import と競合して
-`partially initialized module 'pandas' has no attribute 'Series'`
-で描画が落ちた．`game_graph_shared._preimport_pandas()` で
-メインスレッドから先読みし，`visualize` extra に `pandas` を明示した
-(従来は gradio 経由の推移的依存だった)．
+- **Gradio コンポーネントを CSS で寄せる**: 2 度試したが，
+  gr.JSON の行番号・gr.Dataframe のセル箱・各所の角丸と枠は
+  スコープ付き CSS で潰しても水準に届かなかった (user 指摘)．
+  1 枚 HTML なら見た目の定義元が 1 つになり，モックと 1 対 1 で
+  対応が取れる．

@@ -19,70 +19,63 @@ from maou.domain.visualization.move_label_converter import (
 )
 
 
-class TestHCPERecordRendererAnalytics:
-    """HCPERecordRenderer.generate_analyticsのテスト．"""
+class TestHCPERecordRendererDistribution:
+    """HCPERecordRenderer.get_distribution のテスト．
 
-    @pytest.fixture
-    def renderer(self) -> HCPERecordRenderer:
-        """テスト用HCPERecordRendererを作成．"""
-        return HCPERecordRenderer(
-            board_renderer=Mock(),
-            move_converter=Mock(),
+    分布は Plotly の Figure ではなく数値列として返る (ワークベンチが
+    そこから SVG ヒストグラムを描く)．
+    """
+
+    def test_returns_the_eval_series(self) -> None:
+        """評価値の列をそのまま返す．"""
+        renderer = HCPERecordRenderer(
+            board_renderer=SVGBoardRenderer(),
+            move_converter=MoveLabelConverter(),
         )
 
-    def test_generate_analytics_returns_single_eval_chart(
-        self, renderer: HCPERecordRenderer
-    ) -> None:
-        """HCPERecordRenderer.generate_analytics returns only eval distribution chart."""
-        records = [
-            {"eval": 100, "moves": 118},
-            {"eval": -50, "moves": 118},
-            {"eval": 200, "moves": 120},
-        ]
+        dist = renderer.get_distribution(
+            [{"eval": 100}, {"eval": -50}, {"eval": 0}]
+        )
 
-        fig = renderer.generate_analytics(records)
+        assert dist is not None
+        assert dist.values == (100.0, -50.0, 0.0)
+        assert dist.axis_label == "評価値"
 
-        assert fig is not None
-        # Should have only 1 trace (eval histogram), not 2
-        assert len(fig.data) == 1
-        assert fig.data[0].name == "評価値"
+    def test_skips_records_without_an_eval(self) -> None:
+        """eval が無いレコードは数えない．"""
+        renderer = HCPERecordRenderer(
+            board_renderer=SVGBoardRenderer(),
+            move_converter=MoveLabelConverter(),
+        )
 
-    def test_generate_analytics_returns_none_for_empty_records(
-        self, renderer: HCPERecordRenderer
-    ) -> None:
-        """空のレコードリストの場合，Noneを返す．"""
-        fig = renderer.generate_analytics([])
+        dist = renderer.get_distribution(
+            [{"eval": 10}, {"eval": None}, {}]
+        )
 
-        assert fig is None
+        assert dist is not None
+        assert dist.values == (10.0,)
 
-    def test_generate_analytics_returns_none_for_no_evals(
-        self, renderer: HCPERecordRenderer
-    ) -> None:
-        """評価値がないレコードの場合，Noneを返す．"""
-        records = [
-            {"moves": 118},
-            {"moves": 120},
-        ]
+    def test_returns_none_without_any_eval(self) -> None:
+        """対象が 1 件も無ければ None を返す．"""
+        renderer = HCPERecordRenderer(
+            board_renderer=SVGBoardRenderer(),
+            move_converter=MoveLabelConverter(),
+        )
 
-        fig = renderer.generate_analytics(records)
+        assert renderer.get_distribution([]) is None
+        assert (
+            renderer.get_distribution([{"eval": None}]) is None
+        )
 
-        assert fig is None
+    def test_record_value_is_the_eval(self) -> None:
+        """強調用の値は評価値そのもの．"""
+        renderer = HCPERecordRenderer(
+            board_renderer=SVGBoardRenderer(),
+            move_converter=MoveLabelConverter(),
+        )
 
-    def test_generate_analytics_chart_layout(
-        self, renderer: HCPERecordRenderer
-    ) -> None:
-        """生成されるチャートのレイアウトが正しいことを確認．"""
-        records = [
-            {"eval": 100, "moves": 118},
-            {"eval": -50, "moves": 118},
-        ]
-
-        fig = renderer.generate_analytics(records)
-
-        assert fig is not None
-        assert fig.layout.title.text == "評価値分布"
-        assert fig.layout.xaxis.title.text == "評価値"
-        assert fig.layout.yaxis.title.text == "頻度"
+        assert renderer.get_record_value({"eval": 42}) == 42.0
+        assert renderer.get_record_value({}) is None
 
 
 class TestHCPERecordRendererArrow:
@@ -489,53 +482,42 @@ class TestPreprocessingRecordRendererTableColumns:
         assert row == [0, "test-002", "0.50", "-"]
 
 
-class TestPreprocessingRecordRendererAnalytics:
-    """PreprocessingRecordRenderer.generate_analyticsのテスト．"""
+class TestPreprocessingRecordRendererDistribution:
+    """PreprocessingRecordRenderer.get_distribution のテスト．"""
 
-    @pytest.fixture
-    def renderer(self) -> PreprocessingRecordRenderer:
-        """テスト用PreprocessingRecordRendererを作成．"""
-        return PreprocessingRecordRenderer(
-            board_renderer=Mock(),
-            move_converter=Mock(),
+    def test_returns_the_result_value_series(self) -> None:
+        """result_value の列を返す．"""
+        renderer = PreprocessingRecordRenderer(
+            board_renderer=SVGBoardRenderer(),
+            move_converter=MoveLabelConverter(),
         )
 
-    def test_analytics_with_best_move_win_rate(
-        self, renderer: PreprocessingRecordRenderer
-    ) -> None:
-        """bestMoveWinRateがある場合，2つのヒストグラムが生成される．"""
-        records = [
-            {"resultValue": 0.6, "bestMoveWinRate": 0.8},
-            {"resultValue": 0.4, "bestMoveWinRate": 0.5},
-            {"resultValue": 0.7, "bestMoveWinRate": 0.9},
-        ]
+        dist = renderer.get_distribution(
+            [{"resultValue": 0.6}, {"resultValue": 0.4}]
+        )
 
-        fig = renderer.generate_analytics(records)
+        assert dist is not None
+        assert dist.values == (0.6, 0.4)
+        assert dist.axis_label == "result_value"
+        assert dist.precision == 3
 
-        assert fig is not None
-        assert len(fig.data) == 2
-        assert fig.data[0].name == "勝率"
-        assert fig.data[1].name == "最善手勝率"
+    def test_returns_none_for_empty_records(self) -> None:
+        """レコードが無ければ None を返す．"""
+        renderer = PreprocessingRecordRenderer(
+            board_renderer=SVGBoardRenderer(),
+            move_converter=MoveLabelConverter(),
+        )
 
-    def test_analytics_without_best_move_win_rate(
-        self, renderer: PreprocessingRecordRenderer
-    ) -> None:
-        """bestMoveWinRateがない場合，従来通り1つのヒストグラムのみ．"""
-        records = [
-            {"resultValue": 0.6},
-            {"resultValue": 0.4},
-        ]
+        assert renderer.get_distribution([]) is None
 
-        fig = renderer.generate_analytics(records)
+    def test_record_value_is_the_result_value(self) -> None:
+        """強調用の値は result_value そのもの．"""
+        renderer = PreprocessingRecordRenderer(
+            board_renderer=SVGBoardRenderer(),
+            move_converter=MoveLabelConverter(),
+        )
 
-        assert fig is not None
-        assert len(fig.data) == 1
-        assert fig.data[0].name == "勝率"
-
-    def test_analytics_empty_records(
-        self, renderer: PreprocessingRecordRenderer
-    ) -> None:
-        """空のレコードリストの場合，Noneを返す．"""
-        fig = renderer.generate_analytics([])
-
-        assert fig is None
+        assert (
+            renderer.get_record_value({"resultValue": 0.75})
+            == 0.75
+        )

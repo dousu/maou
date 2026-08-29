@@ -1,13 +1,11 @@
 /* データ可視化 GUI (visualize) ワークベンチのスタイル．
 
-   Modernist デザインシステム (Archivo・赤単色・角丸ゼロ・2px 罫) を
-   #viz-workbench 配下にスコープして適用する．analyze-gui の
-   analysis_workbench.css と同じトークン体系だが，こちらは 1 枚の
-   gr.HTML ではなく Gradio コンポーネント本体を直接装飾するため，
-   Gradio 6 の内部クラス (.block / .form / .wrap) も対象にする．
+   画面は gr.HTML 1 枚 (maou.interface.visualize_workbench) なので，
+   ここが見た目の唯一の定義元である．Gradio コンポーネントを装飾する
+   必要はなく，#viz-workbench 配下の自前クラスだけを書く．
 
-   theme.css → components.css → 本ファイル の順に読み込まれるので，
-   ここでの宣言が既存テーマを上書きする． */
+   Modernist デザインシステム (Archivo・赤単色 #ec3013・角丸ゼロ・
+   2px 罫) に従う．トークン名と寸法はデザインモックに合わせてある． */
 
 #viz-workbench {
   --vz-bg: #f3f2f2;
@@ -34,8 +32,9 @@
   --vz-sans: "Archivo", "Noto Sans JP", system-ui, sans-serif;
   --vz-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  --vz-rail-left: 340px;
-  --vz-rail-right: 420px;
+  --vz-rail-l: 340px;
+  --vz-rail-r: 420px;
+  --vz-top-h: 72px;
 
   font-family: var(--vz-sans);
   font-variant-numeric: tabular-nums;
@@ -44,7 +43,11 @@
   color: var(--vz-text);
   background: var(--vz-bg);
   min-width: 1280px;
-  gap: 0 !important;
+  height: 100vh;
+  min-height: 680px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 #viz-workbench *,
@@ -53,190 +56,306 @@
   box-sizing: border-box;
 }
 
-/* Gradio 既定の幅上限・余白・角丸・影を打ち消し，ワークベンチを画面幅
-   いっぱいの 1 枚板にする．ワークベンチを含むものだけを :has() で狙う． */
+/* Gradio の幅上限・余白・枠を打ち消し，ワークベンチを 1 枚板にする．
+   ワークベンチを含むものだけを :has() で狙う (他画面を汚さない)． */
 .gradio-container:has(#viz-workbench),
 .main:has(#viz-workbench),
 .wrap:has(#viz-workbench),
-.contain:has(#viz-workbench) {
+.contain:has(#viz-workbench),
+.block:has(#viz-workbench),
+.html-container:has(#viz-workbench),
+.prose:has(#viz-workbench) {
   max-width: 100% !important;
   width: 100% !important;
   padding: 0 !important;
   margin: 0 !important;
-  background: var(--vz-bg, #f3f2f2);
-}
-
-#viz-workbench .block,
-#viz-workbench .form,
-#viz-workbench .gr-box,
-#viz-workbench .gr-group {
   border: 0 !important;
   border-radius: 0 !important;
+  background: var(--vz-bg, #f3f2f2) !important;
   box-shadow: none !important;
-  background: transparent !important;
-  padding: 0 !important;
-  gap: var(--vz-gap, 8px);
+  overflow: visible !important;
 }
 
-#viz-workbench .gap,
-#viz-workbench .styler {
-  gap: 8px !important;
+body:has(#viz-workbench) {
+  margin: 0;
+  background: #f3f2f2;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   共通部品
+   ══════════════════════════════════════════════════════════════ */
+
+#viz-workbench .vz-m {
+  font-family: var(--vz-mono);
+}
+
+#viz-workbench .vz-right {
+  text-align: right;
+}
+
+#viz-workbench .vz-lbl {
+  font: 800 11px/1 var(--vz-sans);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--vz-neutral-600);
+  margin: 0;
+}
+
+#viz-workbench .vz-hint {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--vz-neutral-600);
+  margin: 0;
+}
+
+#viz-workbench .vz-unit {
+  font-size: 12px;
+  color: var(--vz-neutral-600);
+}
+
+#viz-workbench .vz-empty {
+  padding: 14px 0;
+  font-size: 12px;
+  color: var(--vz-neutral-500);
+}
+
+#viz-workbench .vz-rule {
+  height: 2px;
+  background: var(--vz-divider);
+  margin: 14px 0;
+}
+
+#viz-workbench .vz-vr {
+  width: 1px;
+  height: 28px;
+  background: var(--vz-divider);
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-spacer {
+  flex: 1 1 auto;
+}
+
+/* ── セグメンテッドコントロール ───────────────────────── */
+
+#viz-workbench .vz-seg {
+  display: flex;
+  border: 1px solid var(--vz-text);
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-seg.start {
+  align-self: flex-start;
+}
+
+#viz-workbench .vz-seg > button {
+  font: 800 11px/1 var(--vz-sans);
+  letter-spacing: 0.06em;
+  padding: 9px 12px;
+  color: var(--vz-neutral-700);
+  border: 0;
+  border-right: 1px solid var(--vz-divider);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#viz-workbench .vz-seg > button:last-child {
+  border-right: 0;
+}
+
+#viz-workbench .vz-seg > button:hover {
+  background: color-mix(in srgb, var(--vz-text) 7%, transparent);
+}
+
+#viz-workbench .vz-seg > button:disabled {
+  cursor: default;
+  color: var(--vz-neutral-400);
+}
+
+#viz-workbench .vz-seg > button:disabled:hover {
+  background: transparent;
+}
+
+#viz-workbench .vz-seg > button.on {
+  background: var(--vz-accent);
+  color: var(--vz-bg);
+}
+
+/* ── 入力 ─────────────────────────────────────────────── */
+
+#viz-workbench .vz-in {
+  width: 100%;
+  height: 30px;
+  border: 1px solid var(--vz-divider);
+  background: var(--vz-neutral-100);
+  font: 400 13px/28px var(--vz-body, var(--vz-sans));
+  padding: 0 8px;
+  color: var(--vz-text);
+  border-radius: 0;
+}
+
+#viz-workbench .vz-in.vz-m {
+  font-family: var(--vz-mono);
+  font-size: 12.5px;
+}
+
+#viz-workbench .vz-in:focus {
+  outline: 0;
+  border-color: var(--vz-accent);
+}
+
+#viz-workbench .vz-in::placeholder {
+  color: var(--vz-neutral-500);
+}
+
+#viz-workbench .vz-in.off,
+#viz-workbench .vz-in:disabled {
+  background: var(--vz-neutral-200);
+  color: var(--vz-neutral-400);
+}
+
+#viz-workbench .vz-in.wrap {
+  height: auto;
+  padding: 7px 8px;
+  line-height: 1.5;
+  font-size: 11.5px;
+  word-break: break-all;
+}
+
+/* ── ボタン ───────────────────────────────────────────── */
+
+#viz-workbench .vz-b {
+  font: 800 12px/1 var(--vz-sans);
+  padding: 9px 12px;
+  border: 1px solid var(--vz-text);
+  background: transparent;
+  color: var(--vz-text);
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: 0;
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-b:hover {
+  background: color-mix(in srgb, var(--vz-text) 7%, transparent);
+}
+
+#viz-workbench .vz-b.pri {
+  background: var(--vz-accent);
+  border-color: var(--vz-accent);
+  color: var(--vz-bg);
+}
+
+#viz-workbench .vz-b.pri:hover {
+  background: var(--vz-accent-600);
+}
+
+#viz-workbench .vz-b.gh {
+  border-color: var(--vz-divider);
+}
+
+#viz-workbench .vz-b.grow {
+  flex: 1 1 auto;
+}
+
+#viz-workbench .vz-b:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+#viz-workbench .vz-btn-row {
+  display: flex;
+  gap: 8px;
 }
 
 /* ══════════════════════════════════════════════════════════════
    トップバー
    ══════════════════════════════════════════════════════════════ */
 
-#vz-topbar {
-  display: flex !important;
-  flex-wrap: nowrap !important;
+#viz-workbench .vz-top {
+  display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 22px;
   padding: 0 20px;
-  min-height: 72px;
+  height: var(--vz-top-h);
   border-bottom: 2px solid var(--vz-text);
-  background: var(--vz-bg);
+  flex-shrink: 0;
 }
 
-#vz-topbar > .block,
-#vz-topbar > * {
-  flex: 0 0 auto;
-  width: auto !important;
-  min-width: 0;
-}
-
-.vz-brand {
+#viz-workbench .vz-brand {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  white-space: nowrap;
 }
 
-.vz-brand-name {
+#viz-workbench .vz-brand-name {
   font: 800 21px/1 var(--vz-sans);
   letter-spacing: -0.02em;
-  color: var(--vz-text);
 }
 
-.vz-brand-sub {
+#viz-workbench .vz-brand-sub {
   font: 800 11px/1 var(--vz-sans);
   letter-spacing: 0.16em;
   color: var(--vz-accent);
 }
 
-/* トップバー右側は残り幅を分け合う．ステータスは伸縮させる． */
-#vz-topbar #vz-status {
-  flex: 1 1 auto !important;
-  min-width: 120px;
-}
-
-/* ══════════════════════════════════════════════════════════════
-   セグメンテッドコントロール (array_type ラジオ)
-   ══════════════════════════════════════════════════════════════ */
-
-#array-type-dropdown .wrap,
-#array-type-dropdown fieldset,
-#array-type-dropdown > .form {
-  display: flex !important;
-  flex-direction: row !important;
-  flex-wrap: nowrap !important;
-  gap: 0 !important;
-  border: 1px solid var(--vz-text) !important;
-  padding: 0 !important;
-  background: transparent !important;
-}
-
-#array-type-dropdown label {
-  display: flex !important;
+#viz-workbench .vz-status {
+  display: flex;
   align-items: center;
-  margin: 0 !important;
-  padding: 9px 12px !important;
-  border: 0 !important;
-  border-right: 1px solid var(--vz-divider) !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  cursor: pointer;
-  font: 800 11px/1 var(--vz-sans) !important;
-  letter-spacing: 0.06em;
-  color: var(--vz-neutral-700) !important;
-  white-space: nowrap;
+  gap: 10px;
+  flex: 0 0 auto;
 }
 
-#array-type-dropdown label:last-child {
-  border-right: 0 !important;
+#viz-workbench .vz-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--vz-accent);
+  flex: 0 0 auto;
 }
 
-#array-type-dropdown label:hover {
-  background: color-mix(in srgb, var(--vz-text) 7%, transparent) !important;
+#viz-workbench .vz-dot.ok {
+  background: #2e7d32;
+}
+#viz-workbench .vz-dot.mock {
+  background: var(--vz-accent);
+}
+#viz-workbench .vz-dot.busy {
+  background: #ef6c00;
+}
+#viz-workbench .vz-dot.none {
+  background: var(--vz-neutral-400);
+}
+#viz-workbench .vz-dot.error {
+  background: var(--vz-accent-700);
 }
 
-#array-type-dropdown label.selected,
-#array-type-dropdown label:has(input:checked) {
-  background: var(--vz-accent) !important;
-  color: var(--vz-bg) !important;
-}
-
-/* ラジオの丸ポチは消す (セグメント全体がヒット領域) */
-#array-type-dropdown input[type="radio"] {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-  margin: 0;
-}
-
-/* ══════════════════════════════════════════════════════════════
-   モードバッジ / ステータス
-   ══════════════════════════════════════════════════════════════ */
-
-#viz-workbench #mode-badge {
-  display: flex !important;
-  align-items: center;
-  padding: 0 !important;
-  background: transparent !important;
-  border: 0 !important;
-}
-
-#viz-workbench .mode-badge-text {
-  display: inline-flex !important;
-  align-items: center;
-  gap: 8px;
-  padding: 0 !important;
-  background: transparent !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  font: 800 11px/1 var(--vz-sans) !important;
+#viz-workbench .vz-badge {
+  font: 800 11px/1 var(--vz-sans);
   letter-spacing: 0.1em;
-  color: var(--vz-text) !important;
+}
+
+#viz-workbench .vz-count {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+#viz-workbench .vz-path {
+  font-size: 12px;
+  color: var(--vz-neutral-700);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-#viz-workbench #vz-status {
-  max-height: 52px;
-  overflow-y: auto;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--vz-neutral-700);
-  border-left: 1px solid var(--vz-divider);
-  padding-left: 14px !important;
-}
-
-#viz-workbench #vz-status p,
-#viz-workbench #vz-status ul,
-#viz-workbench #vz-status li {
-  margin: 0 !important;
-  font-size: 11px !important;
-  line-height: 1.5 !important;
-  color: var(--vz-neutral-700) !important;
-}
-
-#viz-workbench #vz-status ul {
-  padding-left: 14px;
-}
-
-#viz-workbench #vz-status strong {
-  color: var(--vz-text);
+#viz-workbench .vz-status-msg {
+  font-size: 11.5px;
+  color: var(--vz-accent-700);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -244,245 +363,146 @@
    ══════════════════════════════════════════════════════════════ */
 
 #viz-workbench .vz-body {
-  display: flex !important;
-  flex-wrap: nowrap !important;
-  align-items: stretch;
-  gap: 0 !important;
-  height: calc(100vh - 74px);
-  min-height: 680px;
-}
-
-/* Gradio の .column は flex-wrap: wrap のため，高さを固定したレールでは
-   セクションが 2 列目に折り返してしまう．nowrap を明示して縦積みを保つ． */
-#viz-workbench .vz-rail,
-#viz-workbench .vz-stage,
-#viz-workbench .vz-sec {
-  flex-wrap: nowrap !important;
-}
-
-#viz-workbench .vz-rail,
-#viz-workbench .vz-stage {
+  display: grid;
+  grid-template-columns:
+    var(--vz-rail-l) 2px minmax(0, 1fr) 2px var(--vz-rail-r);
+  flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  gap: 0 !important;
 }
 
-#viz-workbench .vz-rail-left {
-  flex: 0 0 var(--vz-rail-left) !important;
-  width: var(--vz-rail-left) !important;
-  min-width: var(--vz-rail-left) !important;
+/* グリッドの 2px 列を罫線として描く (mock の .vz-div 相当) */
+#viz-workbench .vz-body > .vz-rail.left {
+  grid-column: 1;
   border-right: 2px solid var(--vz-divider);
 }
 
-#viz-workbench .vz-rail-right {
-  flex: 0 0 var(--vz-rail-right) !important;
-  width: var(--vz-rail-right) !important;
-  min-width: var(--vz-rail-right) !important;
+#viz-workbench .vz-body > .vz-stage {
+  grid-column: 3;
+}
+
+#viz-workbench .vz-body > .vz-rail.right {
+  grid-column: 5;
   border-left: 2px solid var(--vz-divider);
 }
 
-#viz-workbench .vz-stage {
-  flex: 1 1 auto !important;
-  min-width: 0 !important;
-  padding: 16px 20px 20px;
-}
-
-/* レールは高さを固定してスクロールさせるため，中のセクションは
-   flex-shrink させない (放置すると先頭のアコーディオンが 2px に潰れる)． */
-#viz-workbench .vz-rail > * {
-  flex: 0 0 auto !important;
-}
-
-#viz-workbench .vz-rail > .vz-sec-grow {
-  flex: 1 0 auto !important;
-}
-
-/* レール内のセクション．セクション間は 2px 罫で仕切る． */
-#viz-workbench .vz-sec {
-  display: flex !important;
+#viz-workbench .vz-rail {
+  display: flex;
   flex-direction: column;
-  gap: 9px !important;
-  padding: 14px 14px;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+#viz-workbench .vz-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 14px;
   border-bottom: 2px solid var(--vz-divider);
-}
-
-/* 幅 340px のレールでは Gradio の .row が折り返して縦積みになるため，
-   横並びを明示する (評価値の min / max など)． */
-#viz-workbench .vz-rail .row {
-  flex-wrap: nowrap !important;
-  gap: 8px !important;
-}
-
-#viz-workbench .vz-rail .row > * {
-  min-width: 0 !important;
-}
-
-/* Gradio は隣接する入力を 1 つの .form にまとめて縦積みにするため，
-   gr.Row 直下の .form は明示的に横並びへ戻す． */
-#viz-workbench .vz-rail .row > .form {
-  display: flex !important;
-  flex-direction: row !important;
-  flex-wrap: nowrap !important;
-  gap: 8px !important;
-  width: 100%;
-}
-
-#viz-workbench .vz-rail .row > .form > * {
-  flex: 1 1 0 !important;
-  min-width: 0 !important;
-}
-
-/* レール内は行間を詰めて，結果一覧に高さを譲る */
-#viz-workbench .vz-rail span[data-testid="block-info"] {
-  line-height: 1.35 !important;
-  margin: 0 !important;
-}
-
-#viz-workbench .vz-rail label > span {
-  margin-bottom: 2px !important;
+  flex: 0 0 auto;
 }
 
 #viz-workbench .vz-sec:last-child {
   border-bottom: 0;
 }
 
-/* 結果一覧のように残り高さを占めるセクション */
-#viz-workbench .vz-sec-grow {
-  flex: 1 1 auto !important;
-  min-height: 320px;
+/* 結果一覧・指し手一覧は残り高さを埋めて内側でスクロールする */
+#viz-workbench .vz-sec.grow {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
-/* 小見出し (大文字ラベル) */
-#viz-workbench .vz-lbl,
-#viz-workbench .vz-lbl p {
-  font: 800 11px/1 var(--vz-sans) !important;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--vz-neutral-600) !important;
-  margin: 0 !important;
+#viz-workbench .vz-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-#viz-workbench .vz-hint,
-#viz-workbench .vz-hint p {
-  font-size: 11.5px !important;
-  line-height: 1.5;
-  color: var(--vz-neutral-600) !important;
-  margin: 0 !important;
+#viz-workbench .vz-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#viz-workbench .vz-pager .vz-b {
+  padding: 5px 9px;
+}
+
+#viz-workbench .vz-pageno {
+  font-size: 12px;
 }
 
 /* ══════════════════════════════════════════════════════════════
-   フォーム部品 — ボタン・入力・スライダー
+   罫線だけの表
    ══════════════════════════════════════════════════════════════ */
 
-/* 枠付きにするのは gr.Button だけ (variant クラスを持つ)．
-   テーブルのヘッダー，JSON のコピー，アコーディオンの開閉などは
-   Gradio 内部の <button> なので巻き込まないようにする． */
-#viz-workbench button.primary,
-#viz-workbench button.secondary,
-#viz-workbench button.stop {
-  font: 800 12px/1 var(--vz-sans) !important;
-  letter-spacing: 0.02em;
-  padding: 9px 12px !important;
-  border: 1px solid var(--vz-text) !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  color: var(--vz-text) !important;
-  box-shadow: none !important;
-  white-space: nowrap;
-  min-width: 0;
-  transition: background 0.12s ease;
+#viz-workbench .vz-table {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  margin: 0 -14px;
 }
 
-#viz-workbench button.primary:hover,
-#viz-workbench button.secondary:hover,
-#viz-workbench button.stop:hover {
-  background: color-mix(in srgb, var(--vz-text) 7%, transparent) !important;
-}
-
-/* Gradio 内部ボタン (テーブルヘッダー・JSON コピー等) は素のまま */
-#viz-workbench .table-wrap button,
-#viz-workbench thead button,
-#viz-workbench tbody button,
-#viz-workbench .json-holder button,
-#viz-workbench .label-wrap {
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-
-#viz-workbench button.primary {
-  background: var(--vz-accent) !important;
-  border-color: var(--vz-accent) !important;
-  color: var(--vz-bg) !important;
-}
-
-#viz-workbench button.primary:hover {
-  background: var(--vz-accent-600) !important;
-}
-
-#viz-workbench button.secondary {
-  border-color: var(--vz-divider) !important;
-}
-
-#viz-workbench button:disabled,
-#viz-workbench button[disabled] {
-  opacity: 0.42;
-  cursor: not-allowed;
-}
-
-#viz-workbench input[type="text"],
-#viz-workbench input[type="number"],
-#viz-workbench textarea,
-#viz-workbench .wrap-inner {
-  border: 1px solid var(--vz-divider) !important;
-  border-radius: 0 !important;
-  background: var(--vz-neutral-100) !important;
-  color: var(--vz-text) !important;
-  font-family: var(--vz-mono) !important;
-  font-size: 13px !important;
-  box-shadow: none !important;
-}
-
-#viz-workbench input[type="text"]:focus,
-#viz-workbench input[type="number"]:focus,
-#viz-workbench textarea:focus {
-  border-color: var(--vz-accent) !important;
-  outline: 0 !important;
-  box-shadow: none !important;
-}
-
-#viz-workbench input::placeholder,
-#viz-workbench textarea::placeholder {
-  color: var(--vz-neutral-500) !important;
-}
-
-/* ラベルと info テキスト */
-#viz-workbench label > span,
-#viz-workbench .block > label > span,
-#viz-workbench span[data-testid="block-info"] {
-  font: 800 10.5px/1.4 var(--vz-sans) !important;
+#viz-workbench .vz-h {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 2px solid var(--vz-text);
+  font: 800 10.5px/1 var(--vz-sans);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--vz-neutral-600) !important;
+  color: var(--vz-neutral-700);
+  flex: 0 0 auto;
 }
 
-#viz-workbench span[data-testid="block-info"] {
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 400 !important;
-  font-size: 11px !important;
+#viz-workbench .vz-table-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
-/* スライダー */
-#viz-workbench input[type="range"] {
-  accent-color: var(--vz-accent);
+#viz-workbench .vz-row {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--vz-neutral-300);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+#viz-workbench .vz-row:hover {
+  background: color-mix(in srgb, var(--vz-text) 6%, transparent);
+}
+
+#viz-workbench .vz-row.on {
+  background: var(--vz-accent-200);
+  box-shadow: inset 3px 0 0 var(--vz-accent);
+  font-weight: 700;
+}
+
+#viz-workbench .vz-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+#viz-workbench .vz-row .vz-cell:first-child {
+  color: var(--vz-neutral-600);
+}
+
+#viz-workbench .vz-row.on .vz-cell:first-child {
+  color: var(--vz-text);
 }
 
 /* ══════════════════════════════════════════════════════════════
-   サーバー生成 HTML — キーと値 / 罫線だけの表
-   (game_graph_shared.build_kv_html / build_row_table_html)
+   キーと値
    ══════════════════════════════════════════════════════════════ */
 
 #viz-workbench .vz-kv {
@@ -492,13 +512,15 @@
   padding: 6px 0;
   border-bottom: 1px solid var(--vz-neutral-300);
   font-size: 12.5px;
-  line-height: 1.5;
 }
 
 #viz-workbench .vz-kv > span:first-child {
   color: var(--vz-neutral-600);
   flex: 0 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 #viz-workbench .vz-kv > span:last-child {
@@ -519,277 +541,227 @@
   gap: 0 18px;
 }
 
-#viz-workbench .vz-sub-lbl {
-  font: 800 10px/1 var(--vz-sans);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--vz-neutral-600);
-  margin: 12px 0 4px;
+/* ══════════════════════════════════════════════════════════════
+   ヒストグラム
+   ══════════════════════════════════════════════════════════════ */
+
+#viz-workbench .vz-hist svg {
+  display: block;
+  height: 110px;
 }
 
-#viz-workbench .vz-m {
-  font-family: var(--vz-mono);
+#viz-workbench .vz-bar {
+  fill: var(--vz-neutral-500);
 }
 
-#viz-workbench .vz-empty {
-  padding: 14px 0;
-  font-size: 12px;
+#viz-workbench .vz-bar.on {
+  fill: var(--vz-accent);
+}
+
+#viz-workbench .vz-axis {
+  stroke: var(--vz-text);
+  stroke-width: 2;
+}
+
+#viz-workbench .vz-hist-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
   color: var(--vz-neutral-500);
+  font-family: var(--vz-mono);
+  padding-top: 4px;
 }
 
-/* 罫線だけの表．ヘッダーは 2px 罫，行は 1px 罫で仕切る． */
-#viz-workbench .vz-table {
+#viz-workbench .vz-hist-axis {
+  font-family: var(--vz-sans);
+  color: var(--vz-neutral-600);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   中央ステージ
+   ══════════════════════════════════════════════════════════════ */
+
+#viz-workbench .vz-stage {
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  flex: 1 1 auto;
-}
-
-#viz-workbench .vz-h {
-  display: grid;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 4px;
-  border-bottom: 2px solid var(--vz-text);
-  font: 800 10.5px/1 var(--vz-sans);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--vz-neutral-700);
-}
-
-#viz-workbench .vz-table-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-#viz-workbench .vz-row {
-  display: grid;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 4px;
-  border-bottom: 1px solid var(--vz-neutral-300);
-  font-size: 12.5px;
-  cursor: default;
-}
-
-#viz-workbench .vz-row[data-row] {
-  cursor: pointer;
-}
-
-#viz-workbench .vz-row[data-row]:hover {
-  background: color-mix(in srgb, var(--vz-text) 6%, transparent);
-}
-
-#viz-workbench .vz-row.on {
-  background: var(--vz-accent-200);
-  box-shadow: inset 3px 0 0 var(--vz-accent);
-  font-weight: 700;
-}
-
-#viz-workbench .vz-row > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   min-width: 0;
-}
-
-/* 結果一覧はセクションの残り高さを埋めて内側でスクロールする */
-#viz-workbench #vz-result-list {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
   min-height: 0;
-}
-
-/* ══════════════════════════════════════════════════════════════
-   テーブル (旧 gr.Dataframe — グラフの分岐分析など残存分)
-   ══════════════════════════════════════════════════════════════ */
-
-#viz-workbench .table-wrap,
-#viz-workbench table {
-  border: 0 !important;
-  border-radius: 0 !important;
-  box-shadow: none !important;
-  background: transparent !important;
-  font-size: 12.5px;
-}
-
-#viz-workbench thead,
-#viz-workbench thead tr {
-  background: transparent !important;
-}
-
-#viz-workbench thead th {
-  padding: 8px 10px !important;
-  border: 0 !important;
-  border-radius: 0 !important;
-  border-bottom: 2px solid var(--vz-text) !important;
-  background: transparent !important;
-  font: 800 10.5px/1 var(--vz-sans) !important;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--vz-neutral-700) !important;
-}
-
-#viz-workbench tbody td {
-  padding: 7px 10px !important;
-  border: 0 !important;
-  border-bottom: 1px solid var(--vz-neutral-300) !important;
-  background: transparent !important;
-  font-family: var(--vz-mono) !important;
-  color: var(--vz-text) !important;
-}
-
-#viz-workbench tbody tr:hover td {
-  background: color-mix(in srgb, var(--vz-text) 6%, transparent) !important;
-}
-
-#viz-workbench tbody tr.focus td,
-#viz-workbench tbody td.focus {
-  background: var(--vz-accent-200) !important;
-  font-weight: 700;
-}
-
-/* Gradio のセルは白い箱で描かれるので，罫線だけの表に戻す． */
-#viz-workbench .cell-wrap,
-#viz-workbench .header-content {
-  background: transparent !important;
-  border: 0 !important;
-  box-shadow: none !important;
-}
-
-#viz-workbench thead th {
-  box-shadow: none !important;
-}
-
-/* 幅 340px のレールに収まらない列は表の中で横スクロールさせる
-   (レール自体は overflow-x: hidden なので，ここで受ける)． */
-#viz-workbench .vz-rail .table-wrap,
-#viz-workbench .vz-rail .table-container {
-  overflow-x: auto !important;
-  max-width: 100%;
-}
-
-/* ══════════════════════════════════════════════════════════════
-   JSON ビュー (レコード詳細 / 局面統計)
-   ══════════════════════════════════════════════════════════════ */
-
-#viz-workbench .json-holder,
-#viz-workbench [data-testid="json"] {
-  border: 0 !important;
-  border-radius: 0 !important;
-  background: transparent !important;
-  font-family: var(--vz-mono) !important;
-  font-size: 12.5px !important;
-  padding: 0 !important;
-}
-
-/* ══════════════════════════════════════════════════════════════
-   中央ステージ — 盤面とレコード送り
-   ══════════════════════════════════════════════════════════════ */
-
-/* 盤面は残り高さの中央に置き，レコード送りはステージ最下部に落とす． */
-#viz-workbench .vz-stage > .vz-stage-head {
-  flex: 0 0 auto;
-}
-
-#viz-workbench .vz-stage > #board-display {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-#viz-workbench .vz-stage > .vz-nav {
-  flex: 0 0 auto;
-  margin-top: auto;
+  padding: 16px 20px 20px;
+  overflow: hidden;
 }
 
 #viz-workbench .vz-stage-head {
-  display: flex !important;
-  flex-wrap: nowrap !important;
+  display: flex;
   align-items: center;
   gap: 12px;
   padding-bottom: 12px;
+  flex: 0 0 auto;
 }
 
-#viz-workbench #selected-record-id input {
-  max-width: 420px;
-  font-size: 12px !important;
+#viz-workbench .vz-sfen {
+  font-size: 12px;
+  color: var(--vz-neutral-700);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-#viz-workbench #board-display {
+#viz-workbench .vz-stage-head .vz-b {
+  padding: 5px 9px;
+}
+
+#viz-workbench .vz-board {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 0 !important;
-  background: transparent !important;
-  padding: 0 !important;
 }
 
-#viz-workbench #board-display svg {
+#viz-workbench .vz-board svg {
   max-width: 640px;
+  max-height: 100%;
   width: 100%;
   height: auto;
 }
 
-#viz-workbench .vz-nav {
-  display: flex !important;
-  flex-wrap: nowrap !important;
+#viz-workbench .vz-board.small {
+  min-height: 220px;
+}
+
+#viz-workbench .vz-board.small svg {
+  max-width: 100%;
+}
+
+/* ── 先手勝率バー (preprocessing) ─────────────────────── */
+
+#viz-workbench .vz-winbar {
+  display: flex;
   align-items: center;
   gap: 14px;
   padding-top: 14px;
-  margin-top: 14px;
-  border-top: 2px solid var(--vz-divider);
-}
-
-#viz-workbench .vz-nav > * {
   flex: 0 0 auto;
-  width: auto !important;
 }
 
-#viz-workbench #record-indicator,
-#viz-workbench #record-indicator p {
-  font-family: var(--vz-mono) !important;
-  font-size: 15px !important;
-  font-weight: 700 !important;
-  color: var(--vz-text) !important;
-  margin: 0 !important;
-  white-space: nowrap;
+#viz-workbench .vz-winbar-track {
+  flex: 1 1 auto;
+  height: 22px;
+  background: var(--vz-neutral-300);
+  position: relative;
+  border: 1px solid var(--vz-divider);
 }
 
-#viz-workbench #page-info,
-#viz-workbench #page-info p {
-  font-family: var(--vz-mono) !important;
-  font-size: 12px !important;
-  color: var(--vz-neutral-700) !important;
-  margin: 0 !important;
-  text-align: center;
+#viz-workbench .vz-winbar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--vz-accent);
+}
+
+#viz-workbench .vz-winbar-mid {
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: var(--vz-text);
+}
+
+#viz-workbench .vz-winbar-pct {
+  font-size: 14px;
+  font-weight: 700;
+  min-width: 52px;
+  text-align: right;
+}
+
+/* ── レコード送り ─────────────────────────────────────── */
+
+#viz-workbench .vz-nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-nav-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+#viz-workbench .vz-recno {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+#viz-workbench .vz-legend-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--vz-neutral-700);
+  margin-left: auto;
+}
+
+#viz-workbench .vz-swatch-box {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--vz-text);
+  background: var(--vz-accent-200);
+  display: inline-block;
 }
 
 /* ══════════════════════════════════════════════════════════════
    ゲームグラフ
    ══════════════════════════════════════════════════════════════ */
 
-#viz-workbench #graph-view {
-  height: 100%;
-  min-height: 520px;
+#viz-workbench .vz-graph {
+  flex: 1 1 auto;
+  min-height: 0;
   border: 1px solid var(--vz-divider);
-  border-radius: 0;
   background: var(--vz-neutral-100);
   padding: 12px;
+  display: flex;
+  overflow: hidden;
 }
 
-#viz-workbench #graph-view > * {
+#viz-workbench .vz-graph > * {
+  flex: 1 1 auto;
+  min-width: 0;
   border-radius: 0 !important;
 }
 
-#viz-workbench .breadcrumb-nav {
+#viz-workbench .vz-crumbs {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  font-family: var(--vz-mono);
+}
+
+#viz-workbench .vz-crumb {
   font-size: 12.5px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--vz-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+#viz-workbench .vz-crumb.on {
+  font-weight: 700;
+  color: var(--vz-accent-700);
+  text-decoration: none;
+  cursor: default;
+}
+
+#viz-workbench .vz-crumb-sep {
+  color: var(--vz-neutral-500);
 }
 
 #viz-workbench .vz-legend {
@@ -805,27 +777,109 @@
   gap: 10px;
 }
 
-#viz-workbench .vz-legend-swatch {
+#viz-workbench .vz-swatch {
   width: 14px;
   height: 14px;
   border-radius: 50%;
   flex: 0 0 auto;
 }
 
-#viz-workbench .vz-legend-note {
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--vz-neutral-600);
-  padding-top: 4px;
+/* ── スライダー ───────────────────────────────────────── */
+
+#viz-workbench .vz-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-/* アコーディオン見出しをレールの小見出しと同じ見た目に揃える */
-#viz-workbench .label-wrap,
-#viz-workbench .label-wrap > span {
-  font: 800 11px/1.4 var(--vz-sans) !important;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--vz-neutral-600) !important;
-  padding: 0 !important;
-  margin: 0 !important;
+#viz-workbench .vz-slider-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--vz-neutral-700);
+}
+
+#viz-workbench .vz-slider-head > span:last-child {
+  font-weight: 700;
+  color: var(--vz-text);
+}
+
+#viz-workbench .vz-slider-foot {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--vz-neutral-500);
+}
+
+/* トラックとつまみはモックの 4px 罫 + 4x14 の矩形に合わせる */
+#viz-workbench .vz-slider input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 14px;
+  background: transparent;
+  cursor: pointer;
+  margin: 0;
+}
+
+#viz-workbench .vz-slider input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--vz-neutral-300);
+  border-radius: 0;
+}
+
+#viz-workbench .vz-slider input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: var(--vz-neutral-300);
+  border-radius: 0;
+}
+
+#viz-workbench .vz-slider input[type="range"]::-moz-range-progress {
+  height: 4px;
+  background: var(--vz-accent);
+}
+
+#viz-workbench .vz-slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 4px;
+  height: 14px;
+  background: var(--vz-text);
+  border: 0;
+  border-radius: 0;
+  margin-top: -5px;
+}
+
+#viz-workbench .vz-slider input[type="range"]::-moz-range-thumb {
+  width: 4px;
+  height: 14px;
+  background: var(--vz-text);
+  border: 0;
+  border-radius: 0;
+}
+
+/* ── 評価値レンジ ─────────────────────────────────────── */
+
+#viz-workbench .vz-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#viz-workbench .vz-range.is-off {
+  opacity: 0.5;
+}
+
+#viz-workbench .vz-range-sep {
+  font-size: 12px;
+  color: var(--vz-neutral-600);
+  flex: 0 0 auto;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   ブリッジ (不可視)
+   ══════════════════════════════════════════════════════════════ */
+
+.maou-hidden {
+  display: none !important;
 }
