@@ -26,8 +26,27 @@ analyze-gui (`analysis_workbench.css`) と同じ Modernist トークン
 `static/visualize_workbench.css` に `#viz-workbench` スコープで定義し，
 Gradio コンポーネントを 3 カラムに組み替えた．
 analyze-gui と違い gr.HTML 1 枚には**していない** — 検索・
-ページネーション・インデックス構築など既存のイベント配線をすべて
-温存するため，レイアウトと CSS だけを変えている．
+ページネーション・インデックス構築など既存のイベント配線を温存する
+ためレイアウトと CSS を変える方針とし，そのうえで **表示専用の
+パネルだけ** gr.HTML に置き換えた (user から「gr.HTML でもっと綺麗に
+できないか」との指摘を受けた 2 段目の作業)．
+
+置き換えたのは Gradio 固有の枠・行番号・セル箱がデザインに寄せられない
+4 つ:
+
+| 旧 | 新 | 見た目 |
+|---|---|---|
+| 結果一覧 `gr.Dataframe` | `gr.HTML` | 2px 罫の見出し + 1px 罫の行，選択行に accent |
+| レコード詳細 `gr.JSON` | `gr.HTML` | vz-kv のキー/値 2 段組 |
+| データセット統計 `gr.JSON` | `gr.HTML` | vz-kv の 2 列グリッド |
+| 局面統計 / 指し手一覧 (グラフ) | `gr.HTML` | 同上 |
+
+HTML は `game_graph_shared.build_kv_html` /
+`build_stats_grid_html` / `build_row_table_html` が組む (値は
+`html.escape` 済み)．行クリックは `.select()` が使えないので，
+ゲームグラフと同じ `server_functions` + `js_on_load` ブリッジを
+新設した (`static/visualize_workbench.js`)．結果一覧の選択行は
+サーバーが返す HTML に載るので，レコード送りでも強調が追随する．
 
 - トップバー: `MAOU VISUALIZE` / データ型セグメンテッドコントロール /
   モードバッジ / ステータス (件数・パス) / 再構築・更新
@@ -86,3 +105,17 @@ analyze-gui と違い gr.HTML 1 枚には**していない** — 検索・
 - **ヒストグラムの配色も Modernist に寄せる**: 配色は app 層
   (`record_renderer.py`) にあり，データ型ごとに色を変えて意味を持たせて
   いる．シェルの restyle の範囲を超えるので手を付けていない．
+- **analyze-gui と同じ gr.HTML 1 枚に寄せ切る**: 上表の 4 つを置き換えた
+  時点で Gradio の chrome が残るのは入力系 (Dropdown / Slider / Number)
+  だけで，そこは CSS で足りている．入力を HTML 化すると値の往復まで
+  自前になり，得るものに対して壊す面が大きい．
+
+## 付随して直したもの (drift ではない)
+
+`gr.Dataframe` を全廃した副作用で **起動時に pandas を読むものが
+無くなり**，plotly の配列判定 (`sys.modules` の pandas を import せず
+参照する) がワーカースレッドの初回 import と競合して
+`partially initialized module 'pandas' has no attribute 'Series'`
+で描画が落ちた．`game_graph_shared._preimport_pandas()` で
+メインスレッドから先読みし，`visualize` extra に `pandas` を明示した
+(従来は gradio 経由の推移的依存だった)．

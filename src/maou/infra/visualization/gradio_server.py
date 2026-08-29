@@ -46,15 +46,21 @@ from maou.infra.visualization.game_graph_shared import (
     ELEM_ID_DEPTH_SLIDER,
     ELEM_ID_EXPAND_BRIDGE,
     ELEM_ID_MIN_PROB_SLIDER,
+    ELEM_ID_ROW_BRIDGE,
     ELEM_ID_SELECT_BRIDGE,
     ELEM_ID_VIEWPORT_BRIDGE,
     FONT_LINKS,
     GAME_GRAPH_LEGEND_HTML,
     JS_ON_LOAD_EXPAND,
+    JS_ON_LOAD_ROW,
     JS_ON_LOAD_SELECT,
     JS_ON_LOAD_VIEWPORT,
     build_breadcrumb_html,
     build_graph_html,
+    build_kv_html,
+    build_row_table_html,
+    build_stats_grid_html,
+    build_workbench_head,
     create_analytics_plot,
     create_empty_plot,
 )
@@ -821,7 +827,7 @@ class GradioVisualizationServer:
                 page=1,
                 page_size=page_size,
             )
-            stats = self._get_current_stats()
+            stats = self._get_current_stats_html()
             data_outputs: tuple[Any, ...] = (
                 *paginate_result,
                 stats,
@@ -1298,18 +1304,23 @@ class GradioVisualizationServer:
         Returns:
             tuple matching outputs for pagination methods (13 values).
         """
-        empty_table: list[
-            list[Any]
-        ] = []  # Empty list for results_table
+        empty_table = build_row_table_html(
+            self._current_table_headers(),
+            [],
+            clickable=True,
+            empty_message="データソースを読み込んでください",
+        )
 
         page_info = "No data loaded"
 
         board_display = self._render_empty_board_placeholder()
 
-        record_details = {
-            "message": "No data loaded",
-            "instruction": "Use 'Data Source Management' section to load data",
-        }
+        record_details = build_kv_html(
+            {
+                "message": "No data loaded",
+                "instruction": "左レールのデータソースから読み込んでください",
+            }
+        )
 
         cached_records: list[dict[str, Any]] = []
         record_index = 0
@@ -1339,10 +1350,10 @@ class GradioVisualizationServer:
     ) -> tuple[
         int,  # current_page
         int,  # current_record_index
-        list[list[Any]],  # table_data
+        str,  # table_data (HTML)
         str,  # page_info
         str,  # board_svg
-        dict[str, Any],  # record_details
+        str,  # record_details (HTML)
         list[dict[str, Any]],  # current_page_records
         str,  # record_indicator
         Any | None,  # analytics_figure (Plotly Figure or None)
@@ -1358,10 +1369,17 @@ class GradioVisualizationServer:
         return (
             1,  # current_page
             0,  # current_record_index
-            [],  # empty table
+            build_row_table_html(
+                self._current_table_headers(),
+                [],
+                clickable=True,
+                empty_message="データソースを読み込んでください",
+            ),  # empty table
             "No data loaded",  # page_info
             self._render_empty_board_placeholder(),  # board_svg
-            {"message": "No data loaded"},  # record_details
+            build_kv_html(
+                {"message": "No data loaded"}
+            ),  # record_details
             [],  # current_page_records
             "Record 0 / 0",  # record_indicator
             None,  # analytics_figure
@@ -1369,6 +1387,67 @@ class GradioVisualizationServer:
             gr.Button(interactive=False),  # next button
             "",  # selected_record_id
         )
+
+    def _render_result_table(
+        self,
+        records: list[dict[str, Any]],
+        selected: int | None,
+        offset: int = 0,
+    ) -> str:
+        """結果一覧の HTML を組み直す．
+
+        gr.Dataframe と違い選択行はサーバー側の HTML に載るため，
+        レコード送りでもここを通して強調表示を更新する．
+
+        Args:
+            records: 現在のページのレコード
+            selected: 強調表示する行番号 (0 始まり)．None なら強調しない．
+            offset: 通し番号の起点 (ページ先頭のグローバル索引)
+
+        Returns:
+            結果一覧の HTML 文字列
+        """
+        headers = self._current_table_headers()
+        if self.viz_interface is None:
+            return build_row_table_html(
+                headers, [], clickable=True
+            )
+        rows = [
+            self.viz_interface.renderer.format_table_row(
+                i + offset + 1, record
+            )
+            for i, record in enumerate(records)
+        ]
+        return build_row_table_html(
+            headers,
+            rows,
+            selected=selected,
+            clickable=True,
+        )
+
+    def _get_current_stats_html(self) -> str:
+        """データセット統計を右レール用の HTML として返す．
+
+        Returns:
+            vz-kv グリッドの HTML 文字列
+        """
+        return build_stats_grid_html(self._get_current_stats())
+
+    def _current_table_headers(self) -> list[str]:
+        """結果一覧の列見出しを返す (未ロード時は空)．
+
+        Returns:
+            列見出しのリスト
+        """
+        if self.viz_interface is None:
+            return []
+        try:
+            return self.viz_interface.get_table_columns()
+        except Exception:
+            logger.warning(
+                "Failed to get table columns", exc_info=True
+            )
+            return []
 
     def _render_empty_board_placeholder(self) -> str:
         """Render placeholder SVG when no data is loaded．
@@ -1669,14 +1748,17 @@ class GradioVisualizationServer:
                                 else []
                             )
 
-                            results_table = gr.Dataframe(
-                                headers=table_headers
-                                if table_headers
-                                else None,
-                                label="結果一覧",
-                                show_label=False,
-                                interactive=False,
-                                elem_id="search-results-table",
+                            # gr.Dataframe ではなくサーバー生成の HTML．
+                            # 行クリックは row_bridge 経由で受ける
+                            # (static/visualize_workbench.js)．
+                            results_table = gr.HTML(
+                                value=build_row_table_html(
+                                    table_headers,
+                                    [],
+                                    clickable=True,
+                                ),
+                                elem_id="vz-result-list",
+                                container=False,
                             )
                             with gr.Row():
                                 prev_btn = gr.Button(
@@ -1767,9 +1849,10 @@ class GradioVisualizationServer:
                                 elem_classes=["vz-lbl"],
                                 container=False,
                             )
-                            record_details = gr.JSON(
-                                label="レコード詳細",
-                                show_label=False,
+                            record_details = gr.HTML(
+                                value=build_kv_html(None),
+                                elem_id="vz-detail",
+                                container=False,
                             )
 
                         with gr.Column(elem_classes=["vz-sec"]):
@@ -1796,15 +1879,17 @@ class GradioVisualizationServer:
                                     size="sm",
                                     scale=0,
                                 )
-                            stats_json = gr.JSON(
-                                value={},
-                                label="統計情報",
-                                show_label=False,
+                            stats_json = gr.HTML(
+                                value=build_stats_grid_html(
+                                    None
+                                ),
+                                elem_id="vz-dataset-stats",
+                                container=False,
                             )
 
                             # Refresh button click handler
                             stats_refresh_btn.click(
-                                fn=self._get_current_stats,
+                                fn=self._get_current_stats_html,
                                 inputs=[],
                                 outputs=[stats_json],
                             )
@@ -1952,9 +2037,9 @@ class GradioVisualizationServer:
                                 elem_classes=["vz-lbl"],
                                 container=False,
                             )
-                            gt_stats_json = gr.JSON(
-                                label="局面統計",
-                                show_label=False,
+                            gt_stats_json = gr.HTML(
+                                value=build_kv_html(None),
+                                container=False,
                             )
 
                         with gr.Column(elem_classes=["vz-sec"]):
@@ -1967,15 +2052,12 @@ class GradioVisualizationServer:
                             # による子局面遷移(on_move_selected)は意図的に省略．
                             # スタンドアロンモード(game_graph_server.py)では
                             # child_hashes_state を使って実装済み．
-                            gt_move_table = gr.Dataframe(
-                                headers=[
-                                    "指し手",
-                                    "確率",
-                                    "勝率",
-                                ],
-                                label="指し手一覧",
-                                show_label=False,
-                                interactive=False,
+                            gt_move_table = gr.HTML(
+                                value=build_row_table_html(
+                                    ["指し手", "確率", "勝率"],
+                                    [],
+                                ),
+                                container=False,
                             )
 
                         with gr.Column(elem_classes=["vz-sec"]):
@@ -2036,10 +2118,71 @@ class GradioVisualizationServer:
                 ],
             )
 
-            # テーブル行選択イベント
-            results_table.select(
-                fn=self._on_table_row_select,
-                inputs=[current_page_records],
+            # 結果一覧の行クリック．
+            # gr.HTML には .select() が無いので，ゲームグラフと同じ
+            # server_functions ブリッジで行番号を受け取る
+            # (JS 側は static/visualize_workbench.js)．
+            # WARNING: _pending_row はクロージャとして全ブラウザセッションで
+            # 共有される (game_graph_server.py の _pending と同じ制約．
+            # ローカルの解析ツールとして単一利用者を前提とする)．
+            _pending_row: dict[str, int] = {}
+
+            def handle_row_select(value: str) -> bool:
+                """JS から呼ばれる server_function．行番号を控える．"""
+                try:
+                    _pending_row["index"] = int(value)
+                except (TypeError, ValueError):
+                    return False
+                return True
+
+            def _on_row_click(
+                page: int,
+                size: int,
+                records: list[dict[str, Any]],
+            ) -> tuple[Any, ...]:
+                """控えた行番号で盤面・詳細・強調行を更新する．"""
+                index = _pending_row.get("index")
+                if index is None:
+                    return (gr.skip(),) * 8
+                (
+                    board_svg,
+                    details_html,
+                    record_id,
+                    row_index,
+                    indicator,
+                    prev_state,
+                    next_state,
+                ) = self._select_record_at(index, records)
+                return (
+                    board_svg,
+                    details_html,
+                    record_id,
+                    row_index,
+                    indicator,
+                    prev_state,
+                    next_state,
+                    self._render_result_table(
+                        records,
+                        row_index,
+                        (page - 1) * size,
+                    ),
+                )
+
+            row_bridge = gr.HTML(
+                value="",
+                elem_id=ELEM_ID_ROW_BRIDGE,
+                elem_classes=["maou-hidden"],
+                server_functions=[handle_row_select],
+                js_on_load=JS_ON_LOAD_ROW,
+            )
+
+            row_bridge.change(
+                fn=_on_row_click,
+                inputs=[
+                    current_page,
+                    page_size,
+                    current_page_records,
+                ],
                 outputs=[
                     board_display,
                     record_details,
@@ -2048,6 +2191,7 @@ class GradioVisualizationServer:
                     record_indicator,
                     prev_record_btn,
                     next_record_btn,
+                    results_table,
                 ],
             )
 
@@ -3027,17 +3171,20 @@ class GradioVisualizationServer:
                 self.viz_interface.get_table_columns()
             )
 
-            # table_dataの代わりにgr.update()で返す
-            table_update = gr.update(
-                value=table_data,
-                headers=table_headers,
+            # 罫線だけの表を HTML で組む (先頭行を選択済みにする)．
+            # table_data / table_headers は interface が返した値をそのまま使う．
+            table_update = build_row_table_html(
+                table_headers,
+                table_data,
+                selected=0 if cached_records else None,
+                clickable=True,
             )
 
         return (
             table_update,
             page_info,
             board_svg,
-            details,
+            build_kv_html(details),
             cached_records,  # キャッシュ
             0,  # record_indexをリセット
             record_indicator,  # インジケーター
@@ -3150,21 +3297,22 @@ class GradioVisualizationServer:
 
         return (*paginate_result, mode_badge, status_msg)
 
-    def _on_table_row_select(
+    def _select_record_at(
         self,
-        evt: gr.SelectData,
+        row_index: int,
         current_page_records: list[dict[str, Any]],
-    ) -> tuple[
-        str, dict[str, Any], str, int, str, gr.Button, gr.Button
-    ]:
-        """テーブル行選択時のハンドラ．
+    ) -> tuple[str, str, str, int, str, gr.Button, gr.Button]:
+        """結果一覧の行が選ばれたときの出力を組み立てる．
+
+        gr.Dataframe の .select() を廃し，gr.HTML のブリッジから渡る
+        行番号で呼ばれる (create_demo の _on_row_click)．
 
         Args:
-            evt: Gradio SelectDataイベント（行インデックスを含む）
+            row_index: 選択された行番号 (0 始まり)
             current_page_records: 現在のページのレコードキャッシュ
 
         Returns:
-            (board_svg, record_details, selected_id, record_index,
+            (board_svg, details_html, selected_id, record_index,
              record_indicator, prev_record_btn, next_record_btn)
         """
         if (
@@ -3173,7 +3321,9 @@ class GradioVisualizationServer:
         ):
             return (
                 self._render_empty_board_placeholder(),
-                {"message": "No record selected"},
+                build_kv_html(
+                    {"message": "No record selected"}
+                ),
                 "",
                 0,
                 gr.skip(),
@@ -3181,20 +3331,12 @@ class GradioVisualizationServer:
                 gr.skip(),
             )
 
-        # evt.index[0]が行インデックス
-        # Gradio 6.0+ではevt.indexがtuple, list, intのいずれかで返される
-        row_index = (
-            evt.index[0]
-            if isinstance(evt.index, (tuple, list))
-            else evt.index
-        )
-
         if row_index < 0 or row_index >= len(
             current_page_records
         ):
             return (
                 self._render_empty_board_placeholder(),
-                {"message": "Invalid row index"},
+                build_kv_html({"message": "Invalid row index"}),
                 "",
                 0,
                 gr.skip(),
@@ -3219,7 +3361,7 @@ class GradioVisualizationServer:
 
         return (
             board_svg,
-            details,
+            build_kv_html(details),
             record_id,
             row_index,
             record_indicator,
@@ -3229,9 +3371,7 @@ class GradioVisualizationServer:
 
     def _search_by_id(
         self, record_id: str
-    ) -> tuple[
-        str, dict[str, Any], str, str, gr.Button, gr.Button
-    ]:
+    ) -> tuple[str, str, str, str, gr.Button, gr.Button]:
         """ID検索のラッパー関数（viz_interfaceがNoneの場合をハンドリング）．
 
         Args:
@@ -3250,7 +3390,7 @@ class GradioVisualizationServer:
                 )
                 return (
                     board_svg,
-                    details,
+                    build_kv_html(details),
                     record_id,
                     gr.skip(),
                     gr.skip(),
@@ -3265,7 +3405,7 @@ class GradioVisualizationServer:
             if "error" in details:
                 return (
                     board_svg,
-                    details,
+                    build_kv_html(details),
                     gr.skip(),
                     gr.skip(),
                     gr.skip(),
@@ -3275,7 +3415,7 @@ class GradioVisualizationServer:
             # 検索成功: ボタン無効化 + インジケータ更新
             return (
                 board_svg,
-                details,
+                build_kv_html(details),
                 record_id,
                 "ID検索: 1/1",
                 gr.Button(interactive=False),
@@ -3284,9 +3424,7 @@ class GradioVisualizationServer:
 
     def _search_by_sfen(
         self, sfen: str
-    ) -> tuple[
-        str, dict[str, Any], str, str, gr.Button, gr.Button
-    ]:
+    ) -> tuple[str, str, str, str, gr.Button, gr.Button]:
         """SFEN検索のラッパー関数（viz_interfaceがNoneの場合をハンドリング）．
 
         Args:
@@ -3305,7 +3443,7 @@ class GradioVisualizationServer:
                 )
                 return (
                     board_svg,
-                    details,
+                    build_kv_html(details),
                     gr.skip(),
                     gr.skip(),
                     gr.skip(),
@@ -3320,7 +3458,7 @@ class GradioVisualizationServer:
             if "error" in details:
                 return (
                     board_svg,
-                    details,
+                    build_kv_html(details),
                     gr.skip(),
                     gr.skip(),
                     gr.skip(),
@@ -3331,7 +3469,7 @@ class GradioVisualizationServer:
             record_id = str(details.get("id", sfen))
             return (
                 board_svg,
-                details,
+                build_kv_html(details),
                 record_id,
                 "SFEN検索: 1/1",
                 gr.Button(interactive=False),
@@ -3631,10 +3769,10 @@ class GradioVisualizationServer:
     ) -> tuple[
         int,
         int,
-        list[list[Any]],
         str,
         str,
-        dict[str, Any],
+        str,
+        str,
         list[dict[str, Any]],
         str,
         Any | None,  # analytics_figure (Plotly Figure or None)
@@ -3700,10 +3838,14 @@ class GradioVisualizationServer:
             return (
                 current_page,
                 new_index,
-                gr.skip(),  # results_table — ページ内では変化なし
+                self._render_result_table(
+                    current_page_records,
+                    new_index,
+                    (current_page - 1) * page_size,
+                ),  # results_table — 強調行のみ更新
                 gr.skip(),  # page_info — 変化なし
                 board_svg,
-                details,
+                build_kv_html(details),
                 current_page_records,
                 record_indicator,
                 gr.skip(),  # analytics_chart — ページ単位統計，変化なし
@@ -3741,7 +3883,7 @@ class GradioVisualizationServer:
                 gr.skip(),  # results_table
                 gr.skip(),  # page_info
                 board_svg,
-                details,
+                build_kv_html(details),
                 current_page_records,
                 record_indicator,
                 gr.skip(),  # analytics_chart
@@ -3822,10 +3964,10 @@ class GradioVisualizationServer:
     ) -> tuple[
         int,
         int,
-        list[list[Any]],
         str,
         str,
-        dict[str, Any],
+        str,
+        str,
         list[dict[str, Any]],
         str,
         Any | None,  # analytics_figure (Plotly Figure or None)
@@ -3888,10 +4030,14 @@ class GradioVisualizationServer:
             return (
                 current_page,
                 new_index,
-                gr.skip(),  # results_table — ページ内では変化なし
+                self._render_result_table(
+                    current_page_records,
+                    new_index,
+                    (current_page - 1) * page_size,
+                ),  # results_table — 強調行のみ更新
                 gr.skip(),  # page_info — 変化なし
                 board_svg,
-                details,
+                build_kv_html(details),
                 current_page_records,
                 record_indicator,
                 gr.skip(),  # analytics_chart — ページ単位統計，変化なし
@@ -3929,7 +4075,7 @@ class GradioVisualizationServer:
                 gr.skip(),  # results_table
                 gr.skip(),  # page_info
                 board_svg,
-                details,
+                build_kv_html(details),
                 current_page_records,
                 record_indicator,
                 gr.skip(),  # analytics_chart
@@ -4088,7 +4234,11 @@ def launch_server(
         _build_head_scripts,
     )
 
-    head_scripts = FONT_LINKS + _build_head_scripts()
+    head_scripts = (
+        FONT_LINKS
+        + _build_head_scripts()
+        + build_workbench_head()
+    )
 
     launch_kwargs: dict[str, Any] = {
         "server_name": server_name,

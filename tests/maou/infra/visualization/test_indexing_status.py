@@ -201,10 +201,10 @@ class TestCheckIndexingStatusWithTransition:
 
         # Mock _paginate_all_data to return fake data
         mock_paginate_result = (
-            [["row1"]],  # results_table
+            '<div class="vz-table">row1</div>',  # results_table (HTML)
             "Page 1/1",  # page_info
             "<svg>board</svg>",  # board_display
-            {"id": "1"},  # record_details
+            '<div class="vz-kv-list">1</div>',  # record_details (HTML)
             [{"id": "1"}],  # current_page_records
             0,  # current_record_index
             "1/1",  # record_indicator
@@ -219,10 +219,11 @@ class TestCheckIndexingStatusWithTransition:
             return_value=mock_paginate_result
         )
 
-        # Mock _get_current_stats
-        mock_stats = {"total_records": 1000}
-        mock_server._get_current_stats = MagicMock(
-            return_value=mock_stats
+        # Mock _get_current_stats_html
+        # (stats_json は gr.JSON から gr.HTML になったので，
+        #  遷移が返すのは辞書ではなく描画済みの HTML)
+        mock_server._get_current_stats_html = MagicMock(
+            return_value='<div class="vz-kv-grid">stats</div>'
         )
 
         result = (
@@ -271,17 +272,17 @@ class TestCheckIndexingStatusWithTransition:
 
         # Data components should have actual values (not gr.update())
         # result[8]: results_table
-        assert result[8] == [["row1"]], (
-            f"results_table mismatch: {result[8]}"
-        )
+        assert (
+            result[8] == '<div class="vz-table">row1</div>'
+        ), f"results_table mismatch: {result[8]}"
         # result[9]: page_info
         assert result[9] == "Page 1/1", (
             f"page_info mismatch: {result[9]}"
         )
-        # result[21]: stats_json
-        assert result[21] == {"total_records": 1000}, (
-            f"stats_json mismatch: {result[21]}"
-        )
+        # result[21]: stats_json (HTML 文字列)
+        assert (
+            result[21] == '<div class="vz-kv-grid">stats</div>'
+        ), f"stats_json mismatch: {result[21]}"
 
         # Verify _paginate_all_data was called correctly
         mock_server._paginate_all_data.assert_called_once_with(

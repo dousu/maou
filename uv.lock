@@ -1565,7 +1565,7 @@ wheels = [
 
 [[package]]
 name = "maou"
-version = "0.100.0"
+version = "0.101.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -1632,6 +1632,7 @@ tensorrt-infer = [
 visualize = [
     { name = "gradio" },
     { name = "matplotlib" },
+    { name = "pandas" },
 ]
 
 [package.dev-dependencies]
@@ -1685,6 +1686,7 @@ requires-dist = [
     { name = "onnxslim", marker = "extra == 'cpu'" },
     { name = "onnxslim", marker = "extra == 'cuda'" },
     { name = "onnxslim", marker = "extra == 'mpu'" },
+    { name = "pandas", marker = "extra == 'visualize'", specifier = ">=2.0.0" },
     { name = "plotly", specifier = ">=6.5.0,<7.0.0" },
     { name = "polars", specifier = ">=1.0.0" },
     { name = "psutil", specifier = ">=6.0.0" },

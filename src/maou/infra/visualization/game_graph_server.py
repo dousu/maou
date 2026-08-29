@@ -21,15 +21,20 @@ from maou.infra.visualization.game_graph_shared import (
     ELEM_ID_DEPTH_SLIDER,
     ELEM_ID_EXPAND_BRIDGE,
     ELEM_ID_MIN_PROB_SLIDER,
+    ELEM_ID_MOVE_BRIDGE,
     ELEM_ID_SELECT_BRIDGE,
     ELEM_ID_VIEWPORT_BRIDGE,
     FONT_LINKS,
     GAME_GRAPH_LEGEND_HTML,
     JS_ON_LOAD_EXPAND,
+    JS_ON_LOAD_MOVE,
     JS_ON_LOAD_SELECT,
     JS_ON_LOAD_VIEWPORT,
     build_breadcrumb_html,
     build_graph_html,
+    build_kv_html,
+    build_row_table_html,
+    build_workbench_head,
     create_analytics_plot,
     create_empty_plot,
     load_static_file,
@@ -49,8 +54,8 @@ _ExpandResult = tuple[
     str,
     str,
     str,
-    dict[str, str],
-    list[list[str]],
+    str,
+    str,
     list[str],
     go.Figure,
     str,
@@ -161,8 +166,8 @@ def _get_detail_outputs(
     pos_hash: int,
 ) -> tuple[
     str,
-    dict[str, str],
-    list[list[str]],
+    str,
+    str,
     list[str],
     go.Figure,
     str,
@@ -175,8 +180,11 @@ def _get_detail_outputs(
         pos_hash: 対象ノードのposition_hash
 
     Returns:
-        (board_svg, stats, display_moves, child_hashes,
+        (board_svg, stats_html, moves_html, child_hashes,
          plot, breadcrumb_html, sfen_text)
+
+    stats と指し手一覧は gr.JSON / gr.Dataframe ではなく
+    ワークベンチの HTML として返す (build_kv_html / build_row_table_html)．
     """
     board_svg = viz.get_board_svg(pos_hash)
     stats = viz.get_node_stats(pos_hash)
@@ -200,8 +208,13 @@ def _get_detail_outputs(
 
     return (
         board_svg,
-        stats,
-        display_moves,
+        build_kv_html(stats),
+        build_row_table_html(
+            ["指し手", "確率", "勝率"],
+            display_moves,
+            clickable=True,
+            empty_message="指し手がありません",
+        ),
         child_hashes,
         plot,
         breadcrumb_html,
@@ -218,8 +231,8 @@ def _update_graph_view(
 ) -> tuple[
     str,
     str,
-    dict[str, str],
-    list[list[str]],
+    str,
+    str,
     list[str],
     go.Figure,
     str,
@@ -323,7 +336,11 @@ def launch_game_graph_server(
         _spatial_buckets[(bx, by)].append(h)
 
     custom_css = _load_custom_css()
-    head_scripts = FONT_LINKS + _build_head_scripts()
+    head_scripts = (
+        FONT_LINKS
+        + _build_head_scripts()
+        + build_workbench_head()
+    )
 
     # --- コールバック定義 ---
 
@@ -342,8 +359,8 @@ def launch_game_graph_server(
     ) -> tuple[
         str,
         str,
-        dict[str, str],
-        list[list[str]],
+        str,
+        str,
         list[str],
         go.Figure,
         str,
@@ -365,8 +382,8 @@ def launch_game_graph_server(
     ) -> tuple[
         str,
         str,
-        dict[str, str],
-        list[list[str]],
+        str,
+        str,
         list[str],
         go.Figure,
         str,
@@ -393,6 +410,18 @@ def launch_game_graph_server(
     # .input() / .change() が発火しない(Issue #3471, #7954)．
     # gr.HTML の server_functions でデータを処理し，
     # trigger("change") で .change() コールバックを発火する．
+
+    def handle_move_select(row_str: str) -> bool:
+        """指し手一覧の行クリックの server_function．
+
+        JS から呼ばれ，行番号を _pending に控える．
+        """
+        try:
+            _pending["move_row"] = int(row_str)
+        except (TypeError, ValueError):
+            logger.warning("Invalid move row: %s", row_str)
+            return False
+        return True
 
     def handle_select(node_id_str: str) -> bool:
         """ノード選択の server_function．
@@ -565,8 +594,10 @@ def launch_game_graph_server(
             "",
             "",
             str(viz.get_root_hash()),
-            {},
-            [],
+            build_kv_html(None),
+            build_row_table_html(
+                ["指し手", "確率", "勝率"], []
+            ),
             [],
             create_empty_plot(),
             "",
@@ -577,34 +608,33 @@ def launch_game_graph_server(
         current_child_hashes: list[str],
         display_depth: int,
         min_prob: float,
-        evt: gr.SelectData,
     ) -> _ExpandResult:
-        """指し手一覧の行選択時のコールバック．
+        """指し手一覧の行クリック時のコールバック．
+
+        指し手一覧は gr.HTML なので .select() が使えない．
+        move_bridge (server_functions) が控えた行番号を読む．
 
         Args:
             current_child_hashes: 現在表示中の局面の子ノードhashリスト(gr.State)
             display_depth: 表示深さ
             min_prob: エッジの最小確率閾値
-            evt: Gradio の SelectData イベント
         """
         _empty: _ExpandResult = (
             "",
             "",
             "",
-            {},
-            [],
+            build_kv_html(None),
+            build_row_table_html(
+                ["指し手", "確率", "勝率"], []
+            ),
             [],
             create_empty_plot(),
             "",
             "",
         )
-        if not current_child_hashes or evt.index is None:
+        row_idx = _pending.get("move_row")
+        if not current_child_hashes or row_idx is None:
             return _empty
-        row_idx = (
-            evt.index[0]
-            if isinstance(evt.index, (list, tuple))
-            else evt.index
-        )
         if row_idx < 0 or row_idx >= len(current_child_hashes):
             return _empty
         try:
@@ -922,8 +952,9 @@ def launch_game_graph_server(
                             elem_classes=["vz-lbl"],
                             container=False,
                         )
-                        stats_json = gr.JSON(
-                            label="局面統計", show_label=False
+                        stats_json = gr.HTML(
+                            value=build_kv_html(None),
+                            container=False,
                         )
 
                     with gr.Column(elem_classes=["vz-sec"]):
@@ -932,11 +963,16 @@ def launch_game_graph_server(
                             elem_classes=["vz-lbl"],
                             container=False,
                         )
-                        move_table = gr.Dataframe(
-                            headers=["指し手", "確率", "勝率"],
-                            label="指し手一覧",
-                            show_label=False,
-                            interactive=False,
+                        # 行クリックで子局面へ移るため data-row 付きの
+                        # HTML にし，move_bridge で行番号を受ける．
+                        move_table = gr.HTML(
+                            value=build_row_table_html(
+                                ["指し手", "確率", "勝率"],
+                                [],
+                                clickable=True,
+                            ),
+                            elem_id="vz-move-list",
+                            container=False,
                         )
 
                     with gr.Column(elem_classes=["vz-sec"]):
@@ -968,6 +1004,13 @@ def launch_game_graph_server(
             elem_classes=["maou-hidden"],
             server_functions=[handle_expand],
             js_on_load=JS_ON_LOAD_EXPAND,
+        )
+        move_bridge = gr.HTML(
+            value="",
+            elem_id=ELEM_ID_MOVE_BRIDGE,
+            elem_classes=["maou-hidden"],
+            server_functions=[handle_move_select],
+            js_on_load=JS_ON_LOAD_MOVE,
         )
         # ビューポートクエリ用ブリッジ(Phase 4: 遅延読み込み)
         gr.HTML(
@@ -1053,7 +1096,7 @@ def launch_game_graph_server(
         )
 
         # 指し手一覧の行選択
-        move_table.select(
+        move_bridge.change(
             fn=on_move_selected,
             inputs=[
                 child_hashes_state,
