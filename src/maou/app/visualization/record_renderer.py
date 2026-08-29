@@ -8,10 +8,8 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    import plotly.graph_objects as go
+from dataclasses import dataclass
+from typing import Any
 
 from maou.domain.board.shogi import (
     Board,
@@ -31,6 +29,27 @@ from maou.domain.visualization.move_label_converter import (
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Distribution:
+    """1 系列の分布データ (描画非依存)．
+
+    ワークベンチはこの数値列から自前で SVG ヒストグラムを描く．
+    Plotly の Figure と違い描画ライブラリに依存しないので，
+    interface 層でそのまま HTML に落とせる．
+
+    Attributes:
+        title: 見出し (例: "評価値の分布")
+        axis_label: 横軸のラベル (例: "評価値")
+        values: 度数分布を取る対象の数値列
+        precision: 目盛りラベルの小数桁数 (整数なら 0)
+    """
+
+    title: str
+    axis_label: str
+    values: tuple[float, ...]
+    precision: int = 0
 
 
 class RecordRenderer(ABC):
@@ -101,16 +120,32 @@ class RecordRenderer(ABC):
         """
 
     @abstractmethod
-    def generate_analytics(
+    def get_distribution(
         self, records: list[dict[str, Any]]
-    ) -> go.Figure | None:
-        """レコード群からデータ分析用のPlotly Figureを生成する．
+    ) -> Distribution | None:
+        """レコード群から分布の数値列を取り出す．
+
+        ワークベンチはこの数値列から SVG ヒストグラムを描く
+        (Plotly を介さないので配色をデザインに合わせられる)．
 
         Args:
             records: 分析対象のレコードリスト
 
         Returns:
-            Plotly Figureオブジェクト，またはデータがない場合はNone
+            Distribution．対象データが無い場合は None．
+        """
+
+    @abstractmethod
+    def get_record_value(
+        self, record: dict[str, Any]
+    ) -> float | None:
+        """分布上で強調表示する 1 レコードの値を返す．
+
+        Args:
+            record: 対象レコード
+
+        Returns:
+            分布と同じ尺度の値．取れない場合は None．
         """
 
     def _create_board_position(
@@ -277,60 +312,29 @@ class HCPERecordRenderer(RecordRenderer):
             record.get("moves"),
         ]
 
-    def generate_analytics(
+    def get_distribution(
         self, records: list[dict[str, Any]]
-    ) -> go.Figure | None:
-        """HCPEデータから評価値の分布チャートを生成する．
-
-        Args:
-            records: HCPEレコードのリスト
-
-        Returns:
-            Plotly Figureオブジェクト，またはデータがない場合はNone
-        """
-        try:
-            import plotly.graph_objects as go
-        except ImportError:
-            return None
-
-        if not records:
-            return None
-
-        # データ抽出（評価値のみ）
-        evals = [
-            r.get("eval", 0)
+    ) -> Distribution | None:
+        """評価値の分布を返す．"""
+        values = [
+            float(r["eval"])
             for r in records
             if r.get("eval") is not None
         ]
-
-        if not evals:
+        if not values:
             return None
-
-        # 評価値ヒストグラム（単一チャート）
-        fig = go.Figure(
-            data=[
-                go.Histogram(
-                    x=evals,
-                    marker_color="rgba(0,112,243,0.6)",
-                    nbinsx=30,
-                    name="評価値",
-                )
-            ]
+        return Distribution(
+            title="評価値の分布",
+            axis_label="評価値",
+            values=tuple(values),
         )
 
-        # レイアウト設定
-        fig.update_layout(
-            title="評価値分布",
-            xaxis_title="評価値",
-            yaxis_title="頻度",
-            template="plotly_white",
-            font={"family": "system-ui", "size": 12},
-            height=400,
-            showlegend=False,
-            margin={"l": 40, "r": 40, "t": 60, "b": 40},
-        )
-
-        return fig
+    def get_record_value(
+        self, record: dict[str, Any]
+    ) -> float | None:
+        """このレコードの評価値を返す．"""
+        value = record.get("eval")
+        return None if value is None else float(value)
 
 
 class Stage1RecordRenderer(RecordRenderer):
@@ -429,56 +433,39 @@ class Stage1RecordRenderer(RecordRenderer):
         num_reachable = sum(sum(row) for row in reachable)
         return [index, record.get("id"), num_reachable]
 
-    def generate_analytics(
+    def get_distribution(
         self, records: list[dict[str, Any]]
-    ) -> go.Figure | None:
-        """Stage1データから到達可能マス数の分布チャートを生成する．
+    ) -> Distribution | None:
+        """到達可能マス数の分布を返す．"""
+        values = [
+            float(self._reachable_count(r)) for r in records
+        ]
+        if not values:
+            return None
+        return Distribution(
+            title="到達可能マス数の分布",
+            axis_label="到達可能マス数",
+            values=tuple(values),
+        )
+
+    def get_record_value(
+        self, record: dict[str, Any]
+    ) -> float | None:
+        """このレコードの到達可能マス数を返す．"""
+        return float(self._reachable_count(record))
+
+    @staticmethod
+    def _reachable_count(record: dict[str, Any]) -> int:
+        """到達可能マスの総数を数える．
 
         Args:
-            records: Stage1レコードのリスト
+            record: レコードデータ
 
         Returns:
-            Plotly Figureオブジェクト，またはデータがない場合はNone
+            到達可能マス数
         """
-        try:
-            import plotly.graph_objects as go
-        except ImportError:
-            return None
-
-        if not records:
-            return None
-
-        # 到達可能マス数を集計
-        reachable_counts = []
-        for r in records:
-            reachable = r.get("reachableSquares", [])
-            count = sum(sum(row) for row in reachable)
-            reachable_counts.append(count)
-
-        # ヒストグラム作成
-        fig = go.Figure(
-            data=[
-                go.Histogram(
-                    x=reachable_counts,
-                    marker_color="rgba(76,175,80,0.6)",
-                    nbinsx=20,
-                    name="到達可能マス数",
-                )
-            ]
-        )
-
-        fig.update_layout(
-            title="到達可能マス数の分布",
-            xaxis_title="到達可能マス数",
-            yaxis_title="頻度",
-            template="plotly_white",
-            font={"family": "system-ui", "size": 12},
-            height=400,
-            showlegend=False,
-            margin={"l": 40, "r": 40, "t": 60, "b": 40},
-        )
-
-        return fig
+        reachable = record.get("reachableSquares", [])
+        return sum(sum(row) for row in reachable)
 
 
 class Stage2RecordRenderer(RecordRenderer):
@@ -566,56 +553,36 @@ class Stage2RecordRenderer(RecordRenderer):
         num_legal = sum(legal_labels)
         return [index, record.get("id"), num_legal]
 
-    def generate_analytics(
+    def get_distribution(
         self, records: list[dict[str, Any]]
-    ) -> go.Figure | None:
-        """Stage2データから合法手数の分布チャートを生成する．
+    ) -> Distribution | None:
+        """合法手数の分布を返す．"""
+        values = [float(self._legal_count(r)) for r in records]
+        if not values:
+            return None
+        return Distribution(
+            title="合法手数の分布",
+            axis_label="合法手数",
+            values=tuple(values),
+        )
+
+    def get_record_value(
+        self, record: dict[str, Any]
+    ) -> float | None:
+        """このレコードの合法手数を返す．"""
+        return float(self._legal_count(record))
+
+    @staticmethod
+    def _legal_count(record: dict[str, Any]) -> int:
+        """合法手ラベルの総数を数える．
 
         Args:
-            records: Stage2レコードのリスト
+            record: レコードデータ
 
         Returns:
-            Plotly Figureオブジェクト，またはデータがない場合はNone
+            合法手数
         """
-        try:
-            import plotly.graph_objects as go
-        except ImportError:
-            return None
-
-        if not records:
-            return None
-
-        # 合法手数を集計
-        legal_counts = []
-        for r in records:
-            legal_labels = r.get("legalMovesLabel", [])
-            count = sum(legal_labels)
-            legal_counts.append(count)
-
-        # ヒストグラム作成
-        fig = go.Figure(
-            data=[
-                go.Histogram(
-                    x=legal_counts,
-                    marker_color="rgba(255,152,0,0.6)",
-                    nbinsx=30,
-                    name="合法手数",
-                )
-            ]
-        )
-
-        fig.update_layout(
-            title="合法手数の分布",
-            xaxis_title="合法手数",
-            yaxis_title="頻度",
-            template="plotly_white",
-            font={"family": "system-ui", "size": 12},
-            height=400,
-            showlegend=False,
-            margin={"l": 40, "r": 40, "t": 60, "b": 40},
-        )
-
-        return fig
+        return sum(record.get("legalMovesLabel", []))
 
 
 class PreprocessingRecordRenderer(RecordRenderer):
@@ -728,102 +695,30 @@ class PreprocessingRecordRenderer(RecordRenderer):
             best_wr_str,
         ]
 
-    def generate_analytics(
+    def get_distribution(
         self, records: list[dict[str, Any]]
-    ) -> go.Figure | None:
-        """Preprocessingデータから勝率分布チャートを生成する．
-
-        resultValueとbestMoveWinRate（存在する場合）の分布を表示する．
-
-        Args:
-            records: Preprocessingレコードのリスト
-
-        Returns:
-            Plotly Figureオブジェクト，またはデータがない場合はNone
-        """
-        try:
-            import plotly.graph_objects as go
-            from plotly.subplots import make_subplots
-        except ImportError:
-            return None
-
-        if not records:
-            return None
-
-        # resultValueを集計
-        result_values = [
-            r.get("resultValue", 0.0)
+    ) -> Distribution | None:
+        """result_value (先手勝率) の分布を返す．"""
+        values = [
+            float(r["resultValue"])
             for r in records
             if r.get("resultValue") is not None
         ]
-
-        # bestMoveWinRateを集計
-        best_wr_values = [
-            r.get("bestMoveWinRate", 0.0)
-            for r in records
-            if r.get("bestMoveWinRate") is not None
-        ]
-
-        has_best_wr = len(best_wr_values) > 0
-
-        result_hist = go.Histogram(
-            x=result_values,
-            marker_color="rgba(156,39,176,0.6)",
-            nbinsx=20,
-            name="勝率",
+        if not values:
+            return None
+        return Distribution(
+            title="result_value (先手勝率) の分布",
+            axis_label="result_value",
+            values=tuple(values),
+            precision=3,
         )
 
-        if has_best_wr:
-            fig = make_subplots(
-                rows=1,
-                cols=2,
-                subplot_titles=(
-                    "勝率（Result Value）の分布",
-                    "最善手勝率（Best Move WR）の分布",
-                ),
-                horizontal_spacing=0.12,
-            )
-
-            fig.add_trace(result_hist, row=1, col=1)
-
-            fig.add_trace(
-                go.Histogram(
-                    x=best_wr_values,
-                    marker_color="rgba(33,150,243,0.6)",
-                    nbinsx=20,
-                    name="最善手勝率",
-                ),
-                row=1,
-                col=2,
-            )
-
-            fig.update_xaxes(title_text="勝率", row=1, col=1)
-            fig.update_xaxes(
-                title_text="最善手勝率", row=1, col=2
-            )
-            fig.update_yaxes(title_text="頻度", row=1, col=1)
-            fig.update_yaxes(title_text="頻度", row=1, col=2)
-        else:
-            fig = go.Figure(data=[result_hist])
-            fig.update_layout(
-                xaxis_title="勝率",
-                yaxis_title="頻度",
-            )
-
-        title = "勝率分布"
-        if has_best_wr:
-            title = "勝率分布（局面勝率 vs 最善手勝率）"
-
-        fig.update_layout(
-            title=title,
-            template="plotly_white",
-            font={"family": "system-ui", "size": 12},
-            height=400,
-            showlegend=False,
-            margin={"l": 40, "r": 40, "t": 60, "b": 40},
-        )
-
-        return fig
+    def get_record_value(
+        self, record: dict[str, Any]
+    ) -> float | None:
+        """このレコードの result_value を返す．"""
+        value = record.get("resultValue")
+        return None if value is None else float(value)
 
 
 class RecordRendererFactory:

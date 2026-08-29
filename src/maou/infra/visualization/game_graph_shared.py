@@ -6,22 +6,118 @@ game_graph_server.py (スタンドアロンモード) と gradio_server.py (埋�
 
 import html
 import logging
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import plotly.graph_objects as go
-
 logger = logging.getLogger(__name__)
 
+
+# ========================================
+# ワークベンチのアクションレーン
+# ========================================
+#
+# 画面はワークベンチ 1 枚なので，UI 操作はすべて data-action 文字列として
+# JS から届く．重い読み込みを nav と分けないと，インデックス構築中に
+# 行送りが詰まる (analyze-gui の _LANES と同じ考え方)．
+
+WORKBENCH_LANES: tuple[str, ...] = ("nav", "load")
+"""ワークベンチのアクションレーン名．"""
+
+
+def workbench_js_on_load(lane: str) -> str:
+    """レーン名に対応する js_on_load スニペットを返す．
+
+    Args:
+        lane: レーン名
+
+    Returns:
+        JS スニペット
+    """
+    return (
+        "window.__maou_viz = window.__maou_viz || {};"
+        f"window.__maou_viz.{lane} = "
+        "{server: server, trigger: trigger};"
+    )
+
+
+def make_workbench_bridge(
+    buffer: dict[str, str],
+) -> Callable[[str], bool]:
+    """アクション受け渡し用の server_function を作る．
+
+    WARNING: バッファはクロージャとして全ブラウザセッションで共有される
+    (analysis_gui_server.py と同じ制約．ローカル可視化ツールとして
+    単一利用者を前提とする)．
+
+    Args:
+        buffer: アクション文字列を控える辞書
+
+    Returns:
+        JS から呼ばれる server_function
+    """
+
+    def handle_action(value: str) -> bool:
+        """JS から呼ばれる server_function．"""
+        if not value:
+            return False
+        buffer["value"] = str(value)
+        return True
+
+    return handle_action
+
+
+def as_int(text: Any, fallback: int) -> int:
+    """文字列を整数に直す (失敗したら fallback)．
+
+    Args:
+        text: 入力値
+        fallback: 失敗時の値
+
+    Returns:
+        整数
+    """
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def as_float(text: Any, fallback: float) -> float:
+    """文字列を実数に直す (失敗したら fallback)．
+
+    Args:
+        text: 入力値
+        fallback: 失敗時の値
+
+    Returns:
+        実数
+    """
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return fallback
+
+
 _STATIC_DIR = Path(__file__).parent / "static"
+
+# ワークベンチの見出し・ラベルに使う Archivo と本文用の Noto Sans JP．
+# demo.launch(head=...) で head に注入する (CSS からは font-family
+# 参照のみで，@font-face は Google Fonts 側が返す)．
+FONT_LINKS = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
+    "family=Archivo:wght@400;600;800&family=Noto+Sans+JP:wght@400;500;700"
+    '&display=swap">'
+)
+
 
 # ========================================
 # Gradio component elem_id constants
 # ========================================
 
-ELEM_ID_CURRENT_ROOT = "current-root"
-"""現在のルートハッシュ用 hidden Textbox の elem_id．"""
 
 ELEM_ID_SELECT_BRIDGE = "select-bridge"
 """ノード選択ブリッジ用 gr.HTML の elem_id．"""
@@ -29,11 +125,6 @@ ELEM_ID_SELECT_BRIDGE = "select-bridge"
 ELEM_ID_EXPAND_BRIDGE = "expand-bridge"
 """ノード展開ブリッジ用 gr.HTML の elem_id．"""
 
-ELEM_ID_DEPTH_SLIDER = "gt-depth-slider"
-"""表示深さスライダーの elem_id(JS からの値読み取り用)．"""
-
-ELEM_ID_MIN_PROB_SLIDER = "gt-min-prob-slider"
-"""最小確率スライダーの elem_id(JS からの値読み取り用)．"""
 
 ELEM_ID_VIEWPORT_BRIDGE = "viewport-bridge"
 """ビューポートクエリブリッジ用 gr.HTML の elem_id．"""
@@ -131,124 +222,24 @@ def build_graph_html(canvas_data_json: str) -> str:
 """
 
 
-def build_breadcrumb_html(
-    breadcrumb_data: list[dict[str, str]],
-) -> str:
-    """パンくずリストのHTMLを生成する．
-
-    Args:
-        breadcrumb_data: [{"hash": "...", "label": "..."}, ...]
-
-    Returns:
-        パンくずリストのHTML文字列
-    """
-    if not breadcrumb_data:
-        return '<div class="breadcrumb-nav"></div>'
-
-    items: list[str] = []
-    last_idx = len(breadcrumb_data) - 1
-    for i, item in enumerate(breadcrumb_data):
-        if i > 0:
-            items.append(
-                '<span class="breadcrumb-sep">&gt;</span>'
-            )
-        escaped_label = html.escape(item["label"])
-        escaped_hash = html.escape(item["hash"])
-        if i == last_idx:
-            # 現在のノード(クリック不可)
-            items.append(
-                f'<span class="breadcrumb-item active">'
-                f"{escaped_label}</span>"
-            )
-        else:
-            items.append(
-                f'<span class="breadcrumb-item" '
-                f'data-hash="{escaped_hash}">'
-                f"{escaped_label}</span>"
-            )
-
-    return f'<div class="breadcrumb-nav">{"".join(items)}</div>'
-
-
 # ========================================
-# Plotly chart builders
+# ワークベンチ用 HTML レンダラー
 # ========================================
+#
+# gr.JSON / gr.Dataframe は Gradio 固有の枠・行番号・セル箱を伴い，
+# ワークベンチのデザイン (罫線だけの表・キーと値の 2 段組) に寄せられない．
+# 表示専用のパネルはサーバー側で HTML を組み，gr.HTML に流し込む．
+# 行クリックが要るテーブルは data-row 属性を持たせ，
+# static/visualize_workbench.js のブリッジが行番号をサーバーへ返す．
 
 
-def create_analytics_plot(
-    analytics_data: dict[str, Any],
-) -> go.Figure | None:
-    """分岐分析のPlotlyチャートを生成する．
+def build_workbench_head() -> str:
+    """ワークベンチの行クリックブリッジ JS を head に注入する HTML を返す．
 
-    Args:
-        analytics_data: 分析データ(moves, probabilities, win_rates)
-
-    Returns:
-        Plotly Figure．データがない場合None．
-    """
-    moves = analytics_data.get("moves", [])
-    probs = analytics_data.get("probabilities", [])
-    win_rates = analytics_data.get("win_rates", [])
-
-    if not moves:
-        return None
-
-    colors = []
-    for wr in win_rates:
-        if wr > 0.55:
-            colors.append("#2196F3")
-        elif wr < 0.45:
-            colors.append("#F44336")
-        else:
-            colors.append("#9E9E9E")
-
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                x=moves,
-                y=[p * 100 for p in probs],
-                marker_color=colors,
-                text=[f"{wr * 100:.1f}%" for wr in win_rates],
-                textposition="outside",
-                hovertemplate="<b>%{x}</b><br>"
-                + "確率: %{y:.1f}%<br>"
-                + "勝率: %{text}<extra></extra>",
-            )
-        ]
-    )
-    fig.update_layout(
-        title="上位指し手の確率分布",
-        xaxis_title="指し手",
-        yaxis_title="確率 (%)",
-        template="plotly_white",
-        height=300,
-        margin={"l": 40, "r": 20, "t": 40, "b": 60},
-        font={"family": "Noto Sans JP, sans-serif"},
-    )
-    return fig
-
-
-def create_empty_plot() -> go.Figure:
-    """空のPlotlyチャートを生成する．
+    gr.HTML は innerHTML で差し替わり ``<script>`` が実行されないため，
+    head 側に置く (game_graph_server._build_head_scripts と同じ方針)．
 
     Returns:
-        空のPlotly Figure
+        head に入れる HTML 文字列
     """
-    fig = go.Figure()
-    fig.update_layout(
-        title="分岐分析",
-        template="plotly_white",
-        height=300,
-        annotations=[
-            {
-                "text": "ノードを選択してください",
-                "xref": "paper",
-                "yref": "paper",
-                "x": 0.5,
-                "y": 0.5,
-                "showarrow": False,
-                "font": {"size": 14, "color": "#718096"},
-            }
-        ],
-    )
-    return fig
+    return f"<script>{load_static_file('visualize_workbench.js')}</script>"

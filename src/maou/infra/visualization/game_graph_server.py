@@ -10,6 +10,8 @@ import logging
 import tempfile
 import uuid
 from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,25 +19,31 @@ import gradio as gr
 import plotly.graph_objects as go
 
 from maou.infra.visualization.game_graph_shared import (
-    ELEM_ID_CURRENT_ROOT,
-    ELEM_ID_DEPTH_SLIDER,
     ELEM_ID_EXPAND_BRIDGE,
-    ELEM_ID_MIN_PROB_SLIDER,
     ELEM_ID_SELECT_BRIDGE,
     ELEM_ID_VIEWPORT_BRIDGE,
+    FONT_LINKS,
     JS_ON_LOAD_EXPAND,
     JS_ON_LOAD_SELECT,
     JS_ON_LOAD_VIEWPORT,
-    build_breadcrumb_html,
+    WORKBENCH_LANES,
+    as_float,
+    as_int,
     build_graph_html,
-    create_analytics_plot,
-    create_empty_plot,
+    build_workbench_head,
     load_static_file,
+    make_workbench_bridge,
+    workbench_js_on_load,
 )
 from maou.interface.game_graph_io import GameGraphIO
 from maou.interface.game_graph_visualization import (
     GameGraphVisualizationInterface,
-    GraphLayout,
+)
+from maou.interface.visualize_workbench import (
+    GraphData,
+    StatusView,
+    WorkbenchState,
+    render_workbench,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,8 +55,8 @@ _ExpandResult = tuple[
     str,
     str,
     str,
-    dict[str, str],
-    list[list[str]],
+    str,
+    str,
     list[str],
     go.Figure,
     str,
@@ -64,7 +72,10 @@ def _load_custom_css() -> str:
     Returns:
         結合されたCSS文字列
     """
-    css_files = ["theme.css", "components.css"]
+    # 画面はワークベンチ 1 枚なので，Gradio コンポーネント向けの
+    # theme.css / components.css は読み込まない (旧 UI の遺物であり，
+    # 残すとワークベンチのトークンと競合する)．
+    css_files = ["visualize_workbench.css"]
     css_parts = []
     for css_file in css_files:
         css_path = _STATIC_DIR / css_file
@@ -150,120 +161,6 @@ def _build_head_scripts() -> str:
 """
 
 
-def _get_detail_outputs(
-    viz: GameGraphVisualizationInterface,
-    pos_hash: int,
-) -> tuple[
-    str,
-    dict[str, str],
-    list[list[str]],
-    list[str],
-    go.Figure,
-    str,
-    str,
-]:
-    """ノード詳細パネルの出力を生成する．
-
-    Args:
-        viz: 可視化インターフェース
-        pos_hash: 対象ノードのposition_hash
-
-    Returns:
-        (board_svg, stats, display_moves, child_hashes,
-         plot, breadcrumb_html, sfen_text)
-    """
-    board_svg = viz.get_board_svg(pos_hash)
-    stats = viz.get_node_stats(pos_hash)
-    moves_with_hash = viz.get_move_table(pos_hash)
-    analytics = viz.get_analytics_data(pos_hash)
-    plot = create_analytics_plot(analytics)
-    if plot is None:
-        plot = create_empty_plot()
-
-    breadcrumb = viz.get_breadcrumb_data(pos_hash)
-    breadcrumb_html = build_breadcrumb_html(breadcrumb)
-
-    sfen_text = viz.export_sfen_path(pos_hash)
-
-    # 表示用データ(3列)とchild_hashリストを分離
-    display_moves = [
-        [r.japanese, r.probability, r.win_rate]
-        for r in moves_with_hash
-    ]
-    child_hashes = [r.child_hash for r in moves_with_hash]
-
-    return (
-        board_svg,
-        stats,
-        display_moves,
-        child_hashes,
-        plot,
-        breadcrumb_html,
-        sfen_text,
-    )
-
-
-def _update_graph_view(
-    viz: GameGraphVisualizationInterface,
-    root_hash: int,
-    display_depth: int,
-    min_prob: float,
-    layout: GraphLayout | None = None,
-) -> tuple[
-    str,
-    str,
-    dict[str, str],
-    list[list[str]],
-    list[str],
-    go.Figure,
-    str,
-    str,
-]:
-    """グラフビューと詳細パネルを更新する．
-
-    Args:
-        viz: 可視化インターフェース
-        root_hash: 表示するサブグラフのルートhash
-        display_depth: 表示深さ
-        min_prob: エッジの最小確率閾値
-        layout: 事前計算されたレイアウト
-
-    Returns:
-        (graph_html, board_svg, stats, display_moves, child_hashes,
-         plot, breadcrumb_html, sfen_text)
-    """
-    if layout is None:
-        layout = GraphLayout(
-            node_positions={}, bounds=(0.0, 0.0, 0.0, 0.0)
-        )
-    canvas_data = viz.get_canvas_data(
-        root_hash, int(display_depth), min_prob, layout
-    )
-    canvas_json = json.dumps(canvas_data, ensure_ascii=False)
-    graph_html = build_graph_html(canvas_json)
-
-    (
-        board_svg,
-        stats,
-        display_moves,
-        child_hashes,
-        plot,
-        breadcrumb_html,
-        sfen_text,
-    ) = _get_detail_outputs(viz, root_hash)
-
-    return (
-        graph_html,
-        board_svg,
-        stats,
-        display_moves,
-        child_hashes,
-        plot,
-        breadcrumb_html,
-        sfen_text,
-    )
-
-
 def launch_game_graph_server(
     graph_path: Path,
     port: int | None = None,
@@ -317,70 +214,17 @@ def launch_game_graph_server(
         _spatial_buckets[(bx, by)].append(h)
 
     custom_css = _load_custom_css()
-    head_scripts = _build_head_scripts()
+    head_scripts = (
+        FONT_LINKS
+        + _build_head_scripts()
+        + build_workbench_head()
+    )
 
-    # --- コールバック定義 ---
-
-    # server_functions → .change() コールバック間のデータ受け渡し用
-    # NOTE: Gradio はセッション内のリクエストを逐次処理するため，
-    # 同一セッション内での競合は発生しない．
-    # WARNING: _pending はクロージャとして全セッションに共有されるため，
-    # 複数ユーザーが同時接続するマルチセッション環境では競合が発生する．
-    # 本モジュール(スタンドアロンモード)は単一ユーザー前提で設計されており，
-    # マルチセッション環境では gr.State を使ったセッション分離が必要．
+    # server_functions → .change() コールバック間のデータ受け渡し用．
+    # WARNING: クロージャとして全ブラウザセッションで共有されるため，
+    # 複数ユーザーの同時接続では競合する．本モジュール (スタンドアロン
+    # モード) は単一利用者を前提とする．
     _pending: dict[str, Any] = {}
-
-    def on_load(
-        display_depth: int,
-        min_prob: float,
-    ) -> tuple[
-        str,
-        str,
-        dict[str, str],
-        list[list[str]],
-        list[str],
-        go.Figure,
-        str,
-        str,
-    ]:
-        """初期表示コールバック．"""
-        return _update_graph_view(
-            viz,
-            viz.get_root_hash(),
-            display_depth,
-            min_prob,
-            graph_layout,
-        )
-
-    def on_refresh(
-        display_depth: int,
-        min_prob: float,
-        current_root: str,
-    ) -> tuple[
-        str,
-        str,
-        dict[str, str],
-        list[list[str]],
-        list[str],
-        go.Figure,
-        str,
-        str,
-    ]:
-        """更新ボタンのコールバック．"""
-        try:
-            rh = (
-                int(current_root)
-                if current_root
-                else viz.get_root_hash()
-            )
-        except ValueError:
-            logger.warning(
-                "Invalid current_root: %s", current_root
-            )
-            rh = viz.get_root_hash()
-        return _update_graph_view(
-            viz, rh, display_depth, min_prob, graph_layout
-        )
 
     # --- server_functions: JS から直接呼び出される Python 関数 ---
     # Gradio 6 では JS DOM 操作で Textbox の値を変更しても
@@ -388,22 +232,37 @@ def launch_game_graph_server(
     # gr.HTML の server_functions でデータを処理し，
     # trigger("change") で .change() コールバックを発火する．
 
+    def handle_move_select(row_str: str) -> bool:
+        """指し手一覧の行クリックの server_function．
+
+        JS から呼ばれ，行番号を _pending に控える．
+        """
+        try:
+            _pending["move_row"] = int(row_str)
+        except (TypeError, ValueError):
+            logger.warning("Invalid move row: %s", row_str)
+            return False
+        return True
+
     def handle_select(node_id_str: str) -> bool:
         """ノード選択の server_function．
 
-        JS から呼ばれ，結果を _pending に格納する．
+        Canvas のシングルクリックで呼ばれ，選んだノードの hash を
+        _pending に控える (描画はワークベンチ側でまとめて行う)．
+
+        Args:
+            node_id_str: ノードの position_hash 文字列
+
+        Returns:
+            控えられたら True
         """
         if not node_id_str:
             return False
         try:
-            pos_hash = int(node_id_str)
+            _pending["node"] = str(int(node_id_str))
         except (ValueError, TypeError):
             logger.warning("Invalid node_id: %s", node_id_str)
             return False
-        _pending["select"] = {
-            "data": _get_detail_outputs(viz, pos_hash),
-            "hash": pos_hash,
-        }
         return True
 
     def handle_expand(
@@ -413,39 +272,35 @@ def launch_game_graph_server(
     ) -> bool:
         """ノード展開の server_function．
 
-        JS から呼ばれ，結果を _pending に格納する．
-        depth / prob は JS 側がスライダー DOM から読み取って渡す．
+        Canvas のダブルクリックで呼ばれ，新しいルートにするノードの
+        hash を _pending に控える．深さ・確率は JS がスライダー DOM
+        から読んで渡すが，値の保持はワークベンチ状態側が持つので
+        ここでは使わない．
 
         Note:
-            Gradio 6 の server_functions は複数の JS 引数を
-            リストとして第1引数に渡す場合があるため，
-            node_id_str がリストの場合は展開して処理する．
+            Gradio 6 の server_functions は複数の JS 引数をリストとして
+            第1引数に渡す場合があるため，リストなら展開して扱う．
+
+        Args:
+            node_id_str: ノードの position_hash 文字列 (または引数リスト)
+            display_depth: 表示深さ (JS から渡るが未使用)
+            min_prob: 最小確率 (JS から渡るが未使用)
+
+        Returns:
+            控えられたら True
         """
-        # server_functions が複数引数をリストで渡す場合の展開
         if isinstance(node_id_str, list):
             args = node_id_str
             node_id_str = str(args[0]) if args else ""
-            if len(args) > 1:
-                display_depth = args[1]
-            if len(args) > 2:
-                min_prob = args[2]
         if not node_id_str:
             return False
         try:
-            pos_hash = int(node_id_str)
+            _pending["node"] = str(int(node_id_str))
         except (ValueError, TypeError):
-            logger.warning("Invalid node_id: %s", node_id_str)
+            logger.warning(
+                "Invalid expand node_id: %s", node_id_str
+            )
             return False
-        _pending["expand"] = {
-            "data": _update_graph_view(
-                viz,
-                pos_hash,
-                int(display_depth),
-                min_prob,
-                graph_layout,
-            ),
-            "hash": pos_hash,
-        }
         return True
 
     def handle_viewport(
@@ -507,212 +362,6 @@ def launch_game_graph_server(
         )
         return json.dumps(canvas_data, ensure_ascii=False)
 
-    def on_select_result() -> tuple[
-        str,
-        dict[str, str],
-        list[list[str]],
-        list[str],
-        go.Figure,
-        str,
-        str,
-        str,
-    ]:
-        """select_bridge.change のコールバック．
-
-        handle_select が格納した結果を返す．
-        最後の要素は選択ノードのハッシュ文字列．
-        """
-        result = _pending.pop("select", None)
-        if result:
-            return (*result["data"], str(result["hash"]))
-        return ("", {}, [], [], create_empty_plot(), "", "", "")
-
-    def on_expand_result() -> _ExpandResult:
-        """expand_bridge.change のコールバック．
-
-        handle_expand が格納した結果を返す．
-        """
-        result = _pending.pop("expand", None)
-        if result:
-            (
-                graph_html_v,
-                board_svg,
-                stats,
-                display_moves,
-                child_hashes,
-                plot,
-                breadcrumb_html_v,
-                sfen_text_v,
-            ) = result["data"]
-            return (
-                graph_html_v,
-                board_svg,
-                str(result["hash"]),
-                stats,
-                display_moves,
-                child_hashes,
-                plot,
-                breadcrumb_html_v,
-                sfen_text_v,
-            )
-        return (
-            "",
-            "",
-            str(viz.get_root_hash()),
-            {},
-            [],
-            [],
-            create_empty_plot(),
-            "",
-            "",
-        )
-
-    def on_move_selected(
-        current_child_hashes: list[str],
-        display_depth: int,
-        min_prob: float,
-        evt: gr.SelectData,
-    ) -> _ExpandResult:
-        """指し手一覧の行選択時のコールバック．
-
-        Args:
-            current_child_hashes: 現在表示中の局面の子ノードhashリスト(gr.State)
-            display_depth: 表示深さ
-            min_prob: エッジの最小確率閾値
-            evt: Gradio の SelectData イベント
-        """
-        _empty: _ExpandResult = (
-            "",
-            "",
-            "",
-            {},
-            [],
-            [],
-            create_empty_plot(),
-            "",
-            "",
-        )
-        if not current_child_hashes or evt.index is None:
-            return _empty
-        row_idx = (
-            evt.index[0]
-            if isinstance(evt.index, (list, tuple))
-            else evt.index
-        )
-        if row_idx < 0 or row_idx >= len(current_child_hashes):
-            return _empty
-        try:
-            pos_hash = int(current_child_hashes[row_idx])
-        except (ValueError, IndexError):
-            return _empty
-        (
-            graph_html_v,
-            board_svg,
-            stats,
-            display_moves,
-            child_hashes,
-            plot,
-            breadcrumb_html_v,
-            sfen_text_v,
-        ) = _update_graph_view(
-            viz, pos_hash, display_depth, min_prob, graph_layout
-        )
-        return (
-            graph_html_v,
-            board_svg,
-            str(pos_hash),
-            stats,
-            display_moves,
-            child_hashes,
-            plot,
-            breadcrumb_html_v,
-            sfen_text_v,
-        )
-
-    def on_back_to_root(
-        display_depth: int,
-        min_prob: float,
-    ) -> _ExpandResult:
-        """ルートに戻るボタンのコールバック．"""
-        rh = viz.get_root_hash()
-        (
-            graph_html_v,
-            board_svg,
-            stats,
-            display_moves,
-            child_hashes,
-            plot,
-            breadcrumb_html_v,
-            sfen_text_v,
-        ) = _update_graph_view(
-            viz, rh, display_depth, min_prob, graph_layout
-        )
-        return (
-            graph_html_v,
-            board_svg,
-            str(rh),
-            stats,
-            display_moves,
-            child_hashes,
-            plot,
-            breadcrumb_html_v,
-            sfen_text_v,
-        )
-
-    def on_set_as_root(
-        selected_node: str,
-        current_root: str,
-        display_depth: int,
-        min_prob: float,
-    ) -> _ExpandResult:
-        """選択ノードをルートに設定するボタンのコールバック．
-
-        選択ノードが現在のルートと同じ場合は再描画をスキップする．
-        """
-        _noop: _ExpandResult = (
-            gr.skip(),  # type: ignore[assignment]
-            gr.skip(),  # type: ignore[assignment]
-            gr.skip(),  # type: ignore[assignment]
-            gr.skip(),  # type: ignore[assignment]
-            gr.skip(),  # type: ignore[assignment]
-            gr.skip(),  # type: ignore[assignment]
-            gr.skip(),  # type: ignore[assignment]
-            gr.skip(),  # type: ignore[assignment]
-            gr.skip(),  # type: ignore[assignment]
-        )
-        if not selected_node:
-            return _noop
-        if selected_node == current_root:
-            return _noop
-        try:
-            pos_hash = int(selected_node)
-        except (ValueError, TypeError):
-            return _noop
-        (
-            graph_html_v,
-            board_svg,
-            stats,
-            display_moves,
-            child_hashes,
-            plot,
-            breadcrumb_html_v,
-            sfen_text_v,
-        ) = _update_graph_view(
-            viz, pos_hash, display_depth, min_prob, graph_layout
-        )
-        return (
-            graph_html_v,
-            board_svg,
-            str(pos_hash),
-            stats,
-            display_moves,
-            child_hashes,
-            plot,
-            breadcrumb_html_v,
-            sfen_text_v,
-        )
-
-    # CSV一時ファイル用ディレクトリ(プロセス終了時に自動削除)
     _csv_tmp_dir = tempfile.TemporaryDirectory(
         prefix="maou_game_graph_csv_"
     )
@@ -748,98 +397,262 @@ def launch_game_graph_server(
         return str(tmp_path)
 
     # --- UI構築 ---
+    #
+    # 画面は gradio_server と同じワークベンチ 1 枚
+    # (maou.interface.visualize_workbench)．操作は data-action として
+    # static/visualize_workbench.js から，Canvas 上のクリックは従来どおり
+    # select / expand / viewport ブリッジから届く．
+
+    render_seq = {"n": 0}
+
+    def _collect(state: WorkbenchState) -> GraphData:
+        """状態からグラフ画面の表示データを組み立てる．
+
+        Args:
+            state: 操作状態
+
+        Returns:
+            GraphData
+        """
+        try:
+            rh = (
+                int(state.node)
+                if state.node
+                else viz.get_root_hash()
+            )
+        except (TypeError, ValueError):
+            rh = viz.get_root_hash()
+
+        canvas = viz.get_canvas_data(
+            rh,
+            int(state.depth),
+            float(state.min_prob),
+            graph_layout,
+        )
+        nodes_total, edges_total = viz.get_counts()
+        return GraphData(
+            graph_html=build_graph_html(
+                json.dumps(canvas, ensure_ascii=False)
+            ),
+            breadcrumb=[
+                (
+                    str(c.get("label", "")),
+                    str(c.get("hash", "")),
+                )
+                for c in viz.get_breadcrumb_data(rh)
+            ],
+            board_svg=viz.get_board_svg(rh),
+            node_stats=viz.get_node_stats(rh),
+            moves=[
+                [r.japanese, r.probability, r.win_rate]
+                for r in viz.get_move_table(rh)
+            ],
+            usi_line=viz.export_sfen_path(rh),
+            node_count=len(canvas.get("nodes", [])),
+            edge_count=edges_total,
+            total_nodes=nodes_total,
+        )
+
+    def _status(state: WorkbenchState) -> StatusView:
+        """トップバーの状態を組み立てる．
+
+        Args:
+            state: 操作状態
+
+        Returns:
+            StatusView
+        """
+        nodes_total, edges_total = viz.get_counts()
+        return StatusView(
+            badge="GRAPH",
+            tone="ok",
+            count_main=f"{nodes_total:,}",
+            count_unit=f"nodes / {edges_total:,} edges",
+            path_label=str(graph_path),
+        )
+
+    def _render(state: WorkbenchState) -> str:
+        """ワークベンチ全体の HTML を返す．
+
+        Args:
+            state: 操作状態
+
+        Returns:
+            HTML 文字列
+        """
+        render_seq["n"] += 1
+        return render_workbench(
+            state,
+            _status(state),
+            graph=_collect(state),
+            render_stamp=str(render_seq["n"]),
+            # スタンドアロンはグラフ専用 (レコードのインデックスを持たない)
+            types_enabled=False,
+        )
+
+    def _child_hash_at(state: WorkbenchState, row: int) -> str:
+        """指し手一覧の行番号から子ノード hash を引く．
+
+        Args:
+            state: 操作状態
+            row: 行番号 (0 始まり)
+
+        Returns:
+            子ノードの hash 文字列．引けなければ空文字．
+        """
+        try:
+            rh = (
+                int(state.node)
+                if state.node
+                else viz.get_root_hash()
+            )
+        except (TypeError, ValueError):
+            return ""
+        moves = viz.get_move_table(rh)
+        if 0 <= row < len(moves):
+            return str(moves[row].child_hash)
+        return ""
+
+    def on_workbench_action(
+        action: str, state: WorkbenchState
+    ) -> tuple[WorkbenchState, str, Any]:
+        """data-action を状態に適用して再描画する．
+
+        Args:
+            action: JS から届いたアクション文字列
+            state: 現在の操作状態
+
+        Returns:
+            (新しい状態, HTML, CSV ダウンロードの更新)
+        """
+        verb, _, rest = str(action).partition(":")
+        csv_update: Any = gr.skip()
+
+        if verb == "depth":
+            state = replace(
+                state, depth=as_int(rest, state.depth)
+            )
+        elif verb == "minprob":
+            state = replace(
+                state,
+                min_prob=as_float(rest, state.min_prob),
+            )
+        elif verb == "node":
+            state = replace(
+                state,
+                node="" if rest == "root" else rest,
+            )
+        elif verb == "move":
+            child = _child_hash_at(state, as_int(rest, -1))
+            if child:
+                state = replace(state, node=child)
+        elif verb == "setroot":
+            # 選択中のノードが既にルート扱いなので再描画のみ
+            pass
+        elif verb == "csv":
+            csv_update = on_export_csv(
+                state.node,
+                state.depth,
+                state.min_prob,
+            )
+        elif verb in ("redraw", "refresh"):
+            pass
+        else:
+            logger.debug("Unknown action: %s", action)
+
+        return (state, _render(state), csv_update)
+
+    def on_bridge_node(
+        state: WorkbenchState,
+    ) -> tuple[WorkbenchState, str]:
+        """Canvas のクリック / ダブルクリックで選択ノードを移す．
+
+        Args:
+            state: 現在の操作状態
+
+        Returns:
+            (新しい状態, HTML)
+        """
+        pending = _pending.pop("node", None)
+        if pending:
+            state = replace(state, node=str(pending))
+        return (state, _render(state))
 
     with gr.Blocks(
         title="Maou Game Graph Viewer",
     ) as demo:
-        gr.Markdown("# Maou Game Graph Viewer")
-        initial_sfen = viz.get_initial_sfen()
-        gr.Markdown(
-            f"Nodes: **{len(nodes_df):,}** / "
-            f"Edges: **{len(edges_df):,}** / "
-            f"Root: `{initial_sfen}`"
+        state = gr.State(
+            WorkbenchState(
+                array_type="game-graph",
+                node=str(root_hash),
+            )
         )
-
-        # コントロールバー
-        with gr.Row():
-            depth_slider = gr.Slider(
-                minimum=1,
-                maximum=20,
-                value=3,
-                step=1,
-                label="表示深さ",
-                scale=1,
-                elem_id=ELEM_ID_DEPTH_SLIDER,
-            )
-            min_prob_slider = gr.Slider(
-                minimum=0.001,
-                maximum=0.3,
-                value=0.01,
-                step=0.001,
-                label="最小確率",
-                scale=1,
-                elem_id=ELEM_ID_MIN_PROB_SLIDER,
-            )
-            refresh_btn = gr.Button(
-                "更新", variant="primary", scale=0
-            )
-            back_btn = gr.Button(
-                "ルートに戻る", variant="secondary", scale=0
-            )
-            set_root_btn = gr.Button(
-                "ルートに設定", variant="secondary", scale=0
-            )
-
-        # パンくずリスト
-        breadcrumb_html = gr.HTML(
-            value=build_breadcrumb_html(
-                [{"hash": str(root_hash), "label": "初期局面"}]
+        workbench = gr.HTML(
+            _render(
+                WorkbenchState(
+                    array_type="game-graph",
+                    node=str(root_hash),
+                )
             ),
-            label="パンくずリスト",
-            show_label=False,
+            elem_id="viz-workbench-slot",
+        )
+        csv_file = gr.File(
+            label="CSVダウンロード",
+            interactive=False,
+            elem_id="vz-csv-file",
         )
 
-        # メインコンテンツ
-        with gr.Row():
-            with gr.Column(scale=3):
-                graph_html = gr.HTML(
-                    label="グラフ表示",
-                    elem_id="graph-view",
+        # --- ワークベンチのアクションレーン ---
+        buffers: dict[str, dict[str, str]] = {
+            lane: {} for lane in WORKBENCH_LANES
+        }
+        lane_bridges = {
+            lane: gr.HTML(
+                value="",
+                elem_id=f"vz-bridge-{lane}",
+                elem_classes=["maou-hidden"],
+                server_functions=[
+                    make_workbench_bridge(buffers[lane])
+                ],
+                js_on_load=workbench_js_on_load(lane),
+            )
+            for lane in WORKBENCH_LANES
+        }
+
+        def _lane_handler(
+            lane_name: str,
+        ) -> Callable[[WorkbenchState], tuple[Any, ...]]:
+            """レーン名を束縛したハンドラを返す．
+
+            Args:
+                lane_name: レーン名
+
+            Returns:
+                .change() に渡すハンドラ
+            """
+
+            def run(
+                current: WorkbenchState,
+            ) -> tuple[Any, ...]:
+                """控えたアクションを適用して再描画する．"""
+                return on_workbench_action(
+                    buffers[lane_name].pop("value", ""),
+                    current,
                 )
 
-            with gr.Column(scale=2):
-                board_html = gr.HTML(label="盤面")
-                stats_json = gr.JSON(label="局面統計")
-                move_table = gr.Dataframe(
-                    headers=["指し手", "確率", "勝率"],
-                    label="指し手一覧",
-                    interactive=False,
-                )
-                analytics_plot = gr.Plot(label="分岐分析")
+            return run
 
-                # エクスポートセクション
-                with gr.Accordion("エクスポート", open=False):
-                    sfen_text = gr.Textbox(
-                        label="USI position文字列",
-                        interactive=False,
-                        lines=2,
-                    )
-                    export_csv_btn = gr.Button(
-                        "CSV出力",
-                        variant="secondary",
-                        size="sm",
-                    )
-                    csv_file = gr.File(
-                        label="CSVダウンロード",
-                        visible=True,
-                    )
+        for lane in WORKBENCH_LANES:
+            lane_bridges[lane].change(
+                _lane_handler(lane),
+                inputs=[state],
+                outputs=[state, workbench, csv_file],
+            )
 
-        # --- Bridge components (server_functions) ---
+        # --- Canvas レンダラー側のブリッジ ---
         # Gradio 6 では JS DOM 操作で Textbox の値を変更しても
-        # .input() / .change() が発火しない．
-        # gr.HTML の server_functions を使い，JS → Python を直接呼び出す．
-        # 処理完了後に trigger("change") で .change() を発火し，
-        # Gradio の出力パイプラインで UI コンポーネントを更新する．
+        # .input() / .change() が発火しない．gr.HTML の server_functions で
+        # JS → Python を直接呼び出し，trigger("change") で描画を回す．
         select_bridge = gr.HTML(
             value="",
             elem_id=ELEM_ID_SELECT_BRIDGE,
@@ -854,7 +667,7 @@ def launch_game_graph_server(
             server_functions=[handle_expand],
             js_on_load=JS_ON_LOAD_EXPAND,
         )
-        # ビューポートクエリ用ブリッジ(Phase 4: 遅延読み込み)
+        # ビューポートクエリ用ブリッジ(遅延読み込み)
         gr.HTML(
             value="",
             elem_id=ELEM_ID_VIEWPORT_BRIDGE,
@@ -863,125 +676,15 @@ def launch_game_graph_server(
             js_on_load=JS_ON_LOAD_VIEWPORT,
         )
 
-        # Hidden state
-        current_root_state = gr.Textbox(
-            label="",
-            value=str(root_hash),
-            elem_id=ELEM_ID_CURRENT_ROOT,
-            elem_classes=["maou-hidden"],
-        )
-        # 指し手一覧の行選択用child_hashリスト
-        child_hashes_state = gr.State([])
-        # グラフ上で選択中のノードhash("ルートに設定"ボタン用)
-        selected_node_state = gr.State("")
-
-        # --- イベントハンドリング ---
-
-        # 初期表示
-        _load_outputs = [
-            graph_html,
-            board_html,
-            stats_json,
-            move_table,
-            child_hashes_state,
-            analytics_plot,
-            breadcrumb_html,
-            sfen_text,
-        ]
-
-        demo.load(
-            fn=on_load,
-            inputs=[depth_slider, min_prob_slider],
-            outputs=_load_outputs,
-        )
-
-        # 更新ボタン
-        refresh_btn.click(
-            fn=on_refresh,
-            inputs=[
-                depth_slider,
-                min_prob_slider,
-                current_root_state,
-            ],
-            outputs=_load_outputs,
-        )
-
-        # ノード選択(シングルクリック) - server_functions → trigger("change")
-        _select_outputs = [
-            board_html,
-            stats_json,
-            move_table,
-            child_hashes_state,
-            analytics_plot,
-            breadcrumb_html,
-            sfen_text,
-            selected_node_state,
-        ]
-
-        # ノード展開 / 指し手選択共通の出力(グラフ + 詳細パネル)
-        _expand_outputs = [
-            graph_html,
-            board_html,
-            current_root_state,
-            stats_json,
-            move_table,
-            child_hashes_state,
-            analytics_plot,
-            breadcrumb_html,
-            sfen_text,
-        ]
-
-        # server_functions で処理後，trigger("change") で発火する
         select_bridge.change(
-            fn=on_select_result,
-            outputs=_select_outputs,
+            on_bridge_node,
+            inputs=[state],
+            outputs=[state, workbench],
         )
-
-        # 指し手一覧の行選択
-        move_table.select(
-            fn=on_move_selected,
-            inputs=[
-                child_hashes_state,
-                depth_slider,
-                min_prob_slider,
-            ],
-            outputs=_expand_outputs,
-        )
-
-        # ノード展開(ダブルクリック / パンくずクリック)
         expand_bridge.change(
-            fn=on_expand_result,
-            outputs=_expand_outputs,
-        )
-
-        # ルートに戻る
-        back_btn.click(
-            fn=on_back_to_root,
-            inputs=[depth_slider, min_prob_slider],
-            outputs=_expand_outputs,
-        )
-
-        # 選択ノードをルートに設定
-        set_root_btn.click(
-            fn=on_set_as_root,
-            inputs=[
-                selected_node_state,
-                current_root_state,
-                depth_slider,
-                min_prob_slider,
-            ],
-            outputs=_expand_outputs,
-        )
-
-        # CSV出力
-        export_csv_btn.click(
-            fn=on_export_csv,
-            inputs=[
-                current_root_state,
-                depth_slider,
-                min_prob_slider,
-            ],
-            outputs=[csv_file],
+            on_bridge_node,
+            inputs=[state],
+            outputs=[state, workbench],
         )
 
     # サーバー起動

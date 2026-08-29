@@ -1,0 +1,885 @@
+/* データ可視化 GUI (visualize) ワークベンチのスタイル．
+
+   画面は gr.HTML 1 枚 (maou.interface.visualize_workbench) なので，
+   ここが見た目の唯一の定義元である．Gradio コンポーネントを装飾する
+   必要はなく，#viz-workbench 配下の自前クラスだけを書く．
+
+   Modernist デザインシステム (Archivo・赤単色 #ec3013・角丸ゼロ・
+   2px 罫) に従う．トークン名と寸法はデザインモックに合わせてある． */
+
+#viz-workbench {
+  --vz-bg: #f3f2f2;
+  --vz-surface: #eae9e9;
+  --vz-text: #201e1d;
+  --vz-accent: #ec3013;
+  --vz-divider: rgba(32, 30, 29, 0.4);
+
+  --vz-neutral-100: #f8f4f4;
+  --vz-neutral-200: #eae7e7;
+  --vz-neutral-300: #d7d3d3;
+  --vz-neutral-400: #bab6b6;
+  --vz-neutral-500: #9b9797;
+  --vz-neutral-600: #7d7979;
+  --vz-neutral-700: #605d5d;
+  --vz-neutral-800: #444141;
+  --vz-neutral-900: #2d2b2b;
+
+  --vz-accent-100: #fff2ef;
+  --vz-accent-200: #ffe0d9;
+  --vz-accent-600: #dd2b0f;
+  --vz-accent-700: #ae1800;
+
+  --vz-sans: "Archivo", "Noto Sans JP", system-ui, sans-serif;
+  --vz-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --vz-rail-l: 340px;
+  --vz-rail-r: 420px;
+  --vz-top-h: 72px;
+
+  font-family: var(--vz-sans);
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--vz-text);
+  background: var(--vz-bg);
+  min-width: 1280px;
+  height: 100vh;
+  min-height: 680px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#viz-workbench *,
+#viz-workbench *::before,
+#viz-workbench *::after {
+  box-sizing: border-box;
+}
+
+/* Gradio の幅上限・余白・枠を打ち消し，ワークベンチを 1 枚板にする．
+   ワークベンチを含むものだけを :has() で狙う (他画面を汚さない)． */
+.gradio-container:has(#viz-workbench),
+.main:has(#viz-workbench),
+.wrap:has(#viz-workbench),
+.contain:has(#viz-workbench),
+.block:has(#viz-workbench),
+.html-container:has(#viz-workbench),
+.prose:has(#viz-workbench) {
+  max-width: 100% !important;
+  width: 100% !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: var(--vz-bg, #f3f2f2) !important;
+  box-shadow: none !important;
+  overflow: visible !important;
+}
+
+body:has(#viz-workbench) {
+  margin: 0;
+  background: #f3f2f2;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   共通部品
+   ══════════════════════════════════════════════════════════════ */
+
+#viz-workbench .vz-m {
+  font-family: var(--vz-mono);
+}
+
+#viz-workbench .vz-right {
+  text-align: right;
+}
+
+#viz-workbench .vz-lbl {
+  font: 800 11px/1 var(--vz-sans);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--vz-neutral-600);
+  margin: 0;
+}
+
+#viz-workbench .vz-hint {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--vz-neutral-600);
+  margin: 0;
+}
+
+#viz-workbench .vz-unit {
+  font-size: 12px;
+  color: var(--vz-neutral-600);
+}
+
+#viz-workbench .vz-empty {
+  padding: 14px 0;
+  font-size: 12px;
+  color: var(--vz-neutral-500);
+}
+
+#viz-workbench .vz-rule {
+  height: 2px;
+  background: var(--vz-divider);
+  margin: 14px 0;
+}
+
+#viz-workbench .vz-vr {
+  width: 1px;
+  height: 28px;
+  background: var(--vz-divider);
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-spacer {
+  flex: 1 1 auto;
+}
+
+/* ── セグメンテッドコントロール ───────────────────────── */
+
+#viz-workbench .vz-seg {
+  display: flex;
+  border: 1px solid var(--vz-text);
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-seg.start {
+  align-self: flex-start;
+}
+
+#viz-workbench .vz-seg > button {
+  font: 800 11px/1 var(--vz-sans);
+  letter-spacing: 0.06em;
+  padding: 9px 12px;
+  color: var(--vz-neutral-700);
+  border: 0;
+  border-right: 1px solid var(--vz-divider);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#viz-workbench .vz-seg > button:last-child {
+  border-right: 0;
+}
+
+#viz-workbench .vz-seg > button:hover {
+  background: color-mix(in srgb, var(--vz-text) 7%, transparent);
+}
+
+#viz-workbench .vz-seg > button:disabled {
+  cursor: default;
+  color: var(--vz-neutral-400);
+}
+
+#viz-workbench .vz-seg > button:disabled:hover {
+  background: transparent;
+}
+
+#viz-workbench .vz-seg > button.on {
+  background: var(--vz-accent);
+  color: var(--vz-bg);
+}
+
+/* ── 入力 ─────────────────────────────────────────────── */
+
+#viz-workbench .vz-in {
+  width: 100%;
+  height: 30px;
+  border: 1px solid var(--vz-divider);
+  background: var(--vz-neutral-100);
+  font: 400 13px/28px var(--vz-body, var(--vz-sans));
+  padding: 0 8px;
+  color: var(--vz-text);
+  border-radius: 0;
+}
+
+#viz-workbench .vz-in.vz-m {
+  font-family: var(--vz-mono);
+  font-size: 12.5px;
+}
+
+#viz-workbench .vz-in:focus {
+  outline: 0;
+  border-color: var(--vz-accent);
+}
+
+#viz-workbench .vz-in::placeholder {
+  color: var(--vz-neutral-500);
+}
+
+#viz-workbench .vz-in.off,
+#viz-workbench .vz-in:disabled {
+  background: var(--vz-neutral-200);
+  color: var(--vz-neutral-400);
+}
+
+#viz-workbench .vz-in.wrap {
+  height: auto;
+  padding: 7px 8px;
+  line-height: 1.5;
+  font-size: 11.5px;
+  word-break: break-all;
+}
+
+/* ── ボタン ───────────────────────────────────────────── */
+
+#viz-workbench .vz-b {
+  font: 800 12px/1 var(--vz-sans);
+  padding: 9px 12px;
+  border: 1px solid var(--vz-text);
+  background: transparent;
+  color: var(--vz-text);
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: 0;
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-b:hover {
+  background: color-mix(in srgb, var(--vz-text) 7%, transparent);
+}
+
+#viz-workbench .vz-b.pri {
+  background: var(--vz-accent);
+  border-color: var(--vz-accent);
+  color: var(--vz-bg);
+}
+
+#viz-workbench .vz-b.pri:hover {
+  background: var(--vz-accent-600);
+}
+
+#viz-workbench .vz-b.gh {
+  border-color: var(--vz-divider);
+}
+
+#viz-workbench .vz-b.grow {
+  flex: 1 1 auto;
+}
+
+#viz-workbench .vz-b:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+#viz-workbench .vz-btn-row {
+  display: flex;
+  gap: 8px;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   トップバー
+   ══════════════════════════════════════════════════════════════ */
+
+#viz-workbench .vz-top {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 0 20px;
+  height: var(--vz-top-h);
+  border-bottom: 2px solid var(--vz-text);
+  flex-shrink: 0;
+}
+
+#viz-workbench .vz-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+#viz-workbench .vz-brand-name {
+  font: 800 21px/1 var(--vz-sans);
+  letter-spacing: -0.02em;
+}
+
+#viz-workbench .vz-brand-sub {
+  font: 800 11px/1 var(--vz-sans);
+  letter-spacing: 0.16em;
+  color: var(--vz-accent);
+}
+
+#viz-workbench .vz-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--vz-accent);
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-dot.ok {
+  background: #2e7d32;
+}
+#viz-workbench .vz-dot.mock {
+  background: var(--vz-accent);
+}
+#viz-workbench .vz-dot.busy {
+  background: #ef6c00;
+}
+#viz-workbench .vz-dot.none {
+  background: var(--vz-neutral-400);
+}
+#viz-workbench .vz-dot.error {
+  background: var(--vz-accent-700);
+}
+
+#viz-workbench .vz-badge {
+  font: 800 11px/1 var(--vz-sans);
+  letter-spacing: 0.1em;
+}
+
+#viz-workbench .vz-count {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+#viz-workbench .vz-path {
+  font-size: 12px;
+  color: var(--vz-neutral-700);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#viz-workbench .vz-status-msg {
+  font-size: 11.5px;
+  color: var(--vz-accent-700);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   3 カラムのボディ
+   ══════════════════════════════════════════════════════════════ */
+
+#viz-workbench .vz-body {
+  display: grid;
+  grid-template-columns:
+    var(--vz-rail-l) 2px minmax(0, 1fr) 2px var(--vz-rail-r);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* グリッドの 2px 列を罫線として描く (mock の .vz-div 相当) */
+#viz-workbench .vz-body > .vz-rail.left {
+  grid-column: 1;
+  border-right: 2px solid var(--vz-divider);
+}
+
+#viz-workbench .vz-body > .vz-stage {
+  grid-column: 3;
+}
+
+#viz-workbench .vz-body > .vz-rail.right {
+  grid-column: 5;
+  border-left: 2px solid var(--vz-divider);
+}
+
+#viz-workbench .vz-rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+#viz-workbench .vz-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 14px;
+  border-bottom: 2px solid var(--vz-divider);
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-sec:last-child {
+  border-bottom: 0;
+}
+
+/* 結果一覧・指し手一覧は残り高さを埋めて内側でスクロールする */
+#viz-workbench .vz-sec.grow {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#viz-workbench .vz-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#viz-workbench .vz-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#viz-workbench .vz-pager .vz-b {
+  padding: 5px 9px;
+}
+
+#viz-workbench .vz-pageno {
+  font-size: 12px;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   罫線だけの表
+   ══════════════════════════════════════════════════════════════ */
+
+#viz-workbench .vz-table {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+  margin: 0 -14px;
+}
+
+#viz-workbench .vz-h {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 2px solid var(--vz-text);
+  font: 800 10.5px/1 var(--vz-sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--vz-neutral-700);
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-table-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+#viz-workbench .vz-row {
+  display: grid;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--vz-neutral-300);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+#viz-workbench .vz-row:hover {
+  background: color-mix(in srgb, var(--vz-text) 6%, transparent);
+}
+
+#viz-workbench .vz-row.on {
+  background: var(--vz-accent-200);
+  box-shadow: inset 3px 0 0 var(--vz-accent);
+  font-weight: 700;
+}
+
+#viz-workbench .vz-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+#viz-workbench .vz-row .vz-cell:first-child {
+  color: var(--vz-neutral-600);
+}
+
+#viz-workbench .vz-row.on .vz-cell:first-child {
+  color: var(--vz-text);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   キーと値
+   ══════════════════════════════════════════════════════════════ */
+
+#viz-workbench .vz-kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--vz-neutral-300);
+  font-size: 12.5px;
+}
+
+#viz-workbench .vz-kv > span:first-child {
+  color: var(--vz-neutral-600);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#viz-workbench .vz-kv > span:last-child {
+  font-weight: 700;
+  text-align: right;
+  word-break: break-all;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#viz-workbench .vz-kv-list > .vz-kv:last-child {
+  border-bottom: 0;
+}
+
+#viz-workbench .vz-kv-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 18px;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   ヒストグラム
+   ══════════════════════════════════════════════════════════════ */
+
+#viz-workbench .vz-hist svg {
+  display: block;
+  height: 110px;
+}
+
+#viz-workbench .vz-bar {
+  fill: var(--vz-neutral-500);
+}
+
+#viz-workbench .vz-bar.on {
+  fill: var(--vz-accent);
+}
+
+#viz-workbench .vz-axis {
+  stroke: var(--vz-text);
+  stroke-width: 2;
+}
+
+#viz-workbench .vz-hist-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--vz-neutral-500);
+  font-family: var(--vz-mono);
+  padding-top: 4px;
+}
+
+#viz-workbench .vz-hist-axis {
+  font-family: var(--vz-sans);
+  color: var(--vz-neutral-600);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   中央ステージ
+   ══════════════════════════════════════════════════════════════ */
+
+#viz-workbench .vz-stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px 20px 20px;
+  overflow: hidden;
+}
+
+#viz-workbench .vz-stage-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 12px;
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-sfen {
+  font-size: 12px;
+  color: var(--vz-neutral-700);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#viz-workbench .vz-stage-head .vz-b {
+  padding: 5px 9px;
+}
+
+#viz-workbench .vz-board {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#viz-workbench .vz-board svg {
+  max-width: 640px;
+  max-height: 100%;
+  width: 100%;
+  height: auto;
+}
+
+#viz-workbench .vz-board.small {
+  min-height: 220px;
+}
+
+#viz-workbench .vz-board.small svg {
+  max-width: 100%;
+}
+
+/* ── 先手勝率バー (preprocessing) ─────────────────────── */
+
+#viz-workbench .vz-winbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-top: 14px;
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-winbar-track {
+  flex: 1 1 auto;
+  height: 22px;
+  background: var(--vz-neutral-300);
+  position: relative;
+  border: 1px solid var(--vz-divider);
+}
+
+#viz-workbench .vz-winbar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--vz-accent);
+}
+
+#viz-workbench .vz-winbar-mid {
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: var(--vz-text);
+}
+
+#viz-workbench .vz-winbar-pct {
+  font-size: 14px;
+  font-weight: 700;
+  min-width: 52px;
+  text-align: right;
+}
+
+/* ── レコード送り ─────────────────────────────────────── */
+
+#viz-workbench .vz-nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+}
+
+#viz-workbench .vz-nav-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+#viz-workbench .vz-recno {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+#viz-workbench .vz-legend-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--vz-neutral-700);
+  margin-left: auto;
+}
+
+#viz-workbench .vz-swatch-box {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--vz-text);
+  background: var(--vz-accent-200);
+  display: inline-block;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   ゲームグラフ
+   ══════════════════════════════════════════════════════════════ */
+
+#viz-workbench .vz-graph {
+  flex: 1 1 auto;
+  min-height: 0;
+  border: 1px solid var(--vz-divider);
+  background: var(--vz-neutral-100);
+  padding: 12px;
+  display: flex;
+  overflow: hidden;
+}
+
+#viz-workbench .vz-graph > * {
+  flex: 1 1 auto;
+  min-width: 0;
+  border-radius: 0 !important;
+}
+
+#viz-workbench .vz-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+#viz-workbench .vz-crumb {
+  font-size: 12.5px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--vz-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+#viz-workbench .vz-crumb.on {
+  font-weight: 700;
+  color: var(--vz-accent-700);
+  text-decoration: none;
+  cursor: default;
+}
+
+#viz-workbench .vz-crumb-sep {
+  color: var(--vz-neutral-500);
+}
+
+#viz-workbench .vz-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+#viz-workbench .vz-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#viz-workbench .vz-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+/* ── スライダー ───────────────────────────────────────── */
+
+#viz-workbench .vz-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#viz-workbench .vz-slider-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--vz-neutral-700);
+}
+
+#viz-workbench .vz-slider-head > span:last-child {
+  font-weight: 700;
+  color: var(--vz-text);
+}
+
+#viz-workbench .vz-slider-foot {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--vz-neutral-500);
+}
+
+/* トラックとつまみはモックの 4px 罫 + 4x14 の矩形に合わせる */
+#viz-workbench .vz-slider input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 14px;
+  background: transparent;
+  cursor: pointer;
+  margin: 0;
+}
+
+#viz-workbench .vz-slider input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--vz-neutral-300);
+  border-radius: 0;
+}
+
+#viz-workbench .vz-slider input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: var(--vz-neutral-300);
+  border-radius: 0;
+}
+
+#viz-workbench .vz-slider input[type="range"]::-moz-range-progress {
+  height: 4px;
+  background: var(--vz-accent);
+}
+
+#viz-workbench .vz-slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 4px;
+  height: 14px;
+  background: var(--vz-text);
+  border: 0;
+  border-radius: 0;
+  margin-top: -5px;
+}
+
+#viz-workbench .vz-slider input[type="range"]::-moz-range-thumb {
+  width: 4px;
+  height: 14px;
+  background: var(--vz-text);
+  border: 0;
+  border-radius: 0;
+}
+
+/* ── 評価値レンジ ─────────────────────────────────────── */
+
+#viz-workbench .vz-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#viz-workbench .vz-range.is-off {
+  opacity: 0.5;
+}
+
+#viz-workbench .vz-range-sep {
+  font-size: 12px;
+  color: var(--vz-neutral-600);
+  flex: 0 0 auto;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   ブリッジ (不可視)
+   ══════════════════════════════════════════════════════════════ */
+
+.maou-hidden {
+  display: none !important;
+}
