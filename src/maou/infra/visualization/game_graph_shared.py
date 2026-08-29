@@ -16,6 +16,50 @@ logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
+# ワークベンチの見出し・ラベルに使う Archivo と本文用の Noto Sans JP．
+# demo.launch(head=...) で head に注入する (CSS からは font-family
+# 参照のみで，@font-face は Google Fonts 側が返す)．
+FONT_LINKS = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?'
+    "family=Archivo:wght@400;600;800&family=Noto+Sans+JP:wght@400;500;700"
+    '&display=swap">'
+)
+
+# ゲームグラフ凡例のHTML．色と輪郭の意味は Canvas レンダラー
+# (static/game_graph_canvas.js の winRateToColor / ノード描画) に対応する．
+GAME_GRAPH_LEGEND_HTML = """
+<div class="vz-legend">
+  <div class="vz-legend-item">
+    <span class="vz-legend-swatch" style="background:rgb(25,118,210)"></span>
+    先手有利 — 最善手勝率 &gt; 55%
+  </div>
+  <div class="vz-legend-item">
+    <span class="vz-legend-swatch" style="background:#9E9E9E"></span>
+    互角 — 45% 〜 55%
+  </div>
+  <div class="vz-legend-item">
+    <span class="vz-legend-swatch" style="background:rgb(211,47,47)"></span>
+    後手有利 — 最善手勝率 &lt; 45%
+  </div>
+  <div class="vz-legend-item">
+    <span class="vz-legend-swatch"
+          style="background:transparent;border:3px solid #0070f3"></span>
+    選択中のノード
+  </div>
+  <div class="vz-legend-item">
+    <span class="vz-legend-swatch"
+          style="background:transparent;border:2px dashed #ff9800"></span>
+    深さ打ち切り (未展開の子を持つ)
+  </div>
+  <div class="vz-legend-note">
+    ノード径は親エッジ確率の平方根に比例し，エッジ線幅は確率に比例する．
+  </div>
+</div>
+"""
+
+
 # ========================================
 # Gradio component elem_id constants
 # ========================================

@@ -48,6 +48,8 @@ from maou.infra.visualization.game_graph_shared import (
     ELEM_ID_MIN_PROB_SLIDER,
     ELEM_ID_SELECT_BRIDGE,
     ELEM_ID_VIEWPORT_BRIDGE,
+    FONT_LINKS,
+    GAME_GRAPH_LEGEND_HTML,
     JS_ON_LOAD_EXPAND,
     JS_ON_LOAD_SELECT,
     JS_ON_LOAD_VIEWPORT,
@@ -81,7 +83,11 @@ def _load_custom_css() -> str:
         str: 結合されたCSS文字列
     """
     static_dir = Path(__file__).parent / "static"
-    css_files = ["theme.css", "components.css"]
+    css_files = [
+        "theme.css",
+        "components.css",
+        "visualize_workbench.css",
+    ]
 
     css_parts = []
     for css_file in css_files:
@@ -1397,43 +1403,109 @@ class GradioVisualizationServer:
         with gr.Blocks(
             title="Maou Shogi Data Visualizer"
         ) as demo:
-            # Header with mode badge
-            with gr.Row():
-                gr.Markdown("# ⚡ Maou将棋データ可視化ツール")
+            with gr.Column(elem_id="viz-workbench"):
+                # Mode indicator with badge (referenceable for updates)
+                if self.use_mock_data:
+                    badge_content = '<span class="mode-badge-text">🔴 MOCK MODE</span>'
+                elif self.has_data:
+                    badge_content = '<span class="mode-badge-text">🟢 REAL MODE</span>'
+                else:
+                    badge_content = '<span class="mode-badge-text">⚪ NO DATA</span>'
 
-            # Mode indicator with badge (referenceable for updates)
-            if self.use_mock_data:
-                badge_content = '<span class="mode-badge-text">🔴 MOCK MODE</span>'
-            elif self.has_data:
-                badge_content = '<span class="mode-badge-text">🟢 REAL MODE</span>'
-            else:
-                badge_content = '<span class="mode-badge-text">⚪ NO DATA</span>'
+                # --- トップバー: ブランド / データ型切替 / 状態 / 再構築 ---
+                with gr.Row(elem_id="vz-topbar"):
+                    gr.HTML(
+                        '<div class="vz-brand">'
+                        '<span class="vz-brand-name">MAOU</span>'
+                        '<span class="vz-brand-sub">VISUALIZE</span>'
+                        "</div>",
+                        elem_classes=["vz-brand-block"],
+                    )
 
-            mode_badge = gr.HTML(
-                value=badge_content,
-                elem_id="mode-badge",
-            )
+                    # データ型はセグメンテッドコントロールとして常時露出させる
+                    # (旧レイアウトではデータソースアコーディオン内のDropdown)．
+                    array_type_dropdown = gr.Radio(
+                        choices=[
+                            "hcpe",
+                            "preprocessing",
+                            "stage1",
+                            "stage2",
+                            "game-graph",
+                        ],
+                        value=self.array_type,
+                        show_label=False,
+                        container=False,
+                        interactive=True,
+                        elem_id="array-type-dropdown",
+                    )
 
-            # Toast notifications
-            gr.HTML(create_toast_notification_script())
+                    mode_badge = gr.HTML(
+                        value=badge_content,
+                        elem_id="mode-badge",
+                        container=False,
+                    )
 
-            # Keyboard shortcuts
-            gr.HTML(create_keyboard_shortcuts_script())
+                    status_markdown = gr.Markdown(
+                        value=self._get_initial_status_message(),
+                        elem_id="vz-status",
+                        elem_classes=["status-message"],
+                        container=False,
+                    )
 
-            # --- レコードブラウザ UI (hcpe/preprocessing/stage1/stage2) ---
-            is_record_mode = self.array_type != "game-graph"
-            record_browser_panel = gr.Row(
-                visible=is_record_mode
-            )
-            with record_browser_panel:
-                # 左パネル: ナビゲーションと検索コントロール
-                with gr.Column(scale=1):
-                    # データソース管理セクション
-                    with gr.Accordion(
-                        "📂 Data Source Management",
-                        open=True,  # Always expanded by default
-                    ) as data_source_accordion:
-                        with gr.Row():
+                    rebuild_btn = gr.Button(
+                        "再構築",
+                        variant="secondary",
+                        size="sm",
+                        scale=0,
+                        interactive=self.has_data,  # Only enabled when data is loaded
+                    )
+                    refresh_btn = gr.Button(
+                        "🔄 更新",
+                        variant="secondary",
+                        size="sm",
+                        scale=0,
+                        interactive=self.has_data,  # Only enabled when data is loaded
+                    )
+
+                # Status polling timer (polls every 2 seconds)
+                # 起動時にインデックス構築中の場合はアクティブ化
+                status_timer = gr.Timer(
+                    value=2.0,
+                    active=self.indexing_state.is_indexing(),
+                )
+
+                # Toast notifications
+                gr.HTML(create_toast_notification_script())
+
+                # Keyboard shortcuts
+                gr.HTML(create_keyboard_shortcuts_script())
+
+                # --- レコードブラウザ UI (hcpe/preprocessing/stage1/stage2) ---
+                is_record_mode = self.array_type != "game-graph"
+                record_browser_panel = gr.Row(
+                    visible=is_record_mode,
+                    elem_classes=["vz-body"],
+                )
+                with record_browser_panel:
+                    # 左レール: データソース・検索・結果一覧
+                    with gr.Column(
+                        scale=0,
+                        min_width=340,
+                        elem_classes=[
+                            "vz-rail",
+                            "vz-rail-left",
+                        ],
+                    ):
+                        # データソース管理セクション．
+                        # インデックス構築完了時に自動で畳んで結果一覧に
+                        # 高さを譲るため Accordion のままにしてある
+                        # (_check_indexing_status_with_transition の
+                        #  accordion_update 出力先)．
+                        with gr.Accordion(
+                            "データソース",
+                            open=True,
+                            elem_classes=["vz-sec"],
+                        ) as data_source_accordion:
                             source_mode = gr.Radio(
                                 choices=[
                                     "Directory",
@@ -1441,258 +1513,154 @@ class GradioVisualizationServer:
                                 ],
                                 value="Directory",
                                 label="Source Type",
-                                scale=1,
+                                show_label=False,
+                                container=False,
                             )
 
-                        initial_dirs = self.path_suggester.preload_directories(
-                            base_path=Path.cwd(),
-                            max_depth=2,
-                            limit=100,
-                        )
-                        dir_input = gr.Dropdown(
-                            label="📁 Directory Path",
-                            choices=initial_dirs,
-                            value=None,
-                            allow_custom_value=True,
-                            filterable=True,
-                            info="Select from list or type to search",
-                            visible=True,
-                            scale=3,
-                        )
+                            initial_dirs = self.path_suggester.preload_directories(
+                                base_path=Path.cwd(),
+                                max_depth=2,
+                                limit=100,
+                            )
+                            dir_input = gr.Dropdown(
+                                label="📁 Directory Path",
+                                choices=initial_dirs,
+                                value=None,
+                                allow_custom_value=True,
+                                filterable=True,
+                                info="Select from list or type to search",
+                                visible=True,
+                            )
 
-                        files_input = gr.Dropdown(
-                            label="📄 File Paths",
-                            choices=[],
-                            value=None,
-                            allow_custom_value=True,
-                            filterable=True,
-                            info="Type to search .feather files (2+ characters)",
-                            visible=False,
-                            scale=3,
-                        )
+                            files_input = gr.Dropdown(
+                                label="📄 File Paths",
+                                choices=[],
+                                value=None,
+                                allow_custom_value=True,
+                                filterable=True,
+                                info="Type to search .feather files (2+ characters)",
+                                visible=False,
+                            )
 
-                        array_type_dropdown = gr.Dropdown(
-                            choices=[
-                                "hcpe",
-                                "preprocessing",
-                                "stage1",
-                                "stage2",
-                                "game-graph",
-                            ],
-                            value=self.array_type,
-                            label="Array Type",
-                            interactive=True,
-                            elem_id="array-type-dropdown",
-                        )
-
-                        with gr.Row():
                             load_btn = gr.Button(
-                                "Load Data Source",
+                                "読み込み",
                                 variant="primary",
-                                scale=2,
                             )
-                            rebuild_btn = gr.Button(
-                                "Rebuild Index",
+
+                        # 検索セクション (ID / SFEN / 評価値範囲)
+                        with gr.Column(elem_classes=["vz-sec"]):
+                            gr.Markdown(
+                                "検索",
+                                elem_classes=["vz-lbl"],
+                                container=False,
+                            )
+
+                            # 初期化時にID候補リストを取得（最大1000件）
+                            initial_ids: list[str] = []
+                            if (
+                                self.has_data
+                                and self.viz_interface
+                                is not None
+                            ):
+                                try:
+                                    initial_ids = self.viz_interface.get_all_ids(
+                                        limit=1000
+                                    )
+                                except Exception as e:
+                                    logger.warning(
+                                        f"Failed to load initial ID list: {e}"
+                                    )
+
+                            id_input = gr.Dropdown(
+                                label="レコードID",
+                                choices=initial_ids,
+                                value=None,
+                                allow_custom_value=True,
+                                filterable=True,
+                                info="2文字以上で候補を動的に絞り込み",
+                                elem_id="id-search-input",
+                            )
+                            id_search_btn = gr.Button(
+                                "ID検索",
+                                variant="primary",
+                                elem_id="id-search-btn",
+                            )
+
+                            sfen_input = gr.Textbox(
+                                label="🔍 SFEN",
+                                placeholder=(
+                                    "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/"
+                                    "PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
+                                ),
+                                show_label=False,
+                                elem_id="sfen-search-input",
+                            )
+                            gr.Markdown(
+                                "SFEN — 局面を SFEN 文字列で指定して検索",
+                                elem_classes=["vz-hint"],
+                                container=False,
+                            )
+                            sfen_search_btn = gr.Button(
+                                "SFEN検索",
                                 variant="secondary",
-                                scale=1,
-                                interactive=self.has_data,  # Only enabled when data is loaded
-                            )
-                            refresh_btn = gr.Button(
-                                "🔄 Refresh",
-                                variant="secondary",
-                                scale=1,
-                                interactive=self.has_data,  # Only enabled when data is loaded
+                                elem_id="sfen-search-btn",
                             )
 
-                        status_markdown = gr.Markdown(
-                            value=self._get_initial_status_message(),
-                            elem_classes=["status-message"],
-                        )
+                            # 評価値範囲検索（HCPEデータのみ）
+                            if self.supports_eval_search:
+                                with gr.Row():
+                                    min_eval = gr.Number(
+                                        label="最小評価値",
+                                        show_label=False,
+                                        value=lambda: None,
+                                        precision=0,
+                                        placeholder="最小評価値",
+                                    )
+                                    max_eval = gr.Number(
+                                        label="最大評価値",
+                                        show_label=False,
+                                        value=lambda: None,
+                                        precision=0,
+                                        placeholder="最大評価値",
+                                    )
+                                gr.Markdown(
+                                    "評価値範囲 — 空欄で無制限",
+                                    elem_classes=["vz-hint"],
+                                    container=False,
+                                )
+                                eval_search_btn = gr.Button(
+                                    "範囲検索",
+                                    variant="secondary",
+                                )
+                            else:
+                                # 評価値検索非対応の場合はダミーコンポーネント
+                                gr.Markdown(
+                                    "評価値範囲検索は hcpe のみ対応",
+                                    elem_classes=["vz-hint"],
+                                    container=False,
+                                )
+                                min_eval = gr.Number(
+                                    visible=False
+                                )
+                                max_eval = gr.Number(
+                                    visible=False
+                                )
+                                eval_search_btn = gr.Button(
+                                    visible=False
+                                )
 
-                        # Status polling timer (polls every 2 seconds)
-                        # 起動時にインデックス構築中の場合はアクティブ化
-                        status_timer = gr.Timer(
-                            value=2.0,
-                            active=self.indexing_state.is_indexing(),
-                        )
-
-                    # ページ内レコードナビゲーション
-                    with gr.Group():
-                        gr.Markdown(
-                            "### 🎯 レコードナビゲーション"
-                        )
-                        with gr.Row():
-                            prev_record_btn = gr.Button(
-                                "← 前のレコード",
-                                size="sm",
-                                elem_id="prev-record",
-                            )
-                            record_indicator = gr.Markdown(
-                                "Record 0 / 0",
-                                elem_id="record-indicator",
-                            )
-                            next_record_btn = gr.Button(
-                                "次のレコード →",
-                                size="sm",
-                                elem_id="next-record",
-                            )
-
-                    # ページネーション
-                    with gr.Group():
-                        gr.Markdown("### 📄 ページネーション")
-                        page_size = gr.Slider(
-                            label="📊 1ページあたりの件数",
-                            info="一度に表示するレコード数を設定（10〜100件）",
-                            minimum=10,
-                            maximum=100,
-                            value=20,
-                            step=10,
-                        )
-                        with gr.Row():
-                            prev_btn = gr.Button(
-                                "← 前へ", elem_id="prev-page"
-                            )
-                            next_btn = gr.Button(
-                                "次へ →", elem_id="next-page"
-                            )
-                        page_info = gr.Markdown(
-                            "ページ 1", elem_id="page-info"
-                        )
-
-                    # 検索機能
-                    gr.Markdown("## 🔍 検索機能")
-
-                    # ID検索
-                    with gr.Group():
-                        gr.Markdown("### ID検索")
-
-                        # 初期化時にID候補リストを取得（最大1000件）
-                        initial_ids: list[str] = []
-                        if (
-                            self.has_data
-                            and self.viz_interface is not None
+                        # 結果一覧 + ページネーション
+                        with gr.Column(
+                            elem_classes=[
+                                "vz-sec",
+                                "vz-sec-grow",
+                            ]
                         ):
-                            try:
-                                initial_ids = self.viz_interface.get_all_ids(
-                                    limit=1000
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to load initial ID list: {e}"
-                                )
-
-                        id_input = gr.Dropdown(
-                            label="🔍 レコードID",
-                            choices=initial_ids,
-                            value=None,
-                            allow_custom_value=True,
-                            filterable=True,
-                            info="IDを入力すると候補が絞り込まれます（2文字以上で動的更新）",
-                            elem_id="id-search-input",
-                        )
-                        id_search_btn = gr.Button(
-                            "ID検索",
-                            variant="primary",
-                            elem_id="id-search-btn",
-                        )
-
-                    # SFEN検索
-                    with gr.Group():
-                        gr.Markdown("### SFEN検索")
-
-                        sfen_input = gr.Textbox(
-                            label="🔍 SFEN",
-                            placeholder=(
-                                "lnsgkgsnl/1r5b1/ppppppppp/9/9/9/"
-                                "PPPPPPPPP/1B5R1/LNSGKGSNL b - 1"
-                            ),
-                            info="局面をSFEN文字列で指定して検索します",
-                            elem_id="sfen-search-input",
-                        )
-                        sfen_search_btn = gr.Button(
-                            "SFEN検索",
-                            variant="primary",
-                            elem_id="sfen-search-btn",
-                        )
-
-                    # 評価値範囲検索（HCPEデータのみ）
-                    if self.supports_eval_search:
-                        with gr.Group():
-                            gr.Markdown("### 評価値範囲検索")
-                            min_eval = gr.Number(
-                                label="📉 最小評価値",
-                                info="評価値の下限（空欄で無制限）",
-                                value=lambda: None,
-                                precision=0,
-                                placeholder="制限なし",
+                            gr.Markdown(
+                                "結果",
+                                elem_classes=["vz-lbl"],
+                                container=False,
                             )
-                            max_eval = gr.Number(
-                                label="📈 最大評価値",
-                                info="評価値の上限（空欄で無制限）",
-                                value=lambda: None,
-                                precision=0,
-                                placeholder="制限なし",
-                            )
-                            eval_search_btn = gr.Button(
-                                "範囲検索", variant="secondary"
-                            )
-                    else:
-                        # 評価値検索非対応の場合はダミーコンポーネント
-                        min_eval = gr.Number(visible=False)
-                        max_eval = gr.Number(visible=False)
-                        eval_search_btn = gr.Button(
-                            visible=False
-                        )
-
-                    # データセット情報
-                    with gr.Accordion(
-                        "📊 データセット情報", open=True
-                    ):
-                        with gr.Row():
-                            stats_refresh_btn = gr.Button(
-                                "🔄 更新",
-                                size="sm",
-                                scale=0,
-                            )
-                        stats_json = gr.JSON(
-                            value={},
-                            label="統計情報",
-                        )
-
-                        # Refresh button click handler
-                        stats_refresh_btn.click(
-                            fn=self._get_current_stats,
-                            inputs=[],
-                            outputs=[stats_json],
-                        )
-
-                # 右パネル: 視覚化
-                with gr.Column(scale=2):
-                    gr.Markdown("## 🎴 盤面表示")
-
-                    # ボード表示（SVG）
-                    board_display = gr.HTML(
-                        value=self._get_default_board_svg(),
-                        label="盤面",
-                        elem_id="board-display",
-                    )
-
-                    # 選択中のレコードID（コピー用）
-                    selected_record_id = gr.Textbox(
-                        value="",
-                        label="選択中のID（部分選択してコピー可能）",
-                        interactive=False,
-                        elem_id="selected-record-id",
-                    )
-
-                    # タブ式レコード詳細表示
-                    with gr.Tabs():
-                        with gr.Tab("📋 概要"):
-                            record_details = gr.JSON(
-                                label="レコード詳細",
-                            )
-
-                        with gr.Tab("📊 検索結果"):
                             # Rendererから動的にヘッダーを取得
                             table_headers: list[str] = (
                                 self.viz_interface.get_table_columns()
@@ -1706,104 +1674,330 @@ class GradioVisualizationServer:
                                 if table_headers
                                 else None,
                                 label="結果一覧",
+                                show_label=False,
                                 interactive=False,
                                 elem_id="search-results-table",
                             )
+                            with gr.Row():
+                                prev_btn = gr.Button(
+                                    "‹",
+                                    elem_id="prev-page",
+                                    scale=0,
+                                )
+                                page_info = gr.Markdown(
+                                    "ページ 1",
+                                    elem_id="page-info",
+                                    container=False,
+                                )
+                                next_btn = gr.Button(
+                                    "›",
+                                    elem_id="next-page",
+                                    scale=0,
+                                )
+                            page_size = gr.Slider(
+                                label="📊 1ページあたりの件数",
+                                info="一度に表示するレコード数を設定（10〜100件）",
+                                minimum=10,
+                                maximum=100,
+                                value=20,
+                                step=10,
+                            )
 
-                        with gr.Tab("📈 データ分析"):
+                    # 中央ステージ: 盤面とレコード送り
+                    with gr.Column(elem_classes=["vz-stage"]):
+                        with gr.Row(
+                            elem_classes=["vz-stage-head"]
+                        ):
+                            gr.Markdown(
+                                "局面",
+                                elem_classes=["vz-lbl"],
+                                container=False,
+                            )
+                            # 選択中のレコードID（コピー用）
+                            selected_record_id = gr.Textbox(
+                                value="",
+                                label="選択中のID（部分選択してコピー可能）",
+                                show_label=False,
+                                interactive=False,
+                                container=False,
+                                elem_id="selected-record-id",
+                                scale=1,
+                            )
+
+                        # ボード表示（SVG）
+                        board_display = gr.HTML(
+                            value=self._get_default_board_svg(),
+                            label="盤面",
+                            show_label=False,
+                            elem_id="board-display",
+                            container=False,
+                        )
+
+                        with gr.Row(elem_classes=["vz-nav"]):
+                            prev_record_btn = gr.Button(
+                                "◀ 前",
+                                size="sm",
+                                elem_id="prev-record",
+                                scale=0,
+                            )
+                            record_indicator = gr.Markdown(
+                                "Record 0 / 0",
+                                elem_id="record-indicator",
+                                container=False,
+                            )
+                            next_record_btn = gr.Button(
+                                "次 ▶",
+                                size="sm",
+                                elem_id="next-record",
+                                scale=0,
+                            )
+
+                    # 右レール: レコード詳細・分布・統計
+                    with gr.Column(
+                        scale=0,
+                        min_width=420,
+                        elem_classes=[
+                            "vz-rail",
+                            "vz-rail-right",
+                        ],
+                    ):
+                        with gr.Column(elem_classes=["vz-sec"]):
+                            gr.Markdown(
+                                "レコード詳細",
+                                elem_classes=["vz-lbl"],
+                                container=False,
+                            )
+                            record_details = gr.JSON(
+                                label="レコード詳細",
+                                show_label=False,
+                            )
+
+                        with gr.Column(elem_classes=["vz-sec"]):
+                            gr.Markdown(
+                                "分布",
+                                elem_classes=["vz-lbl"],
+                                container=False,
+                            )
                             analytics_chart = gr.Plot(
                                 value=None,
                                 label="データ分析チャート",
+                                show_label=False,
                             )
 
-            # --- ゲームグラフ UI (game-graph) ---
-            is_tree_mode = self.array_type == "game-graph"
-            game_graph_panel = gr.Column(visible=is_tree_mode)
-            with game_graph_panel:
-                gt_info = gr.Markdown(
-                    value="ゲームグラフデータを読み込んでください",
+                        with gr.Column(elem_classes=["vz-sec"]):
+                            with gr.Row():
+                                gr.Markdown(
+                                    "データセット統計",
+                                    elem_classes=["vz-lbl"],
+                                    container=False,
+                                )
+                                stats_refresh_btn = gr.Button(
+                                    "🔄 更新",
+                                    size="sm",
+                                    scale=0,
+                                )
+                            stats_json = gr.JSON(
+                                value={},
+                                label="統計情報",
+                                show_label=False,
+                            )
+
+                            # Refresh button click handler
+                            stats_refresh_btn.click(
+                                fn=self._get_current_stats,
+                                inputs=[],
+                                outputs=[stats_json],
+                            )
+
+                # --- ゲームグラフ UI (game-graph) ---
+                is_tree_mode = self.array_type == "game-graph"
+                game_graph_panel = gr.Row(
+                    visible=is_tree_mode,
+                    elem_classes=["vz-body"],
                 )
-                with gr.Row():
-                    gt_depth_slider = gr.Slider(
-                        minimum=1,
-                        maximum=10,
-                        value=3,
-                        step=1,
-                        label="表示深さ",
-                        scale=1,
-                        elem_id=ELEM_ID_DEPTH_SLIDER,
-                    )
-                    gt_min_prob_slider = gr.Slider(
-                        minimum=0.001,
-                        maximum=0.3,
-                        value=0.01,
-                        step=0.001,
-                        label="最小確率",
-                        scale=1,
-                        elem_id=ELEM_ID_MIN_PROB_SLIDER,
-                    )
-                    gt_refresh_btn = gr.Button(
-                        "更新",
-                        variant="primary",
+                with game_graph_panel:
+                    # 左レール: パンくず / 表示コントロール / 凡例 / エクスポート
+                    with gr.Column(
                         scale=0,
-                    )
-                    gt_back_btn = gr.Button(
-                        "ルートに戻る",
-                        variant="secondary",
-                        scale=0,
-                    )
-                    # NOTE: 「ルートに設定」ボタンは省略．
-                    # ダブルクリック / パンくずで同等の操作が可能．
-                    # スタンドアロン版は game_graph_server.py を参照．
-                # パンくずリスト
-                gt_breadcrumb_html = gr.HTML(
-                    value='<div class="breadcrumb-nav"></div>',
-                    label="パンくずリスト",
-                    show_label=False,
-                )
-                with gr.Row():
-                    with gr.Column(scale=3):
-                        gt_graph_html = gr.HTML(
-                            label="グラフ表示",
-                            elem_id="graph-view",
-                        )
-                    with gr.Column(scale=2):
-                        gt_board_html = gr.HTML(
-                            label="盤面",
-                        )
-                        gt_stats_json = gr.JSON(
-                            label="局面統計",
-                        )
-                        # NOTE: 埋め込みモードでは指し手テーブルの行クリック
-                        # による子局面遷移(on_move_selected)は意図的に省略．
-                        # スタンドアロンモード(game_graph_server.py)では
-                        # child_hashes_state を使って実装済み．
-                        gt_move_table = gr.Dataframe(
-                            headers=["指し手", "確率", "勝率"],
-                            label="指し手一覧",
-                            interactive=False,
-                        )
-                        gt_analytics_plot = gr.Plot(
-                            label="分岐分析",
-                        )
-                        with gr.Accordion(
-                            "エクスポート", open=False
-                        ):
+                        min_width=340,
+                        elem_classes=[
+                            "vz-rail",
+                            "vz-rail-left",
+                        ],
+                    ):
+                        with gr.Column(elem_classes=["vz-sec"]):
+                            gr.Markdown(
+                                "パンくず",
+                                elem_classes=["vz-lbl"],
+                                container=False,
+                            )
+                            # パンくずリスト
+                            gt_breadcrumb_html = gr.HTML(
+                                value='<div class="breadcrumb-nav"></div>',
+                                label="パンくずリスト",
+                                show_label=False,
+                                container=False,
+                            )
+                            gt_info = gr.Markdown(
+                                value="ゲームグラフデータを読み込んでください",
+                                elem_classes=["vz-hint"],
+                                container=False,
+                            )
+                            gt_back_btn = gr.Button(
+                                "ルートに戻る",
+                                variant="secondary",
+                            )
+                            # NOTE: 「ルートに設定」ボタンは省略．
+                            # ダブルクリック / パンくずで同等の操作が可能．
+                            # スタンドアロン版は game_graph_server.py を参照．
+
+                        with gr.Column(elem_classes=["vz-sec"]):
+                            gr.Markdown(
+                                "表示コントロール",
+                                elem_classes=["vz-lbl"],
+                                container=False,
+                            )
+                            gt_depth_slider = gr.Slider(
+                                minimum=1,
+                                maximum=10,
+                                value=3,
+                                step=1,
+                                label="表示深さ",
+                                elem_id=ELEM_ID_DEPTH_SLIDER,
+                            )
+                            gt_min_prob_slider = gr.Slider(
+                                minimum=0.001,
+                                maximum=0.3,
+                                value=0.01,
+                                step=0.001,
+                                label="最小確率",
+                                elem_id=ELEM_ID_MIN_PROB_SLIDER,
+                            )
+                            gt_refresh_btn = gr.Button(
+                                "更新",
+                                variant="primary",
+                            )
+
+                        with gr.Column(elem_classes=["vz-sec"]):
+                            gr.Markdown(
+                                "凡例",
+                                elem_classes=["vz-lbl"],
+                                container=False,
+                            )
+                            gr.HTML(
+                                GAME_GRAPH_LEGEND_HTML,
+                                container=False,
+                            )
+
+                        with gr.Column(elem_classes=["vz-sec"]):
+                            gr.Markdown(
+                                "エクスポート",
+                                elem_classes=["vz-lbl"],
+                                container=False,
+                            )
                             gt_sfen_text = gr.Textbox(
                                 label="USI position文字列",
+                                show_label=False,
                                 interactive=False,
                                 lines=2,
+                                container=False,
                             )
 
-                # 埋め込みモードではデータがファイルアップロード後に
-                # 非同期で読み込まれるため，UI構築時にはルートハッシュが
-                # 未確定．初回の load_result.then で正しい値を設定する．
-                gt_current_root = gr.Textbox(
-                    label="",
-                    value="",
-                    elem_id=ELEM_ID_CURRENT_ROOT,
-                    elem_classes=["maou-hidden"],
-                )
+                    # 中央ステージ: グラフ
+                    with gr.Column(elem_classes=["vz-stage"]):
+                        with gr.Row(
+                            elem_classes=["vz-stage-head"]
+                        ):
+                            gr.Markdown(
+                                "グラフ",
+                                elem_classes=["vz-lbl"],
+                                container=False,
+                            )
+                            gr.Markdown(
+                                "クリックで詳細更新 / ホイールでズーム / ドラッグで移動",
+                                elem_classes=["vz-hint"],
+                                container=False,
+                            )
+                        gt_graph_html = gr.HTML(
+                            label="グラフ表示",
+                            show_label=False,
+                            elem_id="graph-view",
+                            container=False,
+                        )
+
+                    # 右レール: 選択局面 / 局面統計 / 指し手一覧
+                    with gr.Column(
+                        scale=0,
+                        min_width=420,
+                        elem_classes=[
+                            "vz-rail",
+                            "vz-rail-right",
+                        ],
+                    ):
+                        with gr.Column(elem_classes=["vz-sec"]):
+                            gr.Markdown(
+                                "選択局面",
+                                elem_classes=["vz-lbl"],
+                                container=False,
+                            )
+                            gt_board_html = gr.HTML(
+                                label="盤面",
+                                show_label=False,
+                                container=False,
+                            )
+
+                        with gr.Column(elem_classes=["vz-sec"]):
+                            gr.Markdown(
+                                "局面統計",
+                                elem_classes=["vz-lbl"],
+                                container=False,
+                            )
+                            gt_stats_json = gr.JSON(
+                                label="局面統計",
+                                show_label=False,
+                            )
+
+                        with gr.Column(elem_classes=["vz-sec"]):
+                            gr.Markdown(
+                                "指し手一覧 — 確率降順",
+                                elem_classes=["vz-lbl"],
+                                container=False,
+                            )
+                            # NOTE: 埋め込みモードでは指し手テーブルの行クリック
+                            # による子局面遷移(on_move_selected)は意図的に省略．
+                            # スタンドアロンモード(game_graph_server.py)では
+                            # child_hashes_state を使って実装済み．
+                            gt_move_table = gr.Dataframe(
+                                headers=[
+                                    "指し手",
+                                    "確率",
+                                    "勝率",
+                                ],
+                                label="指し手一覧",
+                                show_label=False,
+                                interactive=False,
+                            )
+
+                        with gr.Column(elem_classes=["vz-sec"]):
+                            gr.Markdown(
+                                "分岐分析",
+                                elem_classes=["vz-lbl"],
+                                container=False,
+                            )
+                            gt_analytics_plot = gr.Plot(
+                                label="分岐分析",
+                                show_label=False,
+                            )
+
+                    # 埋め込みモードではデータがファイルアップロード後に
+                    # 非同期で読み込まれるため，UI構築時にはルートハッシュが
+                    # 未確定．初回の load_result.then で正しい値を設定する．
+                    gt_current_root = gr.Textbox(
+                        label="",
+                        value="",
+                        elem_id=ELEM_ID_CURRENT_ROOT,
+                        elem_classes=["maou-hidden"],
+                    )
 
             # イベントハンドラとState変数
             current_page = gr.State(value=1)
@@ -3894,7 +4088,7 @@ def launch_server(
         _build_head_scripts,
     )
 
-    head_scripts = _build_head_scripts()
+    head_scripts = FONT_LINKS + _build_head_scripts()
 
     launch_kwargs: dict[str, Any] = {
         "server_name": server_name,

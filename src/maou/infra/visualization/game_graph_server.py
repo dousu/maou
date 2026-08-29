@@ -23,6 +23,8 @@ from maou.infra.visualization.game_graph_shared import (
     ELEM_ID_MIN_PROB_SLIDER,
     ELEM_ID_SELECT_BRIDGE,
     ELEM_ID_VIEWPORT_BRIDGE,
+    FONT_LINKS,
+    GAME_GRAPH_LEGEND_HTML,
     JS_ON_LOAD_EXPAND,
     JS_ON_LOAD_SELECT,
     JS_ON_LOAD_VIEWPORT,
@@ -64,7 +66,11 @@ def _load_custom_css() -> str:
     Returns:
         結合されたCSS文字列
     """
-    css_files = ["theme.css", "components.css"]
+    css_files = [
+        "theme.css",
+        "components.css",
+        "visualize_workbench.css",
+    ]
     css_parts = []
     for css_file in css_files:
         css_path = _STATIC_DIR / css_file
@@ -317,7 +323,7 @@ def launch_game_graph_server(
         _spatial_buckets[(bx, by)].append(h)
 
     custom_css = _load_custom_css()
-    head_scripts = _build_head_scripts()
+    head_scripts = FONT_LINKS + _build_head_scripts()
 
     # --- コールバック定義 ---
 
@@ -752,87 +758,196 @@ def launch_game_graph_server(
     with gr.Blocks(
         title="Maou Game Graph Viewer",
     ) as demo:
-        gr.Markdown("# Maou Game Graph Viewer")
-        initial_sfen = viz.get_initial_sfen()
-        gr.Markdown(
-            f"Nodes: **{len(nodes_df):,}** / "
-            f"Edges: **{len(edges_df):,}** / "
-            f"Root: `{initial_sfen}`"
-        )
+        with gr.Column(elem_id="viz-workbench"):
+            initial_sfen = viz.get_initial_sfen()
 
-        # コントロールバー
-        with gr.Row():
-            depth_slider = gr.Slider(
-                minimum=1,
-                maximum=20,
-                value=3,
-                step=1,
-                label="表示深さ",
-                scale=1,
-                elem_id=ELEM_ID_DEPTH_SLIDER,
-            )
-            min_prob_slider = gr.Slider(
-                minimum=0.001,
-                maximum=0.3,
-                value=0.01,
-                step=0.001,
-                label="最小確率",
-                scale=1,
-                elem_id=ELEM_ID_MIN_PROB_SLIDER,
-            )
-            refresh_btn = gr.Button(
-                "更新", variant="primary", scale=0
-            )
-            back_btn = gr.Button(
-                "ルートに戻る", variant="secondary", scale=0
-            )
-            set_root_btn = gr.Button(
-                "ルートに設定", variant="secondary", scale=0
-            )
-
-        # パンくずリスト
-        breadcrumb_html = gr.HTML(
-            value=build_breadcrumb_html(
-                [{"hash": str(root_hash), "label": "初期局面"}]
-            ),
-            label="パンくずリスト",
-            show_label=False,
-        )
-
-        # メインコンテンツ
-        with gr.Row():
-            with gr.Column(scale=3):
-                graph_html = gr.HTML(
-                    label="グラフ表示",
-                    elem_id="graph-view",
+            # --- トップバー ---
+            with gr.Row(elem_id="vz-topbar"):
+                gr.HTML(
+                    '<div class="vz-brand">'
+                    '<span class="vz-brand-name">MAOU</span>'
+                    '<span class="vz-brand-sub">VISUALIZE</span>'
+                    "</div>",
+                )
+                gr.HTML(
+                    '<span class="mode-badge-text">🟢 GAME GRAPH</span>',
+                    elem_id="mode-badge",
+                    container=False,
+                )
+                gr.Markdown(
+                    f"**{len(nodes_df):,}** nodes / "
+                    f"**{len(edges_df):,}** edges\n"
+                    f"- Root: `{initial_sfen}`",
+                    elem_id="vz-status",
+                    container=False,
                 )
 
-            with gr.Column(scale=2):
-                board_html = gr.HTML(label="盤面")
-                stats_json = gr.JSON(label="局面統計")
-                move_table = gr.Dataframe(
-                    headers=["指し手", "確率", "勝率"],
-                    label="指し手一覧",
-                    interactive=False,
-                )
-                analytics_plot = gr.Plot(label="分岐分析")
+            with gr.Row(elem_classes=["vz-body"]):
+                # 左レール: パンくず / 表示コントロール / 凡例 / エクスポート
+                with gr.Column(
+                    scale=0,
+                    min_width=340,
+                    elem_classes=["vz-rail", "vz-rail-left"],
+                ):
+                    with gr.Column(elem_classes=["vz-sec"]):
+                        gr.Markdown(
+                            "パンくず",
+                            elem_classes=["vz-lbl"],
+                            container=False,
+                        )
+                        breadcrumb_html = gr.HTML(
+                            value=build_breadcrumb_html(
+                                [
+                                    {
+                                        "hash": str(root_hash),
+                                        "label": "初期局面",
+                                    }
+                                ]
+                            ),
+                            label="パンくずリスト",
+                            show_label=False,
+                            container=False,
+                        )
+                        with gr.Row():
+                            back_btn = gr.Button(
+                                "ルートに戻る",
+                                variant="secondary",
+                            )
+                            set_root_btn = gr.Button(
+                                "ルートに設定",
+                                variant="secondary",
+                            )
 
-                # エクスポートセクション
-                with gr.Accordion("エクスポート", open=False):
-                    sfen_text = gr.Textbox(
-                        label="USI position文字列",
-                        interactive=False,
-                        lines=2,
+                    with gr.Column(elem_classes=["vz-sec"]):
+                        gr.Markdown(
+                            "表示コントロール",
+                            elem_classes=["vz-lbl"],
+                            container=False,
+                        )
+                        depth_slider = gr.Slider(
+                            minimum=1,
+                            maximum=20,
+                            value=3,
+                            step=1,
+                            label="表示深さ",
+                            elem_id=ELEM_ID_DEPTH_SLIDER,
+                        )
+                        min_prob_slider = gr.Slider(
+                            minimum=0.001,
+                            maximum=0.3,
+                            value=0.01,
+                            step=0.001,
+                            label="最小確率",
+                            elem_id=ELEM_ID_MIN_PROB_SLIDER,
+                        )
+                        refresh_btn = gr.Button(
+                            "更新", variant="primary"
+                        )
+
+                    with gr.Column(elem_classes=["vz-sec"]):
+                        gr.Markdown(
+                            "凡例",
+                            elem_classes=["vz-lbl"],
+                            container=False,
+                        )
+                        gr.HTML(
+                            GAME_GRAPH_LEGEND_HTML,
+                            container=False,
+                        )
+
+                    with gr.Column(elem_classes=["vz-sec"]):
+                        gr.Markdown(
+                            "エクスポート",
+                            elem_classes=["vz-lbl"],
+                            container=False,
+                        )
+                        sfen_text = gr.Textbox(
+                            label="USI position文字列",
+                            show_label=False,
+                            interactive=False,
+                            lines=2,
+                            container=False,
+                        )
+                        export_csv_btn = gr.Button(
+                            "CSV出力",
+                            variant="secondary",
+                        )
+                        csv_file = gr.File(
+                            label="CSVダウンロード",
+                            visible=True,
+                        )
+
+                # 中央ステージ: グラフ
+                with gr.Column(elem_classes=["vz-stage"]):
+                    with gr.Row(elem_classes=["vz-stage-head"]):
+                        gr.Markdown(
+                            "グラフ",
+                            elem_classes=["vz-lbl"],
+                            container=False,
+                        )
+                        gr.Markdown(
+                            "クリックで詳細更新 / ダブルクリックで展開 / "
+                            "ホイールでズーム / ドラッグで移動",
+                            elem_classes=["vz-hint"],
+                            container=False,
+                        )
+                    graph_html = gr.HTML(
+                        label="グラフ表示",
+                        show_label=False,
+                        elem_id="graph-view",
+                        container=False,
                     )
-                    export_csv_btn = gr.Button(
-                        "CSV出力",
-                        variant="secondary",
-                        size="sm",
-                    )
-                    csv_file = gr.File(
-                        label="CSVダウンロード",
-                        visible=True,
-                    )
+
+                # 右レール: 選択局面 / 局面統計 / 指し手一覧 / 分岐分析
+                with gr.Column(
+                    scale=0,
+                    min_width=420,
+                    elem_classes=["vz-rail", "vz-rail-right"],
+                ):
+                    with gr.Column(elem_classes=["vz-sec"]):
+                        gr.Markdown(
+                            "選択局面",
+                            elem_classes=["vz-lbl"],
+                            container=False,
+                        )
+                        board_html = gr.HTML(
+                            label="盤面",
+                            show_label=False,
+                            container=False,
+                        )
+
+                    with gr.Column(elem_classes=["vz-sec"]):
+                        gr.Markdown(
+                            "局面統計",
+                            elem_classes=["vz-lbl"],
+                            container=False,
+                        )
+                        stats_json = gr.JSON(
+                            label="局面統計", show_label=False
+                        )
+
+                    with gr.Column(elem_classes=["vz-sec"]):
+                        gr.Markdown(
+                            "指し手一覧 — 確率降順",
+                            elem_classes=["vz-lbl"],
+                            container=False,
+                        )
+                        move_table = gr.Dataframe(
+                            headers=["指し手", "確率", "勝率"],
+                            label="指し手一覧",
+                            show_label=False,
+                            interactive=False,
+                        )
+
+                    with gr.Column(elem_classes=["vz-sec"]):
+                        gr.Markdown(
+                            "分岐分析",
+                            elem_classes=["vz-lbl"],
+                            container=False,
+                        )
+                        analytics_plot = gr.Plot(
+                            label="分岐分析", show_label=False
+                        )
 
         # --- Bridge components (server_functions) ---
         # Gradio 6 では JS DOM 操作で Textbox の値を変更しても
