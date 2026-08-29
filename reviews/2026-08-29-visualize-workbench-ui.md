@@ -1,5 +1,6 @@
 ---
-status: pending
+status: applied
+applied_in: a24a0ef
 date: 2026-08-29
 target: [docs/commands/visualize.md]
 risk: low
