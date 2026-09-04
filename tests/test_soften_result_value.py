@@ -404,3 +404,65 @@ class TestDebias:
         )
         out = debias(softened, original)
         assert np.allclose(out, softened, atol=1e-6)
+
+
+class TestEmbeddedReference:
+    """外部ファイル無しで ``--mode empirical`` が使えること．
+
+    Colab などへスクリプト 1 枚だけ持っていく運用のため，測定済みの条件分布を
+    分位点表として埋め込んである．表が壊れると対照実験の教師が別物になる．
+    """
+
+    def test_quantile_tables_are_well_formed(self) -> None:
+        from soften_result_value import (
+            EMBEDDED_QUANTILES_HI,
+            EMBEDDED_QUANTILES_LO,
+        )
+
+        for q in (EMBEDDED_QUANTILES_LO, EMBEDDED_QUANTILES_HI):
+            assert len(q) == 101, "0, 0.01, ..., 1 の 101 点"
+            assert ((q >= 0.0) & (q <= 1.0)).all()
+            assert (np.diff(q) >= -1e-6).all(), (
+                "分位点は単調非減少"
+            )
+
+    def test_reproduces_the_measured_distribution(self) -> None:
+        """埋め込み表が測定値を再現すること (回帰).
+
+        実測 (floodgate 2025-03-02 / ply 60-99): 0 側 mean 0.2949 /
+        1 側 mean 0.7772 / ほぼ確信 28.6%.
+        """
+        from soften_result_value import embedded_pools
+
+        lo, hi = embedded_pools(
+            200_000, np.random.default_rng(0)
+        )
+        assert lo.mean() == pytest.approx(0.2949, abs=0.005)
+        assert hi.mean() == pytest.approx(0.7772, abs=0.005)
+        both = np.concatenate([lo, hi])
+        conf = ((both < 0.1) | (both > 0.9)).mean()
+        assert conf == pytest.approx(0.286, abs=0.01)
+
+    def test_is_deterministic_for_a_seed(self) -> None:
+        from soften_result_value import embedded_pools
+
+        a = embedded_pools(500, np.random.default_rng(3))
+        b = embedded_pools(500, np.random.default_rng(3))
+        assert np.array_equal(a[0], b[0])
+        assert np.array_equal(a[1], b[1])
+
+    def test_sides_are_separated(self) -> None:
+        """0 側の分布は 1 側より低い方に寄っていること．"""
+        from soften_result_value import embedded_pools
+
+        lo, hi = embedded_pools(
+            20_000, np.random.default_rng(0)
+        )
+        assert lo.mean() < 0.5 < hi.mean()
+
+    def test_embedded_band_matches_the_documented_one(
+        self,
+    ) -> None:
+        from soften_result_value import EMBEDDED_BAND
+
+        assert EMBEDDED_BAND == (60, 100)

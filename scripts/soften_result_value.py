@@ -42,10 +42,14 @@
 
 ## 使い方
 
-    # 探索値と同じ条件分布から標本化する (推奨)
+    # 探索値と同じ条件分布から標本化する (推奨)．参照は埋め込み済みなので
+    # このファイル 1 枚と maou wheel だけで動く
     scripts/soften_result_value.py HCPE_DIR out.feather \\
-        --min-ply 60 --max-ply 100 --mode empirical \\
-        --reference scratchpad/measure/sv_vs_outcome.feather
+        --min-ply 60 --max-ply 100 --mode empirical
+
+    # 偏りを打ち消した対照 (軟化の効果と偏りの効果を分離する)
+    scripts/soften_result_value.py HCPE_DIR out_debias.feather \\
+        --min-ply 60 --max-ply 100 --mode empirical --debias
 
     # 一様に鈍らせる
     scripts/soften_result_value.py HCPE_DIR out.feather \\
@@ -68,6 +72,241 @@ import polars as pl
 
 CONFIDENT = (0.0, 1.0)
 """軟化の対象にする集約後 ``resultValue``．引き分け 0.5 と平均済みは除く．"""
+
+
+# --- 埋め込み参照 -----------------------------------------------------------
+# ``--reference`` を渡さなくても ``--mode empirical`` が使えるようにするため，
+# 測定済みの条件分布を分位点表として持つ．Colab などへ**このファイル 1 枚だけ**
+# 持っていける形にするのが目的 (参照 feather は scratchpad 配下で git 管理外)．
+#
+# 出所: floodgate 2025-03-02 の 394 局 (学習期間内) の ply 60-99 について，
+#   1. maou utility search-values --min-ply 40 --model-path <teacher>
+#   2. maou pre-process (--search-value-path なし) で置換前の resultValue
+#   3. zobrist id で join
+# 元ラベル別に 11,939 行 (0 側 5,953 / 1 側 5,986)．101 分位点で平均は 4 桁目
+# まで，「ほぼ確信 (<0.1 or >0.9)」の割合は 28.6% vs 28.8% で再現する．
+#
+# **帯を変えるなら再測定すること．**分布は手数に強く依存し，ply>=120 では
+# ほぼ確信が 58.6% まで上がる (ply 60-99 は 28.6%)．
+
+EMBEDDED_BAND = (60, 100)
+"""埋め込み分位点表を測った手数帯 ``[min_ply, max_ply)``．"""
+
+EMBEDDED_QUANTILES_LO = np.array(
+    [
+        0.0000,
+        0.0000,
+        0.0000,
+        0.0008,
+        0.0029,
+        0.0065,
+        0.0099,
+        0.0135,
+        0.0176,
+        0.0218,
+        0.0265,
+        0.0316,
+        0.0354,
+        0.0392,
+        0.0434,
+        0.0479,
+        0.0532,
+        0.0577,
+        0.0625,
+        0.0685,
+        0.0746,
+        0.0814,
+        0.0863,
+        0.0928,
+        0.0985,
+        0.1044,
+        0.1090,
+        0.1150,
+        0.1202,
+        0.1263,
+        0.1314,
+        0.1369,
+        0.1426,
+        0.1484,
+        0.1550,
+        0.1613,
+        0.1660,
+        0.1716,
+        0.1784,
+        0.1843,
+        0.1902,
+        0.1960,
+        0.2025,
+        0.2070,
+        0.2128,
+        0.2196,
+        0.2250,
+        0.2310,
+        0.2385,
+        0.2444,
+        0.2524,
+        0.2603,
+        0.2663,
+        0.2729,
+        0.2783,
+        0.2838,
+        0.2899,
+        0.2959,
+        0.3023,
+        0.3092,
+        0.3170,
+        0.3235,
+        0.3302,
+        0.3369,
+        0.3471,
+        0.3556,
+        0.3638,
+        0.3726,
+        0.3847,
+        0.3943,
+        0.4033,
+        0.4102,
+        0.4201,
+        0.4280,
+        0.4380,
+        0.4486,
+        0.4589,
+        0.4709,
+        0.4812,
+        0.4916,
+        0.5031,
+        0.5162,
+        0.5320,
+        0.5441,
+        0.5562,
+        0.5731,
+        0.5872,
+        0.5999,
+        0.6147,
+        0.6308,
+        0.6493,
+        0.6656,
+        0.6820,
+        0.6984,
+        0.7117,
+        0.7340,
+        0.7520,
+        0.7686,
+        0.7997,
+        0.8371,
+        0.9474,
+    ],
+    dtype=np.float32,
+)
+"""元ラベルが 0 だった局面の探索値の 101 分位点 (0, 0.01, ..., 1)．"""
+
+EMBEDDED_QUANTILES_HI = np.array(
+    [
+        0.0557,
+        0.2325,
+        0.2728,
+        0.3096,
+        0.3448,
+        0.3730,
+        0.4028,
+        0.4289,
+        0.4497,
+        0.4645,
+        0.4884,
+        0.5063,
+        0.5210,
+        0.5361,
+        0.5529,
+        0.5710,
+        0.5839,
+        0.5970,
+        0.6114,
+        0.6222,
+        0.6325,
+        0.6430,
+        0.6524,
+        0.6600,
+        0.6685,
+        0.6777,
+        0.6841,
+        0.6912,
+        0.6974,
+        0.7056,
+        0.7129,
+        0.7197,
+        0.7249,
+        0.7304,
+        0.7356,
+        0.7429,
+        0.7475,
+        0.7540,
+        0.7584,
+        0.7640,
+        0.7709,
+        0.7764,
+        0.7828,
+        0.7883,
+        0.7932,
+        0.7978,
+        0.8029,
+        0.8074,
+        0.8119,
+        0.8174,
+        0.8235,
+        0.8278,
+        0.8329,
+        0.8375,
+        0.8423,
+        0.8476,
+        0.8527,
+        0.8573,
+        0.8605,
+        0.8654,
+        0.8692,
+        0.8733,
+        0.8780,
+        0.8823,
+        0.8868,
+        0.8911,
+        0.8950,
+        0.8987,
+        0.9036,
+        0.9076,
+        0.9115,
+        0.9158,
+        0.9204,
+        0.9241,
+        0.9288,
+        0.9331,
+        0.9369,
+        0.9406,
+        0.9440,
+        0.9480,
+        0.9521,
+        0.9556,
+        0.9586,
+        0.9615,
+        0.9652,
+        0.9686,
+        0.9717,
+        0.9745,
+        0.9774,
+        0.9806,
+        0.9833,
+        0.9864,
+        0.9888,
+        0.9911,
+        0.9936,
+        0.9955,
+        0.9979,
+        0.9995,
+        1.0000,
+        1.0000,
+        1.0000,
+    ],
+    dtype=np.float32,
+)
+"""元ラベルが 1 だった局面の探索値の 101 分位点．"""
 
 
 def load_positions(
@@ -206,6 +445,26 @@ def soften_uniform(
     ).astype(np.float32)
 
 
+def embedded_pools(
+    n: int, rng: np.random.Generator
+) -> tuple[np.ndarray, np.ndarray]:
+    """埋め込み分位点表から逆関数法で標本を作る．
+
+    ``--reference`` が無いときの既定．外部ファイルを持ち運ばずに
+    ``--mode empirical`` を使えるようにするためにある．
+    """
+    q = np.linspace(0.0, 1.0, len(EMBEDDED_QUANTILES_LO))
+    u = rng.random(n)
+    return (
+        np.interp(u, q, EMBEDDED_QUANTILES_LO).astype(
+            np.float32
+        ),
+        np.interp(u, q, EMBEDDED_QUANTILES_HI).astype(
+            np.float32
+        ),
+    )
+
+
 def empirical_pools(
     reference: pl.DataFrame, min_ply: int, max_ply: int
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -320,8 +579,9 @@ def main() -> int:
     ap.add_argument(
         "--reference",
         type=Path,
-        help="--mode empirical のときの参照 "
-        "(searchWinRate と置換前 resultValue を持つ feather)",
+        help="--mode empirical の参照 (searchWinRate と置換前 resultValue を"
+        "持つ feather)．省略すると埋め込み分位点表を使うので，"
+        "このファイル 1 枚だけで動く",
     )
     ap.add_argument(
         "--debias",
@@ -373,18 +633,34 @@ def main() -> int:
         softened = soften_uniform(original, args.epsilon)
     else:
         if args.reference is None:
-            raise SystemExit(
-                "--mode empirical には --reference が要る"
+            if (args.min_ply, args.max_ply) != EMBEDDED_BAND:
+                print(
+                    f"警告: 埋め込み分位点表は ply {EMBEDDED_BAND[0]}-"
+                    f"{EMBEDDED_BAND[1] - 1} で測ったもので，指定された "
+                    f"ply {args.min_ply}-{args.max_ply - 1} とは違う．"
+                    "分布は手数に強く依存するので --reference で"
+                    "測り直した参照を渡すこと",
+                    file=sys.stderr,
+                )
+            pool_lo, pool_hi = embedded_pools(
+                len(original), rng
             )
-        pool_lo, pool_hi = empirical_pools(
-            pl.read_ipc(args.reference, memory_map=False),
-            args.min_ply,
-            args.max_ply,
-        )
-        print(
-            f"参照の標本: 0 側 {len(pool_lo):,} / 1 側 {len(pool_hi):,}",
-            file=sys.stderr,
-        )
+            print(
+                "参照: 埋め込み分位点表 "
+                f"(ply {EMBEDDED_BAND[0]}-{EMBEDDED_BAND[1] - 1})",
+                file=sys.stderr,
+            )
+        else:
+            pool_lo, pool_hi = empirical_pools(
+                pl.read_ipc(args.reference, memory_map=False),
+                args.min_ply,
+                args.max_ply,
+            )
+            print(
+                f"参照: {args.reference} "
+                f"(0 側 {len(pool_lo):,} / 1 側 {len(pool_hi):,})",
+                file=sys.stderr,
+            )
         softened = soften_empirical(
             original, pool_lo, pool_hi, rng
         )
