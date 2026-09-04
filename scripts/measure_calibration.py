@@ -219,6 +219,105 @@ def _bin_mask(
     )
 
 
+EXTREME_EDGE = 0.10
+"""「極端に振った」と見なす境界．``p < 0.10`` または ``p > 0.90``．"""
+
+
+def overconfidence(
+    p: np.ndarray, y: np.ndarray
+) -> tuple[float, float, float]:
+    """極端に振った予測が，実際にその通りになったかを返す．
+
+    ## なぜ ECE / Brier と別に要るのか
+
+    **Brier は識別能力に支配される**ので，「勝ち負けを見分ける力」が同じま
+    ま「根拠なく断言する量」だけが減っても動かない．ECE は全ビン・全手数を
+    集約するため，一部の帯だけで起きた変化が他の帯と相殺されて消える．
+
+    実測 (2026-09-04): 探索値を ply>=120 に投与した A/B で，同帯の Brier は
+    0.0960 -> 0.0942 (有意でない) だったが，本指標は +0.007 -> −0.011 と
+    **有意に動いていた** (対局単位 paired bootstrap で
+    Δ = −0.0177 [−0.0254, −0.0106])．Brier と ECE だけを見て「効果なし」と
+    判定しかけたため，この列を足した．
+
+    ## 何を比べているか
+
+    ``p`` が極端側にある局面だけを取り出し::
+
+        claimed = max(p, 1-p) の平均   モデルが主張した確信
+        actual  = その方向へ実際に決着した割合
+        gap     = claimed - actual     正なら過信，負なら控えめ
+
+    Args:
+        p: 局面ごとの予測勝率．
+        y: 局面ごとの実際の勝敗 (0/1)．
+
+    Returns:
+        ``(極端と判定した割合, 主張した確信の平均, 実測の的中率)``．
+        該当が 20 局面未満なら 3 つとも ``nan``．
+    """
+    ext = (p < EXTREME_EDGE) | (p > 1 - EXTREME_EDGE)
+    if ext.sum() < 20:
+        return (float("nan"),) * 3
+    claimed = float(
+        np.where(p[ext] > 0.5, p[ext], 1 - p[ext]).mean()
+    )
+    actual = float(
+        np.where(p[ext] > 0.5, y[ext], 1 - y[ext]).mean()
+    )
+    return float(ext.mean()), claimed, actual
+
+
+def game_resamples(
+    gidx: np.ndarray, n_games: int, rounds: int, seed: int
+) -> list[np.ndarray]:
+    """対局ごと丸ごと再標本した索引を ``rounds`` 本つくる．
+
+    同一対局の局面は同じ勝敗ラベルを共有する (ρ = 1) ので，局面単位の
+    再標本では区間が狭く出すぎる．詳細はモジュール docstring．
+    """
+    rng = np.random.default_rng(seed)
+    by_game = [np.where(gidx == i)[0] for i in range(n_games)]
+    return [
+        np.concatenate(
+            [
+                by_game[i]
+                for i in rng.integers(0, n_games, n_games)
+            ]
+        )
+        for _ in range(rounds)
+    ]
+
+
+def overconfidence_ci(
+    p: np.ndarray,
+    y: np.ndarray,
+    picks: list[np.ndarray],
+    mask: np.ndarray | None = None,
+) -> tuple[float, float]:
+    """:func:`overconfidence` の gap の 95% 区間を対局単位で求める．
+
+    **返るのは「そのモデル単体の gap がゼロと違うか」の区間**であって，
+    2 つのモデルの差の区間ではない．同じ局面・同じラベルを採点している
+    以上，モデル間の比較は **paired** で取らないと区間が広く出すぎる．
+
+    実例 (2026-09-04): ply120+ で base_ep11 は +0.0069 [−0.0042, +0.0186]
+    と単体ではゼロをまたぐが，sv28.6_ep13 との **paired** な差は
+    −0.0177 [−0.0254, −0.0106] で有意だった．**単体の区間が重なることを
+    「差がない」と読んではいけない．**
+    """
+    vals = []
+    for pk in picks:
+        sel = pk if mask is None else pk[mask[pk]]
+        _, claimed, actual = overconfidence(p[sel], y[sel])
+        if not np.isnan(claimed):
+            vals.append(claimed - actual)
+    if len(vals) < 50:
+        return float("nan"), float("nan")
+    lo, hi = np.percentile(vals, [2.5, 97.5])
+    return float(lo), float(hi)
+
+
 def expected_calibration_error(
     p: np.ndarray, y: np.ndarray
 ) -> float:
@@ -248,6 +347,7 @@ def report_by_ply(
     y: np.ndarray,
     gidx: np.ndarray,
     ply: np.ndarray,
+    picks: list[np.ndarray] | None = None,
 ) -> None:
     """手数帯ごとの較正を出す．
 
@@ -262,27 +362,50 @@ def report_by_ply(
         y: 局面ごとの実際の勝敗 (0/1)．
         gidx: 局面ごとの対局インデックス．
         ply: 局面ごとの手数．
+        picks: 対局単位の再標本索引 (:func:`game_resamples`)．
+            渡すと ``gap`` の 95% 区間も出す．
     """
     print(
         "\nby ply band (memorisation should concentrate in later plies)"
     )
     print(
+        "ext%/claim/actual/gap = 極端に振った予測 "
+        f"(p<{EXTREME_EDGE:.2f} or p>{1 - EXTREME_EDGE:.2f}) の"
+        "割合・主張した確信・実測の的中率・その差 (正 = 過信)"
+    )
+    width = 96 + (20 if picks else 0)
+    print(
         f"{'ply':>10}{'positions':>11}{'games':>7}"
         f"{'pred':>8}{'actual':>8}{'ECE':>8}{'Brier':>8}"
+        f"{'ext%':>8}{'claim':>8}{'actual':>8}{'gap':>10}"
+        + ("        gap 95% CI" if picks else "")
     )
-    print("-" * 60)
+    print("-" * width)
     for lo, hi in itertools.pairwise(PLY_BANDS):
         m = (ply >= lo) & (ply < hi)
         if m.sum() < 50:
             continue
         label = f"{lo}-{hi - 1}" if hi < 10**9 else f"{lo}+"
-        print(
+        ext, claimed, hit = overconfidence(p[m], y[m])
+        line = (
             f"{label:>10}{m.sum():>11,}"
             f"{len(np.unique(gidx[m])):>7,}"
             f"{p[m].mean():>8.3f}{y[m].mean():>8.3f}"
             f"{expected_calibration_error(p[m], y[m]):>8.4f}"
             f"{float(np.mean((p[m] - y[m]) ** 2)):>8.4f}"
         )
+        if np.isnan(claimed):
+            line += f"{'-':>8}{'-':>8}{'-':>8}{'-':>10}"
+        else:
+            line += (
+                f"{100 * ext:>7.1f}%{claimed:>8.3f}"
+                f"{hit:>8.3f}{claimed - hit:>+10.4f}"
+            )
+            if picks:
+                ci_lo, ci_hi = overconfidence_ci(p, y, picks, m)
+                if not np.isnan(ci_lo):
+                    line += f"  [{ci_lo:+.4f}, {ci_hi:+.4f}]"
+        print(line)
 
 
 def bootstrap_by_game(
@@ -395,6 +518,11 @@ def main() -> int:
         f"actual win rate {y.mean():.3f}\n"
     )
 
+    picks = (
+        game_resamples(gidx, n_games, args.bootstrap, args.seed)
+        if args.bootstrap
+        else None
+    )
     boot = (
         bootstrap_by_game(
             p, y, gidx, n_games, args.bootstrap, args.seed
@@ -447,8 +575,25 @@ def main() -> int:
         f"diagnostic temperature T = {t:.2f} (ECE would be {ece_t:.4f}); "
         "T far from 1 means over-confidence"
     )
+    ext, claimed, hit = overconfidence(p, y)
+    if not np.isnan(claimed):
+        line = (
+            f"extreme (p<{EXTREME_EDGE:.2f} or p>{1 - EXTREME_EDGE:.2f})"
+            f" = {100 * ext:.1f}% of positions; "
+            f"claimed {claimed:.3f} vs actual {hit:.3f} "
+            f"-> overconfidence {claimed - hit:+.4f}"
+        )
+        if picks is not None:
+            ci_lo, ci_hi = overconfidence_ci(p, y, picks)
+            if not np.isnan(ci_lo):
+                line += f" [{ci_lo:+.4f}, {ci_hi:+.4f}]"
+        print(line)
+        print(
+            "  (正なら断言しすぎ．Brier は識別能力に支配されるので"
+            "この量が動いても動かないことがある)"
+        )
     if args.by_ply:
-        report_by_ply(p, y, gidx, ply)
+        report_by_ply(p, y, gidx, ply, picks)
     return 0
 
 
