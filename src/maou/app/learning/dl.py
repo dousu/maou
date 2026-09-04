@@ -80,7 +80,7 @@ class LearningDataSource(DataSource):
 EarlyStoppingMetric = Literal["total", "value", "policy"]
 """early stopping とチェックポイント保存が監視する検証指標．
 
-``total`` は policy と value を足した検証損失 (従来の挙動)．
+既定は ``value``．``total`` は policy と value を足した検証損失．
 
 2 つの head は**過学習の速さが違う**ため，合算値の最小点はどちらの head の
 最小点とも一致しない．value 教師は 1 対局につき 1 つの勝敗ビットを全局面へ
@@ -89,6 +89,14 @@ policy 教師は局面ごとに異なるラベルを持つのでその近道が�
 
 較正 (ECE) を見ているときは ``value``，指し手予測を見ているときは
 ``policy`` を選ぶと，合算値が黙って行う折衷を避けられる．
+
+``total`` を既定から外したのは，**合算損失が policy に支配される**ため．
+実測 (vit-19.8m / 38.5M 行) では検証 total 2.5680 のうち policy CE が
+2.0609 (約 8 割) を占め，policy は単調改善を続けるので合算の最小点は
+value の最小点より 7 epoch 後ろへずれた．その 2 点を held-out 較正で
+測ると ECE 0.0285 (value の底) 対 0.0513 (合算の底) で，**監視指標の
+取り違えによる差のほうが，教師信号そのものを変えて得られた差より
+大きかった**．
 """
 
 
@@ -172,7 +180,7 @@ class Learning:
         optimizer_eps: float
         detect_anomaly: bool = False
         early_stopping_patience: int = 0
-        early_stopping_metric: EarlyStoppingMetric = "total"
+        early_stopping_metric: EarlyStoppingMetric = "value"
         resume_backbone_from: Path | None = None
         resume_policy_head_from: Path | None = None
         resume_value_head_from: Path | None = None

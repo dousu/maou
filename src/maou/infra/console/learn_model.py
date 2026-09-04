@@ -392,12 +392,13 @@ def _build_adaptive_batch_config(
 @click.option(
     "--early-stopping-metric",
     type=click.Choice(["total", "value", "policy"]),
-    default="total",
+    default="value",
     show_default=True,
     help="Validation metric that early stopping and checkpoint saving track. "
     "'total' is the combined loss, 'value' the Brier score and 'policy' the "
     "cross entropy. The two heads overfit at different speeds, so the "
-    "combined minimum matches neither head's own minimum.",
+    "combined minimum matches neither head's own minimum -- and 'total' is "
+    "dominated by policy, so it lands well past the value head's own best.",
 )
 @click.option(
     "--stage1-threshold",
