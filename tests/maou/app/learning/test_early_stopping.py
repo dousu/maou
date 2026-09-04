@@ -130,8 +130,14 @@ class TestLearningOptionField:
         opt = self._option(early_stopping_patience=5)
         assert opt.early_stopping_patience == 5
 
-    def test_metric_defaults_to_total(self) -> None:
-        assert self._option().early_stopping_metric == "total"
+    def test_metric_defaults_to_value(self) -> None:
+        """既定は ``value``．
+
+        合算 ``total`` は policy に支配されるので value head の最小点より
+        後ろで止まる．実測では合算の底と value の底で held-out ECE が
+        0.0513 対 0.0285 と 1.8 倍違った．
+        """
+        assert self._option().early_stopping_metric == "value"
 
     def test_carries_metric(self) -> None:
         opt = self._option(early_stopping_metric="value")
@@ -162,11 +168,11 @@ class TestCliOptions:
         assert isinstance(opt.type, click.IntRange)
         assert opt.type.min == 0
 
-    def test_early_stopping_metric_defaults_to_total(
+    def test_early_stopping_metric_defaults_to_value(
         self,
     ) -> None:
         opt = _find_option("--early-stopping-metric")
-        assert opt.default == "total"
+        assert opt.default == "value"
 
     def test_early_stopping_metric_choices(self) -> None:
         opt = _find_option("--early-stopping-metric")

@@ -2,7 +2,9 @@
 
 import tempfile
 from pathlib import Path
+from typing import Any
 
+import pytest
 import torch
 
 from maou.app.learning.model_io import ModelIO
@@ -304,3 +306,151 @@ def test_load_legal_moves_head_strips_orig_mod_prefix() -> None:
     )
     assert "0.weight" in result
     assert not any(k.startswith("_orig_mod.") for k in result)
+
+
+class TestDedupeIdenticalNodes:
+    """``convert_float_to_float16`` が吐く重複ノードの除去 (回帰)．
+
+    fp16 変換器が ``name``/``op_type``/``input``/``output`` の
+    すべてが同一な Cast を 2 回吐くことがあり，onnxruntime は
+    ``two nodes with same node name`` として読み込みを拒否する．
+    """
+
+    @staticmethod
+    def _model_with_duplicate() -> Any:
+        from onnx import TensorProto, helper
+
+        cast = helper.make_node(
+            "Cast",
+            inputs=["x"],
+            outputs=["y"],
+            name="/dup_cast_node",
+            to=TensorProto.FLOAT,
+        )
+        graph = helper.make_graph(
+            [
+                cast,
+                helper.make_node(
+                    "Cast",
+                    inputs=["x"],
+                    outputs=["y"],
+                    name="/dup_cast_node",
+                    to=TensorProto.FLOAT,
+                ),
+            ],
+            "g",
+            [
+                helper.make_tensor_value_info(
+                    "x", TensorProto.FLOAT16, [1]
+                )
+            ],
+            [
+                helper.make_tensor_value_info(
+                    "y", TensorProto.FLOAT, [1]
+                )
+            ],
+        )
+        return helper.make_model(graph)
+
+    def test_removes_exact_duplicate(self) -> None:
+        from maou.app.learning.model_io import (
+            _dedupe_identical_nodes,
+        )
+
+        model = self._model_with_duplicate()
+        assert len(model.graph.node) == 2
+
+        removed = _dedupe_identical_nodes(model)
+
+        assert removed == 1
+        assert len(model.graph.node) == 1
+        # 残った 1 本は元と同じ入出力を保つ (計算が変わらない)
+        assert list(model.graph.node[0].input) == ["x"]
+        assert list(model.graph.node[0].output) == ["y"]
+
+    def test_duplicate_makes_model_unloadable_and_dedupe_fixes_it(
+        self, tmp_path: Path
+    ) -> None:
+        import onnx
+        import onnxruntime as ort
+
+        model = self._model_with_duplicate()
+        broken = tmp_path / "broken.onnx"
+        onnx.save(model, broken)
+        with pytest.raises(
+            Exception, match="two nodes with same node name"
+        ):
+            ort.InferenceSession(
+                str(broken), providers=["CPUExecutionProvider"]
+            )
+
+        from maou.app.learning.model_io import (
+            _dedupe_identical_nodes,
+        )
+
+        _dedupe_identical_nodes(model)
+        fixed = tmp_path / "fixed.onnx"
+        onnx.save(model, fixed)
+        ort.InferenceSession(
+            str(fixed), providers=["CPUExecutionProvider"]
+        )
+
+    def test_noop_when_no_duplicates(self) -> None:
+        from maou.app.learning.model_io import (
+            _dedupe_identical_nodes,
+        )
+
+        model = self._model_with_duplicate()
+        del model.graph.node[1]
+
+        assert _dedupe_identical_nodes(model) == 0
+        assert len(model.graph.node) == 1
+
+
+class TestAssertOnnxLoadable:
+    """読み込めない ONNX を publish させないガード (回帰)．"""
+
+    def test_raises_on_unloadable_model(
+        self, tmp_path: Path
+    ) -> None:
+        from maou.app.learning.model_io import (
+            _assert_onnx_loadable,
+        )
+
+        bad = tmp_path / "not_onnx.onnx"
+        bad.write_bytes(b"definitely not a protobuf")
+
+        with pytest.raises(RuntimeError, match="not loadable"):
+            _assert_onnx_loadable(bad)
+
+    def test_passes_on_loadable_model(
+        self, tmp_path: Path
+    ) -> None:
+        import onnx
+        from onnx import TensorProto, helper
+
+        from maou.app.learning.model_io import (
+            _assert_onnx_loadable,
+        )
+
+        node = helper.make_node(
+            "Identity", inputs=["x"], outputs=["y"], name="/id"
+        )
+        graph = helper.make_graph(
+            [node],
+            "g",
+            [
+                helper.make_tensor_value_info(
+                    "x", TensorProto.FLOAT, [1]
+                )
+            ],
+            [
+                helper.make_tensor_value_info(
+                    "y", TensorProto.FLOAT, [1]
+                )
+            ],
+        )
+        good = tmp_path / "good.onnx"
+        onnx.save(helper.make_model(graph), good)
+
+        _assert_onnx_loadable(good)  # 例外が出なければ成功

@@ -18,6 +18,63 @@ from maou.domain.data.schema import (
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+def _dedupe_identical_nodes(onnx_model: Any) -> int:
+    """完全に同一なノードの重複を取り除き，除いた数を返す．
+
+    ``convert_float_to_float16`` は，ある fp16 テンソルが複数の
+    block 済みノードへ流れるとき，同じ Cast ノードを 2 回吐くこと
+    がある．結果は ``name`` / ``op_type`` / ``input`` / ``output``
+    がすべて一致する重複で，onnxruntime は
+    ``two nodes with same node name`` として**読み込みを拒否する**．
+
+    ノード名はエッジから参照されない (エッジはテンソル名で結ばれる)
+    ので，同一入力から同一出力を作る片方を落としてもグラフの計算は
+    変わらない．名前だけを付け替える対処では，同じ出力テンソルを 2 つ
+    のノードが生成する別の不正グラフになるため採らない．
+    """
+    graph = onnx_model.graph
+    seen: set[
+        tuple[str, str, tuple[str, ...], tuple[str, ...]]
+    ] = set()
+    kept = []
+    for node in graph.node:
+        key = (
+            node.name,
+            node.op_type,
+            tuple(node.input),
+            tuple(node.output),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(node)
+    removed = len(graph.node) - len(kept)
+    if removed:
+        del graph.node[:]
+        graph.node.extend(kept)
+    return removed
+
+
+def _assert_onnx_loadable(onnx_path: Path) -> None:
+    """保存した ONNX が onnxruntime で読めることを確認する．
+
+    読めないモデルをクラウドへ上げると，学習が完走したのに成果物が
+    使えないという形で後段の測定まで壊れる．アップロード前にここで
+    落とす．
+    """
+    import onnxruntime as ort
+
+    try:
+        ort.InferenceSession(
+            str(onnx_path), providers=["CPUExecutionProvider"]
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"Exported ONNX model is not loadable by onnxruntime: "
+            f"{onnx_path}. Refusing to publish it. Original error: {exc}"
+        ) from exc
+
+
 class ModelIO:
     @staticmethod
     def _strip_orig_mod_prefix(
@@ -493,6 +550,7 @@ class ModelIO:
         )
         onnx_model_simp = onnxslim.slim(onnx_model)
         onnx.save(onnx_model_simp, onnx_model_path)
+        _assert_onnx_loadable(onnx_model_path)
 
         # ONNX FP32の検証
         if verify_export:
@@ -553,7 +611,14 @@ class ModelIO:
                 "Flatten",
             ],  # FP16にしたくない演算 (出力層とか)
         )
+        removed = _dedupe_identical_nodes(onnx_model_fp16)
+        if removed:
+            logger.info(
+                f"Removed {removed} duplicate node(s) emitted by "
+                "the FP16 converter"
+            )
         onnx.save(onnx_model_fp16, onnx_model_fp16_path)
+        _assert_onnx_loadable(onnx_model_fp16_path)
 
         # ONNX FP16の検証
         if verify_export:
