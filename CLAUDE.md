@@ -66,6 +66,12 @@ Maou (魔王) is a Shogi (Japanese chess) AI project implemented in Python follo
 - MUST remove `docs/commands/<command-name>.md` when removing a CLI command
 - MUST follow the existing documentation format (Overview + CLI options tables)
 
+### Google Colab (GPU 検証)
+- MUST follow [docs/colab-cli-notes.md](docs/colab-cli-notes.md) §6–§10 when using
+  the `colab` CLI: wheel from Release `latest`, Drive writes only via mount inside
+  the VM and only under `MyDrive/shogi`, local-first output, `scripts/` for
+  reproducibility, `/checkpoint-context` right after launching a long job
+
 ## Repository-Centric Memory Architecture (MUST)
 
 Long-term memory lives in the repository, not in the conversation.
@@ -298,6 +304,7 @@ cargo test --release -p maou_shogi -- --ignored --nocapture       # #[ignore] �
 | LR Tuning | [docs/learning-rate-tuning.md](docs/learning-rate-tuning.md) |
 | Git Workflow | [docs/git-workflow.md](docs/git-workflow.md) |
 | CLI Commands | [docs/commands/](docs/commands/) |
+| Colab CLI 運用 | [docs/colab-cli-notes.md](docs/colab-cli-notes.md) |
 | Shogi Visualization | [docs/visualization/shogi-conventions.md](docs/visualization/shogi-conventions.md) |
 
 ### ⚠️ Visualization 実装時の必読ドキュメント
