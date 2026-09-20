@@ -1,6 +1,6 @@
 ---
-status: pending          # pending | approved | applied | rejected
-applied_in:              # commit SHA, filled when status becomes applied
+status: applied          # pending | approved | applied | rejected
+applied_in: a23bcba8
 date: 2026-09-20
 target: [docs/colab-cli-notes.md, scripts/colab_adopt_session.py, .claude/skills/colab-operator/SKILL.md, CLAUDE.md]
 risk: low
