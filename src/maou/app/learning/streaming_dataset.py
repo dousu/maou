@@ -310,13 +310,16 @@ class StreamingKifDataset(IterableDataset):
 
             total_batches = 0
             file_count = 0
-            for file_idx, columnar_batch in enumerate(
-                self._source.iter_files_columnar_subset(
-                    worker_files
-                )
+            # enumerate() は結果 tuple を使い回し，次の要素を取りに行く間も
+            # 前の要素を tuple 経由で握る (CPython の最適化) ので，前ファイル分を
+            # 手放すためにはループ変数だけを使う
+            for (
+                columnar_batch
+            ) in self._source.iter_files_columnar_subset(
+                worker_files
             ):
                 file_count += 1
-                if file_idx == 0:
+                if file_count == 1:
                     _log_worker_memory(
                         worker_id,
                         "after_first_file",
@@ -337,6 +340,10 @@ class StreamingKifDataset(IterableDataset):
                             os.getpid(),
                         )
                     yield batch
+                # 次ファイルを読む前に前ファイル分を手放す
+                # (generator 側の del と対で，前ファイルと次ファイルの
+                # 読込一時領域が重ならないようにする)
+                del columnar_batch
             logger.debug(
                 "Worker %d: iteration complete"
                 " (%d batches from %d files)",
@@ -441,13 +448,16 @@ class StreamingStage1Dataset(IterableDataset):
 
             total_batches = 0
             file_count = 0
-            for file_idx, columnar_batch in enumerate(
-                self._source.iter_files_columnar_subset(
-                    worker_files
-                )
+            # enumerate() は結果 tuple を使い回し，次の要素を取りに行く間も
+            # 前の要素を tuple 経由で握る (CPython の最適化) ので，前ファイル分を
+            # 手放すためにはループ変数だけを使う
+            for (
+                columnar_batch
+            ) in self._source.iter_files_columnar_subset(
+                worker_files
             ):
                 file_count += 1
-                if file_idx == 0:
+                if file_count == 1:
                     _log_worker_memory(
                         worker_id,
                         "after_first_file",
@@ -468,6 +478,10 @@ class StreamingStage1Dataset(IterableDataset):
                             os.getpid(),
                         )
                     yield batch
+                # 次ファイルを読む前に前ファイル分を手放す
+                # (generator 側の del と対で，前ファイルと次ファイルの
+                # 読込一時領域が重ならないようにする)
+                del columnar_batch
             logger.debug(
                 "Worker %d: iteration complete"
                 " (%d batches from %d files)",
@@ -596,19 +610,24 @@ class StreamingStage2Dataset(IterableDataset):
             file_count = 0
             buffer: list[ColumnarBatch] = []
 
-            for file_idx, columnar_batch in enumerate(
-                self._source.iter_files_columnar_subset(
-                    worker_files
-                )
+            # enumerate() は結果 tuple を使い回し，次の要素を取りに行く間も
+            # 前の要素を tuple 経由で握る (CPython の最適化) ので，前ファイル分を
+            # 手放すためにはループ変数だけを使う
+            for (
+                columnar_batch
+            ) in self._source.iter_files_columnar_subset(
+                worker_files
             ):
                 file_count += 1
-                if file_idx == 0:
+                if file_count == 1:
                     _log_worker_memory(
                         worker_id,
                         "after_first_file",
                         level=logging.DEBUG,
                     )
                 buffer.append(columnar_batch)
+                # 参照は buffer が持つ．ループ変数の分は手放す
+                del columnar_batch
 
                 if len(buffer) >= _FILES_PER_CONCAT:
                     merged = ColumnarBatch.concatenate(buffer)
@@ -628,6 +647,8 @@ class StreamingStage2Dataset(IterableDataset):
                                 os.getpid(),
                             )
                         yield batch
+                    # 次のまとまりを読む前に結合済み分を手放す
+                    del merged
 
             # 残りのバッファを処理
             if buffer:

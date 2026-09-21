@@ -24,12 +24,15 @@ except (
         _LRScheduler as LRScheduler,
     )
 
+import polars as pl
+
 from maou.app.learning.dataset import DataSource, KifDataset
 from maou.app.learning.network import (
     BackboneArchitecture,
     HeadlessNetwork,
     Network,
 )
+from maou.domain.data.arrow_format import scan_row_count
 
 logger = logging.getLogger(__name__)
 
@@ -186,23 +189,46 @@ class DatasetFactory:
         return dataset_train, dataset_validation
 
 
-_DECOMPRESSION_FACTOR: float = 4.0
-"""LZ4の一般的展開倍率(2-4倍)の上限値．"""
+_PEAK_IMAGES: float = 2.0
+"""ワーカーが同時に持つ「展開後 1 ファイル分」のイメージ数．
 
-_SAFETY_MARGIN: float = 2.0
-"""ワーカーあたりメモリの安全マージン．
-
-各ワーカーは展開済み feather ファイルを Polars DataFrame と numpy
-(ColumnarBatch) の両方で一時保持し，さらに prefetch バッファ・アロケータ
-の断片化・GC 遅延が上乗せされる．旧値 1.5 は過小評価で worker を出し過ぎ，
-OOM killer による worker kill を招いていたため保守側に引き上げた．
+Rust の ``load_feather`` は record batch の ``Vec`` を集めてから
+``concat_batches`` で 1 つに複製するので読込中に 2 枚，変換中は
+Polars DataFrame + numpy (ColumnarBatch ≈ 0.75 枚) で 1.75 枚になる．
+前ファイルの ColumnarBatch は次を読む前に手放す
+(``StreamingFileSource.iter_files_columnar_subset``) ので，これ以上は重ならない．
 """
 
-_WORKER_MEMORY_BUDGET_FRACTION: float = 0.4
+_PEAK_MARGIN: float = 1.15
+"""展開後サイズから見積もるときの安全マージン (アロケータの断片化・torch の
+ベースライン分)．2026-09-21 の Colab G4 (176GB) では旧見積が 1 ファイル
+1.3GB としていた worker が実際は 34GiB (= 展開後 12GB × 2.85) に達し，
+5 worker で memory cgroup の OOM になった (Explore 調査 + dmesg)．
+"""
+
+_DECOMPRESSION_FACTOR: float = 4.0
+"""スキーマから展開後サイズが分からないときに使う LZ4 の展開倍率．
+
+固定幅でない列 (可変長 List / 文字列) を含むファイルだけがこの経路に落ちる．
+maou が書く前処理済 / HCPE は FixedSizeList なので通常は使わない．
+"""
+
+_SAFETY_MARGIN: float = 4.0
+"""展開倍率経路の安全マージン．
+
+展開倍率は一般値でしかない (前処理済の ``moveWinRate`` 1496×f32 は約 68 倍に
+展開される) ので，``_WORKER_MEMORY_BUDGET_FRACTION`` を 0.4 から 0.8 に上げた
+分を打ち消して従来と同じ上限に保つ．
+"""
+
+_WORKER_MEMORY_BUDGET_FRACTION: float = 0.8
 """DataLoader ワーカー群に割り当てる利用可能メモリの割合．
 
-残りはメインプロセス(モデル・pinned buffer・CUDA context・Python)用に確保する．
-旧値 0.5 では headroom 不足で OOM しやすかったため 0.4 に引き下げた．
+残りはメインプロセス (モデル・pinned buffer・CUDA context・Python) 用に確保する．
+旧値 0.4 は per-worker の見積誤差 (LZ4 4 倍固定) を吸収するための値で，
+展開後サイズをスキーマと行数から直接見積もるようになったので 0.8 に上げた
+(176GB の VM で 12GB/ファイルなら 5 worker，15GB の DevContainer で
+小ファイルなら従来どおり)．
 """
 
 _FALLBACK_PER_WORKER_MB: float = 200.0
@@ -238,18 +264,79 @@ def _sample_for_size_estimate(
     ]
 
 
+_FIXED_WIDTH_BYTES: dict[pl.DataType, int] = {
+    pl.Boolean(): 1,
+    pl.Int8(): 1,
+    pl.UInt8(): 1,
+    pl.Int16(): 2,
+    pl.UInt16(): 2,
+    pl.Int32(): 4,
+    pl.UInt32(): 4,
+    pl.Float32(): 4,
+    pl.Int64(): 8,
+    pl.UInt64(): 8,
+    pl.Float64(): 8,
+}
+
+
+def _dtype_row_bytes(
+    dtype: pl.DataType | pl.datatypes.DataTypeClass,
+) -> int | None:
+    """固定幅 dtype の 1 行あたりバイト数 (固定幅でなければ ``None``)．
+
+    Arrow の FixedSizeList は Polars では ``pl.Array`` (入れ子も可) に
+    なるので再帰で畳む．可変長 List / 文字列は展開後サイズが行数から
+    決まらないので ``None`` を返し，呼び出し側が展開倍率の経路に落とす．
+    """
+    if isinstance(dtype, pl.Array):
+        inner = _dtype_row_bytes(dtype.inner)
+        return None if inner is None else inner * dtype.size
+    for fixed, width in _FIXED_WIDTH_BYTES.items():
+        if dtype == fixed:
+            return width
+    return None
+
+
+def _uncompressed_file_mb(file_path: Path) -> float | None:
+    """feather の展開後サイズ (MB) をメタデータだけから求める．
+
+    スキーマ (``pl.read_ipc_schema``) と行数 (``scan_row_count``，File 形式
+    ならメタデータ読み) の積なのでデータ本体は読まない．固定幅でない列を
+    含む，または読めないときは ``None``．
+    """
+    try:
+        schema = pl.read_ipc_schema(file_path)
+        row_bytes = 0
+        for dtype in schema.values():
+            width = _dtype_row_bytes(dtype)
+            if width is None:
+                return None
+            row_bytes += width
+        rows = scan_row_count(file_path)
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        pl.exceptions.PolarsError,
+    ):
+        return None
+    return row_bytes * rows / (1024**2)
+
+
 def _estimate_per_worker_mb(
     file_paths: list[Path] | None,
     logger: logging.Logger,
 ) -> float:
-    """データファイルサイズからワーカーあたりのメモリ消費量を推定する．
+    """データファイルからワーカーあたりのメモリ消費量を推定する．
 
-    圧縮済みファイルの平均サイズに展開倍率と安全マージンを乗じて
-    1ワーカーあたりのメモリ使用量を算出する．
-    ファイルパスが未指定またはすべて存在しない場合はフォールバック値を返す．
+    各ワーカーは担当ファイルを 1 つずつ丸ごと展開するので，ピークは
+    **最大の 1 ファイルの展開後サイズ** × ``_PEAK_IMAGES`` × ``_PEAK_MARGIN``．
+    展開後サイズはスキーマと行数から求める (``_uncompressed_file_mb``)．
+    固定幅でない列を含むなど求まらないファイルは，圧縮サイズ ×
+    ``_DECOMPRESSION_FACTOR`` × ``_SAFETY_MARGIN`` で代用する．
+    ファイルパスが未指定またはすべて読めない場合はフォールバック値を返す．
 
-    平均サイズは高々 ``_SIZE_SAMPLE_LIMIT`` 件の等間隔サンプルから
-    求める (全ファイルを stat() しない)．
+    サンプルは高々 ``_SIZE_SAMPLE_LIMIT`` 件の等間隔 (全ファイルを stat() しない)．
 
     Args:
         file_paths: データファイルパスのリスト
@@ -262,14 +349,35 @@ def _estimate_per_worker_mb(
         return _FALLBACK_PER_WORKER_MB
 
     sampled = _sample_for_size_estimate(file_paths)
-    file_sizes = []
+    estimates: list[float] = []
+    n_exact = 0
+    max_uncompressed_mb = 0.0
+    max_compressed_mb = 0.0
     for fp in sampled:
         try:
-            file_sizes.append(fp.stat().st_size)
+            compressed_mb = fp.stat().st_size / (1024**2)
         except OSError:
             continue
+        uncompressed_mb = _uncompressed_file_mb(fp)
+        if uncompressed_mb is not None:
+            n_exact += 1
+            max_uncompressed_mb = max(
+                max_uncompressed_mb, uncompressed_mb
+            )
+            estimates.append(
+                uncompressed_mb * _PEAK_IMAGES * _PEAK_MARGIN
+            )
+        else:
+            max_compressed_mb = max(
+                max_compressed_mb, compressed_mb
+            )
+            estimates.append(
+                compressed_mb
+                * _DECOMPRESSION_FACTOR
+                * _SAFETY_MARGIN
+            )
 
-    if not file_sizes:
+    if not estimates:
         logger.warning(
             "No accessible data files found; "
             "using fallback per_worker_mb=%.0f",
@@ -277,23 +385,20 @@ def _estimate_per_worker_mb(
         )
         return _FALLBACK_PER_WORKER_MB
 
-    avg_compressed_mb = (
-        sum(file_sizes) / len(file_sizes) / (1024**2)
-    )
-    estimated = (
-        avg_compressed_mb
-        * _DECOMPRESSION_FACTOR
-        * _SAFETY_MARGIN
-    )
-    per_worker_mb = max(estimated, _FALLBACK_PER_WORKER_MB)
+    per_worker_mb = max(max(estimates), _FALLBACK_PER_WORKER_MB)
 
     logger.info(
         "Dynamic per_worker_mb=%.0f "
-        "(avg_file=%.1fMB, files=%d/%d accessible "
-        "of %d total)",
+        "(max_uncompressed=%.1fMB from schema x rows for %d files, "
+        "max_compressed=%.1fMB x %.0f for %d files; "
+        "%d/%d accessible of %d total)",
         per_worker_mb,
-        avg_compressed_mb,
-        len(file_sizes),
+        max_uncompressed_mb,
+        n_exact,
+        max_compressed_mb,
+        _DECOMPRESSION_FACTOR * _SAFETY_MARGIN,
+        len(estimates) - n_exact,
+        len(estimates),
         len(sampled),
         len(file_paths),
     )
@@ -312,9 +417,8 @@ def _estimate_max_workers_by_memory(
     一定のメモリを消費する．利用可能メモリの一部を
     DataLoaderワーカーに割り当て，安全なワーカー数を算出する．
 
-    ファイルパスが渡された場合，圧縮ファイルの実サイズから
-    ワーカーあたりのメモリ消費量を動的に推定する．
-    展開倍率(LZ4: 4.0)と安全マージン(2.0)を考慮する．
+    ファイルパスが渡された場合，最大ファイルの展開後サイズ (スキーマ × 行数)
+    からワーカーあたりのメモリ消費量を動的に推定する (``_estimate_per_worker_mb``)．
     割当は利用可能メモリの ``_WORKER_MEMORY_BUDGET_FRACTION`` に制限する．
 
     Args:

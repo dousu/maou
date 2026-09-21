@@ -225,6 +225,35 @@ class TestFilePathsProperty:
 class TestIterFilesColumnar:
     """Test iter_files_columnar generator."""
 
+    def test_previous_batch_released_before_next_file(
+        self, tmp_path: Path
+    ) -> None:
+        """前ファイルの ColumnarBatch は次ファイルを読む前に手放される．
+
+        generator のローカル ``batch`` が前ファイル分を握ったまま次の
+        ``_loader`` を呼ぶと，worker のピークが「前ファイルの ColumnarBatch
+        + 次ファイルの読込一時領域」になる (2026-09-21 の Colab G4 で
+        12GB/ファイル × 5 worker が memory cgroup の OOM に達した)．
+        """
+        import weakref
+
+        file_paths = _create_preprocessing_files(
+            tmp_path, file_count=2, rows_per_file=3
+        )
+        source = StreamingFileSource(
+            file_paths=file_paths,
+            array_type="preprocessing",
+        )
+        gen = source.iter_files_columnar_subset(file_paths)
+        first = next(gen)
+        ref = weakref.ref(first)
+        del first  # 消費側は参照を切った
+        second = next(gen)  # generator が次ファイルを読んだあと
+        assert ref() is None, (
+            "generator still holds the previous ColumnarBatch"
+        )
+        assert second.board_positions.shape[0] == 3
+
     def test_yields_correct_count(self, tmp_path: Path) -> None:
         """Yields one ColumnarBatch per file."""
         file_paths = _create_preprocessing_files(
