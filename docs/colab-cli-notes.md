@@ -257,8 +257,12 @@ flush や TensorBoard の event ファイルのような高頻度更新で不安
 - 出力先は常に VM ローカル．**ローカル側は `/content/shogi/` を Drive の `MyDrive/shogi/` と
   同じレイアウトで切る** (§7.4)．コピーが `rsync -a /content/shogi/X/ /content/drive/MyDrive/shogi/X/`
   の 1 行になり，取り違えが起きない．
-- 入力も同様に，Drive から `/content/shogi/` へコピーしてから使う (FUSE 直読みは遅く，
-  DataLoader の並列読みで不安定)．
+- **読み取りも同様に，Drive から `/content/shogi/` へコピーしてから使う**．学習の入力
+  (HCPE / 前処理済) だけでなく，TensorBoard のイベントファイルやモデルを**解析目的で
+  読む場合も含む** (例: `EventAccumulator` で基準 run の LR 曲線を読む)．FUSE 直読みは
+  遅く，DataLoader の並列読みで不安定になるうえ，多数の小ファイルを舐める読み取りは
+  kernel の接続断を招きうる．`rsync -a /content/drive/MyDrive/shogi/X/ /content/shogi/X/`
+  で取り，ローカル側を読む．Drive 上で許されるのは `ls` 相当の一覧取得だけ．
 - Drive へのコピーは「作業のまとまり」単位: 1 ステージ完了時 (hcpe → preprocess → …)，
   epoch 数回ごとの checkpoint，`search-values` の shard がいくつか確定したとき，
   および **`colab stop` の直前**．コピー後に `ls -l` でサイズを突き合わせてから次へ進む．
