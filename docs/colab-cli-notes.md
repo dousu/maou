@@ -272,7 +272,10 @@ flush や TensorBoard の event ファイルのような高頻度更新で不安
   (2026-09-21 の Arm 0: learn 中の切断で `preprocess_20260921` を失った)．
   `scripts/colab_arm0_job.py` は preprocess 段階の完了直後に退避する．
 - 途中で VM を失っても Drive にある中間物から再開できる状態を保つ (`search-values --resume` は
-  shard ディレクトリを Drive から戻せばそのまま続きから走る)．
+  shard ディレクトリを Drive から戻せばそのまま続きから走る．Arm 0 は
+  `scripts/colab_arm0_job.py --train-preprocessed preprocess/preprocess_<前の tag>` で
+  前処理済を `fetch` が戻し，`soften` / `preprocess` を飛ばして learn から走る．`--tag` は
+  新しくする — モデル / ログのフォルダは learn-model 1 回ごとに分ける)．
 
 ### 7.4 レイアウト
 
@@ -283,6 +286,7 @@ flush や TensorBoard の event ファイルのような高頻度更新で不安
 | 探索値 (shard dir) | `maou utility search-values --output-path` | `search_values/` | `search_values/` |
 | モデル (`.onnx` / `.pt`) | `maou learn-model --model-dir` | `maou_test/models/` | `maou_test/models/` |
 | TensorBoard ログ | `maou learn-model --log-dir` | `maou_test/logs/` | `maou_test/logs/` |
+| ジョブの記録 (`STATUS` / 段階ログ / `diag/`) | `scripts/colab_arm0_job.py` | `maou_test/jobs/` | `maou_test/jobs/` |
 
 - 各フォルダの下は **`<種別>_<YYYYMMDD>`** (種別 = 親フォルダ名，日付 = 生成日) のサブフォルダを
   切る．既存の実例: `hcpe/hcpe_20260805/`，`preprocess/preprocess_20260901/`，
@@ -293,6 +297,10 @@ flush や TensorBoard の event ファイルのような高頻度更新で不安
   モデルは実験 (= 1 回の `learn-model`) ごとに必ずサブフォルダを分ける．
 - `learn-model` の `--model-dir` / `--log-dir` の既定は cwd (`/content`) 相対の `./models` / `./logs`
   なので **必ず明示する**．
+- `maou_test/jobs/arm0_<tag>/` は driver の記録 (数 MB): `STATUS`，段階ログ，driver ログの
+  snapshot，失敗時の `diag/` (`dmesg` 末尾 / `free` / `df` / `nvidia-smi` / `ps`)．
+  再生成できない (失敗の証拠) ので §7.5 の「10 分未満で再生成できるもの」には当たらない．
+  `soften` の出力 (`*.feather`，1 分で作り直せる) は退避しない．
 - 上表にない一時物は Drive に置かない．TensorRT engine cache (`--trt-cache-dir`) は数分で
   再生成できるので VM ローカルに置くだけでよい．Drive に残す基準は §7.5．
 
@@ -374,7 +382,7 @@ colab status -s gpu                         #    [gpu] <endpoint> | Hardware: L4
   (2026-09-21: Arm 0 の learn 開始 2 時間後，VM 起動から約 3.5〜4 時間で切断)．
   **`scripts/colab_keepalive_cell.py` を新しいセルに貼って実行し，ジョブの間ずっと
   実行中のままにする (MUST)**．24 時間走り，5 分ごとに `/content/job.log` と
-  `/content/shogi/arm0_*/STATUS` の末尾を表示し直す (進捗もここで見える)．
+  `/content/shogi/maou_test/jobs/arm0_*/STATUS` の末尾を表示し直す (進捗もここで見える)．
   `colab exec` で流すものではない (ブラウザが attach している kernel で走らせる)．
   Colab 側の上限 (最長実行時間) はユーザのプラン次第で，ユーザが把握する．
 - **登録したセッションを `colab stop` しない．** `stop` は VM を unassign するので，ユーザが
@@ -387,8 +395,17 @@ colab status -s gpu                         #    [gpu] <endpoint> | Hardware: L4
   そのまま — 止めるのは VM 上のジョブ自身．猶予 (`--unassign-grace-min`，既定 60 分) の間に
   `colab download` で小物 (value-best の `_fp16.onnx` 等) を取る．猶予を過ぎて VM が消えた
   あとは Drive にある (§7.3 で退避済み) ので，ユーザに CPU ランタイム + `drive.mount` を
-  依頼して `colab download` で取る．**失敗 (rc≠0) のときは段階ログを見られるよう VM を
-  残す**ので，診断後にユーザがブラウザで削除する．
+  依頼して `colab download` で取る．
+- **失敗 (rc≠0) のときも，診断情報を Drive へ退避してから unassign する (MUST)**．
+  driver は失敗した段階のあと `diag/` (`dmesg` 末尾 / `free` / `/proc/meminfo` / cgroup /
+  `df` / `nvidia-smi` / `ps` / 版数) を採り，段階ログ・driver ログ・保存済みの models / logs
+  を Drive (`maou_test/jobs/arm0_<tag>/` と `maou_test/{models,logs}/`) へ退避し，rsync の
+  照合が OK のときだけ同じ猶予のあと unassign する．退避できなかった (Drive 無し / 不一致)
+  ときは `UNASSIGN_SKIPPED` を出して VM を残すので，直して `--evacuate-only` で退避を
+  やり直してからユーザがブラウザで削除する．理由: 2026-09-21 の Arm 0 は learn が 22:10 に
+  memory cgroup の OOM で落ちたあと 8 時間以上 VM が空転した．OOM の証拠は VM の `dmesg`
+  にしか無く，epoch 1 のモデルも periodic sync の前で VM に取り残されていた．
+  原因調査は Drive の `diag/` と段階ログから行い，VM を残す判断は KEEP_VM でユーザが行う．
 - 一覧の token には `tokenExpiresInSeconds: 3600` が付くが CLI は token を更新しない
   (`new` で作ったセッションも 1 つの token を最長 24h 使う設計)．401 が出たら
   `colab_adopt_session.py gpu --force` で最新 token に置き換える．
