@@ -266,6 +266,11 @@ flush や TensorBoard の event ファイルのような高頻度更新で不安
 - Drive へのコピーは「作業のまとまり」単位: 1 ステージ完了時 (hcpe → preprocess → …)，
   epoch 数回ごとの checkpoint，`search-values` の shard がいくつか確定したとき，
   および **`colab stop` の直前**．コピー後に `ls -l` でサイズを突き合わせてから次へ進む．
+- **次の段階を始める前に，済んだ段階の出力を退避する (MUST)**．特に 1 時間級の
+  `pre-process` 出力は `learn-model` に入る前に Drive へコピーする．learn 中の周期退避
+  (models / logs) だけでは，VM を失ったとき前処理からやり直しになる
+  (2026-09-21 の Arm 0: learn 中の切断で `preprocess_20260921` を失った)．
+  `scripts/colab_arm0_job.py` は preprocess 段階の完了直後に退避する．
 - 途中で VM を失っても Drive にある中間物から再開できる状態を保つ (`search-values --resume` は
   shard ディレクトリを Drive から戻せばそのまま続きから走る)．
 
@@ -353,7 +358,9 @@ CLI に attach コマンドは無いが，`colab sessions` が取る一覧に ru
 
 ```bash
 # 1. ユーザ: ブラウザ (colab.research.google.com) で GPU 種別を選んでランタイムを起動し，
-#    タブを開いたままにする．必要なら同じノートブックのセルで drive.mount も済ませる (§0(d))
+#    タブを開いたままにする．必要なら同じノートブックのセルで drive.mount も済ませる (§0(d))．
+#    さらに `scripts/colab_keepalive_cell.py` の中身を新しいセルに貼って実行し，
+#    ジョブの間ずっと「実行中」にしておく (下記)
 colab sessions                              # 2. `[?] <endpoint> | Hardware: L4 ...` に見える
 PY="$(uv tool dir)/google-colab-cli/bin/python"
 "$PY" scripts/colab_adopt_session.py gpu    # 3. 未登録が 1 つならそれを gpu として登録 (複数なら --endpoint)
@@ -362,11 +369,26 @@ colab status -s gpu                         #    [gpu] <endpoint> | Hardware: L4
 # 5. 投入を確認したら **すぐに /checkpoint-context** (下記の記録項目)
 ```
 
-- 登録したセッションには keep-alive デーモンが無い (§3)．**ブラウザのタブが唯一の keep-alive**．
-  Colab 側の上限 (アイドル切断・最長実行時間) はユーザのプラン次第で，ユーザが把握する．
+- 登録したセッションには keep-alive デーモンが無い (§3)．**ブラウザのタブを開いている
+  だけでは足りない — ノートブックでセルを実行していないと数時間でアイドル切断される**
+  (2026-09-21: Arm 0 の learn 開始 2 時間後，VM 起動から約 3.5〜4 時間で切断)．
+  **`scripts/colab_keepalive_cell.py` を新しいセルに貼って実行し，ジョブの間ずっと
+  実行中のままにする (MUST)**．24 時間走り，5 分ごとに `/content/job.log` と
+  `/content/shogi/arm0_*/STATUS` の末尾を表示し直す (進捗もここで見える)．
+  `colab exec` で流すものではない (ブラウザが attach している kernel で走らせる)．
+  Colab 側の上限 (最長実行時間) はユーザのプラン次第で，ユーザが把握する．
 - **登録したセッションを `colab stop` しない．** `stop` は VM を unassign するので，ユーザが
   ブラウザで見ているランタイムごと消える．終了はユーザに報告し，ランタイムの削除は
   ユーザがブラウザ側で行う．ローカル登録だけ外すなら `--forget`．
+- **完走したら VM 側が自分で unassign する (MUST)**．長時間ジョブの driver には
+  `google.colab.runtime.unassign()` と同じ `POST http://$TBE_RUNTIME_ADDR/unassign` を
+  rc=0 の終わりに入れる (`scripts/colab_arm0_job.py --unassign-on-done`．環境変数は
+  kernel の子プロセスに継承されるので nohup からでも通る)．CLI 側から `stop` しない規約は
+  そのまま — 止めるのは VM 上のジョブ自身．猶予 (`--unassign-grace-min`，既定 60 分) の間に
+  `colab download` で小物 (value-best の `_fp16.onnx` 等) を取る．猶予を過ぎて VM が消えた
+  あとは Drive にある (§7.3 で退避済み) ので，ユーザに CPU ランタイム + `drive.mount` を
+  依頼して `colab download` で取る．**失敗 (rc≠0) のときは段階ログを見られるよう VM を
+  残す**ので，診断後にユーザがブラウザで削除する．
 - 一覧の token には `tokenExpiresInSeconds: 3600` が付くが CLI は token を更新しない
   (`new` で作ったセッションも 1 つの token を最長 24h 使う設計)．401 が出たら
   `colab_adopt_session.py gpu --force` で最新 token に置き換える．
