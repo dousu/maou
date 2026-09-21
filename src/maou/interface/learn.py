@@ -233,7 +233,7 @@ def file_validation(p: Path) -> None:
 
 
 def dir_init(d: Path) -> None:
-    """Initialize directory, creating if it doesn't exist.
+    """Initialize directory, creating it (and missing parents) if absent.
 
     Args:
         d: Directory path to initialize
@@ -242,7 +242,7 @@ def dir_init(d: Path) -> None:
         ValueError: If path exists but is not a directory
     """
     if not d.exists():
-        d.mkdir()
+        d.mkdir(parents=True)
     else:
         if not d.is_dir():
             raise ValueError(

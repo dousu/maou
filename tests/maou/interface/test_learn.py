@@ -1,8 +1,11 @@
+from pathlib import Path
+
 import pytest
 
 from maou.interface.learn import (
     SUPPORTED_LR_SCHEDULERS,
     _resolve_stage12_scheduler,
+    dir_init,
     learn,
     learn_multi_stage,
     normalize_lr_scheduler_name,
@@ -35,6 +38,30 @@ def test_normalize_lr_scheduler_name_rejects_unknown_scheduler() -> (
 ):
     with pytest.raises(ValueError):
         normalize_lr_scheduler_name("linear")
+
+
+def test_dir_init_creates_missing_parents(
+    tmp_path: Path,
+) -> None:
+    """``--model-dir`` に未作成の親を含む入れ子パスを渡しても落ちない．
+
+    Colab の §7.4 レイアウト (``maou_test/models/models_<date>``) は親
+    ディレクトリごと新規に切るので，``mkdir()`` が親を要求すると
+    ``FileNotFoundError`` で学習前に落ちる (2026-09-21 に実測)．
+    """
+    nested = (
+        tmp_path / "maou_test" / "models" / "models_20260921"
+    )
+    dir_init(nested)
+    assert nested.is_dir()
+    dir_init(nested)  # 既存なら何もしない
+
+
+def test_dir_init_rejects_file(tmp_path: Path) -> None:
+    f = tmp_path / "not_a_dir"
+    f.write_text("")
+    with pytest.raises(ValueError, match="not directory"):
+        dir_init(f)
 
 
 def test_supported_lr_scheduler_labels_match_defaults() -> None:
