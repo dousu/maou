@@ -1,6 +1,6 @@
 ---
-status: pending          # pending | approved | applied | rejected
-applied_in:
+status: applied          # pending | approved | applied | rejected
+applied_in: 533d72e2
 date: 2026-09-21
 target: [docs/colab-cli-notes.md, .claude/skills/colab-operator/SKILL.md]
 risk: low
