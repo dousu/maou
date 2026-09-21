@@ -8,8 +8,8 @@
 
 ``colab exec`` で流すものではない (CLI 側の kernel ではなく，ブラウザが
 attach している kernel で走らせる必要がある)．ファイル全体をセルに貼る．
-5 分ごとに ``/content/job.log`` と ``/content/shogi/arm0_*/STATUS`` の末尾を
-表示し直すので，ジョブの進捗もここで見える．停止ボタンで止めてよい
+5 分ごとに ``/content/job.log`` と ``/content/shogi/maou_test/jobs/arm0_*/STATUS``
+の末尾を表示し直すので，ジョブの進捗もここで見える．停止ボタンで止めてよい
 (ジョブ本体は nohup の別プロセスなので影響しない)．
 """
 
@@ -39,7 +39,7 @@ while time.time() < t_end:
         flush=True,
     )
     paths = sorted(
-        glob.glob("/content/shogi/arm0_*/STATUS")
+        glob.glob("/content/shogi/maou_test/jobs/arm0_*/STATUS")
     ) + ["/content/job.log"]
     for path in paths:
         try:

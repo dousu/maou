@@ -17,18 +17,30 @@
 ``preprocess`` の出力は段階完了直後に Drive へ退避し (§7.3 の「1 ステージ
 完了時にコピー」)，``learn`` の間は ``--sync-interval-min`` ごとにモデルと
 ログを Drive へ退避し続けるので，VM を失っても前処理済データと最後の
-checkpoint までは残る．新しい VM で前処理をやり直さずに続きから走らせるには，
-Drive の ``preprocess/preprocess_<tag>`` を VM ローカルの同じ相対パスへ
-``rsync -a`` で戻し，``<work>/arm0_<tag>/STATUS`` に
-``STAGE preprocess DONE rc=0`` の行を書いてから同じコマンドで再投入する
-(``soften`` の出力は 1 分で作り直せるので退避しない)．
+checkpoint までは残る．新しい VM で前処理をやり直さずに learn から走らせる
+には ``--train-preprocessed preprocess/preprocess_<前の tag>`` を渡す
+(``fetch`` が Drive から戻し，``soften`` / ``preprocess`` は飛ばす．
+``--tag`` は新しくする — モデル / ログのフォルダは learn-model 1 回ごとに分ける)．
 
-``--unassign-on-done`` を付けると，全段階が rc=0 で終わったあと
+ジョブの記録 (``STATUS``，段階ログ ``*.log``，driver 自身のログ) は
+``<work>/maou_test/jobs/arm0_<tag>/`` に置き，終了時 (成否を問わず) に
+Drive の同じ相対パスへ退避する (``soften`` の出力 ``*.feather`` は 1 分で
+作り直せるので除く)．**失敗 (rc≠0) のとき**はさらに ``diag/`` に VM の状態
+(``dmesg`` の末尾 / ``free`` / ``df`` / ``nvidia-smi`` / ``ps``) を採り，
+モデルとログの最終退避も行う — 例: 2026-09-21 の learn は memory cgroup の
+OOM で DataLoader worker が殺されて落ちたが，その証拠は VM の ``dmesg`` に
+しか無く，periodic sync の直前に保存された epoch 1 のモデルも VM に
+取り残されていた．
+
+``--unassign-on-done`` を付けると，ジョブが終わったあと (成否を問わず)
 ``--unassign-grace-min`` だけ待ってから Colab の runtime 管理サービスへ
 VM の unassign を要求する (``google.colab.runtime.unassign()`` と同じ
 ``POST http://$TBE_RUNTIME_ADDR/unassign``．kernel の環境変数を継承する
-nohup 子プロセスからでも通る)．猶予の間に ``<work>/arm0_<tag>/KEEP_VM`` を
-作れば取りやめる．失敗 (rc≠0) のときは段階ログを見られるよう VM を残す．
+nohup 子プロセスからでも通る)．猶予の間に ``<work>/maou_test/jobs/arm0_<tag>/KEEP_VM``
+を作れば取りやめる．失敗時は上記の退避が Drive で OK と確認できたときだけ
+unassign し，退避できなかった (Drive 無し / rsync 不一致) ときは
+``UNASSIGN_SKIPPED`` を出して VM を残す．VM が残っているときに退避だけ
+やり直すには ``--evacuate-only`` (段階は走らせない)．
 
 ## 使い方
 
@@ -41,10 +53,11 @@ VM 上 (``docs/colab-cli-notes.md`` §4 の nohup 方式)::
         -- --model-architecture vit ... (基準 run と同一のハイパラ) \\
         > /content/job.log 2>&1 &
 
-``--train-hcpe`` / ``--val-data`` は Drive (``--drive-root``) と VM ローカル
-(``--work-root``) で共通の相対パス (§7.4 のレイアウトを両側で同じに切る)．
-出力は ``preprocess/preprocess_<tag>`` / ``maou_test/models/models_<tag>`` /
-``maou_test/logs/logs_<tag>`` に置く．
+``--train-hcpe`` / ``--val-data`` / ``--train-preprocessed`` は Drive
+(``--drive-root``) と VM ローカル (``--work-root``) で共通の相対パス (§7.4 の
+レイアウトを両側で同じに切る)．出力は ``preprocess/preprocess_<tag>`` /
+``maou_test/models/models_<tag>`` / ``maou_test/logs/logs_<tag>`` /
+``maou_test/jobs/arm0_<tag>`` に置く．
 
 手元で配線を確かめる (Drive 無し / 小データ / 段階を選ぶ)::
 
@@ -59,6 +72,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fnmatch
 import os
 import shlex
 import shutil
@@ -75,6 +89,31 @@ DEFAULT_SOFTEN_ARGS = (
     "--min-ply 60 --max-ply 100 --mode empirical --debias"
 )
 JST = dt.timezone(dt.timedelta(hours=9))
+# driver 自身のログの控え (job_dir/driver.log)．退避のとき diag/ へ snapshot
+# (別名) を置くので，本体は rsync の件数照合から除く (書き込み中で必ず不一致になる)
+DRIVER_LOG = "driver.log"
+DRIVER_LOG_SNAPSHOT = "driver_log.txt"
+JOB_DIR_SYNC_EXCLUDE = ("*.feather", DRIVER_LOG)
+# 失敗時に VM の状態を残すコマンド (diag/<name>.txt)．無いコマンドは
+# その旨を書くだけで失敗にしない (手元の --no-drive テストでも通す)
+DIAG_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("uptime", "uptime"),
+    ("dmesg", "dmesg -T 2>&1 | tail -n 300"),
+    ("free", "free -m"),
+    ("meminfo", "cat /proc/meminfo"),
+    (
+        "cgroup_memory",
+        "cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak /sys/fs/cgroup/memory.events 2>&1",
+    ),
+    ("df", "df -h"),
+    ("nvidia-smi", "nvidia-smi"),
+    ("ps", "ps aux --sort=-rss | head -n 40"),
+    (
+        "python",
+        f"{shlex.quote(sys.executable)} -m pip list 2>/dev/null | grep -iE '^(maou|torch|onnx|polars|numpy) ' ; {shlex.quote(sys.executable)} -V",
+    ),
+)
+_LOG_COPY: Path | None = None
 
 
 def _now() -> str:
@@ -82,8 +121,19 @@ def _now() -> str:
 
 
 def log(msg: str) -> None:
-    """時刻つきで 1 行出す (``colab exec`` のタイムアウト延命のため flush)．"""
-    print(f"[{_now()}] {msg}", flush=True)
+    """時刻つきで 1 行出す (``colab exec`` のタイムアウト延命のため flush)．
+
+    ``Job`` が作られたあとは ``job_dir/driver.log`` にも同じ行を残す
+    (nohup の stdout は job_dir の外なので，退避に含めるための控え)．
+    """
+    line = f"[{_now()}] {msg}"
+    print(line, flush=True)
+    if _LOG_COPY is not None:
+        try:
+            with _LOG_COPY.open("a") as f:
+                f.write(line + "\n")
+        except OSError:
+            pass
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -99,8 +149,20 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     ap.add_argument(
         "--train-hcpe",
-        required=True,
-        help="学習側 HCPE ディレクトリ (work-root / drive-root からの相対)",
+        default="",
+        help=(
+            "学習側 HCPE ディレクトリ (work-root / drive-root からの相対)．"
+            "--train-preprocessed を使わないなら必須"
+        ),
+    )
+    ap.add_argument(
+        "--train-preprocessed",
+        default="",
+        help=(
+            "前の run が作った学習側の前処理済ディレクトリ (相対)．"
+            "指定すると fetch で Drive から戻し，soften / preprocess を飛ばして"
+            " learn からやり直す (新しい VM での再投入用)"
+        ),
     )
     ap.add_argument(
         "--val-data",
@@ -155,8 +217,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--unassign-on-done",
         action="store_true",
         help=(
-            "全段階が rc=0 で終わったら VM を unassign する "
-            "(Colab の runtime 管理サービスへ POST)"
+            "ジョブが終わったら (成否を問わず) VM を unassign する "
+            "(Colab の runtime 管理サービスへ POST)．失敗時は診断情報の"
+            " Drive 退避が OK のときだけ"
         ),
     )
     ap.add_argument(
@@ -165,7 +228,15 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=60.0,
         help=(
             "unassign までの猶予 (分)．この間に成果物を colab download できる．"
-            "<work>/arm0_<tag>/KEEP_VM があれば取りやめる"
+            "<work>/maou_test/jobs/arm0_<tag>/KEEP_VM があれば取りやめる"
+        ),
+    )
+    ap.add_argument(
+        "--evacuate-only",
+        action="store_true",
+        help=(
+            "段階を走らせず，診断情報を集めて job dir / models / logs を"
+            " Drive へ退避するだけ (失敗後に VM が残ったときの手動退避用)"
         ),
     )
     ap.add_argument(
@@ -183,6 +254,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
             ap.error(
                 f"unknown stage {s!r} (choose from {', '.join(STAGES)})"
             )
+    if not ns.train_hcpe and not ns.train_preprocessed:
+        ap.error(
+            "--train-hcpe is required unless --train-preprocessed is given"
+        )
     return ns
 
 
@@ -190,6 +265,7 @@ class Job:
     """段階ごとの実行と ``STATUS`` の読み書き．"""
 
     def __init__(self, ns: argparse.Namespace) -> None:
+        global _LOG_COPY
         self.ns = ns
         self.work: Path = ns.work_root
         self.drive: Path | None = (
@@ -197,12 +273,21 @@ class Job:
         )
         self.train_hcpe = self.work / ns.train_hcpe
         self.val_data = self.work / ns.val_data
-        self.job_dir = self.work / f"arm0_{ns.tag}"
-        self.status = self.job_dir / "STATUS"
-        self.soft_out = self.job_dir / "arm0_debias.feather"
-        self.pre_out = (
-            self.work / "preprocess" / f"preprocess_{ns.tag}"
+        # 前処理済を持ち込む run は soften / preprocess を持たない
+        self.reuse_pre: bool = bool(ns.train_preprocessed)
+        self.job_rel = (
+            Path("maou_test") / "jobs" / f"arm0_{ns.tag}"
         )
+        self.job_dir = self.work / self.job_rel
+        self.status = self.job_dir / "STATUS"
+        self.diag_dir = self.job_dir / "diag"
+        self.soft_out = self.job_dir / "arm0_debias.feather"
+        self.pre_rel = (
+            Path(ns.train_preprocessed)
+            if self.reuse_pre
+            else Path("preprocess") / f"preprocess_{ns.tag}"
+        )
+        self.pre_out = self.work / self.pre_rel
         self.model_dir = (
             self.work
             / "maou_test"
@@ -217,7 +302,10 @@ class Job:
             if ns.maou
             else [sys.executable, "-m", "maou"]
         )
+        # 失敗時の退避が Drive で確認できたか (main() が unassign の可否に使う)
+        self.evacuated: bool = False
         self.job_dir.mkdir(parents=True, exist_ok=True)
+        _LOG_COPY = self.job_dir / DRIVER_LOG
 
     # --- STATUS ---------------------------------------------------------
     def done(self, stage: str) -> bool:
@@ -253,17 +341,27 @@ class Job:
         )
         return rc
 
-    def rsync(self, src: Path, dst: Path) -> int:
-        """``src/`` を ``dst/`` へ同期し，両側のサイズと件数を突き合わせる．"""
+    def rsync(
+        self,
+        src: Path,
+        dst: Path,
+        exclude: tuple[str, ...] = (),
+    ) -> int:
+        """``src/`` を ``dst/`` へ同期し，両側のサイズと件数を突き合わせる．
+
+        ``exclude`` (rsync の ``--exclude`` と同じ glob) は転送からも
+        照合からも外す．
+        """
         if not src.exists():
             log(f"  skip rsync: {src} does not exist")
             return 0
         dst.mkdir(parents=True, exist_ok=True)
+        opts = [f"--exclude={pat}" for pat in exclude]
         rc = subprocess.call(
-            ["rsync", "-a", f"{src}/", f"{dst}/"]
+            ["rsync", "-a", *opts, f"{src}/", f"{dst}/"]
         )
-        s_n, s_b = _tree_size(src)
-        d_n, d_b = _tree_size(dst)
+        s_n, s_b = _tree_size(src, exclude)
+        d_n, d_b = _tree_size(dst, exclude)
         ok = "OK" if (s_n, s_b) == (d_n, d_b) else "MISMATCH"
         log(
             f"  rsync {src} -> {dst}: rc={rc} src={s_n} files/{s_b} B "
@@ -278,8 +376,13 @@ class Job:
                 "  --no-drive: inputs are expected under work-root"
             )
             return 0
+        rels = [self.ns.val_data]
+        if self.reuse_pre:
+            rels.insert(0, str(self.pre_rel))
+        else:
+            rels.insert(0, self.ns.train_hcpe)
         rc = 0
-        for rel in (self.ns.train_hcpe, self.ns.val_data):
+        for rel in rels:
             src, dst = self.drive / rel, self.work / rel
             if not src.exists():
                 log(f"  input missing on Drive: {src}")
@@ -291,6 +394,11 @@ class Job:
         return rc
 
     def soften(self) -> int:
+        if self.reuse_pre:
+            log(
+                "  --train-preprocessed given: nothing to soften"
+            )
+            return 0
         script = (
             Path(__file__)
             .resolve()
@@ -311,6 +419,15 @@ class Job:
         return self.run(cmd, "soften")
 
     def preprocess(self) -> int:
+        if self.reuse_pre:
+            log(
+                f"  --train-preprocessed given: reuse {self.pre_out}"
+            )
+            return (
+                0
+                if (self.pre_out.exists() or self.ns.dry_run)
+                else 1
+            )
         cmd = [
             *self.maou,
             "pre-process",
@@ -408,28 +525,94 @@ class Job:
 
     def _drive_preprocess_dir(self) -> Path:
         assert self.drive is not None
-        return (
-            self.drive
-            / "preprocess"
-            / f"preprocess_{self.ns.tag}"
+        return self.drive / self.pre_rel
+
+    def _sync_job_dir(self) -> int:
+        """job dir (STATUS / 段階ログ / diag) を Drive の同じ相対パスへ退避する．
+
+        driver.log は書き込み中なので snapshot (``diag/driver_log.txt``) を
+        置いてから，本体は照合から外して同期する．
+        """
+        assert self.drive is not None
+        self.diag_dir.mkdir(parents=True, exist_ok=True)
+        live = self.job_dir / DRIVER_LOG
+        if live.exists():
+            shutil.copyfile(
+                live, self.diag_dir / DRIVER_LOG_SNAPSHOT
+            )
+        return self.rsync(
+            self.job_dir,
+            self.drive / self.job_rel,
+            exclude=JOB_DIR_SYNC_EXCLUDE,
         )
+
+    def collect_diag(self) -> None:
+        """VM の状態を ``diag/`` に書く (OOM なら dmesg にしか証拠が無い)．"""
+        self.diag_dir.mkdir(parents=True, exist_ok=True)
+        for name, cmd in DIAG_COMMANDS:
+            out = self.diag_dir / f"{name}.txt"
+            try:
+                r = subprocess.run(
+                    cmd,
+                    shell=True,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                text = f"$ {cmd}\n(rc={r.returncode})\n{r.stdout}{r.stderr}"
+            except (OSError, subprocess.SubprocessError) as e:
+                text = f"$ {cmd}\n({type(e).__name__}: {e})\n"
+            out.write_text(text)
+        log(f"  diag written to {self.diag_dir}")
+
+    def evacuate(self, reason: str) -> int:
+        """診断情報を集め，モデル / ログ / job dir を Drive へ退避する．
+
+        rc=0 のときだけ ``self.evacuated`` を立てる (unassign の条件)．
+        """
+        log(f"  evacuate ({reason})")
+        if self.ns.dry_run:
+            return 0
+        self.collect_diag()
+        if self.drive is None:
+            log(
+                "  --no-drive: nothing to evacuate; VM state stays local"
+            )
+            return 1
+        rc = self._sync_outputs(include_preprocess=False)
+        rc |= self._sync_job_dir()
+        self.evacuated = rc == 0
+        log(
+            f"  EVACUATED={'OK' if self.evacuated else 'FAILED'}"
+        )
+        return rc
 
     def sync(self) -> int:
         if self.drive is None:
             log("  --no-drive: nothing to sync")
             return 0
-        return self._sync_outputs(include_preprocess=True)
+        rc = self._sync_outputs(
+            include_preprocess=not self.reuse_pre
+        )
+        if self.ns.dry_run:
+            return rc
+        return rc | self._sync_job_dir()
 
     # --- driver ---------------------------------------------------------
     def main(self) -> int:
         log(
             f"arm0 job tag={self.ns.tag} work={self.work} drive={self.drive}"
         )
-        log(f"  train_hcpe={self.train_hcpe}")
+        if self.reuse_pre:
+            log(f"  train_preprocessed={self.pre_out}")
+        else:
+            log(f"  train_hcpe={self.train_hcpe}")
         log(f"  val_data={self.val_data}")
         log(
             f"  outputs: {self.pre_out} / {self.model_dir} / {self.log_dir}"
         )
+        log(f"  job dir: {self.job_dir}")
         log(
             f"  learn-model args: {shlex.join(self.ns.learn_args)}"
         )
@@ -442,6 +625,8 @@ class Job:
                 f"  Drive root not found: {self.drive} (mount first)"
             )
             return 2
+        if self.ns.evacuate_only:
+            return self.evacuate("--evacuate-only")
         for stage in STAGES:
             if stage not in self.ns.stage_set:
                 log(f"== {stage}: not selected, skip")
@@ -455,6 +640,7 @@ class Job:
                 self.mark(stage, rc)
             if rc != 0:
                 log(f"== {stage}: FAILED rc={rc}")
+                self.evacuate(f"{stage} failed rc={rc}")
                 return rc
             log(f"== {stage}: DONE")
         return 0
@@ -500,9 +686,18 @@ def _unassign_runtime(
         log(f"UNASSIGN_FAILED {type(e).__name__}: {e}")
 
 
-def _tree_size(root: Path) -> tuple[int, int]:
-    """配下の (ファイル数, 合計バイト) を返す．"""
-    files = [p for p in root.rglob("*") if p.is_file()]
+def _tree_size(
+    root: Path, exclude: tuple[str, ...] = ()
+) -> tuple[int, int]:
+    """配下の (ファイル数, 合計バイト) を返す (``exclude`` の glob に合う名前は除く)．"""
+    files = [
+        p
+        for p in root.rglob("*")
+        if p.is_file()
+        and not any(
+            fnmatch.fnmatch(p.name, pat) for pat in exclude
+        )
+    ]
     return len(files), sum(p.stat().st_size for p in files)
 
 
@@ -513,11 +708,18 @@ def main() -> int:
         return 2
     job = Job(ns)
     rc = job.main()
-    print(f"JOB_DONE exit={rc}", flush=True)
-    if ns.unassign_on_done and rc == 0 and not ns.dry_run:
-        _unassign_runtime(
-            ns.unassign_grace_min, job.job_dir / "KEEP_VM"
-        )
+    log(f"JOB_DONE exit={rc}")
+    if ns.unassign_on_done and not ns.dry_run:
+        if rc == 0 or job.evacuated:
+            _unassign_runtime(
+                ns.unassign_grace_min, job.job_dir / "KEEP_VM"
+            )
+        else:
+            # 退避できていない診断情報は VM にしか無いので残す
+            log(
+                "UNASSIGN_SKIPPED reason=evacuation not confirmed on Drive;"
+                " VM kept for diagnosis"
+            )
     return rc
 
 
