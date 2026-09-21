@@ -1,6 +1,6 @@
 ---
-status: pending          # pending | approved | applied | rejected
-applied_in:
+status: applied          # pending | approved | applied | rejected
+applied_in: 9196f3ee
 date: 2026-09-22
 target: [docs/commands/learn_model.md]
 risk: low
