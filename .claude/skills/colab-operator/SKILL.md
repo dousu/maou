@@ -14,7 +14,13 @@ description: Operate Google Colab environments via the `colab` CLI. Use when ask
 > - GPU choice: `G4` for training, `L4` for inference and training dry-runs. Do not fall back to `T4`.
 > - `colab exec` / `colab run` default `--timeout` is 30 s. `exec` exits 0 on Python exceptions.
 > - Sessions registered with `scripts/colab_adopt_session.py` (browser-started runtimes) have no
->   keep-alive daemon and **must not be `colab stop`ped** — the user deletes them in the browser.
+>   keep-alive daemon and **must not be `colab stop`ped**. An open tab is not enough: the user
+>   runs `scripts/colab_keepalive_cell.py` in a notebook cell for the whole job (idle runtimes
+>   are cut after a few hours). A long job ends by unassigning its own VM
+>   (`colab_arm0_job.py --unassign-on-done`, `POST $TBE_RUNTIME_ADDR/unassign`) after a grace
+>   window for `colab download`; on failure the VM is kept for diagnosis.
+> - Copy each finished stage's output to Drive before starting the next one (the ~1 h
+>   `pre-process` output before `learn-model`).
 > - Drive: write only from inside the VM via the mount, only under `MyDrive/shogi`,
 >   local-first — for **reads too** (copy to `/content/shogi/` before parsing TensorBoard
 >   events or models; only `ls` directly on the mount).
