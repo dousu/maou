@@ -5,6 +5,11 @@
 ストリーミングパターンを使用する．
 
 ピークメモリは「1ファイル分のPolars DataFrame + 対応するColumnarBatch」に抑えられる．
+前ファイルの ``ColumnarBatch`` は次ファイルを読む前に手放す (generator 側の
+``del`` と消費側のループ変数の ``del`` の両方が要る — どちらか一方が参照を
+持っていれば，前ファイル分 + 次ファイルの読込一時領域が重なって
+worker のピークが約 1.4 倍になる．2026-09-21 の Colab G4 で 12GB/ファイルの
+前処理済を 5 worker で読んで memory cgroup の OOM になった)．
 """
 
 from __future__ import annotations
@@ -209,3 +214,5 @@ class StreamingFileSource:
             )
             del df  # DF参照を即座に切る(GC対象にする)
             yield batch
+            # 次ファイルを読む前に前ファイル分を手放す (消費側も参照を切る前提)
+            del batch

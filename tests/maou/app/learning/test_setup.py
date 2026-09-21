@@ -502,25 +502,25 @@ class _FakeVirtualMemory:
         pytest.param(
             8000.0,
             False,
-            16,  # 3200 / 200
+            32,  # 6400 / 200
             id="8GB_no_pin",
         ),
         pytest.param(
             8000.0,
             True,
-            12,  # 3200 / 250
+            25,  # 6400 / 250
             id="8GB_pin",
         ),
         pytest.param(
             2000.0,
             False,
-            4,  # 800 / 200
+            8,  # 1600 / 200
             id="2GB_no_pin",
         ),
         pytest.param(
             500.0,
             False,
-            1,  # 200 / 200
+            2,  # 400 / 200
             id="500MB_no_pin",
         ),
     ],
@@ -613,14 +613,15 @@ def _make_fake_path(
 
 
 def test_estimate_per_worker_mb_100mb_files() -> None:
-    """100MBファイル → per_worker_mb=800．"""
+    """100MBファイル (スキーマ不明) → per_worker_mb=1600．"""
     from maou.app.learning.setup import _estimate_per_worker_mb
 
     logger = logging.getLogger("test_per_worker")
     paths = [_make_fake_path(100.0) for _ in range(5)]
     result = _estimate_per_worker_mb(paths, logger)
-    # 100 * 4.0 (LZ4) * 2.0 (safety) = 800.0
-    assert result == pytest.approx(800.0, rel=1e-3)
+    # 展開後サイズが分からない疑似ファイルは展開倍率経路:
+    # 100 * 4.0 (LZ4) * 4.0 (safety) = 1600.0
+    assert result == pytest.approx(1600.0, rel=1e-3)
 
 
 def test_estimate_per_worker_mb_10mb_files() -> None:
@@ -630,7 +631,7 @@ def test_estimate_per_worker_mb_10mb_files() -> None:
     logger = logging.getLogger("test_per_worker")
     paths = [_make_fake_path(10.0) for _ in range(5)]
     result = _estimate_per_worker_mb(paths, logger)
-    # 10 * 4.0 * 2.0 = 80.0 → max(80, 200) = 200.0
+    # 10 * 4.0 * 4.0 = 160.0 → max(160, 200) = 200.0
     assert result == pytest.approx(200.0, rel=1e-3)
 
 
@@ -666,12 +667,12 @@ def test_estimate_per_worker_mb_mixed_existing() -> None:
         _make_fake_path(100.0, exists=True),
     ]
     result = _estimate_per_worker_mb(paths, logger)
-    # avg = 100MB, 100 * 4.0 * 2.0 = 800.0
-    assert result == pytest.approx(800.0, rel=1e-3)
+    # max = 100MB, 100 * 4.0 * 4.0 = 1600.0
+    assert result == pytest.approx(1600.0, rel=1e-3)
 
 
 def test_estimate_max_workers_with_file_paths() -> None:
-    """ファイルサイズ100MB + pin_memory → per_worker_mb=850．"""
+    """ファイルサイズ100MB + pin_memory → per_worker_mb=1650．"""
     logger = logging.getLogger("test_max_workers_file")
     fake_vm = _FakeVirtualMemory(50000.0)  # 50GB available
     paths = [_make_fake_path(100.0) for _ in range(10)]
@@ -682,9 +683,9 @@ def test_estimate_max_workers_with_file_paths() -> None:
             logger=logger,
             file_paths=paths,
         )
-    # budget = 50000 * 0.4 = 20000, per_worker = 800 + 50 = 850
-    # max_workers = 20000 / 850 = 23.5 → 23
-    assert result == 23
+    # budget = 50000 * 0.8 = 40000, per_worker = 1600 + 50 = 1650
+    # max_workers = 40000 / 1650 = 24.2 → 24
+    assert result == 24
 
 
 def test_estimate_max_workers_fallback_no_file_paths() -> None:
@@ -698,9 +699,9 @@ def test_estimate_max_workers_fallback_no_file_paths() -> None:
             logger=logger,
             file_paths=None,
         )
-    # budget = 8000 * 0.4 = 3200, per_worker = 200 + 50 = 250
-    # max_workers = 3200 / 250 = 12.8 → 12
-    assert result == 12
+    # budget = 8000 * 0.8 = 6400, per_worker = 200 + 50 = 250
+    # max_workers = 6400 / 250 = 25.6 → 25
+    assert result == 25
 
 
 # --- Fix 3: /dev/shm サイズチェックテスト ---
@@ -1139,7 +1140,141 @@ def test_estimate_per_worker_mb_bounds_stat_calls() -> None:
     )
     assert stat_calls <= _SIZE_SAMPLE_LIMIT
     # サンプリングしても推定値は変わらない(全ファイル同サイズ)．
-    assert result == pytest.approx(800.0, rel=1e-3)
+    assert result == pytest.approx(1600.0, rel=1e-3)
+
+
+# --- 展開後サイズ (スキーマ × 行数) からの per-worker 見積 ---
+
+
+def _write_preprocessing_ipc(path: Path, n_rows: int) -> None:
+    """前処理済と同じ on-disk スキーマ (FixedSizeList) の feather を書く．"""
+    import pyarrow as pa
+    from pyarrow import ipc
+
+    def fsl(values: np.ndarray, size: int) -> pa.Array:
+        return pa.FixedSizeListArray.from_arrays(
+            pa.array(values), size
+        )
+
+    board = pa.FixedSizeListArray.from_arrays(
+        fsl(np.zeros(n_rows * 81, dtype=np.uint8), 9), 9
+    )
+    labels = fsl(
+        np.zeros(n_rows * MOVE_LABELS_NUM, dtype=np.float32),
+        MOVE_LABELS_NUM,
+    )
+    table = pa.table(
+        {
+            "id": pa.array(np.arange(n_rows, dtype=np.uint64)),
+            "boardIdPositions": board,
+            "piecesInHand": fsl(
+                np.zeros(n_rows * 14, dtype=np.uint8), 14
+            ),
+            "moveLabel": labels,
+            "moveWinRate": labels,
+            "bestMoveWinRate": pa.array(
+                np.zeros(n_rows, dtype=np.float32)
+            ),
+            "resultValue": pa.array(
+                np.zeros(n_rows, dtype=np.float32)
+            ),
+        }
+    )
+    with ipc.new_file(
+        path,
+        table.schema,
+        options=ipc.IpcWriteOptions(compression="lz4"),
+    ) as w:
+        w.write_table(table)
+
+
+def test_dtype_row_bytes_folds_fixed_size_lists() -> None:
+    """FixedSizeList (入れ子含む) は固定幅，可変長 List / 文字列は None．"""
+    import polars as pl
+
+    from maou.app.learning.setup import _dtype_row_bytes
+
+    assert _dtype_row_bytes(pl.Array(pl.UInt8, (9, 9))) == 81
+    assert (
+        _dtype_row_bytes(pl.Array(pl.Float32, MOVE_LABELS_NUM))
+        == 4 * MOVE_LABELS_NUM
+    )
+    assert _dtype_row_bytes(pl.UInt64) == 8
+    assert _dtype_row_bytes(pl.Float32()) == 4
+    assert _dtype_row_bytes(pl.List(pl.Float32)) is None
+    assert _dtype_row_bytes(pl.String) is None
+
+
+def test_uncompressed_file_mb_from_metadata(
+    tmp_path: Path,
+) -> None:
+    """展開後サイズ = 行幅 (12,079 B) × 行数．圧縮サイズとは無関係．"""
+    from maou.app.learning.setup import _uncompressed_file_mb
+
+    fp = tmp_path / "a.feather"
+    _write_preprocessing_ipc(fp, n_rows=100)
+    row_bytes = 8 + 81 + 14 + 4 * MOVE_LABELS_NUM * 2 + 4 + 4
+    assert _uncompressed_file_mb(fp) == pytest.approx(
+        row_bytes * 100 / (1024**2)
+    )
+    # 全ゼロなので LZ4 で桁違いに縮む — 圧縮サイズからは見積もれない
+    assert fp.stat().st_size < row_bytes * 100 / 10
+
+
+def test_estimate_per_worker_mb_uses_uncompressed_peak(
+    tmp_path: Path,
+) -> None:
+    """スキーマが分かるファイルは最大の展開後サイズ × 2.0 × 1.15．
+
+    2026-09-21 の Colab G4: 圧縮 169MB のファイルが展開後 12GB で，
+    worker は 34GiB に達して memory cgroup の OOM になった．
+    """
+    from maou.app.learning.setup import (
+        _PEAK_IMAGES,
+        _PEAK_MARGIN,
+        _estimate_per_worker_mb,
+    )
+
+    small = tmp_path / "small.feather"
+    large = tmp_path / "large.feather"
+    _write_preprocessing_ipc(small, n_rows=100)
+    _write_preprocessing_ipc(large, n_rows=300)
+    logger = logging.getLogger("test_per_worker")
+    with patch(
+        "maou.app.learning.setup._FALLBACK_PER_WORKER_MB", 0.0
+    ):
+        result = _estimate_per_worker_mb([small, large], logger)
+    row_bytes = 8 + 81 + 14 + 4 * MOVE_LABELS_NUM * 2 + 4 + 4
+    expected = (
+        row_bytes
+        * 300
+        / (1024**2)
+        * _PEAK_IMAGES
+        * _PEAK_MARGIN
+    )
+    assert result == pytest.approx(expected)
+
+
+def test_estimate_max_workers_g4_arm0_fits_five_workers(
+    tmp_path: Path,
+) -> None:
+    """176GB / 12GB ファイルなら 5 worker (旧見積は 51 と答えて OOM した)．"""
+    logger = logging.getLogger("test_max_workers_g4")
+    fake_vm = _FakeVirtualMemory(177158.0)
+    fp = tmp_path / "a.feather"
+    _write_preprocessing_ipc(fp, n_rows=10)
+    with (
+        patch("psutil.virtual_memory", return_value=fake_vm),
+        patch(
+            "maou.app.learning.setup._uncompressed_file_mb",
+            return_value=11520.0,
+        ),
+    ):
+        result = _estimate_max_workers_by_memory(
+            pin_memory=True, logger=logger, file_paths=[fp]
+        )
+    # per_worker = 11520 * 2.0 * 1.15 + 50 = 26546; budget = 141726 → 5
+    assert result == 5
 
 
 def test_model_factory_uses_network_defaults() -> None:

@@ -286,6 +286,46 @@ class FakeStage2Source:
 # ============================================================================
 
 
+class _ReleaseProbeMixin:
+    """次ファイルを求められた時点で前ファイル分が生きているかを記録する source．
+
+    ``FakePreprocessingSource`` / ``FakeStage1Source`` に混ぜて使う．
+    消費側 (dataset の ``__iter__``) がループ変数で前ファイルの
+    ``ColumnarBatch`` を握ったまま次を要求すると ``True`` が記録される．
+    """
+
+    alive_when_next_requested: list[bool]
+
+    def iter_files_columnar_subset(  # type: ignore[override]
+        self,
+        file_paths: list[Path],
+    ) -> Generator[ColumnarBatch, None, None]:
+        import weakref
+
+        self.alive_when_next_requested = []
+        rng = np.random.default_rng(123)
+        for _fp in file_paths:
+            batch = self._make_batch(rng)  # type: ignore[attr-defined]
+            ref = weakref.ref(batch)
+            yield batch
+            del batch
+            self.alive_when_next_requested.append(
+                ref() is not None
+            )
+
+
+class _ReleaseProbePreprocessingSource(
+    _ReleaseProbeMixin, FakePreprocessingSource
+):
+    pass
+
+
+class _ReleaseProbeStage1Source(
+    _ReleaseProbeMixin, FakeStage1Source
+):
+    pass
+
+
 class TestStreamingDataSourceProtocol:
     """Test StreamingDataSource protocol conformance."""
 
@@ -469,6 +509,51 @@ class TestStreamingKifDataset:
         _, targets = next(iter(dataset))
         assert len(targets) == 3
         assert targets[2] is None
+
+
+class TestPreviousFileReleased:
+    """消費側は次ファイルを求める前に前ファイルの ColumnarBatch を手放す．
+
+    worker のピークを「1 ファイル分の読込 + 変換」に抑えるための regression
+    (2026-09-21 の Colab G4: 前ファイル分を握ったまま次を読み，5 worker × 34GiB
+    で memory cgroup の OOM)．generator 側の ``del`` と対で効く．
+    """
+
+    def test_kif_dataset_releases_previous_file(self) -> None:
+        source = _ReleaseProbePreprocessingSource(
+            n_files=3, rows_per_file=8
+        )
+        dataset = StreamingKifDataset(
+            streaming_source=source,
+            batch_size=4,
+            shuffle=False,
+            seed=0,
+        )
+        assert len(list(dataset)) == 6
+        assert source.alive_when_next_requested == [
+            False,
+            False,
+            False,
+        ]
+
+    def test_stage1_dataset_releases_previous_file(
+        self,
+    ) -> None:
+        source = _ReleaseProbeStage1Source(
+            n_files=3, rows_per_file=8
+        )
+        dataset = StreamingStage1Dataset(
+            streaming_source=source,
+            batch_size=4,
+            shuffle=False,
+            seed=0,
+        )
+        assert len(list(dataset)) == 6
+        assert source.alive_when_next_requested == [
+            False,
+            False,
+            False,
+        ]
 
 
 class TestStreamingKifDatasetMoveWinRate:
