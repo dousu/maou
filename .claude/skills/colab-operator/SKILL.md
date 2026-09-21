@@ -15,7 +15,9 @@ description: Operate Google Colab environments via the `colab` CLI. Use when ask
 > - `colab exec` / `colab run` default `--timeout` is 30 s. `exec` exits 0 on Python exceptions.
 > - Sessions registered with `scripts/colab_adopt_session.py` (browser-started runtimes) have no
 >   keep-alive daemon and **must not be `colab stop`ped** — the user deletes them in the browser.
-> - Drive: write only from inside the VM via the mount, only under `MyDrive/shogi`, local-first.
+> - Drive: write only from inside the VM via the mount, only under `MyDrive/shogi`,
+>   local-first — for **reads too** (copy to `/content/shogi/` before parsing TensorBoard
+>   events or models; only `ls` directly on the mount).
 
 
 Operate Google Colab environments via the `colab` CLI: provision GPU/TPU sessions, run Python/shell on the VM, sync files, and capture work as notebooks.
