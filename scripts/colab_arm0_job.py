@@ -14,8 +14,21 @@
     learn       maou learn-model (ハイパラは ``--`` 以降をそのまま渡す)
     sync        前処理済 / モデル / ログを Drive の所定フォルダへ退避
 
-``learn`` の間は ``--sync-interval-min`` ごとにモデルとログを Drive へ
-退避し続けるので，VM を失っても最後の checkpoint までは残る．
+``preprocess`` の出力は段階完了直後に Drive へ退避し (§7.3 の「1 ステージ
+完了時にコピー」)，``learn`` の間は ``--sync-interval-min`` ごとにモデルと
+ログを Drive へ退避し続けるので，VM を失っても前処理済データと最後の
+checkpoint までは残る．新しい VM で前処理をやり直さずに続きから走らせるには，
+Drive の ``preprocess/preprocess_<tag>`` を VM ローカルの同じ相対パスへ
+``rsync -a`` で戻し，``<work>/arm0_<tag>/STATUS`` に
+``STAGE preprocess DONE rc=0`` の行を書いてから同じコマンドで再投入する
+(``soften`` の出力は 1 分で作り直せるので退避しない)．
+
+``--unassign-on-done`` を付けると，全段階が rc=0 で終わったあと
+``--unassign-grace-min`` だけ待ってから Colab の runtime 管理サービスへ
+VM の unassign を要求する (``google.colab.runtime.unassign()`` と同じ
+``POST http://$TBE_RUNTIME_ADDR/unassign``．kernel の環境変数を継承する
+nohup 子プロセスからでも通る)．猶予の間に ``<work>/arm0_<tag>/KEEP_VM`` を
+作れば取りやめる．失敗 (rc≠0) のときは段階ログを見られるよう VM を残す．
 
 ## 使い方
 
@@ -46,12 +59,15 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import shlex
 import shutil
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 STAGES = ("fetch", "soften", "preprocess", "learn", "sync")
@@ -134,6 +150,23 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--maou",
         default="",
         help="maou CLI のパス (既定: このインタプリタで python -m maou)",
+    )
+    ap.add_argument(
+        "--unassign-on-done",
+        action="store_true",
+        help=(
+            "全段階が rc=0 で終わったら VM を unassign する "
+            "(Colab の runtime 管理サービスへ POST)"
+        ),
+    )
+    ap.add_argument(
+        "--unassign-grace-min",
+        type=float,
+        default=60.0,
+        help=(
+            "unassign までの猶予 (分)．この間に成果物を colab download できる．"
+            "<work>/arm0_<tag>/KEEP_VM があれば取りやめる"
+        ),
     )
     ap.add_argument(
         "--dry-run",
@@ -289,7 +322,14 @@ class Job:
             str(self.soft_out),
             *shlex.split(self.ns.preprocess_args),
         ]
-        return self.run(cmd, "preprocess")
+        rc = self.run(cmd, "preprocess")
+        if rc != 0 or self.drive is None or self.ns.dry_run:
+            return rc
+        # 1 時間級の出力なので learn に入る前に退避する (VM を失っても残す)
+        log("  sync preprocess output to Drive before learn")
+        return self.rsync(
+            self.pre_out, self._drive_preprocess_dir()
+        )
 
     def learn(self) -> int:
         extra = list(self.ns.learn_args)
@@ -356,13 +396,7 @@ class Job:
         ]
         if include_preprocess:
             pairs.insert(
-                0,
-                (
-                    self.pre_out,
-                    self.drive
-                    / "preprocess"
-                    / f"preprocess_{self.ns.tag}",
-                ),
+                0, (self.pre_out, self._drive_preprocess_dir())
             )
         rc = 0
         for src, dst in pairs:
@@ -371,6 +405,14 @@ class Job:
                 continue
             rc |= self.rsync(src, dst)
         return rc
+
+    def _drive_preprocess_dir(self) -> Path:
+        assert self.drive is not None
+        return (
+            self.drive
+            / "preprocess"
+            / f"preprocess_{self.ns.tag}"
+        )
 
     def sync(self) -> int:
         if self.drive is None:
@@ -418,6 +460,46 @@ class Job:
         return 0
 
 
+def _unassign_runtime(
+    grace_min: float, hold_file: Path
+) -> None:
+    """猶予のあと Colab の runtime 管理サービスへ VM の unassign を要求する．
+
+    ``google.colab.runtime.unassign()`` の中身 (``POST /unassign``) を
+    そのまま呼ぶ．frontend への JS 送信は kernel 外では不要なので省く．
+    """
+    addr = os.environ.get("TBE_RUNTIME_ADDR")
+    if not addr:
+        log(
+            "  TBE_RUNTIME_ADDR is not set; skip unassign (not on Colab?)"
+        )
+        return
+    deadline = time.monotonic() + grace_min * 60
+    at = dt.datetime.now(JST) + dt.timedelta(minutes=grace_min)
+    log(
+        f"  UNASSIGN_AT={at.isoformat(timespec='seconds')} "
+        f"(touch {hold_file} to keep the VM)"
+    )
+    while time.monotonic() < deadline:
+        if hold_file.exists():
+            log(f"  {hold_file} exists; VM kept")
+            return
+        time.sleep(30)
+    if hold_file.exists():
+        log(f"  {hold_file} exists; VM kept")
+        return
+    req = urllib.request.Request(
+        f"http://{addr}/unassign", data=b"", method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            log(f"UNASSIGN_REQUESTED status={resp.status}")
+    except urllib.error.HTTPError as e:
+        log(f"UNASSIGN_FAILED status={e.code}")
+    except OSError as e:
+        log(f"UNASSIGN_FAILED {type(e).__name__}: {e}")
+
+
 def _tree_size(root: Path) -> tuple[int, int]:
     """配下の (ファイル数, 合計バイト) を返す．"""
     files = [p for p in root.rglob("*") if p.is_file()]
@@ -429,8 +511,13 @@ def main() -> int:
     if shutil.which("rsync") is None and not ns.no_drive:
         log("rsync not found")
         return 2
-    rc = Job(ns).main()
+    job = Job(ns)
+    rc = job.main()
     print(f"JOB_DONE exit={rc}", flush=True)
+    if ns.unassign_on_done and rc == 0 and not ns.dry_run:
+        _unassign_runtime(
+            ns.unassign_grace_min, job.job_dir / "KEEP_VM"
+        )
     return rc
 
 
