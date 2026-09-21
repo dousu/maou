@@ -1189,7 +1189,7 @@ def _write_preprocessing_ipc(path: Path, n_rows: int) -> None:
 
 
 def test_dtype_row_bytes_folds_fixed_size_lists() -> None:
-    """FixedSizeList (入れ子含む) は固定幅，可変長 List / 文字列は None．"""
+    """FixedSizeList (入れ子含む) は固定幅，長さ不明の List / 文字列は None．"""
     import polars as pl
 
     from maou.app.learning.setup import _dtype_row_bytes
@@ -1203,6 +1203,75 @@ def test_dtype_row_bytes_folds_fixed_size_lists() -> None:
     assert _dtype_row_bytes(pl.Float32()) == 4
     assert _dtype_row_bytes(pl.List(pl.Float32)) is None
     assert _dtype_row_bytes(pl.String) is None
+
+
+def test_dtype_row_bytes_resolves_known_list_columns() -> None:
+    """on-disk が可変長 large_list でも，maou のスキーマで長さが決まる列は引ける．
+
+    Polars → Arrow で書いた前処理済の list 列は FixedSizeList ではなく
+    large_list なので (2026-09-22 の Colab で確認)，列名から要素数を引く．
+    """
+    import polars as pl
+
+    from maou.app.learning.setup import _dtype_row_bytes
+
+    assert (
+        _dtype_row_bytes(pl.List(pl.Float32), "moveWinRate")
+        == 4 * MOVE_LABELS_NUM
+    )
+    assert (
+        _dtype_row_bytes(
+            pl.List(pl.List(pl.UInt8)), "boardIdPositions"
+        )
+        == 81
+    )
+    assert (
+        _dtype_row_bytes(pl.List(pl.UInt8), "piecesInHand")
+        == 14
+    )
+    assert (
+        _dtype_row_bytes(pl.List(pl.Float32), "unknown") is None
+    )
+
+
+def _write_preprocessing_polars(
+    path: Path, n_rows: int
+) -> None:
+    """前処理済と同じく Polars の List 列で書く (on-disk は large_list)．"""
+    import polars as pl
+
+    df = pl.DataFrame(
+        {
+            "id": np.arange(n_rows, dtype=np.uint64),
+            "boardIdPositions": [[[0] * 9] * 9] * n_rows,
+            "piecesInHand": [[0] * 14] * n_rows,
+            "moveLabel": [[0.0] * MOVE_LABELS_NUM] * n_rows,
+            "moveWinRate": [[0.0] * MOVE_LABELS_NUM] * n_rows,
+            "bestMoveWinRate": np.zeros(n_rows, np.float32),
+            "resultValue": np.zeros(n_rows, np.float32),
+        },
+        schema_overrides={
+            "boardIdPositions": pl.List(pl.List(pl.UInt8)),
+            "piecesInHand": pl.List(pl.UInt8),
+            "moveLabel": pl.List(pl.Float32),
+            "moveWinRate": pl.List(pl.Float32),
+        },
+    )
+    df.write_ipc(path, compression="lz4")
+
+
+def test_uncompressed_file_mb_from_large_list_file(
+    tmp_path: Path,
+) -> None:
+    """Polars が書いた large_list の前処理済でも展開後サイズが求まる．"""
+    from maou.app.learning.setup import _uncompressed_file_mb
+
+    fp = tmp_path / "chunk.feather"
+    _write_preprocessing_polars(fp, n_rows=50)
+    row_bytes = 8 + 81 + 14 + 4 * MOVE_LABELS_NUM * 2 + 4 + 4
+    assert _uncompressed_file_mb(fp) == pytest.approx(
+        row_bytes * 50 / (1024**2)
+    )
 
 
 def test_uncompressed_file_mb_from_metadata(
