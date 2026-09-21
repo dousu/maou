@@ -24,6 +24,7 @@ except (
         _LRScheduler as LRScheduler,
     )
 
+import numpy as np
 import polars as pl
 
 from maou.app.learning.dataset import DataSource, KifDataset
@@ -33,6 +34,14 @@ from maou.app.learning.network import (
     Network,
 )
 from maou.domain.data.arrow_format import scan_row_count
+from maou.domain.data.schema import (
+    get_hcpe_dtype,
+    get_intermediate_dtype,
+    get_packed_preprocessing_dtype,
+    get_preprocessing_dtype,
+    get_stage1_dtype,
+    get_stage2_dtype,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +85,6 @@ def default_worker_init_fn(worker_id: int) -> None:
     """
     import random
     import time
-
-    import numpy as np
 
     start = time.monotonic()
 
@@ -209,8 +216,9 @@ _PEAK_MARGIN: float = 1.15
 _DECOMPRESSION_FACTOR: float = 4.0
 """スキーマから展開後サイズが分からないときに使う LZ4 の展開倍率．
 
-固定幅でない列 (可変長 List / 文字列) を含むファイルだけがこの経路に落ちる．
-maou が書く前処理済 / HCPE は FixedSizeList なので通常は使わない．
+長さの分からない list / 文字列列を含むファイルだけがこの経路に落ちる．
+maou が書く前処理済 / HCPE の list 列は長さがスキーマで決まっている
+(``_KNOWN_LIST_LENGTHS``) ので通常は使わない．
 """
 
 _SAFETY_MARGIN: float = 4.0
@@ -279,18 +287,62 @@ _FIXED_WIDTH_BYTES: dict[pl.DataType, int] = {
 }
 
 
+def _known_list_lengths() -> dict[str, int]:
+    """maou のスキーマで長さが決まっている list 列の要素数 (列名 → 要素数)．
+
+    Polars → Arrow で書いた feather の list 列は on-disk では可変長
+    ``large_list`` (前処理済の ``moveLabel`` / ``moveWinRate`` など) なので，
+    スキーマだけでは長さが分からない．長さは numpy の構造化 dtype
+    (``get_preprocessing_dtype`` 等の subarray shape) が持っているので
+    そこから引く (例: ``boardIdPositions`` 81，``moveLabel`` 1496)．
+    """
+    lengths: dict[str, int] = {}
+    for get_dtype in (
+        get_hcpe_dtype,
+        get_intermediate_dtype,
+        get_preprocessing_dtype,
+        get_packed_preprocessing_dtype,
+        get_stage1_dtype,
+        get_stage2_dtype,
+    ):
+        dtype = get_dtype()
+        for name in dtype.names or ():
+            shape = dtype[name].shape
+            if shape:
+                lengths[name] = int(np.prod(shape))
+    return lengths
+
+
+_KNOWN_LIST_LENGTHS: dict[str, int] = _known_list_lengths()
+
+
 def _dtype_row_bytes(
     dtype: pl.DataType | pl.datatypes.DataTypeClass,
+    column: str = "",
 ) -> int | None:
-    """固定幅 dtype の 1 行あたりバイト数 (固定幅でなければ ``None``)．
+    """1 列の 1 行あたりバイト数 (行数から決まらなければ ``None``)．
 
-    Arrow の FixedSizeList は Polars では ``pl.Array`` (入れ子も可) に
-    なるので再帰で畳む．可変長 List / 文字列は展開後サイズが行数から
-    決まらないので ``None`` を返し，呼び出し側が展開倍率の経路に落とす．
+    - 固定幅の数値 / bool はその幅．
+    - ``pl.Array`` (Arrow FixedSizeList，入れ子も可) は要素数 × 内側．
+    - ``pl.List`` (Arrow list / large_list) は on-disk では可変長だが，
+      maou のスキーマで長さが決まっている列 (``_KNOWN_LIST_LENGTHS``) なら
+      要素数 × 葉の幅．それ以外の list / 文字列は ``None`` で，呼び出し側が
+      展開倍率の経路に落とす．
     """
     if isinstance(dtype, pl.Array):
-        inner = _dtype_row_bytes(dtype.inner)
+        inner = _dtype_row_bytes(dtype.inner, column)
         return None if inner is None else inner * dtype.size
+    if isinstance(dtype, pl.List):
+        n = _KNOWN_LIST_LENGTHS.get(column)
+        if n is None:
+            return None
+        leaf: pl.DataType | pl.datatypes.DataTypeClass = (
+            dtype.inner
+        )
+        while isinstance(leaf, pl.List):
+            leaf = leaf.inner
+        width = _dtype_row_bytes(leaf, column)
+        return None if width is None else width * n
     for fixed, width in _FIXED_WIDTH_BYTES.items():
         if dtype == fixed:
             return width
@@ -301,14 +353,14 @@ def _uncompressed_file_mb(file_path: Path) -> float | None:
     """feather の展開後サイズ (MB) をメタデータだけから求める．
 
     スキーマ (``pl.read_ipc_schema``) と行数 (``scan_row_count``，File 形式
-    ならメタデータ読み) の積なのでデータ本体は読まない．固定幅でない列を
-    含む，または読めないときは ``None``．
+    ならメタデータ読み) の積なのでデータ本体は読まない．行数から決まらない
+    列を含む，または読めないときは ``None``．
     """
     try:
         schema = pl.read_ipc_schema(file_path)
         row_bytes = 0
-        for dtype in schema.values():
-            width = _dtype_row_bytes(dtype)
+        for column, dtype in schema.items():
+            width = _dtype_row_bytes(dtype, column)
             if width is None:
                 return None
             row_bytes += width
