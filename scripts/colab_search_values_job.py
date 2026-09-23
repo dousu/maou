@@ -60,16 +60,27 @@ WORK = Path("/content/shogi")
 #: 既存の ply>=120 の蓄積 (`search_values/search_values_20260806`) と同じ
 #: teacher なので，前処理の段階で `--search-value-path` を 2 つ渡せば
 #: 両方を 1 つの教師信号としてまとめられる (探索のやり直しは要らない)．
+#: **teacher を変えるなら OUT_REL も新しい日付にする** (provenance が弾く)．
 TEACHER_REL = "maou_test/models/model_20260805_144450_vit-19.8m_16_fp16.onnx"
 #: teacher の sha256．**初回実行でも取り違えを検出する**ための事前登録．
 #: (2 回目以降は出力側の `provenance.json` が同じことを保証する)
 TEACHER_SHA256 = "8949d72912f251dc5537a3a5232ac527f9fbcb6f23aae486269036e0207d448d"
 #: 探索対象の HCPE ディレクトリ．DRIVE からの相対パス．
-HCPE_REL = "hcpe/hcpe_20260805"
+#: **必ず train だけを指す**．`hcpe_20260805/` には `val/` も入っており，
+#: 検証側の教師を変えることは許されない (docs 同ページ § 検証データには
+#: 適用しない)．val を混ぜると予算を無駄にするうえ，前処理で取り違えると
+#: 較正測定の前提が壊れる．
+HCPE_REL = "hcpe/hcpe_20260805/train"
 #: 探索値の出力先 (シャードのディレクトリ)．DRIVE からの相対パス．
-#: 既存の ply>=120 とは**別ディレクトリ**にする (帯ごとに分けておくと，
-#: 前処理でどちらを渡すかを後から選べる)．
-OUT_REL = "search_values/ply60_99"
+#: 命名は `<種別>_<YYYYMMDD>` (docs/colab-cli-notes.md §7.4)．種別は親フォルダ名で，
+#: **帯や条件は名前に詰め込まない** — 由来は worklog に書く (同 §9)．
+#: 既存の ply>=120 (`search_values_20260806`) とは別ディレクトリにする．
+#: 前処理でどちらを渡すかを後から選べるようにするため．
+#:
+#: **この値はセッションをまたいで固定する．** 日付を実行時に生成すると
+#: セッションごとに別のディレクトリができ，`--resume` が前回のシャードを
+#: 見つけられず 13 回ぶんの探索がすべてやり直しになる．
+OUT_REL = "search_values/search_values_20260923"
 
 #: 帯は [MIN_PLY, MAX_PLY)．Arm 1 は ply 60-99．
 MIN_PLY = 60

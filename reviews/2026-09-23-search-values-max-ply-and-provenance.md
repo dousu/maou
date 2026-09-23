@@ -1,5 +1,6 @@
 ---
-status: pending          # pending | approved | applied | rejected
+status: applied          # pending | approved | applied | rejected
+applied_in: d8676e90
 date: 2026-09-23
 target: [docs/commands/utility_search_values.md]
 risk: low
