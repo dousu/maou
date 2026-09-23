@@ -1,6 +1,6 @@
 ---
 status: applied          # pending | approved | applied | rejected
-applied_in: PENDING_SHA
+applied_in: b673675e
 date: 2026-09-23
 target: [docs/colab-cli-notes.md]
 risk: low
