@@ -1,19 +1,39 @@
 #!/usr/bin/env python3
 """探索値の蓄積 (`maou utility search-values`) を Colab で回す 1 ファイル driver．
 
-## 人間の操作 (毎セッション これだけ)
+## 人間の操作
 
-ブラウザで新しい GPU ランタイムを起動し，**次の 3 行だけ**をセルに貼って実行する．
+### セル A — 置く (最初の 1 回だけ)
+
+Drive 書き込みはマウント経由でのみ行う規約 (docs/colab-cli-notes.md §7.1)．
 
 ```python
-from google.colab import drive
-drive.mount("/content/drive")
+from google.colab import drive; drive.mount("/content/drive")
+!mkdir -p /content/drive/MyDrive/shogi/scripts
+!curl -sL https://raw.githubusercontent.com/dousu/maou/main/scripts/colab_search_values_job.py \
+   -o /content/drive/MyDrive/shogi/scripts/colab_search_values_job.py
+```
+
+### セル B — 点検 (毎セッション，投入の前に)
+
+探索は起こさない．teacher の sha256・HCPE・既存シャード・来歴・wheel に
+`--max-ply` があるか・GPU を見て PASS / FAIL を出す．**ALL PASS でなければ
+投入しない** (20 時間を捨てないため)．
+
+```python
+from google.colab import drive; drive.mount("/content/drive")
+%run /content/drive/MyDrive/shogi/scripts/colab_search_values_job.py --check
+```
+
+### セル C — 投入 (毎セッション，これで走り出す)
+
+```python
+from google.colab import drive; drive.mount("/content/drive")
 %run /content/drive/MyDrive/shogi/scripts/colab_search_values_job.py
 ```
 
-このファイル自体は Drive に 1 回置くだけでよい (`scripts/` を rsync するか
-Colab の画面からアップロードする)．中身を書き換える必要は無く，**毎セッション
-同じ 3 行**を貼れば続きから貯まる．
+セル C はそのまま keep-alive 兼モニタとして走り続ける．中身を書き換える必要は
+無く，**毎セッション B → C を貼るだけ**で続きから貯まる．
 
 ## 何が起きるか
 
@@ -495,6 +515,114 @@ def worker() -> int:
 # =====================================================================
 # セル側 (ブラウザの kernel で走る): ワーカーを起こして keep-alive する
 # =====================================================================
+def check() -> int:
+    """投入前の点検．20 時間を捨てる前に前提が揃っているか確かめる．
+
+    探索は起こさない．読み取りと wheel の導入だけで，各項目に PASS / FAIL を出す．
+
+    Returns:
+        すべて PASS なら 0，ひとつでも落ちたら 1．
+    """
+    fails: list[str] = []
+
+    def check_item(
+        ok: bool, label: str, detail: str = ""
+    ) -> None:
+        mark = "PASS" if ok else "FAIL"
+        print(
+            f"[{mark}] {label}"
+            + (f" — {detail}" if detail else "")
+        )
+        if not ok:
+            fails.append(label)
+
+    print(f"=== preflight {now()} ===")
+    check_item(DRIVE.exists(), "Drive mounted", str(DRIVE))
+
+    teacher = DRIVE / TEACHER_REL
+    if teacher.is_file():
+        digest = hashlib.sha256()
+        with teacher.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(chunk)
+        check_item(
+            digest.hexdigest() == TEACHER_SHA256,
+            "teacher sha256",
+            f"{teacher.name} {digest.hexdigest()[:16]}...",
+        )
+    else:
+        check_item(False, "teacher exists", str(teacher))
+
+    hcpe = DRIVE / HCPE_REL
+    shards_in = (
+        len(list(hcpe.glob("**/*.feather")))
+        if hcpe.is_dir()
+        else 0
+    )
+    check_item(
+        shards_in > 0, "HCPE train", f"{shards_in} feather"
+    )
+    check_item(
+        "val" not in HCPE_REL.split("/"),
+        "HCPE excludes val",
+        HCPE_REL,
+    )
+
+    out = DRIVE / OUT_REL
+    n, b = tree_size(out)
+    print(f"[INFO] output {OUT_REL}: {n} files / {b} B")
+    prov = out / "provenance.json"
+    if prov.exists():
+        runs = json.loads(prov.read_text()).get("runs", [])
+        names = {r.get("model_name") for r in runs}
+        print(
+            f"[INFO] provenance: {len(runs)} run(s), teacher(s) {names}"
+        )
+        check_item(
+            names <= {teacher.name},
+            "provenance teacher matches",
+            str(names),
+        )
+    else:
+        print("[INFO] provenance: none yet (first session)")
+
+    rc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "maou",
+            "utility",
+            "search-values",
+            "--help",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    check_item(
+        "--max-ply" in rc.stdout,
+        "wheel has --max-ply",
+        "install/upgrade the wheel if this fails",
+    )
+
+    gpu = subprocess.run(
+        [
+            "nvidia-smi",
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    check_item(gpu.returncode == 0, "GPU", gpu.stdout.strip())
+
+    print(
+        f"\n=== {'ALL PASS — 投入してよい' if not fails else 'FAILED: ' + ', '.join(fails)} ==="
+    )
+    return 1 if fails else 0
+
+
 def worker_alive() -> bool:
     if not PIDFILE.exists():
         return False
@@ -556,6 +684,8 @@ def monitor() -> None:
 
 
 def main() -> int:
+    if "--check" in sys.argv:
+        return check()
     if "--worker" in sys.argv:
         try:
             return worker()
