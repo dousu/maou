@@ -42,6 +42,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -81,6 +82,10 @@ HCPE_REL = "hcpe/hcpe_20260805/train"
 #: セッションごとに別のディレクトリができ，`--resume` が前回のシャードを
 #: 見つけられず 13 回ぶんの探索がすべてやり直しになる．
 OUT_REL = "search_values/search_values_20260923"
+#: ジョブの記録 (STATUS / ログ) の Drive 退避先．docs/colab-cli-notes.md §7.4 の
+#: `maou_test/jobs/` に置く．**unassign すると VM 上の記録は消える**ので，
+#: 手放す前に必ずここへ逃がす (同 §10)．
+JOB_DRIVE_REL = "maou_test/jobs/search_values_20260923"
 
 #: 帯は [MIN_PLY, MAX_PLY)．Arm 1 は ply 60-99．
 MIN_PLY = 60
@@ -186,6 +191,41 @@ def tree_size(root: Path) -> tuple[int, int]:
     return len(files), sum(p.stat().st_size for p in files)
 
 
+def sync_job_dir() -> bool:
+    """STATUS とログを Drive へ逃がす．
+
+    書き込み中のログは rsync の件数照合が必ずずれるので本体は除き，別名の
+    snapshot を送る．**VM を手放すと記録は消える**ので，成否を問わず
+    unassign の前に必ず通す (docs/colab-cli-notes.md §10)．
+
+    Returns:
+        rsync が成功したか．
+    """
+    dst = DRIVE / JOB_DRIVE_REL
+    dst.mkdir(parents=True, exist_ok=True)
+    for live, snap in (
+        (JOB_LOG, "job_log_snapshot.txt"),
+        (SEARCH_LOG, "search_log_snapshot.txt"),
+    ):
+        if live.exists():
+            shutil.copyfile(live, JOB_DIR / snap)
+    rc = run(
+        [
+            "rsync",
+            "-a",
+            "--exclude",
+            JOB_LOG.name,
+            "--exclude",
+            SEARCH_LOG.name,
+            f"{JOB_DIR}/",
+            f"{dst}/",
+        ],
+        JOB_LOG,
+    )
+    log(f"  rsync job dir -> Drive: rc={rc}")
+    return rc == 0
+
+
 # =====================================================================
 # ワーカー (nohup の別プロセスで走る本体)
 # =====================================================================
@@ -276,6 +316,10 @@ def worker() -> int:
             log(f"  fetched {rel} ({dst.stat().st_size} B)")
         elif not rsync(src, dst, rel):
             log(f"FATAL fetch mismatch for {rel}")
+            set_status(
+                phase="failed", error=f"fetch mismatch: {rel}"
+            )
+            sync_job_dir()
             return 1
         else:
             log(f"  fetched {rel}")
@@ -302,6 +346,7 @@ def worker() -> int:
         set_status(
             phase="failed", error="teacher sha256 mismatch"
         )
+        sync_job_dir()
         return 1
     log(
         f"  teacher ok: {teacher.name} sha256={TEACHER_SHA256[:16]}..."
@@ -354,6 +399,7 @@ def worker() -> int:
         time.sleep(20)
         if time.monotonic() >= next_sync:
             rsync(local_out, drive_out, "shards (periodic)")
+            sync_job_dir()
             n, b = tree_size(local_out)
             set_status(phase="search", shards=n, bytes=b)
             next_sync = time.monotonic() + SYNC_EVERY_MIN * 60
@@ -372,15 +418,19 @@ def worker() -> int:
     set_status(phase="sync")
     ok = rsync(local_out, drive_out, "shards (final)")
     n, b = tree_size(local_out)
-    log(
-        f"JOB_DONE exit={rc} shards={n} bytes={b} EVACUATED={'OK' if ok else 'FAILED'}"
-    )
+    # STATUS を先に確定させてから逃がす (Drive 側を最終状態にするため)
     set_status(
         phase="done", exit=rc, shards=n, bytes=b, evacuated=ok
     )
-    if not ok:
+    ok_job = sync_job_dir()
+    log(
+        f"JOB_DONE exit={rc} shards={n} bytes={b} "
+        f"EVACUATED={'OK' if ok and ok_job else 'FAILED'}"
+    )
+    if not (ok and ok_job):
+        # 逃がせていない記録は VM にしか無い．手放すと失う
         log(
-            "  final sync mismatched; keeping the VM so nothing is lost"
+            "  evacuation incomplete; keeping the VM so nothing is lost"
         )
         return 1
     unassign(UNASSIGN_GRACE_MIN)
@@ -460,6 +510,12 @@ def main() -> int:
                 phase="failed",
                 error=f"{type(exc).__name__}: {exc}",
             )
+            try:
+                sync_job_dir()
+            except (
+                Exception
+            ) as eexc:  # 退避の失敗で原因を隠さない
+                log(f"  evacuation failed too: {eexc}")
             return 1
     ensure_worker()
     monitor()
