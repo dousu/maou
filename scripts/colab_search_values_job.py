@@ -60,6 +60,7 @@ from google.colab import drive; drive.mount("/content/drive")
 
 from __future__ import annotations
 
+import ast
 import datetime as dt
 import glob
 import hashlib
@@ -237,6 +238,58 @@ def tree_size(root: Path) -> tuple[int, int]:
         return (0, 0)
     files = [p for p in root.rglob("*") if p.is_file()]
     return len(files), sum(p.stat().st_size for p in files)
+
+
+def parse_search_summary() -> dict[str, str] | None:
+    """`search.log` の末尾から `search-values` の要約 dict を拾う．
+
+    CLI は `click.echo(result)` で dict の repr を 1 行出す
+    (`src/maou/infra/console/search_values.py`)．最後の 1 件を読む．
+    SIGTERM で畳んだ回は要約が出ないので None になる．
+
+    Returns:
+        `{"searched": ..., "total": ...}` を含む dict．無ければ None．
+    """
+    if not SEARCH_LOG.exists():
+        return None
+    for line in reversed(
+        SEARCH_LOG.read_text(errors="replace").splitlines()
+    ):
+        line = line.strip()
+        if not line.startswith("{'searched'"):
+            continue
+        try:
+            parsed = ast.literal_eval(line)
+        except (ValueError, SyntaxError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def verdict(
+    summary: dict[str, str] | None, stopped_for_budget: bool
+) -> str:
+    """**次のセッションが要るか**を一語で返す．
+
+    `search-values` は `--max-positions` を上限に，残っている局面から
+    標本を取る．**取れた数が上限に届かなければ，残りはもう無い**．
+
+    Args:
+        summary: `parse_search_summary()` の結果．
+        stopped_for_budget: `SESSION_HOURS` で畳んだか．
+
+    Returns:
+        `"no"` (蓄積完了) / `"yes"` (続きあり) / `"unknown"`．
+    """
+    if stopped_for_budget:
+        return "yes"
+    if summary is None:
+        return "unknown"
+    try:
+        searched = int(summary["searched"])
+    except (KeyError, TypeError, ValueError):
+        return "unknown"
+    return "yes" if searched >= POSITIONS_PER_SESSION else "no"
 
 
 def collect_diag() -> None:
@@ -537,6 +590,7 @@ def worker() -> int:
             cmd, stdout=fh, stderr=subprocess.STDOUT
         )
 
+    stopped_for_budget = False
     deadline = time.monotonic() + SESSION_HOURS * 3600
     next_sync = time.monotonic() + SYNC_EVERY_MIN * 60
     while proc.poll() is None:
@@ -550,6 +604,7 @@ def worker() -> int:
         if time.monotonic() >= deadline:
             # 壁の手前で畳む．flush 済みのシャードは残り resume が拾う
             log("  session budget reached; stopping the search")
+            stopped_for_budget = True
             proc.terminate()
             try:
                 proc.wait(timeout=600)
@@ -559,20 +614,40 @@ def worker() -> int:
     rc = proc.returncode
     log(f"  search rc={rc}")
 
-    if rc != 0:
-        # 探索が落ちた理由は VM にしか無い (OOM なら dmesg)
+    if rc != 0 and not stopped_for_budget:
+        # 探索が落ちた理由は VM にしか無い (OOM なら dmesg)．
+        # **予算切れは失敗ではない**ので diag は採らない (毎回採ると
+        # 本物の失敗の証拠がノイズに埋もれる)
         collect_diag()
+
+    summary = parse_search_summary()
+    more = verdict(summary, stopped_for_budget)
 
     set_status(phase="sync")
     ok = rsync(local_out, drive_out, "shards (final)")
     n, b = tree_size(local_out)
-    # STATUS を先に確定させてから逃がす (Drive 側を最終状態にするため)
+    # STATUS を先に確定させてから逃がす (Drive 側を最終状態にするため)．
+    # **次のセッションが要るかは，次回のセル B がここを読んで人間に伝える．**
     set_status(
-        phase="done", exit=rc, shards=n, bytes=b, evacuated=ok
+        phase="done",
+        exit=rc,
+        shards=n,
+        bytes=b,
+        evacuated=ok,
+        stop_reason="budget"
+        if stopped_for_budget
+        else "completed",
+        searched=(summary or {}).get("searched"),
+        rows_total=(summary or {}).get("total"),
+        more_sessions_needed=more,
     )
     ok_job = sync_job_dir()
     log(
         f"JOB_DONE exit={rc} shards={n} bytes={b} "
+        f"stop_reason={'budget' if stopped_for_budget else 'completed'} "
+        f"searched={(summary or {}).get('searched', '?')} "
+        f"rows_total={(summary or {}).get('total', '?')} "
+        f"MORE_SESSIONS_NEEDED={more} "
         f"EVACUATED={'OK' if ok and ok_job else 'FAILED'}"
     )
     if not (ok and ok_job):
@@ -582,7 +657,8 @@ def worker() -> int:
         )
         return 1
     unassign(UNASSIGN_GRACE_MIN)
-    return 0 if rc == 0 else rc
+    # 予算切れは計画どおりの終わり方なので成功として返す
+    return 0 if (rc == 0 or stopped_for_budget) else rc
 
 
 # =====================================================================
@@ -642,6 +718,38 @@ def check() -> int:
         "HCPE excludes val",
         HCPE_REL,
     )
+
+    # **前回の判定を先に出す．** セル C を走らせる必要があるかは，
+    # 人間がここで判断できなければならない (search.log は VM ごと消える)
+    prev = DRIVE / JOB_DRIVE_REL / "STATUS"
+    if prev.exists():
+        try:
+            state = json.loads(prev.read_text())
+        except ValueError:
+            state = {}
+        more = state.get("more_sessions_needed", "unknown")
+        print(
+            f"[INFO] 前回 ({state.get('updated', '?')}): "
+            f"exit={state.get('exit')} "
+            f"stop_reason={state.get('stop_reason')} "
+            f"searched={state.get('searched')} "
+            f"rows_total={state.get('rows_total')}"
+        )
+        if more == "no":
+            print(
+                "[DONE] **蓄積は完了しています．セル C は不要です．**"
+                " 次は pre-process へ進む"
+            )
+        elif more == "yes":
+            print("[INFO] 続きがあります → セル C を実行する")
+        else:
+            print(
+                "[WARN] 前回の判定が unknown です．search.log の要約が"
+                " 残っていない可能性があるので，セル C を実行して"
+                " 次回の判定を待つ"
+            )
+    else:
+        print("[INFO] 前回の記録なし (初回セッション)")
 
     out = DRIVE / OUT_REL
     n, b = tree_size(out)
