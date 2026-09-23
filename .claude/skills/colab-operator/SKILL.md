@@ -17,11 +17,12 @@ description: Operate Google Colab environments via the `colab` CLI. Use when ask
 >   keep-alive daemon and **must not be `colab stop`ped**. An open tab is not enough: the user
 >   runs `scripts/colab_keepalive_cell.py` in a notebook cell for the whole job (idle runtimes
 >   are cut after a few hours). A long job ends by unassigning its own VM
->   (`colab_arm0_job.py --unassign-on-done`, `POST $TBE_RUNTIME_ADDR/unassign`) after a grace
->   window for `colab download`. On failure it first copies diagnostics (`dmesg` tail, `free`,
->   `nvidia-smi`, `ps`), stage logs and saved checkpoints to Drive
->   (`maou_test/jobs/arm0_<tag>/`, `maou_test/{models,logs}/`) and unassigns only when that copy
->   verified; otherwise it prints `UNASSIGN_SKIPPED` and keeps the VM (`--evacuate-only` retries).
+>   (any `scripts/colab_*_job.py` driver: `--unassign-on-done`, `POST $TBE_RUNTIME_ADDR/unassign`)
+>   after a grace window for `colab download`. On failure it first copies diagnostics
+>   (`dmesg` tail, `free`, `nvidia-smi`, `ps`), stage logs and saved checkpoints to Drive
+>   (`maou_test/jobs/<job>_<tag>/`, `maou_test/{models,logs}/`) and unassigns only when that copy
+>   verified; otherwise it keeps the VM. Every new driver owes the same evacuate-then-unassign
+>   sequence — see the checklist in `docs/colab-cli-notes.md` §10.
 > - Copy each finished stage's output to Drive before starting the next one (the ~1 h
 >   `pre-process` output before `learn-model`).
 > - Drive: write only from inside the VM via the mount, only under `MyDrive/shogi`,
