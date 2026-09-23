@@ -286,7 +286,7 @@ flush や TensorBoard の event ファイルのような高頻度更新で不安
 | 探索値 (shard dir) | `maou utility search-values --output-path` | `search_values/` | `search_values/` |
 | モデル (`.onnx` / `.pt`) | `maou learn-model --model-dir` | `maou_test/models/` | `maou_test/models/` |
 | TensorBoard ログ | `maou learn-model --log-dir` | `maou_test/logs/` | `maou_test/logs/` |
-| ジョブの記録 (`STATUS` / 段階ログ / `diag/`) | `scripts/colab_arm0_job.py` | `maou_test/jobs/` | `maou_test/jobs/` |
+| ジョブの記録 (`STATUS` / 段階ログ / `diag/`) | 長時間ジョブの driver (`scripts/colab_*_job.py`) | `maou_test/jobs/` | `maou_test/jobs/` |
 
 - 各フォルダの下は **`<種別>_<YYYYMMDD>`** (種別 = 親フォルダ名，日付 = 生成日) のサブフォルダを
   切る．既存の実例: `hcpe/hcpe_20260805/`，`preprocess/preprocess_20260901/`，
@@ -297,7 +297,7 @@ flush や TensorBoard の event ファイルのような高頻度更新で不安
   モデルは実験 (= 1 回の `learn-model`) ごとに必ずサブフォルダを分ける．
 - `learn-model` の `--model-dir` / `--log-dir` の既定は cwd (`/content`) 相対の `./models` / `./logs`
   なので **必ず明示する**．
-- `maou_test/jobs/arm0_<tag>/` は driver の記録 (数 MB): `STATUS`，段階ログ，driver ログの
+- `maou_test/jobs/<ジョブ名>_<tag>/` は driver の記録 (数 MB): `STATUS`，段階ログ，driver ログの
   snapshot，失敗時の `diag/` (`dmesg` 末尾 / `free` / `df` / `nvidia-smi` / `ps`)．
   再生成できない (失敗の証拠) ので §7.5 の「10 分未満で再生成できるもの」には当たらない．
   `soften` の出力 (`*.feather`，1 分で作り直せる) は退避しない．
@@ -382,7 +382,7 @@ colab status -s gpu                         #    [gpu] <endpoint> | Hardware: L4
   (2026-09-21: Arm 0 の learn 開始 2 時間後，VM 起動から約 3.5〜4 時間で切断)．
   **`scripts/colab_keepalive_cell.py` を新しいセルに貼って実行し，ジョブの間ずっと
   実行中のままにする (MUST)**．24 時間走り，5 分ごとに `/content/job.log` と
-  `/content/shogi/maou_test/jobs/arm0_*/STATUS` の末尾を表示し直す (進捗もここで見える)．
+  `/content/shogi/maou_test/jobs/*/STATUS` の末尾を表示し直す (進捗もここで見える)．
   `colab exec` で流すものではない (ブラウザが attach している kernel で走らせる)．
   Colab 側の上限 (最長実行時間) はユーザのプラン次第で，ユーザが把握する．
 - **登録したセッションを `colab stop` しない．** `stop` は VM を unassign するので，ユーザが
@@ -390,7 +390,7 @@ colab status -s gpu                         #    [gpu] <endpoint> | Hardware: L4
   ユーザがブラウザ側で行う．ローカル登録だけ外すなら `--forget`．
 - **完走したら VM 側が自分で unassign する (MUST)**．長時間ジョブの driver には
   `google.colab.runtime.unassign()` と同じ `POST http://$TBE_RUNTIME_ADDR/unassign` を
-  rc=0 の終わりに入れる (`scripts/colab_arm0_job.py --unassign-on-done`．環境変数は
+  rc=0 の終わりに入れる (例: `scripts/colab_arm0_job.py --unassign-on-done`．環境変数は
   kernel の子プロセスに継承されるので nohup からでも通る)．CLI 側から `stop` しない規約は
   そのまま — 止めるのは VM 上のジョブ自身．猶予 (`--unassign-grace-min`，既定 60 分) の間に
   `colab download` で小物 (value-best の `_fp16.onnx` 等) を取る．猶予を過ぎて VM が消えた
@@ -399,7 +399,7 @@ colab status -s gpu                         #    [gpu] <endpoint> | Hardware: L4
 - **失敗 (rc≠0) のときも，診断情報を Drive へ退避してから unassign する (MUST)**．
   driver は失敗した段階のあと `diag/` (`dmesg` 末尾 / `free` / `/proc/meminfo` / cgroup /
   `df` / `nvidia-smi` / `ps` / 版数) を採り，段階ログ・driver ログ・保存済みの models / logs
-  を Drive (`maou_test/jobs/arm0_<tag>/` と `maou_test/{models,logs}/`) へ退避し，rsync の
+  を Drive (`maou_test/jobs/<ジョブ名>_<tag>/` と `maou_test/{models,logs}/`) へ退避し，rsync の
   照合が OK のときだけ同じ猶予のあと unassign する．退避できなかった (Drive 無し / 不一致)
   ときは `UNASSIGN_SKIPPED` を出して VM を残すので，直して `--evacuate-only` で退避を
   やり直してからユーザがブラウザで削除する．理由: 2026-09-21 の Arm 0 は learn が 22:10 に
@@ -428,6 +428,31 @@ Colab フロントエンドは既存 VM に attach するが，そのタブが�
 Claude Code が先に `colab new` してしまった場合は，短時間で終わるものだけそのまま回し，
 長時間ジョブは `colab stop` してユーザにブラウザで作り直してもらう (VM 再確保 1 回分の
 オーバーヘッドのほうが，回収されて成果を失うより安い)．
+
+---
+
+### 10.1 新しい long-running driver を書くときのチェックリスト (MUST)
+
+上の規約は `scripts/colab_arm0_job.py` の説明ではなく，**`scripts/` に置く
+すべての長時間ジョブ driver が満たすもの**である．2 本目 (`colab_search_values_job.py`)
+は退避と `diag/` 採取を落として書かれ，後から直した．新しい driver を追加するときは
+以下を実装してからレビューに出す:
+
+- [ ] **出力はまず VM ローカル**に書き，まとまりごとに Drive へ rsync する (§7.3)
+- [ ] Drive の読み書きは**マウント経由**，**`MyDrive/shogi` の中だけ** (§7.1 / §7.2)
+- [ ] 出力先は `<種別>_<YYYYMMDD>` (§7.4)．**帯や条件を名前に詰め込まない** (§9)．
+      複数セッションに分ける蓄積では**この値を固定する** (実行時生成だと再開できない)
+- [ ] `STATUS` と段階ログを `maou_test/jobs/<ジョブ名>_<tag>/` へ逃がす．
+      **書き込み中のログは rsync の件数照合が必ずずれる**ので本体は除き，
+      別名の snapshot を送る
+- [ ] **失敗経路すべて**で `diag/` を採る (`dmesg` 末尾 / `free` / `/proc/meminfo` /
+      cgroup / `df` / `nvidia-smi` / `ps` / 版数)．**OOM の証拠は VM の `dmesg` に
+      しか無く，unassign すると消える**
+- [ ] unassign は **記録と成果物の退避が rsync 照合 OK のときだけ**行う．
+      片方でも失敗したら VM を残す (`KEEP_VM` でユーザが明示的に残せること)
+- [ ] 成否判定に `cmd | tail` を使わない (exit code が tail のものになる)
+- [ ] 投入前の点検手段を持つ (例: `colab_search_values_job.py --check`)．
+      数十時間を投じる前に，入力・モデルの同一性・wheel の版・GPU を確かめる
 
 ---
 
