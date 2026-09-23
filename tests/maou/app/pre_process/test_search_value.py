@@ -17,11 +17,14 @@ from maou.app.pre_process.hcpe_transform import DataSource
 from maou.app.pre_process.search_value import (
     NODE_CAPACITY_MARGIN,
     PENDING_PATTERN,
+    PROVENANCE_FILENAME,
     SEARCH_VALUE_REQUIRED_SCHEMA,
     SEARCH_VALUE_SCHEMA,
+    SEARCH_VALUE_SUFFIXES,
     SHARD_PATTERN,
     SearchValueCollector,
     SearchValueOption,
+    _feather_paths,
     _merge,
     _next_index,
     _node_capacity,
@@ -30,6 +33,8 @@ from maou.app.pre_process.search_value import (
     _with_current_schema,
     apply_search_values,
     load_search_values,
+    model_fingerprint,
+    read_provenance,
     select_positions,
     validate_search_value_source,
 )
@@ -70,6 +75,35 @@ class TestSelectPositions:
             df, hashes, min_ply=60, max_positions=0, seed=0
         )
         assert rows.tolist() == [2, 3]
+
+    def test_filters_by_max_ply(self) -> None:
+        # 上限は exclusive — soften_result_value.py と同じ [min, max)
+        df = _df(
+            [
+                "g.hcpe_59",
+                "g.hcpe_60",
+                "g.hcpe_99",
+                "g.hcpe_100",
+            ]
+        )
+        hashes = np.array([1, 2, 3, 4], dtype=np.uint64)
+        rows = select_positions(
+            df,
+            hashes,
+            min_ply=60,
+            max_ply=100,
+            max_positions=0,
+            seed=0,
+        )
+        assert rows.tolist() == [1, 2]
+
+    def test_max_ply_defaults_to_no_upper_bound(self) -> None:
+        df = _df(["g.hcpe_60", "g.hcpe_1000"])
+        hashes = np.array([1, 2], dtype=np.uint64)
+        rows = select_positions(
+            df, hashes, min_ply=60, max_positions=0, seed=0
+        )
+        assert rows.tolist() == [0, 1]
 
     def test_keeps_one_row_per_hash(self) -> None:
         # 同一局面は前処理で 1 行へ集約されるので探索も 1 回でよい
@@ -298,10 +332,12 @@ class TestOverwriteGuard:
             self._option(out, overwrite=True)
         )
         assert result["searched"] == "0"
-        assert not out.exists(), (
+        assert not _feather_paths(out, SEARCH_VALUE_SUFFIXES), (
             "--overwrite はシャードを残してはいけない "
             "(残骸を次の --resume が拾う)"
         )
+        # 来歴は作り直したあとの実行を指す (rmtree の後に書かれる)
+        assert len(read_provenance(out)) == 1
 
     def test_resume_and_overwrite_are_mutually_exclusive(
         self, tmp_path: Path
@@ -938,9 +974,13 @@ class TestShardedOutput:
         )
 
         assert result["searched"] == "0"
-        assert sorted(p.name for p in out.iterdir()) == [
-            "part_00000001.feather"
-        ], "pending が確定シャードへまとまり，元は消えること"
+        assert sorted(
+            p.name
+            for p in out.iterdir()
+            if p.suffix in SEARCH_VALUE_SUFFIXES
+        ) == ["part_00000001.feather"], (
+            "pending が確定シャードへまとまり，元は消えること"
+        )
         done = SearchValueCollector()._load_done(
             self._option(out, resume=True)
         )
@@ -989,3 +1029,145 @@ class TestShardedOutput:
             "part_00000010.feather",
             "pending_00000001.feather",
         ]
+
+
+def _model(path: Path, body: bytes) -> Path:
+    """sha256 だけが意味を持つダミーのモデルファイルを作る．"""
+    path.write_bytes(body)
+    return path
+
+
+class TestBandValidation:
+    """帯は `[min_ply, max_ply)` で，空帯は弾く．"""
+
+    def test_rejects_max_ply_not_above_min_ply(
+        self, tmp_path: Path
+    ) -> None:
+        with pytest.raises(
+            ValueError,
+            match=r"--max-ply \(60\) must be greater",
+        ):
+            SearchValueCollector().collect(
+                SearchValueOption(
+                    input_path=tmp_path,
+                    output_path=tmp_path / "sv",
+                    min_ply=60,
+                    max_ply=60,
+                )
+            )
+
+
+class TestProvenance:
+    """shard に teacher が残らないので，来歴だけが根拠になる．
+
+    複数セッションに分けて `--resume` で継ぎ足す運用では，途中で別の
+    モデルを渡しても気付けず教師が混ざる．同一性は sha256 で見る —
+    VM ごとに**パスは変わる**ので，記録として有効なのはファイル名と
+    ダイジェストの方である．
+    """
+
+    def _option(
+        self, out: Path, model: Path | None, **kw: object
+    ) -> SearchValueOption:
+        base: dict[str, object] = {
+            "input_path": out.parent,
+            "output_path": out,
+            "model_path": model,
+        }
+        base.update(kw)
+        return SearchValueOption(**base)  # type: ignore[arg-type]
+
+    def test_records_name_and_digest(
+        self, tmp_path: Path
+    ) -> None:
+        model = _model(
+            tmp_path / "teacher_ep13.onnx", b"weights"
+        )
+        out = tmp_path / "sv"
+        SearchValueCollector()._check_provenance(
+            self._option(out, model)
+        )
+
+        runs = read_provenance(out)
+        assert len(runs) == 1
+        assert runs[0]["model_name"] == "teacher_ep13.onnx"
+        assert runs[0]["model_sha256"] == model_fingerprint(
+            model
+        )
+        assert (out / PROVENANCE_FILENAME).exists()
+
+    def test_records_the_band(self, tmp_path: Path) -> None:
+        model = _model(tmp_path / "t.onnx", b"w")
+        out = tmp_path / "sv"
+        SearchValueCollector()._check_provenance(
+            self._option(out, model, min_ply=60, max_ply=100)
+        )
+
+        runs = read_provenance(out)
+        assert runs[0]["min_ply"] == 60
+        assert runs[0]["max_ply"] == 100
+
+    def test_appends_a_run_per_session(
+        self, tmp_path: Path
+    ) -> None:
+        model = _model(tmp_path / "t.onnx", b"w")
+        out = tmp_path / "sv"
+        collector = SearchValueCollector()
+        for _ in range(3):
+            collector._check_provenance(
+                self._option(out, model)
+            )
+
+        assert len(read_provenance(out)) == 3
+
+    def test_same_teacher_from_another_path_is_accepted(
+        self, tmp_path: Path
+    ) -> None:
+        # Colab は VM ごとにパスが変わる．同じ中身なら継続できること
+        (tmp_path / "vm1").mkdir()
+        (tmp_path / "vm2").mkdir()
+        first = _model(tmp_path / "vm1" / "t.onnx", b"w")
+        second = _model(tmp_path / "vm2" / "t.onnx", b"w")
+        out = tmp_path / "sv"
+        collector = SearchValueCollector()
+        collector._check_provenance(self._option(out, first))
+        collector._check_provenance(self._option(out, second))
+
+        runs = read_provenance(out)
+        assert len(runs) == 2
+        assert (
+            runs[0]["model_sha256"] == runs[1]["model_sha256"]
+        )
+
+    def test_rejects_a_different_teacher(
+        self, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "sv"
+        collector = SearchValueCollector()
+        collector._check_provenance(
+            self._option(
+                out, _model(tmp_path / "old.onnx", b"old")
+            )
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="accumulated with a different model",
+        ):
+            collector._check_provenance(
+                self._option(
+                    out, _model(tmp_path / "new.onnx", b"new")
+                )
+            )
+
+    def test_mock_evaluator_records_no_digest(
+        self, tmp_path: Path
+    ) -> None:
+        out = tmp_path / "sv"
+        SearchValueCollector()._check_provenance(
+            self._option(out, None)
+        )
+
+        runs = read_provenance(out)
+        assert runs[0]["model_sha256"] is None
+        assert runs[0]["model_name"] is None

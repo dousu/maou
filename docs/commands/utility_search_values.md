@@ -25,7 +25,9 @@ policy 教師 (floodgate の実指し手) には手を触れない．局面の�
 
 ### 選定はラベルと独立
 
-絞り込みには**手数 (`--min-ply`) と重複しか使わない**．
+絞り込みには**手数 (`--min-ply` / `--max-ply`) と重複しか使わない**．
+帯は `[--min-ply, --max-ply)` で，`scripts/soften_result_value.py` と同じ
+意味論にそろえてある (下限は含み，上限は含まない)．`--max-ply` を省けば上限なし．
 「モデルが外している局面を選ぶ」は能動学習として魅力的だが，学習分布が
 モデルの誤りへ偏り較正測定の前提が壊れるので採らない．
 
@@ -114,6 +116,14 @@ maou utility search-values \
     --min-ply 60 --max-positions 1000000 --playouts 800 \
     --batch-size 64 --tensorrt --cuda --trt-cache-dir trt_cache/ --resume
 
+# 帯を切って貯める (ply 60-99)．Colab の 1 セッションぶんに区切る
+maou utility search-values \
+    --input-path hcpe_train/ \
+    --output-path search_values_ply60_99/ \
+    --model-path teacher.onnx \
+    --min-ply 60 --max-ply 100 --max-positions 900000 --playouts 800 \
+    --batch-size 64 --threads 1 --tensorrt --cuda --resume
+
 # training 側の前処理にだけ渡す
 maou pre-process --input-path hcpe_train/ --output-dir pre_train/ \
     --search-value-path search_values/
@@ -148,6 +158,7 @@ maou utility search-values --output-path search_values/ --resume ...
 | `--output-path PATH` | required | **シャードを書き出すディレクトリ**．確定シャードは `part_NNNNNNNN.feather` (`id` / `searchWinRate` / `playouts` / `stop` / `elapsedMs` / `warmupMs`)．`--flush-interval` ごとの途中結果は小さな `pending_NNNNNNNN.feather` として足され，`--shard-rows` に達した時点で 1 枚の `part_` へまとめられて消える．**累積全体を書き直さない**ので，1 回の書き込みコストが行数によらず一定になる (旧実装は書き込み量が行数の二乗で伸び，18.7M 行では合計 5.9 時間に達した)．単一ファイルを渡すと移行手順付きの**エラー**になる． |
 | `--model-path PATH` | optional | ONNX モデル．未指定なら決定論的な mock 評価器 (API 検証用．**値に意味は無い**)． |
 | `--min-ply INT` | `60` | この手数以上の局面のみ対象にする．記憶は中終盤に集中し，序盤の局面は多数の対局で共有されて教師が平均化されるので手を入れる必要が無い． |
+| `--max-ply INT` | optional | この手数**未満**の局面のみ対象にする．帯は `[--min-ply, --max-ply)`．省略すると上限なし (従来動作)．`--min-ply` 以下の値はエラーにする． |
 | `--max-positions INT` | `0` | 対象局面数の上限 (`0` で無制限)．GPU 予算に合わせる．標本抽出は `--seed` で決まりラベルに依存しない． |
 | `--seed INT` | `0` | `--max-positions` が効くときの標本抽出の乱数種． |
 | `--playouts INT` | `800` | 1 局面あたりの playout 上限． |
@@ -197,6 +208,28 @@ Searching positions:  12%|█▏  | 122093/1000000 [2:41:07<19:19:02, 12.6pos/s,
 | `stop` | `String` | 探索の停止理由 (`playout_limit` / `root_proven` など)． |
 | `elapsedMs` | `Int32` | 1 局面あたりの探索時間 (ミリ秒)．**律速の切り分け用**．0.82.0 以前の出力には無く null になる． |
 | `warmupMs` | `Int32` | 1 局面あたりの**計測区間外**コスト (ミリ秒)．root の同期評価とノードプール確保．**`elapsedMs` と足して初めて 1 局面の総コストになる**．0.96.0 以前の出力には無く null になる． |
+
+### `provenance.json` (来歴)
+
+出力ディレクトリには，シャードとは別に `provenance.json` が置かれる．
+**シャードには探索したモデルが一切残らない**ので，どの teacher が出した値かは
+ここだけが知っている．実行のたびに 1 レコードが追記される:
+
+| フィールド | 意味 |
+|---|---|
+| `started` | 実行開始時刻 (UTC) |
+| `model_name` | `--model-path` のファイル名．**VM ごとにパスは変わるので，記録として有効なのはこちら** |
+| `model_sha256` | モデルの sha256 (mock 評価器なら `null`) |
+| `model_path` | 実行時に見えていたパス (参考情報) |
+| `min_ply` / `max_ply` | その実行の帯 |
+| `max_playouts` / `time_ms` | 探索予算 |
+
+`--resume` のとき，**既存の来歴と違う sha256 のモデルを渡すとエラーで止まる**．
+1 本の蓄積を十数セッションに分けて継ぎ足す運用では，途中で別のモデルを渡しても
+気付けず教師が混ざったデータが黙ってできあがるため．teacher を変えるときは
+`--output-path` を新しいディレクトリにする．
+
+`.feather` で終わらないので，`--search-value-path` の読み手は拾わない．
 
 ## Cost (実測)
 

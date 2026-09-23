@@ -18,6 +18,7 @@ def collect_search_values(
     output_path: Path,
     model_path: Path | None = None,
     min_ply: int = 60,
+    max_ply: int | None = None,
     max_positions: int = 0,
     seed: int = 0,
     max_playouts: int = 800,
@@ -49,6 +50,8 @@ def collect_search_values(
         output_path: シャードを書き出すディレクトリ．
         model_path: ONNX モデルのパス．None なら mock 評価器．
         min_ply: この手数以上の局面のみ対象にする．
+        max_ply: この手数未満の局面のみ対象にする (None で上限なし)．
+            帯は `[min_ply, max_ply)`．
         max_positions: 対象局面数の上限 (0 で無制限)．
         seed: 上限超過時の標本抽出の乱数種．
         max_playouts: 1 局面あたりの playout 上限．
@@ -95,6 +98,7 @@ def collect_search_values(
         output_path=output_path,
         model_path=model_path,
         min_ply=min_ply,
+        max_ply=max_ply,
         max_positions=max_positions,
         seed=seed,
         max_playouts=max_playouts,
