@@ -453,6 +453,20 @@ Claude Code が先に `colab new` してしまった場合は，短時間で終�
 - [ ] 成否判定に `cmd | tail` を使わない (exit code が tail のものになる)
 - [ ] 投入前の点検手段を持つ (例: `colab_search_values_job.py --check`)．
       数十時間を投じる前に，入力・モデルの同一性・wheel の版・GPU を確かめる
+- [ ] **環境構築は §6 と `docs/design/position-search/benchmarking.md`
+      § "Colab (GPU)" の手順をそのまま踏む**．自前で書き直さない:
+      **タグ固定の `releases/tags/latest`** を引き，**`cp{major}{minor}` で
+      wheel を 1 枚に絞り** (Release には cp312 と cp313 が並ぶ — 全部を 1 回の
+      `pip install` に渡すと非互換側でコマンドごと落ちる)，用途に応じた extras
+      (`learn-model` は `[cuda]`，ONNX GPU 推論は `[tensorrt-infer]`) を付け，
+      GPU 推論なら `/etc/ld.so.conf.d/maou.conf` + `ldconfig` まで行って
+      **`libonnxruntime_providers_shared` と `libnvinfer.so.10` の解決を確認する**．
+      導入は**同期的に**行い rc を見てから次へ進む．
+      **`ldconfig` を踏み忘れても wheel の導入自体は成功するので，点検は通って
+      しまい，投入してから数十時間を失う**
+- [ ] 人間が見るモニタを持つなら，**失敗も終了として扱う**．成功側の phase
+      だけを終了条件にすると，死んだジョブを相手に待ち続ける．終了時は
+      エラー本文と `diag/` の場所を出す
 
 ---
 
