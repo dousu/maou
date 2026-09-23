@@ -519,6 +519,8 @@ def check() -> int:
     """投入前の点検．20 時間を捨てる前に前提が揃っているか確かめる．
 
     探索は起こさない．読み取りと wheel の導入だけで，各項目に PASS / FAIL を出す．
+    wheel をここで入れるのは，新しい VM には入っておらず `--max-ply` の有無を
+    確かめられないため (投入セルの立ち上がりも速くなる)．
 
     Returns:
         すべて PASS なら 0，ひとつでも落ちたら 1．
@@ -586,6 +588,15 @@ def check() -> int:
     else:
         print("[INFO] provenance: none yet (first session)")
 
+    # 新しい VM には wheel が入っていない．点検で入れておけば投入も速くなる
+    try:
+        install_wheel()
+    except Exception as exc:
+        check_item(
+            False,
+            "wheel install",
+            f"{type(exc).__name__}: {exc}",
+        )
     rc = subprocess.run(
         [
             sys.executable,
