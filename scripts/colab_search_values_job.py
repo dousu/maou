@@ -42,6 +42,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -118,6 +119,30 @@ JOB_LOG = JOB_DIR / "job.log"
 SEARCH_LOG = JOB_DIR / "search.log"
 PIDFILE = JOB_DIR / "worker.pid"
 HOLD = JOB_DIR / "KEEP_VM"
+DIAG_DIR = JOB_DIR / "diag"
+
+#: 失敗時に採る VM の状態 (docs/colab-cli-notes.md §10 の MUST)．
+#: **OOM の証拠は VM の dmesg にしか無く，unassign すると消える．**
+DIAG_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("uptime", "uptime"),
+    ("dmesg", "dmesg -T 2>&1 | tail -n 300"),
+    ("free", "free -m"),
+    ("meminfo", "cat /proc/meminfo"),
+    (
+        "cgroup_memory",
+        "cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.peak "
+        "/sys/fs/cgroup/memory.events 2>&1",
+    ),
+    ("df", "df -h"),
+    ("nvidia-smi", "nvidia-smi"),
+    ("ps", "ps aux --sort=-rss | head -n 40"),
+    (
+        "python",
+        f"{shlex.quote(sys.executable)} -m pip list 2>/dev/null "
+        "| grep -iE '^(maou|torch|onnx|polars|numpy) ' ; "
+        f"{shlex.quote(sys.executable)} -V",
+    ),
+)
 
 
 # =====================================================================
@@ -189,6 +214,30 @@ def tree_size(root: Path) -> tuple[int, int]:
         return (0, 0)
     files = [p for p in root.rglob("*") if p.is_file()]
     return len(files), sum(p.stat().st_size for p in files)
+
+
+def collect_diag() -> None:
+    """VM の状態を `diag/` に書く (docs/colab-cli-notes.md §10 の MUST)．
+
+    OOM なら証拠は `dmesg` にしかなく，VM を手放すと消える．失敗したときは
+    必ずこれを採ってから `sync_job_dir()` で Drive へ逃がす．
+    """
+    DIAG_DIR.mkdir(parents=True, exist_ok=True)
+    for name, cmd in DIAG_COMMANDS:
+        try:
+            r = subprocess.run(
+                cmd,
+                shell=True,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            text = f"$ {cmd}\n(rc={r.returncode})\n{r.stdout}{r.stderr}"
+        except (OSError, subprocess.SubprocessError) as e:
+            text = f"$ {cmd}\n({type(e).__name__}: {e})\n"
+        (DIAG_DIR / f"{name}.txt").write_text(text)
+    log(f"  diag written to {DIAG_DIR}")
 
 
 def sync_job_dir() -> bool:
@@ -319,6 +368,7 @@ def worker() -> int:
             set_status(
                 phase="failed", error=f"fetch mismatch: {rel}"
             )
+            collect_diag()
             sync_job_dir()
             return 1
         else:
@@ -346,6 +396,7 @@ def worker() -> int:
         set_status(
             phase="failed", error="teacher sha256 mismatch"
         )
+        collect_diag()
         sync_job_dir()
         return 1
     log(
@@ -414,6 +465,10 @@ def worker() -> int:
             break
     rc = proc.returncode
     log(f"  search rc={rc}")
+
+    if rc != 0:
+        # 探索が落ちた理由は VM にしか無い (OOM なら dmesg)
+        collect_diag()
 
     set_status(phase="sync")
     ok = rsync(local_out, drive_out, "shards (final)")
@@ -511,6 +566,7 @@ def main() -> int:
                 error=f"{type(exc).__name__}: {exc}",
             )
             try:
+                collect_diag()
                 sync_job_dir()
             except (
                 Exception
