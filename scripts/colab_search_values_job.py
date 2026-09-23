@@ -16,9 +16,10 @@ from google.colab import drive; drive.mount("/content/drive")
 
 ### セル B — 点検 (毎セッション，投入の前に)
 
-探索は起こさない．teacher の sha256・HCPE・既存シャード・来歴・wheel に
-`--max-ply` があるか・GPU を見て PASS / FAIL を出す．**ALL PASS でなければ
-投入しない** (20 時間を捨てないため)．
+探索は起こさない．teacher の sha256・HCPE・既存シャード・来歴・GPU を見て
+PASS / FAIL を出し，**wheel (`maou[tensorrt-infer]`) と GPU provider の
+`ldconfig` まで済ませる**ので，セル C の立ち上がりも速くなる．
+**ALL PASS でなければ投入しない** (20 時間を捨てないため)．
 
 ```python
 from google.colab import drive; drive.mount("/content/drive")
@@ -37,7 +38,8 @@ from google.colab import drive; drive.mount("/content/drive")
 
 ## 何が起きるか
 
-1. wheel を入れ，Drive から teacher / HCPE / 既存シャードをローカルへ取る
+1. wheel (`maou[tensorrt-infer]`) と GPU provider を入れ，Drive から
+   teacher / HCPE / 既存シャードをローカルへ取る
 2. 探索を **nohup の別プロセス**で起こす (このセルを止めてもジョブは死なない)
 3. このセル自身が keep-alive 兼モニタになり，5 分ごとに進捗を表示する
    — Colab のアイドル切断はセルが走っている間は起きない
@@ -59,6 +61,7 @@ from google.colab import drive; drive.mount("/content/drive")
 from __future__ import annotations
 
 import datetime as dt
+import glob
 import hashlib
 import json
 import os
@@ -299,35 +302,105 @@ def sync_job_dir() -> bool:
 # ワーカー (nohup の別プロセスで走る本体)
 # =====================================================================
 def install_wheel() -> None:
-    """Release `latest` の wheel を入れる (既に同じ版なら pip が何もしない)．"""
-    url = f"https://api.github.com/repos/{REPO}/releases/latest"
+    """Release `latest` から**実行中の Python 版に合う** wheel を入れる．
+
+    手順は `docs/colab-cli-notes.md` §6 と
+    `docs/design/position-search/benchmarking.md` § "Colab (GPU)" が正．
+
+    - タグ固定の `releases/tags/latest` を引く (`releases/latest` は
+      「最新のリリース」であって `latest` タグとは別物になり得る)
+    - **`cp{major}{minor}` で 1 枚に絞る．** Release には cp312 と cp313 が
+      並んでいるので，全部を 1 回の `pip install` に渡すと非互換の側で
+      コマンドごと落ちる (2026-09-23 に実機で発生)
+    - extras は **`tensorrt-infer`**．`search-values` は ONNX GPU 推論で，
+      素の `maou` には provider が入らない
+
+    Raises:
+        RuntimeError: 対応 wheel が無い / pip が失敗した場合．
+    """
+    url = f"https://api.github.com/repos/{REPO}/releases/tags/latest"
     with urllib.request.urlopen(url, timeout=60) as resp:
         release = json.load(resp)
-    assets = [
-        a["browser_download_url"]
-        for a in release.get("assets", [])
-        if a["name"].endswith(".whl")
-    ]
-    if not assets:
-        raise RuntimeError(
-            f"no wheel in release {release.get('tag_name')}"
-        )
-    log(
-        f"  wheel: {release.get('tag_name')} ({len(assets)} asset(s))"
+    assets = release.get("assets", [])
+    pytag = (
+        f"cp{sys.version_info.major}{sys.version_info.minor}"
     )
+    wheels = [
+        a["browser_download_url"]
+        for a in assets
+        if a["name"].endswith(".whl") and pytag in a["name"]
+    ]
+    if not wheels:
+        raise RuntimeError(
+            f"no {pytag} wheel in release {release.get('tag_name')}: "
+            f"{[a['name'] for a in assets]}"
+        )
+    log(f"  wheel: {wheels[0].rsplit('/', 1)[-1]}")
     rc = run(
         [
             sys.executable,
             "-m",
             "pip",
             "install",
-            "--upgrade",
-            *assets,
+            "-q",
+            f"maou[tensorrt-infer] @ {wheels[0]}",
         ],
         JOB_LOG,
     )
     if rc != 0:
         raise RuntimeError(f"pip install failed rc={rc}")
+    link_gpu_providers()
+
+
+def link_gpu_providers() -> None:
+    """pip 同梱の provider / TensorRT の `.so` を loader パスへ載せる．
+
+    `benchmarking.md` § "Colab (GPU)" の手順 2．これを踏まないと
+    `--tensorrt` / `--cuda` を渡しても EP が解決できない．
+
+    Raises:
+        RuntimeError: lib ディレクトリが見つからない，または `ldconfig` の
+            あとにも provider / TensorRT が解決できない場合．
+    """
+    dirs = (
+        glob.glob(
+            "/usr/local/lib/python3*/dist-packages/onnxruntime/capi"
+        )
+        + glob.glob(
+            "/usr/local/lib/python3*/dist-packages/tensorrt_libs"
+        )
+        + glob.glob(
+            "/usr/local/lib/python3*/dist-packages/nvidia/*/lib"
+        )
+    )
+    if not dirs:
+        raise RuntimeError(
+            "no onnxruntime/tensorrt lib dirs under dist-packages"
+        )
+    Path("/etc/ld.so.conf.d/maou.conf").write_text(
+        "\n".join(dirs) + "\n"
+    )
+    run(["ldconfig"], JOB_LOG)
+    listed = subprocess.run(
+        ["ldconfig", "-p"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    missing = [
+        so
+        for so in (
+            "libonnxruntime_providers_shared",
+            "libnvinfer.so.10",
+        )
+        if so not in listed
+    ]
+    if missing:
+        raise RuntimeError(
+            f"unresolved after ldconfig: {missing} "
+            f"(searched {len(dirs)} dir(s))"
+        )
+    log("  GPU providers linked (onnxruntime + TensorRT)")
 
 
 def unassign(grace_min: float) -> None:
@@ -591,10 +664,15 @@ def check() -> int:
     # 新しい VM には wheel が入っていない．点検で入れておけば投入も速くなる
     try:
         install_wheel()
+        check_item(
+            True,
+            "wheel + GPU providers",
+            "tensorrt-infer, ldconfig OK",
+        )
     except Exception as exc:
         check_item(
             False,
-            "wheel install",
+            "wheel + GPU providers",
             f"{type(exc).__name__}: {exc}",
         )
     rc = subprocess.run(
@@ -657,12 +735,19 @@ def ensure_worker() -> None:
         )
         return
     JOB_DIR.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.Popen(
-        [sys.executable, os.path.abspath(__file__), "--worker"],
-        stdout=SEARCH_LOG.open("a"),
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
+    # `with` で閉じる — セルは切断のたびに貼り直されるので，開きっぱなしに
+    # すると再接続のたびに fd が積もる (子は複製を持つので閉じて問題ない)
+    with SEARCH_LOG.open("a") as fh:
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                os.path.abspath(__file__),
+                "--worker",
+            ],
+            stdout=fh,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
     PIDFILE.write_text(str(proc.pid))
     log(f"worker started (pid {proc.pid})")
 
@@ -684,12 +769,35 @@ def monitor() -> None:
                 ).splitlines()
                 print(f"\n--- {path.name} (last {tail}) ---")
                 print("\n".join(lines[-tail:]))
-        if not worker_alive() and STATUS.exists():
-            state = json.loads(STATUS.read_text())
-            if state.get("phase") in ("done", "grace"):
+        if not worker_alive():
+            # **失敗も終了である．** `done`/`grace` だけを終了とみなすと，
+            # 落ちたワーカーを相手に永久に回り続けて人間が待たされる
+            state: dict[str, object] = {}
+            if STATUS.exists():
+                try:
+                    state = json.loads(STATUS.read_text())
+                except ValueError:
+                    state = {}
+            phase = state.get("phase")
+            if (
+                phase in ("done", "grace", "failed")
+                or not state
+            ):
                 print(
-                    "\nworker finished; this cell can be stopped."
+                    f"\nworker is not running (phase={phase or 'unknown'})."
                 )
+                if phase == "failed":
+                    print(f"error: {state.get('error')}")
+                    print(
+                        f"diag: {DIAG_DIR} "
+                        f"(Drive: {JOB_DRIVE_REL})"
+                    )
+                elif not state:
+                    print(
+                        "STATUS was never written — the worker died "
+                        f"before starting. See {SEARCH_LOG}."
+                    )
+                print("this cell can be stopped.")
                 return
         time.sleep(300)
 
