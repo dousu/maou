@@ -20,8 +20,11 @@ declare -A CLI_DOC_MAP=(
   ["selfplay.py"]="selfplay.md"
   ["analyze_game.py"]="analyze_game.md"
   ["analyze_gui.py"]="analyze_gui.md"
+  ["build_game_graph.py"]="build_game_graph.md"
+  ["search_board.py"]="search.md"
   ["fetch_floodgate.py"]="utility_fetch_floodgate.md"
   ["split_kifu.py"]="utility_split_kifu.md"
+  ["search_values.py"]="utility_search_values.md"
   # screenshot.py is a subcommand of utility group; mapped via UTILITY_DOCS
 )
 

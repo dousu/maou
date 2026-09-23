@@ -32,12 +32,15 @@ HCPE は局面のみを持ち指し手履歴を持たないため，SFEN へ復�
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import re
 import shutil
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -68,6 +71,11 @@ SEARCH_VALUE_SCHEMA: dict[str, pl.DataType] = {
     "warmupMs": pl.Int32(),
 }
 
+#: 出力ディレクトリに置く来歴ファイル．**探索値のシャードには生成した
+#: モデルが一切残らない** ので，どの teacher が出した値かはここだけが知る．
+#: `.feather` で終わらないため `_feather_paths` は拾わない．
+PROVENANCE_FILENAME: str = "provenance.json"
+
 #: 前処理が ``resultValue`` の差し替えに実際に使う列．
 #:
 #: 診断列 (``playouts`` / ``stop`` / ``elapsedMs`` / ``warmupMs``) は前処理では
@@ -91,6 +99,9 @@ class SearchValueOption:
         model_path: ONNX モデルのパス．None なら mock 評価器 (API 検証用)．
         min_ply: この手数以上の局面のみ対象にする．記憶は中終盤に集中する
             ので既定は 60．
+        max_ply: この手数**未満**の局面のみ対象にする (None で上限なし)．
+            帯は `[min_ply, max_ply)` で，`scripts/soften_result_value.py`
+            と同じ意味論にそろえてある．
         max_positions: 対象局面数の上限 (0 で無制限)．GPU 予算に合わせる．
         seed: 上限を超えたときの標本抽出の乱数種．
         max_playouts: 1 局面あたりの playout 上限．
@@ -132,6 +143,7 @@ class SearchValueOption:
     output_path: Path
     model_path: Path | None = None
     min_ply: int = 60
+    max_ply: int | None = None
     max_positions: int = 0
     seed: int = 0
     max_playouts: int = 800
@@ -389,11 +401,50 @@ def _ply_of(record_id: str) -> int:
         return -1
 
 
+def model_fingerprint(model_path: Path | None) -> str | None:
+    """モデルファイルの sha256 を返す．
+
+    Args:
+        model_path: ONNX モデルのパス．None なら mock 評価器．
+
+    Returns:
+        16 進の sha256．``model_path`` が None なら None．
+    """
+    if model_path is None:
+        return None
+    digest = hashlib.sha256()
+    with model_path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def read_provenance(
+    output_path: Path,
+) -> list[dict[str, object]]:
+    """出力ディレクトリの来歴を読む．
+
+    Args:
+        output_path: シャードのディレクトリ．
+
+    Returns:
+        実行ごとの記録のリスト (無ければ空)．
+    """
+    path = output_path / PROVENANCE_FILENAME
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8") as fh:
+        loaded = json.load(fh)
+    runs = loaded.get("runs", [])
+    return runs if isinstance(runs, list) else []
+
+
 def select_positions(
     df: pl.DataFrame,
     hashes: np.ndarray,
     *,
     min_ply: int,
+    max_ply: int | None = None,
     max_positions: int,
     seed: int,
     already_done: Sequence[int] | np.ndarray = (),
@@ -408,6 +459,7 @@ def select_positions(
         df: HCPE の DataFrame (``id`` カラムが必要)．
         hashes: 行ごとの Zobrist hash．
         min_ply: この手数以上を対象にする．
+        max_ply: この手数未満を対象にする (None で上限なし)．
         max_positions: 上限 (0 で無制限)．
         seed: 上限超過時の標本抽出の乱数種．
         already_done: 既に計算済みの hash (resume 用)．
@@ -419,6 +471,8 @@ def select_positions(
         [_ply_of(s) for s in df["id"].to_list()], dtype=np.int64
     )
     keep = ply >= min_ply
+    if max_ply is not None:
+        keep &= ply < max_ply
     if len(already_done):
         keep &= ~np.isin(hashes, np.asarray(already_done))
     rows = np.where(keep)[0]
@@ -768,6 +822,83 @@ class SearchValueCollector:
 
     logger: logging.Logger = logging.getLogger(__name__)
 
+    def _check_provenance(
+        self, option: SearchValueOption
+    ) -> str | None:
+        """teacher が前回と同じか確かめ，来歴へ今回の実行を足す．
+
+        シャードには生成したモデルが残らない．1 本の蓄積を複数セッションに
+        分けて `--resume` で継ぎ足す運用では，途中で別のモデルを渡しても
+        気付けず，**教師が混ざったデータが黙ってできあがる**．実際に過去の
+        蓄積分が「どの teacher か分からない」という理由で再利用できなく
+        なっている．同一性は sha256 で見る — VM ごとにパスが変わるので
+        パスでは判定できず，記録として有効なのはファイル名の方である．
+
+        Args:
+            option: 実行オプション．
+
+        Returns:
+            今回のモデルの sha256 (mock 評価器なら None)．
+
+        Raises:
+            ValueError: 既存の来歴と別のモデルで `resume` した場合．
+        """
+        fingerprint = model_fingerprint(option.model_path)
+        name = (
+            option.model_path.name
+            if option.model_path is not None
+            else None
+        )
+        runs = read_provenance(option.output_path)
+        earlier = [
+            r for r in runs if r.get("model_sha256") is not None
+        ]
+        if earlier:
+            known = earlier[-1]
+            if fingerprint != known["model_sha256"]:
+                raise ValueError(
+                    "this output directory was accumulated with a "
+                    f"different model ({known.get('model_name')}, sha256 "
+                    f"{str(known['model_sha256'])[:16]}...), but "
+                    f"--model-path is now {name or 'the mock evaluator'} "
+                    f"(sha256 {(fingerprint or 'mock')[:16]}...). Mixing "
+                    "teachers in one accumulation makes the values "
+                    "unusable as a single teacher signal; point "
+                    "--output-path at a new directory instead."
+                )
+        runs.append(
+            {
+                "started": datetime.now(UTC)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z"),
+                "model_name": name,
+                "model_sha256": fingerprint,
+                "model_path": str(option.model_path)
+                if option.model_path is not None
+                else None,
+                "min_ply": option.min_ply,
+                "max_ply": option.max_ply,
+                "max_playouts": option.max_playouts,
+                "time_ms": option.time_ms,
+            }
+        )
+        option.output_path.mkdir(parents=True, exist_ok=True)
+        path = option.output_path / PROVENANCE_FILENAME
+        tmp = path.with_name(path.name + ".tmp")
+        with tmp.open("w", encoding="utf-8") as fh:
+            json.dump(
+                {"runs": runs}, fh, ensure_ascii=False, indent=2
+            )
+        os.replace(tmp, path)
+        self.logger.info(
+            "Provenance: teacher=%s sha256=%s (run %d, %s)",
+            name or "mock",
+            (fingerprint or "mock")[:16],
+            len(runs),
+            path,
+        )
+        return fingerprint
+
     def _load_done(
         self, option: SearchValueOption
     ) -> pl.DataFrame:
@@ -863,6 +994,7 @@ class SearchValueCollector:
                 df,
                 hashes,
                 min_ply=option.min_ply,
+                max_ply=option.max_ply,
                 max_positions=0,
                 seed=option.seed,
                 already_done=done_ids,
@@ -933,9 +1065,21 @@ class SearchValueCollector:
 
         Raises:
             ValueError: `resume` と `overwrite` を同時に指定した場合，
-                または出力が既にあるのにどちらも指定されていない場合．
+                出力が既にあるのにどちらも指定されていない場合，
+                `max_ply` が `min_ply` 以下の場合，または既存の来歴と
+                別のモデルで `resume` しようとした場合．
         """
         from maou._rust.maou_search import SearchEngine
+
+        if (
+            option.max_ply is not None
+            and option.max_ply <= option.min_ply
+        ):
+            raise ValueError(
+                f"--max-ply ({option.max_ply}) must be greater than "
+                f"--min-ply ({option.min_ply}); the band is "
+                "[min_ply, max_ply)."
+            )
 
         if option.output_path.is_file():
             # 旧形式 (単一ファイル) を黙ってディレクトリ扱いすると，既存の
@@ -982,6 +1126,8 @@ class SearchValueCollector:
                 option.output_path,
             )
             shutil.rmtree(option.output_path)
+
+        self._check_provenance(option)
 
         done = self._load_done(option)
         selected = self._scan_targets(option, done)

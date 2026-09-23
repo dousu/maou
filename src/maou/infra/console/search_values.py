@@ -46,6 +46,14 @@ from maou.infra.console.common import handle_exception
     "many games so their targets are already averaged.",
 )
 @click.option(
+    "--max-ply",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Only search positions before this ply (exclusive). The band is "
+    "[--min-ply, --max-ply); omit it for no upper bound. Matches the "
+    "semantics of scripts/soften_result_value.py.",
+)
+@click.option(
     "--max-positions",
     type=click.IntRange(min=0),
     default=0,
@@ -223,6 +231,7 @@ def search_values(
     output_path: Path,
     model_path: Path | None,
     min_ply: int,
+    max_ply: int | None,
     max_positions: int,
     seed: int,
     playouts: int,
@@ -270,6 +279,7 @@ def search_values(
         output_path=output_path,
         model_path=model_path,
         min_ply=min_ply,
+        max_ply=max_ply,
         max_positions=max_positions,
         seed=seed,
         max_playouts=playouts,
