@@ -140,6 +140,8 @@ PIP_RETRIES = 10
 #: `pip install` を丸ごとやり直す回数．落としきったパッケージは pip の
 #: キャッシュに残るので，やり直すたびに残りだけを取りに行く．
 PIP_ATTEMPTS = 3
+#: Drive から既存シャードを取り直す回数．揃わなければ探索に入らない．
+FETCH_ATTEMPTS = 3
 
 #: 探索の設定．決着済みなので変えない (docs/performance.md)．
 PLAYOUTS = 800
@@ -260,6 +262,35 @@ def tree_size(root: Path) -> tuple[int, int]:
         return (0, 0)
     files = [p for p in root.rglob("*") if p.is_file()]
     return len(files), sum(p.stat().st_size for p in files)
+
+
+def missing_from(src: Path, dst: Path) -> list[str]:
+    """`src` のファイルのうち，`dst` に同じサイズで揃っていないものを返す．
+
+    `dst` 側にだけあるファイルは問わない (まだ Drive へ上げていない新しい
+    シャードがあり得るため)．
+
+    Args:
+        src: 基準のディレクトリ (Drive 側)．
+        dst: 揃っているべきディレクトリ (ローカル側)．
+
+    Returns:
+        欠けている / サイズが違うファイルの `src` からの相対パス．
+    """
+    if not src.exists():
+        return []
+    missing = []
+    for p in sorted(src.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(src)
+        q = dst / rel
+        if (
+            not q.is_file()
+            or q.stat().st_size != p.stat().st_size
+        ):
+            missing.append(str(rel))
+    return missing
 
 
 def parse_search_summary() -> dict[str, str] | None:
@@ -565,13 +596,44 @@ def worker() -> int:
         else:
             log(f"  fetched {rel}")
 
-    # 既存シャードは --delete なしで取る (ローカルの方が新しいことはない)
+    # 既存シャードは --delete なしで取る．同じ VM でワーカーを起こし直した
+    # ときは，まだ Drive へ上げていない新しいシャードがローカルにある．
+    # **取り終えたことを確かめてから探索に入る．** 書き戻しは `--delete` なので，
+    # 欠けたまま進むと取り損ねたシャードを Drive からも消す．連番も
+    # ローカルの最大値の次から振るので，欠けた番号で Drive 上の別の中身を
+    # 上書きしうる．
     local_out.mkdir(parents=True, exist_ok=True)
-    if drive_out.exists():
-        run(
+    missing: list[str] = []
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        if not drive_out.exists():
+            break
+        rc = run(
             ["rsync", "-a", f"{drive_out}/", f"{local_out}/"],
             JOB_LOG,
         )
+        missing = missing_from(drive_out, local_out)
+        if rc == 0 and not missing:
+            break
+        log(
+            f"  shard fetch incomplete rc={rc} missing={len(missing)} "
+            f"(attempt {attempt}/{FETCH_ATTEMPTS}) e.g. {missing[:3]}"
+        )
+        missing = missing or [f"rsync rc={rc}"]
+        if attempt < FETCH_ATTEMPTS:
+            time.sleep(30)
+    if missing:
+        log(
+            f"FATAL shard fetch incomplete: {len(missing)} file(s); "
+            "not searching (the --delete sync-back would drop them "
+            "from Drive)"
+        )
+        set_status(
+            phase="failed",
+            error=f"shard fetch incomplete: {len(missing)} file(s)",
+        )
+        collect_diag()
+        sync_job_dir()
+        return 1
     n, b = tree_size(local_out)
     log(f"  existing shards: {n} files/{b} B")
 
