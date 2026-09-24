@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import ast
 import datetime as dt
+import fcntl
 import glob
 import hashlib
 import json
@@ -105,7 +106,7 @@ HCPE_REL = "hcpe/hcpe_20260805/train"
 #:
 #: **この値はセッションをまたいで固定する．** 日付を実行時に生成すると
 #: セッションごとに別のディレクトリができ，`--resume` が前回のシャードを
-#: 見つけられず 13 回ぶんの探索がすべてやり直しになる．
+#: 見つけられず全セッションぶんの探索がすべてやり直しになる．
 OUT_REL = "search_values/search_values_20260923"
 #: ジョブの記録 (STATUS / ログ) の Drive 退避先．docs/colab-cli-notes.md §7.4 の
 #: `maou_test/jobs/` に置く．**unassign すると VM 上の記録は消える**ので，
@@ -116,13 +117,29 @@ JOB_DRIVE_REL = "maou_test/jobs/search_values_20260923"
 MIN_PLY = 60
 MAX_PLY = 100
 
-#: 1 セッションで探索する局面数．実測 45,800 局面/時 (L4) から
-#: 20 時間ぶんに取ってある (24h 壁に対して同期と unassign の余裕を残す)．
-POSITIONS_PER_SESSION = 900_000
-#: これを過ぎたら探索を畳んで最終同期に入る．
+#: 1 セッションで探索する局面数．**`SESSION_HOURS` の内に終わる数にする．**
+#: 予算切れで畳むと SIGTERM で要約が出ず，flush 前の局面も捨てるうえ，
+#: 「残りが尽きたか」を `searched < 上限` で判定できなくなる．
+#: 2026-09-24 の実測 10.7 局面/秒 (L4，≈ 38,500 局面/時) で 700k ≈ 18.2 時間．
+#: 残る ≈ 1.8 時間は起動 (対象の走査と TensorRT エンジン構築) と速度の揺れの吸収分．
+#: 900k (45,800 局面/時からの外挿) は 1 セッション目で予算切れになった．
+#: **スループットの実測が変わったらここを直す．**
+POSITIONS_PER_SESSION = 700_000
+#: これを過ぎたら探索を畳んで最終同期に入る (24h 壁に対して同期と
+#: unassign の余裕を残す)．上の局面数が収まらなかったときの保険．
 SESSION_HOURS = 20.0
 #: 最終同期のあと VM を手放すまでの猶予 (分)．
 UNASSIGN_GRACE_MIN = 30.0
+
+#: pip の受信待ち (秒)．既定の 15 秒では Colab から PyPI への転送が一瞬
+#: 止まっただけで `ReadTimeoutError` になる (2026-09-24 に実機で発生)．
+PIP_TIMEOUT_S = 60
+#: pip 自身の接続再試行回数．**転送途中の停止には効かない**ので
+#: `PIP_ATTEMPTS` で外からもやり直す．
+PIP_RETRIES = 10
+#: `pip install` を丸ごとやり直す回数．落としきったパッケージは pip の
+#: キャッシュに残るので，やり直すたびに残りだけを取りに行く．
+PIP_ATTEMPTS = 3
 
 #: 探索の設定．決着済みなので変えない (docs/performance.md)．
 PLAYOUTS = 800
@@ -142,6 +159,11 @@ STATUS = JOB_DIR / "STATUS"
 JOB_LOG = JOB_DIR / "job.log"
 SEARCH_LOG = JOB_DIR / "search.log"
 PIDFILE = JOB_DIR / "worker.pid"
+#: `install_wheel()` の排他ロック．点検 (セル B) とワーカー (セル C) が同時に
+#: pip を走らせると同じ `dist-packages` に 2 本が書き込み，片方の `ldconfig`
+#: が書きかけの `.so` を読む (2026-09-24 に `is truncated` を観測)．
+#: JOB_DIR は Drive へ退避するので，ロックはその外に置く．
+PIP_LOCK = WORK / "pip.lock"
 HOLD = JOB_DIR / "KEEP_VM"
 DIAG_DIR = JOB_DIR / "diag"
 
@@ -389,20 +411,43 @@ def install_wheel() -> None:
             f"{[a['name'] for a in assets]}"
         )
     log(f"  wheel: {wheels[0].rsplit('/', 1)[-1]}")
-    rc = run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "-q",
-            f"maou[tensorrt-infer] @ {wheels[0]}",
-        ],
-        JOB_LOG,
-    )
-    if rc != 0:
-        raise RuntimeError(f"pip install failed rc={rc}")
-    link_gpu_providers()
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "-q",
+        "--timeout",
+        str(PIP_TIMEOUT_S),
+        "--retries",
+        str(PIP_RETRIES),
+        f"maou[tensorrt-infer] @ {wheels[0]}",
+    ]
+    WORK.mkdir(parents=True, exist_ok=True)
+    with PIP_LOCK.open("w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log(
+                "  another pip install is running; waiting for it"
+            )
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        for attempt in range(1, PIP_ATTEMPTS + 1):
+            rc = run(cmd, JOB_LOG)
+            if rc == 0:
+                break
+            if attempt < PIP_ATTEMPTS:
+                log(
+                    f"  pip install failed rc={rc} "
+                    f"(attempt {attempt}/{PIP_ATTEMPTS}); retrying"
+                )
+                time.sleep(30)
+        else:
+            raise RuntimeError(
+                f"pip install failed rc={rc} after {PIP_ATTEMPTS} attempts"
+            )
+        # ldconfig もロックの内側で行う (別の pip が書きかけの .so を読まない)
+        link_gpu_providers()
 
 
 def link_gpu_providers() -> None:
