@@ -1,6 +1,6 @@
 ---
-status: approved         # pending | approved | applied | rejected
-applied_in:
+status: applied          # pending | approved | applied | rejected
+applied_in: b3dc14f8
 date: 2026-09-24
 target: [docs/colab-cli-notes.md]
 risk: low
