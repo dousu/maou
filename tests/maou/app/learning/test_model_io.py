@@ -10,6 +10,12 @@ import torch
 from maou.app.learning.model_io import ModelIO
 from maou.app.learning.setup import ModelFactory
 
+# 手組みの ONNX モデルに付ける opset．``helper.make_model`` の既定は
+# インストール済み onnx が知る最新 opset (onnx 1.22 では 27) になり，
+# onnxruntime が公式対応する範囲 (1.24 では 25 まで) を超えると読み込みを
+# 拒否される．本番の export (``ModelIO`` の ``opset_version=20``) に揃える．
+_ONNX_OPSET = 20
+
 
 def test_format_parameter_count_millions() -> None:
     """Test parameter count formatting for millions."""
@@ -350,7 +356,12 @@ class TestDedupeIdenticalNodes:
                 )
             ],
         )
-        return helper.make_model(graph)
+        return helper.make_model(
+            graph,
+            opset_imports=[
+                helper.make_opsetid("", _ONNX_OPSET)
+            ],
+        )
 
     def test_removes_exact_duplicate(self) -> None:
         from maou.app.learning.model_io import (
@@ -451,6 +462,12 @@ class TestAssertOnnxLoadable:
             ],
         )
         good = tmp_path / "good.onnx"
-        onnx.save(helper.make_model(graph), good)
+        model = helper.make_model(
+            graph,
+            opset_imports=[
+                helper.make_opsetid("", _ONNX_OPSET)
+            ],
+        )
+        onnx.save(model, good)
 
         _assert_onnx_loadable(good)  # 例外が出なければ成功
