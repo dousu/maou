@@ -31,7 +31,7 @@ If validation fails, address issues before proceeding.
 
 ### 2. Analyze Changes Comprehensively
 
-**CRITICAL**: Thoroughly analyze the branch to understand all changes:
+Read every commit and the full diff against the base branch before writing the description:
 
 ```bash
 # Get base branch (usually main)
@@ -129,8 +129,6 @@ Guide reviewers on what to focus on:
 - [ ] Architecture compliance verified
 - [ ] Docstrings added/updated
 - [ ] CLAUDE.md updated if needed
-- [ ] Commits carry the `Co-Authored-By` trailer
-- [ ] PR body ends with the Claude Code footer
 ```
 
 ### 4. Create Pull Request
@@ -386,10 +384,6 @@ bundle_000.meta.json  # Metadata: {"array_id": {"offset": 0, "shape": [...]}}
 - [x] Architecture compliance verified
 - [x] Docstrings added (all public APIs)
 - [x] CLAUDE.md updated (array bundling section added)
-- [x] Commits carry the `Co-Authored-By` trailer
-- [x] PR body ends with the Claude Code footer
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```
@@ -430,29 +424,12 @@ These will cause PR rejection:
 ❌ **No testing information** - Document all testing performed
 ❌ **Incomplete checklists** - Verify all items before submission
 
-## Attribution (required)
+## Attribution
 
-This repository **does** attribute agent-assisted work. Both of the
-following are the established convention — verify against `git log` /
-`gh pr view` before assuming otherwise:
-
-✅ **Commits end with the trailer**:
-
-```
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
-```
-
-✅ **PR bodies end with the footer**:
-
-```
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-```
-
-An earlier revision of this skill prohibited both. That was wrong: it
-contradicted the repository's own history (17 of the 20 commits on `main`
-preceding 2026-07-29 carry the trailer, and every recent PR body carries
-the footer), and following it produced PRs inconsistent with the rest of
-the project. Corrected 2026-07-29.
+Do not attribute the work to an agent or AI tool: no `Co-Authored-By`
+trailer in commits and no "Generated with" footer in PR bodies. Who or
+what wrote a change is not part of the change (`docs/git-workflow.md`
+§ Strict Prohibitions).
 
 ## Integration with Project Standards
 
@@ -463,7 +440,7 @@ Verify your changes respect dependency flow:
 infra → interface → app → domain
 ```
 
-Reference: CLAUDE.md lines 52-60
+Reference: CLAUDE.md § Critical Rules → Architecture
 
 ### Type Safety
 
@@ -473,15 +450,15 @@ def process_bundle(arrays: list[np.ndarray], size_gb: float) -> Path:
     ...
 ```
 
-Reference: CLAUDE.md lines 33-35
+Reference: CLAUDE.md § Critical Rules → Code Quality
 
 ### Japanese Documentation
 
 Use correct punctuation in Japanese text:
-- 句点: ，（全角コンマ）
-- 読点: ．（全角ピリオド）
+- 読点: ，(全角コンマ)
+- 句点: ．(全角ピリオド)
 
-Reference: CLAUDE.md lines 382-405
+Reference: CLAUDE.md § Japanese Writing Rules
 
 ## Troubleshooting
 

@@ -1,5 +1,5 @@
 ---
-description: Audit one path (source module, Rust crate, or doc tree) for correctness bugs, simplification opportunities, cross-module inconsistency (the same shape implemented differently elsewhere, and cross-CLI data-pipeline edges), and documentation drift — then APPLY the code fixes, bump the version, and commit. Documentation drift is never edited silently: it is filed as a reviews/ proposal and reconciled with the user in the same run, then applied on approval. Records coverage in audits/ so a path can be resumed across sessions.
+description: Audit one path (module, Rust crate, or doc tree) for bugs, simplifications, cross-module inconsistency, and doc drift; apply and commit the code fixes, file doc drift as reviews/ proposals, and record coverage in audits/ so the next session can resume.
 argument-hint: [path-or-crate | omit to resume from the audits/ ledger] [effort-level: low|medium|high|max, default medium]
 ---
 

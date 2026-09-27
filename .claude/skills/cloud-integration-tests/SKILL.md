@@ -47,13 +47,13 @@ Execute GCP-specific tests:
 
 ```bash
 # Run all GCP integration tests
-TEST_GCP=true uv run pytest tests/integrations/gcs/
+TEST_GCP=true uv run pytest tests/maou/integrations/gcs/
 
 # Run with verbose output
-TEST_GCP=true uv run pytest tests/integrations/gcs/ -v
+TEST_GCP=true uv run pytest tests/maou/integrations/gcs/ -v
 
 # Run specific test
-TEST_GCP=true uv run pytest tests/integrations/gcs/test_gcs_client.py::test_upload -v
+TEST_GCP=true uv run pytest tests/maou/integrations/gcs/test_gcs_client.py::test_upload -v
 ```
 
 Tests validate:
@@ -71,13 +71,13 @@ Execute AWS-specific tests:
 
 ```bash
 # Run all AWS integration tests
-TEST_AWS=true uv run pytest tests/integrations/s3/
+TEST_AWS=true uv run pytest tests/maou/integrations/s3/
 
 # Run with verbose output
-TEST_AWS=true uv run pytest tests/integrations/s3/ -v
+TEST_AWS=true uv run pytest tests/maou/integrations/s3/ -v
 
 # Run specific test
-TEST_AWS=true uv run pytest tests/integrations/s3/test_s3_client.py::test_upload -v
+TEST_AWS=true uv run pytest tests/maou/integrations/s3/test_s3_client.py::test_upload -v
 ```
 
 Tests validate:
@@ -94,10 +94,10 @@ Test both providers simultaneously:
 
 ```bash
 # Run all cloud integration tests
-TEST_GCP=true TEST_AWS=true uv run pytest tests/integrations/
+TEST_GCP=true TEST_AWS=true uv run pytest tests/maou/integrations/
 
 # Focus on specific functionality
-TEST_GCP=true TEST_AWS=true uv run pytest tests/integrations/ -k "upload"
+TEST_GCP=true TEST_AWS=true uv run pytest tests/maou/integrations/ -k "upload"
 ```
 
 ## Cloud Storage Operations
@@ -110,7 +110,7 @@ uv run maou hcpe-convert \
   --input-format csa \
   --output-s3 \
   --bucket-name my-bucket \
-  --max-workers 8
+  --output-max-workers 8
 ```
 
 Benefits:
@@ -126,7 +126,7 @@ uv run maou hcpe-convert \
   --input-format csa \
   --output-gcs \
   --bucket-name my-bucket \
-  --max-workers 8
+  --output-max-workers 8
 ```
 
 ### S3 Download with Caching
@@ -136,7 +136,7 @@ uv run maou pre-process \
   --input-s3 \
   --input-bucket-name my-bucket \
   --input-local-cache-dir ./cache \
-  --max-workers 16
+  --output-max-workers 16
 ```
 
 Features:
@@ -151,7 +151,7 @@ uv run maou pre-process \
   --input-gcs \
   --input-bucket-name my-bucket \
   --input-local-cache-dir ./cache \
-  --max-workers 16
+  --output-max-workers 16
 ```
 
 ### Array Bundling (removed)
@@ -181,7 +181,7 @@ Before running tests, verify:
 export MAOU_LOG_LEVEL=DEBUG
 
 # Run tests with verbose output
-TEST_GCP=true uv run pytest tests/integrations/gcs/ -v -s
+TEST_GCP=true uv run pytest tests/maou/integrations/gcs/ -v -s
 
 # Or use CLI flag
 uv run maou --debug-mode pre-process \

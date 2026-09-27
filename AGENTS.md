@@ -2,8 +2,7 @@
 
 Guidance for OpenAI Codex agents working in this repository.
 
-> **For Codex agents:** Follow `.codex/config.yaml`, `.codex/AGENT_GUIDE.md`,
-> and `.codex/COMMANDS.md`.
+> **For Codex agents:** Follow `.codex/AGENT_GUIDE.md` and `.codex/COMMANDS.md`.
 > All shell commands **must** use `uv run`.
 
 ## CLAUDE.md is the source of truth
@@ -24,9 +23,7 @@ rules for every agent working here, not only Claude Code:
 - 日本語記述規則 — 読点 `，` / 句点 `．` / 半角括弧 `()`
 - Quick reference commands and the documentation index
 
-This file previously restated those rules in its own words. That produced
-drift — including a 日本語記述規則 section that had 読点 and 句点 swapped
-relative to CLAUDE.md. Shared rules now live in exactly one place. To
+Shared rules live only in CLAUDE.md, so that copies cannot drift. To
 change one, edit `CLAUDE.md` through the `reviews/*.md` approval process
 described there; do not add a local override here.
 
@@ -40,20 +37,12 @@ CLAUDE.md.
 - Create a dedicated feature branch for your work and open a Pull Request
   for every change.
 
-## Attribution (required)
+## Attribution
 
-This repository **does** attribute agent-assisted work. Verify against
-`git log` / `gh pr view` rather than assuming:
-
-- ✅ Commits end with `Co-Authored-By: <model> <noreply@anthropic.com>`
-- ✅ PR bodies end with
-  `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
-
-An earlier revision prohibited both. That contradicted the repository's own
-history (17 of the 20 commits on `main` preceding 2026-07-29 carry the
-trailer, and every recent PR body carries the footer), so following it
-produced work inconsistent with the rest of the project.
-Corrected 2026-07-29 (`reviews/2026-07-29-csa-floodgate-client.md`).
+Do not attribute work to an agent or AI tool. Who or what wrote a change
+is not part of the change, so commits carry no `Co-Authored-By` trailer
+and PR bodies carry no "Generated with" footer
+(`docs/git-workflow.md` § Strict Prohibitions).
 
 ## Quick start
 

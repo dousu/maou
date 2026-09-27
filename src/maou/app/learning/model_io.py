@@ -75,6 +75,44 @@ def _assert_onnx_loadable(onnx_path: Path) -> None:
         ) from exc
 
 
+# 出力した ONNX を実際に読む最古の onnxruntime が受け付ける opset の上限．
+# 本番の Rust エンジン (maou_search) は ort crate 経由で onnxruntime 1.22 を
+# 静的リンクしており (pyproject.toml の onnxruntime-gpu==1.22.* 固定と同じ理由)，
+# 1.22 が読めるのは opset 22 まで．Python 側の onnxruntime (1.24 は 25 まで)
+# を基準にすると，``_assert_onnx_loadable`` は通るのにエンジンで読めない
+# モデルが出荷される．
+_ONNX_RUNTIME_MAX_OPSET = 22
+
+
+def _torch_exporter_max_opset() -> int:
+    """TorchScript エクスポーター (``dynamo=False``) が生成できる最大 opset．
+
+    PyTorch は公開 API でこの値を出していないため ``torch.onnx._constants``
+    から読む．名前が無い PyTorch では，TorchScript エクスポーターが
+    長く上限としてきた 20 を返す．
+    """
+    from torch.onnx import _constants
+
+    return int(
+        getattr(
+            _constants,
+            "ONNX_TORCHSCRIPT_EXPORTER_MAX_OPSET",
+            20,
+        )
+    )
+
+
+def _export_opset() -> int:
+    """ONNX 出力に使う opset を返す．
+
+    エクスポーターが生成できる上限と，本番 runtime が読める上限の
+    うち小さい方．どちらの上限も超えない範囲で最も新しい opset になる．
+    """
+    return min(
+        _torch_exporter_max_opset(), _ONNX_RUNTIME_MAX_OPSET
+    )
+
+
 class ModelIO:
     @staticmethod
     def _strip_orig_mod_prefix(
@@ -533,7 +571,7 @@ class ModelIO:
             export_params=True,
             input_names=["board", "hand"],
             output_names=["policy", "value"],
-            opset_version=20,
+            opset_version=_export_opset(),
             dynamic_axes={
                 "board": {0: "batch_size"},
                 "hand": {0: "batch_size"},

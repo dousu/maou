@@ -79,15 +79,15 @@ All data I/O must use domain layer schemas:
 
 ```python
 from maou.domain.data.schema import get_hcpe_dtype, get_preprocessing_dtype
-from maou.domain.data.io import save_hcpe_array, load_hcpe_array
+from maou.domain.data.rust_io import save_hcpe_df, load_hcpe_df
 
 # Get standardized data types
 hcpe_dtype = get_hcpe_dtype()
 preprocessing_dtype = get_preprocessing_dtype()
 
-# High-performance I/O with validation
-save_hcpe_array(array, "output.hcpe.npy", validate=True)
-loaded_array = load_hcpe_array("input.hcpe.npy", validate=True)
+# Arrow IPC (.feather, LZ4) I/O through the Rust backend
+save_hcpe_df(df, "output.feather")
+loaded_df = load_hcpe_df("input.feather")
 ```
 
 ### HCPE Format
@@ -221,18 +221,6 @@ datasource = FileDataSource(
 )
 ```
 
-### Detect Type Mismatches
-
-```bash
-# Check file extensions vs array_type usage
-find src/maou -name "*.py" -exec grep -H "\.hcpe\.npy" {} \; | while read line; do
-    file=$(echo "$line" | cut -d: -f1)
-    if grep -q 'array_type="preprocessing"' "$file"; then
-        echo "WARNING: $file uses .hcpe.npy but specifies preprocessing type"
-    fi
-done
-```
-
 ## Storage Configuration Validation
 
 ### S3 Configuration
@@ -335,7 +323,7 @@ uv run maou pre-process \
 
 ```bash
 uv run maou learn-model \
-  --input-dir /path/to/processed \
+  --stage3-data-path /path/to/processed \
   --gpu cuda:0
 ```
 
@@ -476,7 +464,7 @@ Status: ✓ DATA PIPELINE VALIDATED
 
 ## References
 
-- **CLAUDE.md**: Data I/O architecture (lines 244-276)
-- **AGENTS.md**: Data pipeline configuration (lines 133-158)
+- **CLAUDE.md**: § Data Pipeline
+- `docs/design/data-pipeline/index.md`: CLI 間データパイプライン
 - `src/maou/domain/data/schema.py`: Schema definitions
-- `src/maou/domain/data/io.py`: I/O functions
+- `src/maou/domain/data/rust_io.py`: I/O functions
