@@ -1,6 +1,6 @@
 ---
-status: pending          # pending | approved | applied | rejected
-applied_in:
+status: applied          # pending | approved | applied | rejected
+applied_in: 97d4c64
 date: 2026-09-27
 target: [CLAUDE.md, docs/git-workflow.md]
 risk: low
@@ -44,3 +44,11 @@ Claude Code のサブエージェント起動ツールは現在 `Agent` とい�
 
 どちらも指示ファイルだけの変更で，コードやテストには影響しない．
 変更 2 が未解決のままだと，どちらのスキルを読み込んだかでエージェントの挙動が変わる．
+
+## 決定
+
+2026-09-27 にユーザが変更 1 を承認し，変更 2 は (b) 帰属を記載しない方向に決定した．
+理由: コミット等のコード変更の本質に帰属は関係ない．`gh-pr` と `AGENTS.md` の
+Attribution 節，`gh-pr` のチェックリストと例，`checkpoint-context` のトレーラー指示を
+書き換えた．`docs/git-workflow.md` と `pr-preparation-checks` はすでに禁止しているため
+変更していない．
