@@ -7,14 +7,19 @@ from typing import Any
 import pytest
 import torch
 
-from maou.app.learning.model_io import ModelIO
+from maou.app.learning.model_io import (
+    _ONNX_RUNTIME_MAX_OPSET,
+    ModelIO,
+    _export_opset,
+    _torch_exporter_max_opset,
+)
 from maou.app.learning.setup import ModelFactory
 
 # 手組みの ONNX モデルに付ける opset．``helper.make_model`` の既定は
 # インストール済み onnx が知る最新 opset (onnx 1.22 では 27) になり，
 # onnxruntime が公式対応する範囲 (1.24 では 25 まで) を超えると読み込みを
-# 拒否される．本番の export (``ModelIO`` の ``opset_version=20``) に揃える．
-_ONNX_OPSET = 20
+# 拒否される．本番の export と同じ opset に揃える．
+_ONNX_OPSET = _export_opset()
 
 
 def test_format_parameter_count_millions() -> None:
@@ -471,3 +476,67 @@ class TestAssertOnnxLoadable:
         onnx.save(model, good)
 
         _assert_onnx_loadable(good)  # 例外が出なければ成功
+
+
+class TestExportOpset:
+    """ONNX 出力の opset が生成側・読み込み側の上限を超えないこと．"""
+
+    def test_within_both_limits(self) -> None:
+        opset = _export_opset()
+        assert opset <= _torch_exporter_max_opset()
+        assert opset <= _ONNX_RUNTIME_MAX_OPSET
+
+    def test_follows_lower_torch_limit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from torch.onnx import _constants
+
+        monkeypatch.setattr(
+            _constants,
+            "ONNX_TORCHSCRIPT_EXPORTER_MAX_OPSET",
+            18,
+            raising=False,
+        )
+        assert _export_opset() == 18
+
+    def test_capped_by_runtime_limit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from torch.onnx import _constants
+
+        monkeypatch.setattr(
+            _constants,
+            "ONNX_TORCHSCRIPT_EXPORTER_MAX_OPSET",
+            _ONNX_RUNTIME_MAX_OPSET + 5,
+            raising=False,
+        )
+        assert _export_opset() == _ONNX_RUNTIME_MAX_OPSET
+
+    def test_exported_model_uses_export_opset(
+        self, tmp_path: Path
+    ) -> None:
+        import onnx
+
+        model = ModelFactory.create_shogi_model(
+            torch.device("cpu"), architecture="resnet"
+        )
+        ModelIO.save_model(
+            trained_model=model,
+            dir=tmp_path,
+            id="t",
+            epoch=0,
+            device=torch.device("cpu"),
+            architecture="resnet",
+        )
+        (onnx_path,) = [
+            p
+            for p in tmp_path.glob("*.onnx")
+            if not p.stem.endswith("_fp16")
+        ]
+        exported = onnx.load(str(onnx_path))
+        default_domain = [
+            o.version
+            for o in exported.opset_import
+            if o.domain in ("", "ai.onnx")
+        ]
+        assert default_domain == [_export_opset()]
