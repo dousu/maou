@@ -166,7 +166,7 @@ c. On **approve**:
      step 8 reconciles the proposals its own run files. What the rule
      forbids is a durable-doc edit with *no* approved proposal behind it.)
    - Run pre-commit (never `--no-verify`) and commit the durable-doc edit:
-     `docs: <proposal title>` + trailers. Note the resulting short SHA.
+     `docs: <proposal title>`. Note the resulting short SHA.
    - Update the proposal frontmatter — single `Edit` per file:
      ```
      status: applied
@@ -202,8 +202,7 @@ proposal or step 5 changed any `status:` (`applied` / `rejected` /
 
 - Stage ONLY `reviews/` (doc-only; never bundle `src/`/`rust/` code — those
   commit separately under the versioning rules).
-- `git commit` with `docs(reviews): reconcile statuses (<one-line summary>)`
-  and the required trailers. Run pre-commit; **never** `--no-verify`.
+- `git commit` with `docs(reviews): reconcile statuses (<one-line summary>)`. Run pre-commit; **never** `--no-verify`.
 - A `pending → applied` transition is committed together with (or right
   after) the user's own durable-doc commit; record that doc commit's SHA in
   `applied_in` and commit the frontmatter update.

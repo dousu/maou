@@ -169,7 +169,7 @@ Full spec: [docs/memory-architecture.md](docs/memory-architecture.md).
 
 ## Code Exploration Policy (MUST)
 
-コードベースの調査・探索には，MUST use `Task` tool with `subagent_type=Explore`.
+コードベースの調査・探索には，MUST use the `Agent` tool with `subagent_type=Explore`.
 
 ### Covered Operations
 - ファイル検索（Glob/Grep）を複数回行う調査

@@ -37,14 +37,12 @@ CLAUDE.md.
 - Create a dedicated feature branch for your work and open a Pull Request
   for every change.
 
-## Attribution (required)
+## Attribution
 
-This repository **does** attribute agent-assisted work. Verify against
-`git log` / `gh pr view` rather than assuming:
-
-- ✅ Commits end with `Co-Authored-By: <model> <noreply@anthropic.com>`
-- ✅ PR bodies end with
-  `🤖 Generated with [Claude Code](https://claude.com/claude-code)`
+Do not attribute work to an agent or AI tool. Who or what wrote a change
+is not part of the change, so commits carry no `Co-Authored-By` trailer
+and PR bodies carry no "Generated with" footer
+(`docs/git-workflow.md` § Strict Prohibitions).
 
 ## Quick start
 
