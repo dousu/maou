@@ -15,7 +15,7 @@ Find optimal DataLoader configuration:
 
 ```bash
 uv run maou utility benchmark-dataloader \
-  --input-dir /path/to/processed \
+  --stage3-data-path /path/to/processed \
   --gpu cuda:0 \
   --batch-size 256
 ```
@@ -41,7 +41,7 @@ Analyze end-to-end training performance:
 
 ```bash
 uv run maou utility benchmark-training \
-  --input-dir /path/to/processed \
+  --stage3-data-path /path/to/processed \
   --gpu cuda:0 \
   --batch-size 256
 ```
@@ -99,7 +99,7 @@ Test on subset of data for quick iteration:
 
 ```bash
 uv run maou utility benchmark-training \
-  --input-dir /path/to/processed \
+  --stage3-data-path /path/to/processed \
   --sample-ratio 0.1 \
   --gpu cuda:0 \
   --batch-size 256
@@ -187,7 +187,7 @@ uv run maou utility benchmark-training \
 
 1. **Baseline Benchmark**
    ```bash
-   uv run maou utility benchmark-dataloader --input-dir ./data --gpu cuda:0
+   uv run maou utility benchmark-dataloader --stage3-data-path ./data --gpu cuda:0
    ```
 
 2. **Identify Bottlenecks**
@@ -196,19 +196,18 @@ uv run maou utility benchmark-training \
    - Slow iteration → Check model complexity
 
 3. **Optimize Configuration**
-   - Adjust `--num-workers`
+   - Adjust `--dataloader-workers` (benchmark-training)
    - Tune `--batch-size`
    - Enable `--pin-memory`
-   - Test `--persistent-workers`
 
 4. **Validate Improvements**
    ```bash
-   uv run maou utility benchmark-training --input-dir ./data --gpu cuda:0
+   uv run maou utility benchmark-training --stage3-data-path ./data --gpu cuda:0
    ```
 
 5. **Production Testing**
    ```bash
-   uv run maou learn-model --input-dir ./data --gpu cuda:0 --epoch 1
+   uv run maou learn-model --stage3-data-path ./data --gpu cuda:0 --epoch 1
    ```
 
 ## Batch Size Optimization

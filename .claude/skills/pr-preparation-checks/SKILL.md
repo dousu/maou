@@ -41,13 +41,13 @@ Verify Clean Architecture dependency flow:
 
 ```bash
 # Check for violations: domain should not import from other layers
-grep -r "from maou\.(app|interface|infra)" src/maou/domain/
+grep -rE "from maou\.(app|interface|infra)" src/maou/domain/
 
 # App should only import from domain
-grep -r "from maou\.(interface|infra)" src/maou/app/
+grep -rE "from maou\.(interface|infra)" src/maou/app/
 
 # Verify type hints are present
-grep -E "def [a-z_]+\(" src/maou/ | grep -v " ->" | grep -v "__" | grep -v "test_"
+uv run mypy src/
 ```
 
 All checks should return empty results (no violations).
@@ -105,7 +105,7 @@ git diff --name-only --diff-filter=U
 Verify docstrings exist:
 ```bash
 # Check for missing docstrings in public functions
-grep -A5 "^def [a-z]" src/maou/domain/ | grep -B5 'def ' | grep -v '"""'
+grep -rA5 "^def [a-z]" src/maou/domain/ | grep -B5 'def ' | grep -v '"""'
 ```
 
 ## PR Description Template
@@ -196,11 +196,10 @@ git push -u origin feature/add-array-bundling
 
 ## Integration with GitHub Actions
 
-The project uses GitHub Actions for:
-- Claude Code integration (`claude.yml`)
-- Pre-commit updates (`pre-commit_autoupdate.yml`)
-
-Your local checks should match CI pipeline to prevent failures.
+GitHub Actions run version-bump checks (`check-version-bump.yml`), wheel
+builds, and Claude Code review/integration. ruff, mypy, and pytest are not
+run in CI — they run only as pre-commit hooks (`.pre-commit-config.yaml`),
+so run them locally before pushing.
 
 ## Custom Slash Commands
 
@@ -214,4 +213,3 @@ Use these commands for additional validation:
 - **CLAUDE.md**: Development guidelines and standards
 - **AGENTS.md**: Codex agent rules and conventions
 - `.pre-commit-config.yaml`: Pre-commit hook configuration
-- `.codex/config.yaml`: QA pipeline configuration

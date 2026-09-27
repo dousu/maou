@@ -77,7 +77,7 @@ All of the following must pass:
 
 ## CI Compliance
 
-This pipeline matches the CI/CD checks that run on GitHub. Running it locally prevents CI failures.
+These are the same checks the pre-commit hooks run (`.pre-commit-config.yaml`). GitHub CI does not run ruff, mypy, or pytest, so this local run is the only gate.
 
 ## Error Resolution
 

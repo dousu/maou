@@ -32,7 +32,7 @@ infra → interface → app → domain
 
 **Examples**:
 - `maou/domain/model/resnet.py`
-- `maou/domain/loss/policy_value_loss.py`
+- `maou/domain/loss/loss_fn.py`
 - `maou/domain/data/schema.py`
 
 ### App Layer (`src/maou/app/`)
@@ -165,8 +165,8 @@ from maou.infra.s3.client import S3Client  # VIOLATION!
 ```python
 # In src/maou/app/learning/training_loop.py
 from maou.domain.data.schema import get_hcpe_dtype
-from maou.domain.model.resnet import create_resnet_model
-from maou.domain.loss.policy_value_loss import PolicyValueLoss
+from maou.domain.model.resnet import ResNet
+from maou.domain.loss.loss_fn import MaskedGCELoss
 ```
 
 ### ✓ CORRECT: Infrastructure depending on App

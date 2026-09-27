@@ -31,7 +31,7 @@ If validation fails, address issues before proceeding.
 
 ### 2. Analyze Changes Comprehensively
 
-**CRITICAL**: Thoroughly analyze the branch to understand all changes:
+Read every commit and the full diff against the base branch before writing the description:
 
 ```bash
 # Get base branch (usually main)
@@ -439,7 +439,7 @@ following are the established convention — verify against `git log` /
 ✅ **Commits end with the trailer**:
 
 ```
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Co-Authored-By: <model> <noreply@anthropic.com>
 ```
 
 ✅ **PR bodies end with the footer**:
@@ -447,12 +447,6 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 ```
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
-
-An earlier revision of this skill prohibited both. That was wrong: it
-contradicted the repository's own history (17 of the 20 commits on `main`
-preceding 2026-07-29 carry the trailer, and every recent PR body carries
-the footer), and following it produced PRs inconsistent with the rest of
-the project. Corrected 2026-07-29.
 
 ## Integration with Project Standards
 
@@ -463,7 +457,7 @@ Verify your changes respect dependency flow:
 infra → interface → app → domain
 ```
 
-Reference: CLAUDE.md lines 52-60
+Reference: CLAUDE.md § Critical Rules → Architecture
 
 ### Type Safety
 
@@ -473,15 +467,15 @@ def process_bundle(arrays: list[np.ndarray], size_gb: float) -> Path:
     ...
 ```
 
-Reference: CLAUDE.md lines 33-35
+Reference: CLAUDE.md § Critical Rules → Code Quality
 
 ### Japanese Documentation
 
 Use correct punctuation in Japanese text:
-- 句点: ，（全角コンマ）
-- 読点: ．（全角ピリオド）
+- 読点: ，(全角コンマ)
+- 句点: ．(全角ピリオド)
 
-Reference: CLAUDE.md lines 382-405
+Reference: CLAUDE.md § Japanese Writing Rules
 
 ## Troubleshooting
 
