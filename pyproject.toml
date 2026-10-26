@@ -16,13 +16,13 @@ dependencies = [
     "psutil>=6.0.0",
     "polars>=1.0.0",
     "duckdb (>=1.4.3,<2.0.0)",
-    "plotly>=6.5.0,<7.0.0",
+    "plotly>=6.5.0,<8.0.0",
 ]
 
 [project.optional-dependencies]
 # GPU種類ごとのextra
 cpu = [
-    "torch>=2.6.0,<=2.11.0",
+    "torch>=2.6.0,<=2.13.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "onnxruntime",
@@ -30,7 +30,7 @@ cpu = [
     "onnxslim",
 ]
 cuda = [
-    "torch>=2.6.0,<=2.11.0",
+    "torch>=2.6.0,<=2.13.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "nvidia-ml-py>=11.4.1",
@@ -39,7 +39,7 @@ cuda = [
     "onnxslim",
 ]
 mpu = [
-    "torch>=2.6.0,<=2.11.0",
+    "torch>=2.6.0,<=2.13.0",
     "torchinfo>=1.8.0",
     "torch-tb-profiler>=0.4.3",
     "onnxruntime-gpu",
@@ -155,7 +155,7 @@ dev = [
     # **適用ルール集合 = ruff の版**であり，版を上げると検出結果が変わる．
     # 範囲指定にすると `uv lock --upgrade` で暗黙に変わるため == で固定する．
     # 上げるときは docs/code-quality.md の差分検証手順に従うこと．
-    "ruff==0.16.1",
+    "ruff==0.16.5",
     "types-tqdm>=4.67.0.20250809",
     "mypy>=1.18.2",
     "google-cloud-storage>=3.4.1",
