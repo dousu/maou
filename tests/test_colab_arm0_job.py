@@ -419,3 +419,100 @@ def test_tree_size_exclude(tmp_path: Path) -> None:
     assert job_mod._tree_size(
         tmp_path, ("*.feather", "driver.log")
     ) == (1, 3)
+
+
+@pytest.mark.skipif(
+    shutil.which("rsync") is None, reason="rsync がない"
+)
+class TestSearchValuePaths:
+    """``--search-value-path`` は soften の代わりに探索値を指定順で pre-process へ渡す．"""
+
+    # pre-process の --search-value-path を指定順に書き出すだけのダミー
+    RECORD = (
+        "import sys, pathlib; a = sys.argv; "
+        "out = pathlib.Path(a[a.index('--output-dir') + 1]); "
+        "out.mkdir(parents=True); "
+        "sv = [a[i + 1] for i, x in enumerate(a) if x == '--search-value-path']; "
+        "(out / 'args.txt').write_text(chr(10).join(sv))"
+    )
+
+    def test_fetches_and_passes_in_order(
+        self, tmp_path: Path
+    ) -> None:
+        work, drive = tmp_path / "work", tmp_path / "drive"
+        for rel in ("hcpe", "val", "sv/new", "sv/old"):
+            (drive / rel).mkdir(parents=True)
+        (
+            drive / "sv" / "new" / "part_00000001.feather"
+        ).write_bytes(b"n" * 4)
+        (
+            drive / "sv" / "old" / "part_00000001.feather"
+        ).write_bytes(b"o" * 6)
+        ns = job_mod._parse_args(
+            [
+                "--train-hcpe",
+                "hcpe",
+                "--val-data",
+                "val",
+                "--search-value-path",
+                "sv/new",
+                "--search-value-path",
+                "sv/old",
+                "--job-name",
+                "arm1b",
+                "--work-root",
+                str(work),
+                "--drive-root",
+                str(drive),
+                "--tag",
+                "t",
+                "--stages",
+                "fetch,soften,preprocess",
+                "--maou",
+                f"{sys.executable} -c {self.RECORD!r}",
+            ]
+        )
+        job = job_mod.Job(ns)
+        assert (
+            job.job_dir
+            == work / "maou_test" / "jobs" / "arm1b_t"
+        )
+        assert job.main() == 0
+        # fetch が探索値を戻した
+        assert (
+            work / "sv" / "old" / "part_00000001.feather"
+        ).read_bytes() == b"o" * 6
+        # soften は走らず (出力なし)，指定順のまま渡った
+        assert not job.soft_out.exists()
+        assert (job.pre_out / "args.txt").read_text().split(
+            "\n"
+        ) == [
+            str(work / "sv" / "new"),
+            str(work / "sv" / "old"),
+        ]
+        # 前処理済は Drive へ退避済み
+        assert (
+            drive / "preprocess" / "preprocess_t" / "args.txt"
+        ).exists()
+
+    def test_missing_on_drive_fails_fetch(
+        self, tmp_path: Path
+    ) -> None:
+        job = _make_job(
+            tmp_path,
+            "m",
+            "raise SystemExit(0)",
+            ["--search-value-path", "sv/none"],
+        )
+        (tmp_path / "drive" / "hcpe").mkdir()
+        assert job.fetch() == 1
+
+    def test_default_keeps_soften_output(
+        self, tmp_path: Path
+    ) -> None:
+        job = _make_job(tmp_path, "d", "raise SystemExit(0)")
+        assert job.job_dir.name == "arm0_d"
+        assert job._search_value_args() == [
+            "--search-value-path",
+            str(job.soft_out),
+        ]

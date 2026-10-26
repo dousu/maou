@@ -22,8 +22,15 @@ checkpoint までは残る．新しい VM で前処理をやり直さずに lear
 (``fetch`` が Drive から戻し，``soften`` / ``preprocess`` は飛ばす．
 ``--tag`` は新しくする — モデル / ログのフォルダは learn-model 1 回ごとに分ける)．
 
+``--search-value-path`` (複数可) を渡すと，軟化した対照ではなく探索値
+そのものを投与する run になる: ``soften`` を飛ばし，``fetch`` が Drive から
+探索値の shard ディレクトリ (``utility search-values`` の出力) を戻し，
+``preprocess`` がそれらを指定順のまま ``pre-process --search-value-path`` に
+渡す (同じ局面は後に指定したほうが勝つ)．ジョブの記録は ``--job-name``
+(既定 ``arm0``) で ``maou_test/jobs/<job-name>_<tag>/`` に分ける．
+
 ジョブの記録 (``STATUS``，段階ログ ``*.log``，driver 自身のログ) は
-``<work>/maou_test/jobs/arm0_<tag>/`` に置き，終了時 (成否を問わず) に
+``<work>/maou_test/jobs/<job-name>_<tag>/`` に置き，終了時 (成否を問わず) に
 Drive の同じ相対パスへ退避する (``soften`` の出力 ``*.feather`` は 1 分で
 作り直せるので除く)．**失敗 (rc≠0) のとき**はさらに ``diag/`` に VM の状態
 (``dmesg`` の末尾 / ``free`` / ``df`` / ``nvidia-smi`` / ``ps``) を採り，
@@ -36,7 +43,7 @@ OOM で DataLoader worker が殺されて落ちたが，その証拠は VM の `
 ``--unassign-grace-min`` だけ待ってから Colab の runtime 管理サービスへ
 VM の unassign を要求する (``google.colab.runtime.unassign()`` と同じ
 ``POST http://$TBE_RUNTIME_ADDR/unassign``．kernel の環境変数を継承する
-nohup 子プロセスからでも通る)．猶予の間に ``<work>/maou_test/jobs/arm0_<tag>/KEEP_VM``
+nohup 子プロセスからでも通る)．猶予の間に ``<work>/maou_test/jobs/<job-name>_<tag>/KEEP_VM``
 を作れば取りやめる．失敗時は上記の退避が Drive で OK と確認できたときだけ
 unassign し，退避できなかった (Drive 無し / rsync 不一致) ときは
 ``UNASSIGN_SKIPPED`` を出して VM を残す．VM が残っているときに退避だけ
@@ -57,7 +64,7 @@ VM 上 (``docs/colab-cli-notes.md`` §4 の nohup 方式)::
 (``--drive-root``) と VM ローカル (``--work-root``) で共通の相対パス (§7.4 の
 レイアウトを両側で同じに切る)．出力は ``preprocess/preprocess_<tag>`` /
 ``maou_test/models/models_<tag>`` / ``maou_test/logs/logs_<tag>`` /
-``maou_test/jobs/arm0_<tag>`` に置く．
+``maou_test/jobs/<job-name>_<tag>`` に置く．
 
 手元で配線を確かめる (Drive 無し / 小データ / 段階を選ぶ)::
 
@@ -193,6 +200,21 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help=f"実行する段階 (カンマ区切り．既定: {','.join(STAGES)})",
     )
     ap.add_argument(
+        "--search-value-path",
+        action="append",
+        default=[],
+        help=(
+            "pre-process へ渡す探索値の shard ディレクトリ (相対．複数可・"
+            "指定順に後勝ち)．指定すると soften を飛ばし，その出力の代わりに"
+            "これを使う"
+        ),
+    )
+    ap.add_argument(
+        "--job-name",
+        default="arm0",
+        help="ジョブの記録フォルダ maou_test/jobs/<job-name>_<tag> の種別名",
+    )
+    ap.add_argument(
         "--soften-args",
         default=DEFAULT_SOFTEN_ARGS,
         help=f"soften_result_value.py へ渡す引数 (既定: {DEFAULT_SOFTEN_ARGS!r})",
@@ -228,7 +250,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=60.0,
         help=(
             "unassign までの猶予 (分)．この間に成果物を colab download できる．"
-            "<work>/maou_test/jobs/arm0_<tag>/KEEP_VM があれば取りやめる"
+            "<work>/maou_test/jobs/<job-name>_<tag>/KEEP_VM があれば取りやめる"
         ),
     )
     ap.add_argument(
@@ -275,8 +297,13 @@ class Job:
         self.val_data = self.work / ns.val_data
         # 前処理済を持ち込む run は soften / preprocess を持たない
         self.reuse_pre: bool = bool(ns.train_preprocessed)
+        self.search_value_rels: list[str] = list(
+            ns.search_value_path
+        )
         self.job_rel = (
-            Path("maou_test") / "jobs" / f"arm0_{ns.tag}"
+            Path("maou_test")
+            / "jobs"
+            / f"{ns.job_name}_{ns.tag}"
         )
         self.job_dir = self.work / self.job_rel
         self.status = self.job_dir / "STATUS"
@@ -380,7 +407,10 @@ class Job:
         if self.reuse_pre:
             rels.insert(0, str(self.pre_rel))
         else:
-            rels.insert(0, self.ns.train_hcpe)
+            rels[:0] = [
+                self.ns.train_hcpe,
+                *self.search_value_rels,
+            ]
         rc = 0
         for rel in rels:
             src, dst = self.drive / rel, self.work / rel
@@ -397,6 +427,11 @@ class Job:
         if self.reuse_pre:
             log(
                 "  --train-preprocessed given: nothing to soften"
+            )
+            return 0
+        if self.search_value_rels:
+            log(
+                "  --search-value-path given: use search values, not soften"
             )
             return 0
         script = (
@@ -435,8 +470,7 @@ class Job:
             str(self.train_hcpe),
             "--output-dir",
             str(self.pre_out),
-            "--search-value-path",
-            str(self.soft_out),
+            *self._search_value_args(),
             *shlex.split(self.ns.preprocess_args),
         ]
         rc = self.run(cmd, "preprocess")
@@ -447,6 +481,18 @@ class Job:
         return self.rsync(
             self.pre_out, self._drive_preprocess_dir()
         )
+
+    def _search_value_args(self) -> list[str]:
+        """pre-process の ``--search-value-path`` 引数 (指定順を保つ)．"""
+        paths = (
+            [self.work / rel for rel in self.search_value_rels]
+            if self.search_value_rels
+            else [self.soft_out]
+        )
+        args: list[str] = []
+        for p in paths:
+            args += ["--search-value-path", str(p)]
+        return args
 
     def learn(self) -> int:
         extra = list(self.ns.learn_args)
@@ -602,12 +648,14 @@ class Job:
     # --- driver ---------------------------------------------------------
     def main(self) -> int:
         log(
-            f"arm0 job tag={self.ns.tag} work={self.work} drive={self.drive}"
+            f"{self.ns.job_name} job tag={self.ns.tag} work={self.work} drive={self.drive}"
         )
         if self.reuse_pre:
             log(f"  train_preprocessed={self.pre_out}")
         else:
             log(f"  train_hcpe={self.train_hcpe}")
+            for rel in self.search_value_rels:
+                log(f"  search_values={self.work / rel}")
         log(f"  val_data={self.val_data}")
         log(
             f"  outputs: {self.pre_out} / {self.model_dir} / {self.log_dir}"
