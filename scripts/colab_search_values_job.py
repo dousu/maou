@@ -101,21 +101,28 @@ HCPE_REL = "hcpe/hcpe_20260805/train"
 #: 探索値の出力先 (シャードのディレクトリ)．DRIVE からの相対パス．
 #: 命名は `<種別>_<YYYYMMDD>` (docs/colab-cli-notes.md §7.4)．種別は親フォルダ名で，
 #: **帯や条件は名前に詰め込まない** — 由来は worklog に書く (同 §9)．
-#: 既存の ply>=120 (`search_values_20260806`) とは別ディレクトリにする．
-#: 前処理でどちらを渡すかを後から選べるようにするため．
+#: 既存の ply>=120 (`search_values_20260806`) / ply 60-99
+#: (`search_values_20260923`) とは別ディレクトリにする．
+#: 前処理でどれを渡すかを後から選べるようにするため．
+#: `--resume` が飛ばすのは**この出力にある局面だけ**なので，既存の蓄積と
+#: hash が重なる局面 (Zobrist hash は手数を含まない) は探索し直される．
+#: ply 20-59 では 30,984 件 (0.3%) で，前処理では後勝ちになる
+#: (`scripts/probe_search_band.py` の実測，2026-10-28)．
 #:
 #: **この値はセッションをまたいで固定する．** 日付を実行時に生成すると
 #: セッションごとに別のディレクトリができ，`--resume` が前回のシャードを
 #: 見つけられず全セッションぶんの探索がすべてやり直しになる．
-OUT_REL = "search_values/search_values_20260923"
+OUT_REL = "search_values/search_values_20261028"
 #: ジョブの記録 (STATUS / ログ) の Drive 退避先．docs/colab-cli-notes.md §7.4 の
 #: `maou_test/jobs/` に置く．**unassign すると VM 上の記録は消える**ので，
 #: 手放す前に必ずここへ逃がす (同 §10)．
-JOB_DRIVE_REL = "maou_test/jobs/search_values_20260923"
+JOB_DRIVE_REL = "maou_test/jobs/search_values_20261028"
 
-#: 帯は [MIN_PLY, MAX_PLY)．Arm 1 は ply 60-99．
-MIN_PLY = 60
-MAX_PLY = 100
+#: 帯は [MIN_PLY, MAX_PLY)．ply 20-59 (8,970,670 局面が未探索，
+#: `scripts/probe_search_band.py` の実測，2026-10-28)．
+#: 過去の帯: ply 60-99 は `search_values_20260923`．
+MIN_PLY = 20
+MAX_PLY = 60
 
 #: 1 セッションで探索する局面数．**`SESSION_HOURS` の内に終わる数にする．**
 #: 予算切れで畳むと SIGTERM で要約が出ず，flush 前の局面も捨てるうえ，
@@ -123,6 +130,10 @@ MAX_PLY = 100
 #: 2026-09-24 の実測 10.7 局面/秒 (L4，≈ 38,500 局面/時) で 700k ≈ 18.2 時間．
 #: 残る ≈ 1.8 時間は起動 (対象の走査と TensorRT エンジン構築) と速度の揺れの吸収分．
 #: 900k (45,800 局面/時からの外挿) は 1 セッション目で予算切れになった．
+#: ply 20-59 も同じ値でよい: 1 局面の探索コスト (`elapsedMs + warmupMs`) は
+#: ply 20-59 の 4,000 局面で 90.9 ms，ply 60-99 の本番 12.7M 局面で 90.6 ms と
+#: 一致した (2026-10-28，L4)．probe 自体の 7.3 局面/秒は少数局面に
+#: ファイル読み込みが乗った値なので本番の見積もりに使わない．
 #: **スループットの実測が変わったらここを直す．**
 POSITIONS_PER_SESSION = 700_000
 #: これを過ぎたら探索を畳んで最終同期に入る (24h 壁に対して同期と
