@@ -27,7 +27,7 @@ polars = { version = "0.53", features = [
     "dtype-date",  # Used for timestamp fields
     # u64 is a core type, no feature flag needed
 ] }
-arrow = { version = "59.3", features = ["ipc", "ipc_compression"] }
+arrow = { version = "60.1", features = ["ipc", "ipc_compression"] }
 arrow-pyarrow = { version = "59.0" }
 numpy = { version = "0.28" }
 thiserror = "2.0"
